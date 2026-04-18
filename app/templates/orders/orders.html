@@ -1,0 +1,534 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    /* === СТИЛИ ДЛЯ ТАБЛИЦЫ ЗАКАЗОВ (ПК) === */
+    .table-orders { 
+        width: 100%; 
+        border-collapse: collapse; 
+        font-size: 13px; 
+        background-color: transparent; /* Прозрачный фон, чтобы видны были отступы */
+    }
+    
+    /* Шапка таблицы */
+    .table-orders th { 
+        background-color: #E8F5E9; /* Светло-зеленый */
+        color: #1B5E20; 
+        font-weight: 700; 
+        text-transform: uppercase; 
+        font-size: 11px; 
+        padding: 12px 8px;
+        border-bottom: 2px solid #2E7D32;
+        border-top: none;
+        vertical-align: middle;
+        text-align: center;
+    }
+    
+    /* Ячейки таблицы */
+    .table-orders td { 
+        background-color: #fff; /* Белый фон карточек */
+        padding: 12px 8px; 
+        vertical-align: top; /* Выравнивание по верху */
+        border-bottom: 1px solid #f0f0f0;
+        color: #333;
+    }
+
+    /* === ГЛАВНЫЙ ЭФФЕКТ "ОСТРОВКОВ" === */
+    /* Добавляем толстую границу цвета фона страницы сверху каждого нового заказа */
+    .row-separator td { 
+        border-top: 15px solid #F8F9FA !important; /* Цвет фона base.html */
+        position: relative;
+    }
+    
+    /* Убираем отступ у самого первого заказа в списке, чтобы не было дырки под шапкой */
+    tbody tr:first-child.row-separator td { border-top: none !important; }
+
+    /* Эффект наведения мыши на заказ */
+    .table-orders tr:hover td { 
+        background-color: #FFFDE7; /* Нежный желтый при наведении */
+        transition: background-color 0.2s;
+    }
+
+    /* === ЦВЕТНЫЕ СТАТУСЫ СЛЕВА === */
+    /* Левая граница первой ячейки (где кнопки) */
+    .table-orders td:first-child { 
+        border-left: 5px solid transparent; 
+        border-radius: 4px 0 0 4px; /* Скругление слева */
+    }
+    .table-orders td:last-child {
+        border-radius: 0 4px 4px 0; /* Скругление справа */
+        border-right: 1px solid #e0e0e0;
+    }
+
+/* ЛОГИСТИКА: Цвета полосок слева (Ход работ) */
+    .status-reserved td:first-child { border-left-color: #9e9e9e; }    /* Серый - новый */
+    .status-in_progress td:first-child { border-left-color: #FF9800; } /* Оранжевый - сборка */
+    .status-ready td:first-child { border-left-color: #00B0FF; }       /* Голубой - собран */
+    .status-shipped td:first-child { border-left-color: #2E7D32; }     /* Зеленый - отгружен */
+    .status-canceled td:first-child { border-left-color: #f44336; }    /* Красный - отмена */
+    .status-canceled td { background-color: #fcfcfc; opacity: 0.8; }
+
+    /* ФИНАНСЫ: Цвет фона ячеек оплаты */
+    .pay-paid { background-color: #f1f8e9 !important; }    /* Бледно-зеленый */
+    .pay-partial { background-color: #fffde7 !important; } /* Бледно-желтый */
+    .pay-unpaid { background-color: #fff5f5 !important; }  /* Бледно-красный */
+
+    /* Бейджи (цветные плашки для текста) */
+    .badge-pay-paid { background-color: #4CAF50; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
+    .badge-pay-partial { background-color: #FBC02D; color: black; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
+    .badge-pay-unpaid { background-color: #ef5350; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
+
+    /* МОБИЛЬНЫЕ СТИЛИ (оставляем без изменений) */
+    .mobile-card { border: 1px solid #e0e0e0; border-radius: 12px; background: white; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); overflow: hidden; }
+    .mobile-card-header { padding: 12px; background: #fff; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+    .mobile-card-header.collapsed { border-bottom: none; }
+    .mobile-card-header:not(.collapsed) { border-bottom: 1px solid #f0f0f0; background: #f9f9f9; }
+    .mobile-card-body { padding: 0; background: #fafafa; }
+    .mobile-item { padding: 10px 12px; border-bottom: 1px solid #eee; font-size: 13px; display: flex; justify-content: space-between; }
+    .mobile-item:last-child { border-bottom: none; }
+    .mobile-actions { padding: 10px; text-align: center; background: #fff; border-top: 1px solid #eee; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+    .dot-reserved { background: #2196F3; }
+    .dot-in_progress { background: #FF9800; }
+    .dot-shipped { background: #4CAF50; }
+    .dot-canceled { background: #F44336; }
+</style>
+
+<!-- ЗАГОЛОВОК И ФИЛЬТРЫ -->
+<div class="page-header">
+    <div class="d-flex flex-column">
+        <div class="page-title">
+            <i class="fas fa-shopping-basket"></i>
+            Заказы
+        </div>
+        <div class="page-subtitle">
+            Управление активными и скрытыми заказами клиентов.
+        </div>
+    </div>
+    <div class="page-actions">
+        <div class="btn-group btn-group-sm shadow-sm">
+            <a href="{{ url_for('orders.orders_list', mode='active') }}" class="btn {% if not show_hidden %}btn-success text-white{% else %}btn-white border{% endif %}">Активные</a>
+            {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('orders.orders_list', mode='hidden') }}" class="btn {% if show_hidden %}btn-danger{% else %}btn-white border text-danger{% endif %}">Скрытые</a>
+            {% endif %}
+        </div>
+        {% if current_user.role != 'user2' %}
+        <a href="{{ url_for('orders.client_drafts_list') }}" class="btn btn-outline-primary btn-sm">Заказы на согласование</a>
+        {% endif %}
+        {% if mode != 'trash' %}
+        <a href="{{ url_for('orders.order_create') }}" class="btn btn-success btn-sm shadow-sm fw-bold px-3"><i class="fas fa-plus-circle me-1"></i> <span class="d-none d-sm-inline">Новый заказ</span></a>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Панель фильтров -->
+<div class="filter-panel" style="position: relative; z-index: 10;">
+    <form method="GET" class="d-flex gap-2 flex-wrap align-items-center w-100" id="filterForm">
+        <input type="hidden" name="mode" value="{{ mode }}">
+        
+        <div class="d-flex align-items-center bg-light rounded px-2 border">
+            <i class="fas fa-calendar-alt text-muted me-2"></i>
+            <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control form-control-sm border-0 bg-light" style="width: auto;">
+            <span class="text-muted mx-1">-</span>
+            <input type="date" name="end_date" value="{{ filters.end or '' }}" class="form-control form-control-sm border-0 bg-light" style="width: auto;">
+        </div>
+
+        <select name="filter_client" class="form-select form-select-sm select-search" style="max-width: 200px;">
+            <option value="">Все клиенты</option>
+            {% for c in all_clients %}
+            <option value="{{ c.id }}" {% if filters.clients and c.id in filters.clients %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+        </select>
+
+        {% if mode != 'trash' %}
+        <select name="filter_status" class="form-select form-select-sm" style="width: auto;">
+            <option value="">Все статусы</option>
+            <option value="reserved" {% if 'reserved' in filters.statuses %}selected{% endif %}>Резерв</option>
+            <option value="in_progress" {% if 'in_progress' in filters.statuses %}selected{% endif %}>В работе</option>
+            <option value="shipped" {% if 'shipped' in filters.statuses %}selected{% endif %}>Отгружен</option>
+            <option value="canceled" {% if 'canceled' in filters.statuses %}selected{% endif %}>Отменен</option>
+        </select>
+        {% endif %}
+        
+        <button class="btn btn-primary btn-sm px-3"><i class="fas fa-search"></i></button>
+        <a href="{{ url_for('orders.orders_list', mode=mode) }}" class="btn btn-light border btn-sm text-muted"><i class="fas fa-times"></i></a>
+        
+        <!-- Кнопки сортировки -->
+        <div class="btn-group btn-group-sm">
+            <a href="{{ url_for('orders.orders_list', mode=mode, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, sort='name') }}" 
+               class="btn {% if sort == 'name' %}btn-primary text-white{% else %}btn-light border{% endif %}" 
+               title="Сортировка по алфавиту">
+               <i class="fas fa-sort-alpha-down"></i> По названию
+            </a>
+            <a href="{{ url_for('orders.orders_list', mode=mode, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, sort='date') }}" 
+               class="btn {% if sort == 'date' %}btn-primary text-white{% else %}btn-light border{% endif %}" 
+               title="Сортировка по дате создания">
+               <i class="fas fa-calendar"></i> По дате
+            </a>
+        </div>
+        
+        <!-- Кнопка экспорта -->
+        <a href="{{ url_for('orders.export_orders', mode=mode, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end) }}" 
+           class="btn btn-success btn-sm ms-2" 
+           hx-boost="false">
+           <i class="fas fa-file-excel"></i> Excel
+        </a>
+        <a href="{{ url_for('orders.export_client_catalog') }}"
+           class="btn btn-outline-success btn-sm"
+           hx-boost="false"
+           title="Выгрузка для клиента: Наименование, Размер, Цена, Свободный остаток и колонка Заказать">
+           <i class="fas fa-file-export"></i> Excel клиенту
+        </a>
+        <button
+            type="button"
+            class="btn btn-outline-primary btn-sm"
+            title="Скопировать ссылку на витрину заказа"
+            onclick="copyShopLink('{{ url_for('public_client_api.public_shop', _external=True) }}')"
+        >
+            <i class="fas fa-link"></i> Ссылка на /shop
+        </button>
+    </form>
+</div>
+
+<!-- ============================================ -->
+<!--           ВЕРСИЯ ДЛЯ ПК (TABLE)              -->
+<!-- ============================================ -->
+<div class="table-responsive d-none d-lg-block">
+    <table class="table-orders">
+        <colgroup>
+            <col style="width: 50px;"> <!-- Кнопки -->
+            <col style="width: 90px;"> <!-- Дата -->
+            <col style="width: 150px;"> <!-- Клиент -->
+            <col style="width: 200px;"> <!-- Культура -->
+            <col style="width: 90px;"> <!-- Размер -->
+            <col style="width: 90px;"> <!-- Поле -->
+            <col style="width: 70px;"> <!-- Кол-во -->
+            <col style="width: 160px;"> <!-- Выкопано -->
+            {% if current_user.role != 'user2' %}
+            <col style="width: 110px;"> <!-- Цена -->
+            <col style="width: 140px;"> <!-- Сумма -->
+            {% endif %}
+            <col style="width: 60px;"> <!-- Отгр -->
+            <col style="width: 100px;"> <!-- Счет -->
+            {% if current_user.role != 'user2' %}
+            <col style="width: 100px;"> <!-- Оплата -->
+            {% endif %}
+            <col style="width: 90px;"> <!-- Статус -->
+        </colgroup>
+        <thead>
+            <tr>
+                <th><i class="fas fa-cog"></i></th>
+                <th>№ / Дата</th>
+                <th class="text-start ps-3">Клиент</th>
+                <th class="text-start ps-3">Культура</th>
+                <th>Размер</th>
+                <th>Поле</th>
+                <th>Кол-во</th>
+                <th>Выкопано</th>
+                {% if current_user.role != 'user2' %}
+                <th class="text-end">Цена</th>
+                <th class="text-end">Сумма</th>
+                {% endif %}
+                <th>Отгр.</th>
+                <th>Счет</th>
+                {% if current_user.role != 'user2' %}
+                <th>Оплата</th>
+                {% endif %}
+                <th>Статус</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in orders %}
+            {% set o = item.order %}
+            {% set rows = item.order_items %}
+            {% set rowspan = item.rowspan %}
+            
+            <!-- ГЛАВНАЯ СТРОКА ЗАКАЗА (С row-separator) -->
+            <tr class="row-separator status-{{ o.status }}">
+                <!-- Кнопки действий -->
+                <td rowspan="{{ rowspan }}" class="text-center">
+                    <div class="d-flex flex-column gap-1 align-items-center">
+                        <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="btn btn-outline-primary btn-sm border-0 py-0" title="Открыть">
+                            <i class="fas fa-folder-open fa-lg"></i>
+                        </a>
+                        {% if current_user.role == 'admin' %}
+                            {% if o.is_deleted %}
+                            <form method="POST" onsubmit="return confirm('Показать заказ?');">
+                                <input type="hidden" name="action" value="restore"><input type="hidden" name="order_id" value="{{ o.id }}">
+                                <button class="btn btn-link text-success p-0" title="Показать в списке"><i class="fas fa-eye"></i></button>
+                            </form>
+                            <form method="POST" onsubmit="return confirm('Удалить заказ полностью? Это действие необратимо.');">
+                                <input type="hidden" name="action" value="purge"><input type="hidden" name="order_id" value="{{ o.id }}">
+                                <button class="btn btn-link text-danger p-0" title="Удалить навсегда"><i class="fas fa-trash-alt"></i></button>
+                            </form>
+                            {% else %}
+                            <form method="POST" onsubmit="return confirm('Спрятать заказ?');">
+                                <input type="hidden" name="action" value="delete"><input type="hidden" name="order_id" value="{{ o.id }}">
+                                <button class="btn btn-link text-danger p-0" title="Скрыть из списка"><i class="fas fa-eye-slash"></i></button>
+                            </form>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </td>
+
+                <!-- Номер и Дата -->
+                <td rowspan="{{ rowspan }}" class="text-center">
+                    <span class="fw-bold text-dark fs-6">#{{ o.id }}</span><br>
+                    <small class="text-muted" style="font-size: 10px;">{{ o.date|dateru }}</small>
+                </td>
+
+                <!-- Клиент -->
+                <td rowspan="{{ rowspan }}" class="fw-bold text-dark">
+                    {{ o.client.name }}
+                </td>
+                
+                <!-- ПЕРВАЯ ПОЗИЦИЯ ТОВАРА -->
+                {% if rows|length > 0 %}
+                    {% set first = rows[0] %}
+                    <td class="text-dark">{{ first.plant.name }}</td>
+                    <td class="text-center text-muted small">{{ first.size.name }}</td>
+                    <td class="text-center text-muted small">{{ first.field.name }}</td>
+                    <td class="text-center fw-bold">{{ first.quantity }}</td>
+                    <td class="text-center">
+                        {% set dug = first.dug_total or 0 %}
+                        {% set perc = (dug * 100 / first.quantity) if first.quantity else 0 %}
+                        {% set perc = (perc if perc < 100 else 100) %}
+                        <div class="progress" style="height: 12px;">
+                            <div class="progress-bar bg-success" role="progressbar" style="width: {{ perc|round(0) }}%;" aria-valuenow="{{ perc|round(0) }}" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                        <div class="small text-muted mt-1">{{ dug }}/{{ first.quantity }}</div>
+                    </td>
+                    {% if current_user.role != 'user2' %}
+                    <td class="text-end text-muted">{{ first.price|money }}</td>
+                    <td class="text-end text-muted">{{ first.sum|money }}</td>
+                    {% endif %}
+                    <td class="text-center {% if first.shipped_quantity >= first.quantity %}text-success fw-bold{% else %}text-muted{% endif %}">{{ first.shipped_quantity }}</td>
+                {% else %}
+                    <td colspan="{% if current_user.role != 'user2' %}8{% else %}6{% endif %}" class="text-center text-muted fst-italic">Нет позиций</td>
+                {% endif %}
+                
+                <!-- Счет -->
+                <td rowspan="{{ rowspan }}" class="text-center small text-muted">
+                    {% if o.invoice_number %}
+                        <span class="fw-bold text-dark">{{ o.invoice_number }}</span><br>{{ o.invoice_date|dateru }}
+                    {% else %}-{% endif %}
+                </td>
+
+                {% if current_user.role != 'user2' %}
+                <!-- Оплата (Деньги) -->
+                <td rowspan="{{ rowspan }}" class="text-center pay-{{ o.payment_status }} align-middle" style="border-right: 1px solid #eee; min-width: 100px;">
+                    <div class="fw-bold mb-1" style="font-size: 13px;">{{ o.paid_sum|money_int }}</div>
+                    {% if o.payment_status == 'paid' %}
+                        <span class="badge-pay-paid">ОПЛАЧЕН</span>
+                    {% elif o.payment_status == 'partial' %}
+                        <span class="badge-pay-partial">ЧАСТИЧНО</span>
+                    {% else %}
+                        <span class="badge-pay-unpaid">ДОЛГ</span>
+                    {% endif %}
+                </td>
+                {% endif %}
+
+                <!-- Статус (Работы) -->
+                <td rowspan="{{ rowspan }}" class="text-center align-middle" style="min-width: 110px;">
+                    {% if o.is_deleted %}
+                        <small class="text-muted">В архиве</small>
+                    {% elif o.status == 'shipped' %}
+                        <div class="text-success fw-bold" style="font-size: 12px;"><i class="fas fa-check-double"></i> Отгружен</div>
+                    {% elif o.status == 'ready' %}
+                        <div class="text-info fw-bold" style="font-size: 12px;"><i class="fas fa-box"></i> Готов</div>
+                    {% elif o.status == 'in_progress' %}
+                        <div class="text-warning fw-bold" style="font-size: 12px;"><i class="fas fa-truck-loading"></i> Копка</div>
+                    {% elif o.status == 'canceled' %}
+                        <div class="text-danger fw-bold" style="font-size: 12px;">Отменен</div>
+                    {% else %}
+                        <div class="text-secondary" style="font-size: 12px;">Резерв</div>
+                    {% endif %}
+                </td>
+            </tr>
+
+            <!-- ОСТАЛЬНЫЕ ПОЗИЦИИ (Если есть) -->
+            {% for i in range(1, rows|length) %}
+            <tr class="status-{{ o.status }}">
+                {% set r = rows[i] %}
+                <td class="text-dark">{{ r.plant.name }}</td>
+                <td class="text-center text-muted small">{{ r.size.name }}</td>
+                <td class="text-center text-muted small">{{ r.field.name }}</td>
+                <td class="text-center fw-bold">{{ r.quantity }}</td>
+                <td class="text-center">
+                    {% set dug = r.dug_total or 0 %}
+                    {% set perc = (dug * 100 / r.quantity) if r.quantity else 0 %}
+                    {% set perc = (perc if perc < 100 else 100) %}
+                    <div class="progress" style="height: 12px;">
+                        <div class="progress-bar bg-success" role="progressbar" style="width: {{ perc|round(0) }}%;" aria-valuenow="{{ perc|round(0) }}" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                    <div class="small text-muted mt-1">{{ dug }}/{{ r.quantity }}</div>
+                </td>
+                {% if current_user.role != 'user2' %}
+                <td class="text-end text-muted text-nowrap">{{ r.price|money }}</td>
+                <td class="text-end text-muted text-nowrap">{{ r.sum|money }}</td>
+                {% endif %}
+                <td class="text-center {% if r.shipped_quantity >= r.quantity %}text-success fw-bold{% else %}text-muted{% endif %}">{{ r.shipped_quantity }}</td>
+            </tr>
+            {% endfor %}
+
+            <!-- ИТОГО ПО ЗАКАЗУ -->
+            {% if o.status != 'canceled' and not o.is_deleted and current_user.role != 'user2' %}
+            <tr class="status-{{ o.status }}" style="background-color: #F8F9FA;">
+                <!-- Объединяем первые 9 колонок (до Цены включительно) для подписи -->
+                <td colspan="9" class="text-end small text-uppercase text-muted pt-2 pb-2 align-middle">
+                    Итого заказ:
+                </td>
+                <!-- Колонка 10: Сумма (выравниваем ровно под столбцом Сумма) -->
+                <td class="text-end fw-bold text-dark fs-6 pt-2 pb-2 text-nowrap border-top">
+                    {{ o.total_sum|money }}
+                </td>
+                <!-- Остальные пустые колонки справа -->
+                <td colspan="4"></td>
+            </tr>
+            {% endif %}
+            
+            {% endfor %}
+            
+            <!-- ОБЩИЙ ИТОГ (ВНИЗУ) -->
+            <tr style="background-color: #FFF9C4; border-top: 3px solid #FBC02D;">
+                <td colspan="{% if current_user.role != 'user2' %}9{% else %}8{% endif %}" class="text-end fw-bold text-uppercase py-3 align-middle">ВСЕГО (По списку):</td>
+                {% if current_user.role != 'user2' %}
+                <td class="text-end fw-bold fs-5 text-dark py-3 text-nowrap">{{ stats.sum|money }}</td>
+                {% endif %}
+                <td class="text-center fw-bold py-3 text-nowrap">{{ stats.shipped_fact }} шт.</td>
+                <td colspan="{% if current_user.role != 'user2' %}3{% else %}2{% endif %}" class="py-3"></td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ============================================ -->
+<!--           ВЕРСИЯ ДЛЯ МОБИЛЬНОГО (CARDS)      -->
+<!-- ============================================ -->
+<div class="d-lg-none">
+    {% for item in orders %}
+    {% set o = item.order %}
+    <div class="mobile-card shadow-sm">
+        <!-- Шапка карточки -->
+        <div class="mobile-card-header collapsed" data-bs-toggle="collapse" data-bs-target="#order-{{ o.id }}">
+            <div class="d-flex flex-column">
+                <div class="d-flex align-items-center mb-1">
+                    <span class="status-dot dot-{{ o.status }}"></span>
+                    <span class="fw-bold text-dark me-2">#{{ o.id }}</span>
+                    <small class="text-muted">{{ o.date|dateru }}</small>
+                </div>
+                <div class="text-primary fw-bold text-truncate" style="max-width: 180px;">{{ o.client.name }}</div>
+            </div>
+            <div class="text-end">
+                {% if current_user.role != 'user2' %}
+                <div class="fw-bold text-dark" style="font-size: 15px;">{{ o.total_sum|money_int }}</div>
+                <div class="d-flex flex-column align-items-end gap-1 mt-1">
+                    <!-- Статус оплаты -->
+                    {% if o.payment_status == 'paid' %}
+                        <span class="badge-pay-paid" style="font-size: 8px; padding: 2px 5px;">ОПЛАЧЕН</span>
+                    {% elif o.payment_status == 'partial' %}
+                        <span class="badge-pay-partial" style="font-size: 8px; padding: 2px 5px;">ЧАСТИЧНО</span>
+                    {% else %}
+                        <span class="badge-pay-unpaid" style="font-size: 8px; padding: 2px 5px;">Не оплачен</span>
+                    {% endif %}
+                    <!-- Статус логистики -->
+                    <span class="badge bg-light text-dark border" style="font-size: 8px; padding: 2px 5px;">{{ o.status|upper }}</span>
+                </div>
+                {% else %}
+                <div class="d-flex flex-column align-items-end gap-1 mt-1">
+                    <span class="badge bg-light text-dark border" style="font-size: 10px; padding: 4px 6px;">{{ o.status|upper }}</span>
+                </div>
+                {% endif %}
+                <div class="mt-1"><i class="fas fa-chevron-down text-muted small"></i></div>
+            </div>
+        </div>
+
+        <!-- Тело карточки -->
+        <div id="order-{{ o.id }}" class="collapse mobile-card-body">
+            {% for r in item.order_items %}
+            <div class="mobile-item">
+                <div style="flex: 1;">
+                    <div class="fw-bold text-secondary">{{ r.plant.name }}</div>
+                    <div class="small text-muted">{{ r.size.name }} | {{ r.field.name }}</div>
+                </div>
+                <div class="text-end ms-2" style="min-width: 100px;">
+                    <div class="fw-bold">{{ r.quantity }} шт.</div>
+                    {% if current_user.role != 'user2' %}
+                    <div class="text-muted small">{{ r.price|money_int }}</div>
+                    {% endif %}
+                    {% set dug = r.dug_total or 0 %}
+                    {% set perc = (dug * 100 / r.quantity) if r.quantity else 0 %}
+                    {% set perc = (perc if perc < 100 else 100) %}
+                    <div class="progress" style="height: 10px; margin-top: 5px;">
+                        <div class="progress-bar bg-success" role="progressbar" style="width: {{ perc|round(0) }}%;" aria-valuenow="{{ perc|round(0) }}" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                    <div class="text-muted small mt-1">Выкопано: {{ dug }}/{{ r.quantity }}</div>
+                    {% if r.shipped_quantity > 0 %}
+                    <div class="badge bg-success bg-opacity-25 text-success border border-success px-1" style="font-size: 9px;">Отгр: {{ r.shipped_quantity }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <div class="p-3 text-center text-muted small">Нет позиций</div>
+            {% endfor %}
+
+            <div class="mobile-actions d-flex gap-2">
+                <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="btn btn-outline-primary btn-sm flex-grow-1">Открыть</a>
+                {% if current_user.role == 'admin' %}
+                <form method="POST" class="flex-grow-1" onsubmit="return confirm('Удалить?');">
+                    <input type="hidden" name="action" value="delete"><input type="hidden" name="order_id" value="{{ o.id }}">
+                    <button class="btn btn-outline-danger btn-sm w-100">Удалить</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    
+    <!-- ИТОГО ДЛЯ МОБИЛЬНОГО -->
+    <div class="card bg-warning bg-opacity-10 border border-warning p-3 mt-3 shadow-sm">
+        <div class="d-flex justify-content-between align-items-center">
+            <span class="fw-bold text-dark small text-uppercase">ВСЕГО (Активные):</span>
+            {% if current_user.role != 'user2' %}
+            <span class="fw-bold fs-5 text-dark">{{ stats.sum|money }}</span>
+            {% endif %}
+        </div>
+        <div class="text-end small text-muted">Отгружено: {{ stats.shipped_fact }} шт.</div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function copyShopLink(shopUrl) {
+    const done = () => {
+        if (window.showToast) {
+            window.showToast('Ссылка на витрину скопирована');
+        } else {
+            alert('Ссылка скопирована: ' + shopUrl);
+        }
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(shopUrl).then(done).catch(() => {
+            fallbackCopy(shopUrl, done);
+        });
+    } else {
+        fallbackCopy(shopUrl, done);
+    }
+}
+
+function fallbackCopy(text, onDone) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'absolute';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    onDone();
+}
+</script>
+{% endblock %}

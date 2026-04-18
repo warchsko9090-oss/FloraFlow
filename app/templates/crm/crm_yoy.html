@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4><i class="fas fa-calendar-alt text-success"></i> Сравнение периодов (YoY)</h4>
+</div>
+
+<div class="card p-3 mb-4 bg-light shadow-sm border-0" style="z-index: 100;">
+    <form method="GET" class="d-flex align-items-center gap-2 flex-wrap">
+        <div class="dropdown">
+            <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Клиенты {% if selected_clients %}({{ selected_clients|length }}){% endif %}</button>
+            <div class="dropdown-menu p-2 shadow" style="max-height: 300px; overflow-y: auto;">
+                {% for c in all_clients %}
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="client_id" value="{{ c.id }}" id="cy{{c.id}}" {% if c.id in selected_clients %}checked{% endif %}>
+                    <label class="form-check-label small" for="cy{{c.id}}">{{ c.name }}</label>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <label class="ms-2 small fw-bold">Годы:</label>
+        <select name="year_start" class="form-select form-select-sm" style="width:80px">
+            {% for y in years %}<option value="{{ y }}" {% if y == filters.start %}selected{% endif %}>{{ y }}</option>{% endfor %}
+        </select>
+        <span>-</span>
+        <select name="year_end" class="form-select form-select-sm" style="width:80px">
+            {% for y in years %}<option value="{{ y }}" {% if y == filters.end %}selected{% endif %}>{{ y }}</option>{% endfor %}
+        </select>
+        
+        <button class="btn btn-primary btn-sm px-4">Сравнить</button>
+    </form>
+</div>
+
+<div class="card shadow-sm h-100">
+    <div class="card-body">
+        <canvas id="yoyChart" style="height: 500px;"></canvas>
+    </div>
+</div>
+
+<script>
+    const ctx = document.getElementById('yoyChart');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'],
+            datasets: {{ datasets|tojson }}
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Выручка (₽)' } }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + new Intl.NumberFormat('ru-RU').format(context.raw) + ' ₽';
+                        }
+                    }
+                }
+            }
+        }
+    });
+</script>
+{% endblock %}

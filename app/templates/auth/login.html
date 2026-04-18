@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    body { background: #f0f2f5; }
+    .login-card {
+        border: none;
+        border-radius: 16px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+        overflow: hidden;
+    }
+    .login-header {
+        background: linear-gradient(135deg, #2E7D32 0%, #43A047 100%);
+        padding: 30px;
+        text-align: center;
+        color: white;
+    }
+    .btn-1c {
+        background: #2E7D32; color: white; padding: 10px; font-weight: 600;
+        width: 100%; border-radius: 8px; transition: 0.2s;
+    }
+    .btn-1c:hover { background: #1B5E20; transform: translateY(-2px); box-shadow: 0 4px 10px rgba(46,125,50,0.3); }
+
+    /* Стили для кнопки установки */
+    #installContainer {
+        display: none; /* Скрыто по умолчанию */
+        margin-top: 20px;
+        text-align: center;
+    }
+    .btn-install {
+        background: white; border: 2px solid #2E7D32; color: #2E7D32;
+        padding: 8px 15px; border-radius: 20px; font-size: 13px; font-weight: bold;
+        transition: 0.2s; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
+    }
+    .btn-install:hover {
+        background: #E8F5E9; transform: scale(1.05);
+    }
+    
+    /* Инструкция для iOS */
+    #iosInstallPrompt {
+        display: none;
+        background: white; border: 1px solid #ddd; border-radius: 12px;
+        padding: 15px; margin-top: 15px; font-size: 12px; color: #555;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.05); text-align: left;
+    }
+    .ios-icon { font-size: 16px; color: #007AFF; margin: 0 4px; }
+</style>
+
+<div class="row justify-content-center align-items-center" style="min-height: 80vh;">
+    <div class="col-md-4 col-sm-8">
+        <div class="card login-card">
+            <div class="login-header">
+                <i class="fas fa-leaf fa-3x mb-2"></i>
+                <h4>Зелёный Фонд</h4>
+                <p class="mb-0 opacity-75">Управление питомником</p>
+            </div>
+            <div class="card-body p-4">
+                {% if is_blocked %}
+                <!-- ЭКРАН БЛОКИРОВКИ -->
+                <div class="text-center py-3">
+                    <i class="fas fa-user-lock fa-4x text-danger mb-3"></i>
+                    <h5 class="fw-bold text-dark mb-2">Доступ заблокирован</h5>
+                    <p class="text-muted small mb-1">Ваш IP-адрес временно ограничен из-за множества подозрительных попыток входа.</p>
+                    <p class="text-danger small fw-bold mt-3"><i class="fas fa-shield-alt"></i> Защита от подбора паролей активна.</p>
+                </div>
+                {% else %}
+                <!-- ФОРМА ВХОДА -->
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-bold text-uppercase">Логин</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0"><i class="fas fa-user text-muted"></i></span>
+                            <input type="text" name="username" class="form-control bg-light border-start-0 ps-0" placeholder="Введите логин" required autofocus>
+                        </div>
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label text-muted small fw-bold text-uppercase">Пароль</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0"><i class="fas fa-lock text-muted"></i></span>
+                            <input type="password" name="password" class="form-control bg-light border-start-0 ps-0" placeholder="••••••" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-1c">Войти в систему</button>
+
+                    <!-- Блок установки приложения -->
+                    <div id="installContainer">
+                        <button type="button" class="btn btn-install" id="btnInstallApp">
+                            <i class="fas fa-download"></i> Установить приложение
+                        </button>
+                    </div>
+
+                    <!-- Инструкция для iOS (Safari не поддерживает кнопку, нужна инструкция) -->
+                    <div id="iosInstallPrompt">
+                        <strong>Как установить на iPhone:</strong><br>
+                        1. Нажмите кнопку "Поделиться" <i class="fas fa-share-square ios-icon"></i> внизу браузера.<br>
+                        2. Выберите <b>"На экран «Домой»"</b> <i class="fas fa-plus-square ios-icon"></i>.
+                    </div>
+
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        <div class="text-center mt-3 text-muted small">
+            &copy; 2025 Зелёный Фонд ERP
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let deferredPrompt;
+    const installContainer = document.getElementById('installContainer');
+    const installButton = document.getElementById('btnInstallApp');
+    const iosPrompt = document.getElementById('iosInstallPrompt');
+
+    // 1. Логика для Chrome, Yandex, Android (Chromium)
+    window.addEventListener('beforeinstallprompt', (e) => {
+        // Предотвращаем автоматическое появление диалога (на старых версиях)
+        e.preventDefault();
+        // Сохраняем событие, чтобы вызвать его позже по клику
+        deferredPrompt = e;
+        // Показываем нашу кнопку (если мы не на экране блокировки)
+        if (installContainer) installContainer.style.display = 'block';
+    });
+
+    if (installButton) {
+        installButton.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                // Показываем системный диалог установки
+                deferredPrompt.prompt();
+                // Ждем выбора пользователя
+                const { outcome } = await deferredPrompt.userChoice;
+                console.log(`User response to install prompt: ${outcome}`);
+                // Обнуляем переменную, так как событие можно использовать один раз
+                deferredPrompt = null;
+                // Скрываем кнопку после нажатия
+                installContainer.style.display = 'none';
+            }
+        });
+    }
+
+    // 2. Логика для iOS (iPhone/iPad)
+    function isIOS() {
+        return [
+            'iPad Simulator',
+            'iPhone Simulator',
+            'iPod Simulator',
+            'iPad',
+            'iPhone',
+            'iPod'
+        ].includes(navigator.platform) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+    }
+
+    // Проверяем, не запущено ли уже приложение в PWA режиме (standalone)
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+
+    if (isIOS() && !isStandalone) {
+        // На iOS нельзя вызвать установку кнопкой, показываем инструкцию
+        iosPrompt.style.display = 'block';
+    }
+</script>
+{% endblock %}

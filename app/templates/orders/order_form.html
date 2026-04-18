@@ -1,0 +1,389 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+<h4>Создание нового заказа</h4>
+<!-- Ссылка на orders.orders_list -->
+<a href="{{ url_for('orders.orders_list') }}" class="btn btn-secondary btn-sm">Отмена</a>
+</div>
+<form method="POST">
+<!-- Выбор клиента -->
+<div class="card mb-3">
+<div class="card-body py-2">
+<div class="row align-items-center">
+<div class="col-md-2 fw-bold">Клиент:</div>
+<div class="col-md-6">
+<!-- Добавили select-search -->
+<select name="client" class="form-select form-select-sm select-search" required>
+<option value="" disabled selected>- Выберите клиента -</option>
+{% for c in clients %}
+<option value="{{ c.id }}">{{ c.name }}</option>
+{% endfor %}
+</select>
+</div>
+<div class="col-md-4">
+    {% if current_user.role in ['admin', 'executive'] %}
+    <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" id="is_barter" name="is_barter">
+        <label class="form-check-label text-warning fw-bold" for="is_barter">Взаимозачет</label>
+    </div>
+    {% endif %}
+</div>
+</div>
+</div>
+</div>
+<!-- Таблица позиций -->
+<div class="form-check mb-2">
+    <input class="form-check-input" type="checkbox" id="toggleSeedlings">
+    <label class="form-check-label" for="toggleSeedlings">Показать саженцы</label>
+</div>
+<div class="table-responsive">
+    <table class="table table-bordered table-sm table-1c bg-white" id="orderTable">
+        <thead>
+            <tr>
+                <th style="width: 25%;">Растение</th>
+                <th style="width: 15%;">Размер</th>
+                <th style="width: 20%;">Поле (Откуда)</th>
+                <th style="width: 15%;">Партия (Год)</th>
+                <th style="width: 8%;">Остаток</th>
+                <th style="width: 8%;">Цена</th>
+                <th style="width: 8%;">Кол-во</th>
+                <th style="width: 30px;"></th>
+            </tr>
+        </thead>
+        <tbody id="rowsContainer">
+            <!-- Первая строка (шаблонная) -->
+            <tr class="item-row">
+                <td>
+                    <select name="plant[]" class="form-select form-select-sm plant-select select-search" required>
+                        <option value="" selected disabled>...</option>
+                        {% for p in plants %}
+                        <option value="{{ p.id }}">{{ p.name }}</option>
+                        {% endfor %}
+                    </select>
+                </td>
+                <td>
+                    <select name="size[]" class="form-select form-select-sm size-select select-search" required>
+                        {% for s in sizes %}
+                        <option value="{{ s.id }}" {% if s.name == 'Саженцы' %}class="seedling-option"{% endif %}>{{ s.name }}</option>
+                        {% endfor %}
+                    </select>
+                </td>
+                <td>
+                    <select name="field[]" class="form-select form-select-sm field-select select-search" required>
+                        {% for f in fields %}
+                        <option value="{{ f.id }}">{{ f.name }}</option>
+                        {% endfor %}
+                    </select>
+                </td>
+                <td>
+                    <div class="year-wrapper">
+                        <select name="year[]" class="form-select form-select-sm year-select" required onchange="updateRowStats(this)">
+                            <option value="" selected disabled>-</option>
+                        </select>
+                        <input type="hidden" name="year[]" class="year-hidden" disabled>
+                        <small class="year-label text-muted d-none"></small>
+                    </div>
+                </td>
+                <td class="text-center align-middle stock-info text-muted small">-</td>
+                <td class="text-end align-middle price-info small">-</td>
+                <td>
+                    <input type="number" name="quantity[]" class="form-control form-control-sm text-end" min="1" required>
+                </td>
+                <td class="text-center align-middle">
+                    <button type="button" class="btn btn-outline-danger btn-xs border-0" onclick="removeRow(this)">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="d-flex justify-content-between mt-3 pb-5">
+    <button type="button" class="btn btn-info btn-sm text-white" onclick="addRow()">+ Добавить строку</button>
+    <button type="submit" class="btn btn-success px-4">Создать заказ</button>
+</div>
+
+<!-- Панель доступных остатков -->
+<div id="stockInfoPanel" class="card shadow-lg border-primary" style="display: none; position: fixed; bottom: 20px; right: 20px; width: 350px; z-index: 1050; max-height: 400px; overflow-y: auto;">
+    <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 small"><i class="fas fa-search-location me-2"></i>Доступно на складах</h6>
+        <button type="button" class="btn-close btn-close-white btn-sm" onclick="$('#stockInfoPanel').hide()"></button>
+    </div>
+    <div class="card-body p-0">
+        <div id="stockInfoContent" class="list-group list-group-flush small">
+            <!-- Сюда JS загрузит данные -->
+        </div>
+        <div id="stockInfoLoading" class="text-center p-3 text-muted" style="display:none;">
+            <i class="fas fa-spinner fa-spin"></i> Загрузка...
+        </div>
+    </div>
+</div>
+
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Глобальная переменная для хранения активной строки
+let activeRowForStock = null;
+
+// === 1. ДОБАВЛЕНИЕ И УДАЛЕНИЕ СТРОК ===
+function addRow() {
+    const tbody = document.getElementById('rowsContainer');
+    const firstRow = tbody.querySelector('tr');
+    
+    const newRow = firstRow.cloneNode(true);
+    
+    // Очистка полей
+    newRow.querySelectorAll('input').forEach(i => i.value = '');
+    newRow.querySelector('.stock-info').innerText = '-';
+    newRow.querySelector('.price-info').innerText = '-';
+    
+    // Сброс блока Года
+    const yearWrapper = newRow.querySelector('.year-wrapper');
+    const yearSelect = yearWrapper.querySelector('.year-select');
+    const yearHidden = yearWrapper.querySelector('.year-hidden');
+    const yearLabel = yearWrapper.querySelector('.year-label');
+    
+    yearSelect.innerHTML = '<option value="" selected disabled>-</option>';
+    yearSelect.style.display = 'block';
+    yearSelect.disabled = false;
+    yearHidden.disabled = true;
+    yearLabel.classList.add('d-none');
+    yearLabel.innerText = '';
+    
+    // Пересоздание Select2 (удаляем старые контейнеры и инициализируем заново)
+    $(newRow).find('.select2-container').remove();
+    $(newRow).find('select.select-search').each(function() {
+        const $select = $(this);
+        $select.removeClass('select2-hidden-accessible')
+               .removeAttr('data-select2-id')
+               .removeAttr('aria-hidden')
+               .removeAttr('tabindex')
+               .removeAttr('style');
+        $select.find('option').removeAttr('data-select2-id');
+        $select.val('');
+    });
+    
+    tbody.appendChild(newRow);
+    initSelect2(newRow);
+}
+
+function removeRow(btn) {
+    const row = btn.closest('tr');
+    if (document.querySelectorAll('.item-row').length > 1) {
+        $(row).find('select').select2('destroy'); // Чистим память
+        row.remove();
+        $('#stockInfoPanel').hide(); // Скрываем панель, если удалили активную строку
+    }
+}
+
+// === 2. СЛУШАТЕЛИ СОБЫТИЙ ===
+
+// Запоминаем активную строку при клике или фокусе
+$(document).on('click focus select2:open', '.item-row', function() {
+    activeRowForStock = this;
+});
+
+// А. Изменили РАСТЕНИЕ или РАЗМЕР -> Показать панель остатков
+$(document).on('select2:select', '.plant-select, .size-select', function(e) {
+    const row = this.closest('tr');
+    activeRowForStock = row;
+    
+    // Сбрасываем зависимые поля при смене родителя
+    if ($(this).hasClass('plant-select')) {
+        // Если сменили растение - размер и поле можно не сбрасывать, но логика остатков меняется
+    }
+
+    const p = $(row).find('.plant-select').val();
+    const s = $(row).find('.size-select').val();
+    const f = $(row).find('.field-select').val();
+
+    // Если выбраны Растение и Размер - грузим панель подсказок
+    if (p && s) {
+        loadAvailabilityPanel(p, s);
+    } else {
+        $('#stockInfoPanel').hide();
+    }
+
+    // Если уже заполнено и поле - обновляем данные строки (год, цена)
+    if (p && s && f) {
+        updateRowInfo(row);
+    }
+});
+
+// Б. Изменили ПОЛЕ вручную -> Обновить данные строки
+$(document).on('select2:select', '.field-select', function(e) {
+    const row = this.closest('tr');
+    updateRowInfo(row);
+});
+
+// В. Изменили ГОД вручную -> Обновить цену и остаток
+function updateRowStats(yearEl) {
+    const row = yearEl.closest('tr');
+    const selectedOpt = yearEl.options[yearEl.selectedIndex];
+    if (selectedOpt && selectedOpt.dataset.free) {
+        updateRowStatsImpl(row, selectedOpt.dataset.free, selectedOpt.dataset.price);
+    }
+}
+
+// === 3. ЛОГИКА ЗАГРУЗКИ ДАННЫХ ===
+
+// Основная функция обновления данных в строке (Год, Остаток, Цена)
+// targetYear - необязательный параметр. Если передан, он выберется автоматически после загрузки.
+async function updateRowInfo(row, targetYear = null) {
+    const p = $(row).find('.plant-select').val();
+    const s = $(row).find('.size-select').val();
+    const f = $(row).find('.field-select').val();
+    
+    const yearSelect = row.querySelector('.year-select');
+    const yearHidden = row.querySelector('.year-hidden');
+    const yearLabel = row.querySelector('.year-label');
+    
+    if (p && s && f) {
+        try {
+            const response = await fetch(`/api/stock_info?plant=${p}&size=${s}&field=${f}`);
+            const data = await response.json();
+            
+            yearSelect.innerHTML = '';
+            
+            if (data.batches && data.batches.length > 0) {
+                let batchToSelect = null;
+
+                data.batches.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.year;
+                    opt.innerText = `${b.year} (Ост: ${b.free})`;
+                    opt.dataset.free = b.free;
+                    opt.dataset.price = b.price;
+                    yearSelect.appendChild(opt);
+
+                    // Если передан целевой год (из попапа), запоминаем его данные
+                    if (targetYear && b.year == targetYear) {
+                        batchToSelect = b;
+                    }
+                });
+                
+                // ЛОГИКА ВЫБОРА:
+                // 1. Если передан targetYear (клик из панели) -> ставим его.
+                // 2. Иначе, если всего одна партия -> ставим её (автовыбор).
+                // 3. Иначе -> даем пользователю выбрать.
+
+                if (batchToSelect) {
+                    // Вариант 1: Кликнули в панели
+                    yearSelect.value = batchToSelect.year;
+                    
+                    // Если партий много, но мы выбрали конкретную - показываем селект с выбранным значением
+                    yearSelect.style.display = 'block';
+                    yearSelect.disabled = false;
+                    yearHidden.disabled = true;
+                    yearLabel.classList.add('d-none');
+                    
+                    updateRowStatsImpl(row, batchToSelect.free, batchToSelect.price);
+
+                } else if (data.batches.length === 1) {
+                    // Вариант 2: Автовыбор единственной партии
+                    const batch = data.batches[0];
+                    yearSelect.value = batch.year;
+                    
+                    // Прячем селект, показываем текст
+                    yearSelect.style.display = 'none';
+                    yearSelect.disabled = true;
+                    yearHidden.value = batch.year;
+                    yearHidden.disabled = false;
+                    yearLabel.innerText = `${batch.year} г. (Авто)`;
+                    yearLabel.classList.remove('d-none');
+                    
+                    updateRowStatsImpl(row, batch.free, batch.price);
+                } else {
+                    // Вариант 3: Много партий, ручной выбор (выбираем первую по дефолту для отображения)
+                    yearSelect.style.display = 'block';
+                    yearSelect.disabled = false;
+                    yearHidden.disabled = true;
+                    yearLabel.classList.add('d-none');
+                    
+                    // Триггерим обновление статистики для первой опции
+                    yearSelect.value = data.batches[0].year;
+                    updateRowStatsImpl(row, data.batches[0].free, data.batches[0].price);
+                }
+            } else {
+                yearSelect.innerHTML = '<option disabled>Нет в наличии</option>';
+                yearSelect.style.display = 'block';
+                yearLabel.classList.add('d-none');
+                row.querySelector('.stock-info').innerText = '0';
+                row.querySelector('.price-info').innerText = '-';
+            }
+        } catch (e) { console.error(e); }
+    }
+}
+
+function updateRowStatsImpl(row, free, price) {
+    const stockCell = row.querySelector('.stock-info');
+    stockCell.innerText = free;
+    stockCell.className = free <= 0 ? 'text-center align-middle stock-info text-danger fw-bold small' : 'text-center align-middle stock-info text-success fw-bold small';
+    row.querySelector('.price-info').innerText = price + ' ₽';
+}
+
+// === 4. ЛОГИКА ВСПЛЫВАЮЩЕЙ ПАНЕЛИ ===
+
+async function loadAvailabilityPanel(plantId, sizeId) {
+    const panel = $('#stockInfoPanel');
+    const content = $('#stockInfoContent');
+    const loader = $('#stockInfoLoading');
+    
+    panel.show();
+    content.empty();
+    loader.show();
+    
+    try {
+        const res = await fetch(`/api/stock_availability?plant_id=${plantId}&size_id=${sizeId}`);
+        const data = await res.json();
+        
+        loader.hide();
+        
+        if (data.items && data.items.length > 0) {
+            data.items.forEach(item => {
+                const el = document.createElement('a');
+                el.href = "#";
+                el.className = "list-group-item list-group-item-action d-flex justify-content-between align-items-center";
+                el.innerHTML = `
+                    <div>
+                        <div class="fw-bold text-primary">${item.field_name}</div>
+                        <small class="text-muted">Партия: ${item.year}</small>
+                    </div>
+                    <div class="text-end">
+                        <span class="badge bg-success rounded-pill mb-1">${item.free} шт</span>
+                        <div class="small fw-bold">${item.price} ₽</div>
+                    </div>
+                `;
+                el.onclick = (e) => {
+                    e.preventDefault();
+                    fillRowData(item.field_id, item.year);
+                };
+                content.append(el);
+            });
+        } else {
+            content.html('<div class="p-3 text-center text-muted small">Нет свободных остатков на складах.</div>');
+        }
+    } catch (e) {
+        console.error(e);
+        loader.hide();
+        content.html('<div class="p-2 text-danger small">Ошибка загрузки</div>');
+    }
+}
+
+function fillRowData(fieldId, year) {
+    if (!activeRowForStock) return;
+    const row = activeRowForStock;
+    
+    // 1. Устанавливаем Поле (Select2)
+    const fieldSelect = $(row).find('.field-select');
+    fieldSelect.val(fieldId).trigger('change.select2'); // Обновляем только визуальную часть Select2
+    
+    // 2. Вызываем обновление данных, ЯВНО передавая год
+    // Мы НЕ полагаемся на событие change, а вызываем функцию напрямую
+    updateRowInfo(row, year);
+}
+</script>
+{% endblock %}

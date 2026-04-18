@@ -1,0 +1,1387 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-chart-pie text-secondary"></i>
+            Финансовые отчеты
+        </div>
+        <div class="page-subtitle">
+            Сверка, обороты, результат, маржа, партнеры и проекты в едином разделе.
+        </div>
+    </div>
+</div>
+
+<!-- Вкладки навигации -->
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'reconciliation' or not active_tab %}active{% endif %}" href="{{ url_for('finance.reports_reconciliation') }}">
+          <i class="fas fa-handshake text-primary me-1"></i> Сверка
+      </a>
+  </li>
+  <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'turnover' %}active{% endif %}" href="{{ url_for('finance.reports_turnover') }}">
+          <i class="fas fa-exchange-alt text-warning me-1"></i> Оборот
+      </a>
+  </li>
+  
+  {% if current_user.role in ['admin', 'executive'] %}
+  <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'financial' %}active{% endif %}" href="{{ url_for('finance.reports_financial') }}">
+          <i class="fas fa-piggy-bank text-success me-1"></i> Результат
+      </a>
+  </li>
+  <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'margin' %}active{% endif %}" href="{{ url_for('finance.reports_margin') }}">
+          <i class="fas fa-percent text-danger me-1"></i> Маржа
+      </a>
+  </li>
+  <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'investor' %}active{% endif %}" href="{{ url_for('finance.reports_investor') }}">
+          <i class="fas fa-briefcase text-info me-1"></i> Партнер
+      </a>
+  </li>
+  <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'calculator' %}active{% endif %}" href="{{ url_for('finance.reports_calculator') }}">
+          <i class="fas fa-calculator text-secondary me-1"></i> Калькулятор
+      </a>
+  </li>
+  <!-- ВКЛАДКА ПРОЕКТЫ -->
+  <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'projects' %}active{% endif %}" href="{{ url_for('finance.reports_projects') }}">
+          <i class="fas fa-project-diagram text-dark me-1"></i> Проекты
+      </a>
+  </li>
+  {% endif %}
+</ul>
+
+<div class="tab-content">
+    
+    <!-- 1. СВЕРКА -->
+    {% if active_tab == 'reconciliation' or not active_tab %}
+    
+    <!-- Фильтры и Управление -->
+    <div class="card p-3 mb-3 bg-light shadow-sm">
+        <form method="GET" action="{{ url_for('finance.reports_reconciliation') }}" class="d-flex gap-3 align-items-end flex-wrap justify-content-between" hx-boost="false">
+            
+            <!-- Левая часть: Выбор клиента и дат -->
+            <div class="d-flex gap-3 align-items-end flex-wrap">
+                <div>
+                    <label class="form-label small fw-bold text-muted text-uppercase">Клиент</label>
+                    <select name="client_id" class="form-select form-select-sm select-search" required style="min-width: 250px;">
+                        <option value="" disabled {% if not filters.get('client_id') %}selected{% endif %}>Выберите клиента</option>
+                        {% for c in clients %}
+                        <option value="{{ c.id }}" {% if filters.get('client_id')|int == c.id %}selected{% endif %}>{{ c.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label small fw-bold text-muted text-uppercase">Период</label>
+                    <div class="input-group input-group-sm">
+                        <input type="date" name="start_date" value="{{ filters.get('start') or '' }}" class="form-control">
+                        <span class="input-group-text bg-white">-</span>
+                        <input type="date" name="end_date" value="{{ filters.get('end') or '' }}" class="form-control">
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm px-4"><i class="fas fa-sync-alt"></i></button>
+            </div>
+            
+            <!-- Правая часть: Режим, Excel и Управление гармошкой -->
+            <div class="d-flex flex-column align-items-end gap-2">
+                <div class="d-flex gap-2">
+                    <div class="btn-group btn-group-sm bg-white shadow-sm" role="group">
+                        <input type="radio" class="btn-check" name="mode" id="mode_grouped" value="grouped" {% if mode == 'grouped' %}checked{% endif %} onchange="this.form.submit()">
+                        <label class="btn btn-outline-secondary" for="mode_grouped"><i class="fas fa-layer-group"></i> По счетам</label>
+
+                        <input type="radio" class="btn-check" name="mode" id="mode_detailed" value="detailed" {% if mode == 'detailed' %}checked{% endif %} onchange="this.form.submit()">
+                        <label class="btn btn-outline-secondary" for="mode_detailed"><i class="fas fa-list"></i> Детально</label>
+                    </div>
+                    
+                    {% if filters.get('client_id') %}
+                    <!-- ИСПРАВЛЕНИЕ: Добавлено hx-boost="false" -->
+                    <a href="{{ url_for('finance.reports_reconciliation_export', client_id=filters.get('client_id'), start_date=filters.get('start'), end_date=filters.get('end'), mode=mode) }}" 
+                       class="btn btn-success btn-sm shadow-sm fw-bold" 
+                       hx-boost="false">
+                        <i class="fas fa-file-excel me-1"></i> Excel
+                    </a>
+                    {% endif %}
+                </div>
+
+                <div class="btn-group btn-group-sm shadow-sm">
+                    <!-- Глобальная кнопка для ОПЛАТ -->
+                    <button type="button" class="btn btn-white border text-success" onclick="toggleAllPayments()" title="Свернуть/Развернуть все оплаты">
+                        <i class="fas fa-money-bill-wave"></i> <i class="fas fa-arrows-alt-v small"></i>
+                    </button>
+                    
+                    {% if mode == 'grouped' %}
+                    <!-- Кнопки для ТОВАРОВ (счета) -->
+                    <button type="button" class="btn btn-white border text-secondary" onclick="expandAllDocs()" title="Раскрыть состав счетов"><i class="fas fa-angle-double-down"></i></button>
+                    <button type="button" class="btn btn-white border text-secondary" onclick="collapseAllDocs()" title="Свернуть состав счетов"><i class="fas fa-angle-double-up"></i></button>
+                    {% endif %}
+                </div>
+            </div>
+
+        </form>
+    </div>
+
+    {% if filters and filters.get('client_id') %}
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center py-3">
+            <span><i class="fas fa-file-contract text-primary me-2"></i> Акт сверки: {{ client_name }}</span>
+            <span class="badge {% if totals.balance > 0 %}bg-danger{% else %}bg-success{% endif %} fs-6">
+                Итого долг: {{ totals.balance|money }}
+            </span>
+        </div>
+        <div class="card-body p-0">
+            <!-- ПК ВЕРСИЯ -->
+            <div class="table-responsive d-none d-md-block">
+                <table class="table table-sm mb-0" style="font-size: 13px; border-collapse: collapse;">
+                    <thead>
+                        <tr class="align-middle text-uppercase small text-muted" style="background-color: #f8f9fa; border-bottom: 2px solid #e9ecef;">
+                            <th style="width: 40px;" class="text-center">#</th>
+                            <th style="width: 100px;">Дата</th>
+                            <th>Основание (Счет)</th>
+                            <th>Операция</th>
+                            <th class="text-end text-danger" style="width: 140px;">Отгрузка (Дебет)</th>
+                            <th class="text-end text-success" style="width: 140px;">Оплата (Кредит)</th>
+                            <th class="text-end fw-bold" style="width: 140px;">Сальдо</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                        <!-- Основная строка -->
+                        <tr class="{% if row.is_payment_row %}payment-row payment-for-{{ row.order_id }}{% endif %}" 
+                            style="{% if loop.index > 1 and row.is_grouped %}border-top: 2px solid #dee2e6;{% else %}border-top: 1px solid #f0f0f0;{% endif %} {% if row.is_grouped %}background-color: #fffcf5;{% endif %}">
+                            
+                            <td class="text-center align-middle">
+                                <!-- Гармошка ТОВАРОВ -->
+                                {% if row.doc_items %}
+                                <button class="btn btn-link p-0 text-decoration-none btn-sm text-muted doc-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#rec_detail_{{ loop.index }}">
+                                    <i class="fas fa-plus-square"></i>
+                                </button>
+                                {% endif %}
+
+                                <!-- Гармошка ОПЛАТ (только если это заказ и у него есть оплаты) -->
+                                {% if row.has_payments %}
+                                <button class="btn btn-link p-0 text-decoration-none btn-sm text-success ms-1 pay-toggler-{{ row.order_id }}" type="button" onclick="togglePayments({{ row.order_id }})" title="Показать/Скрыть оплаты">
+                                    <i class="fas fa-money-bill-wave"></i>
+                                </button>
+                                {% endif %}
+                            </td>
+                            
+                            <td class="small align-middle text-muted">{{ row.date.strftime('%d.%m.%Y') }}</td>
+                            
+                            <!-- Колонка: Счет -->
+                            <td class="align-middle">
+                                {% if row.invoice_info %}
+                                    <span class="fw-bold text-dark">{{ row.invoice_info }}</span>
+                                {% else %}
+                                    <span class="text-muted small">-</span>
+                                {% endif %}
+                            </td>
+
+                            <td class="align-middle">
+                                {% if row.is_grouped %}
+                                    <span class="badge bg-warning text-dark border border-warning me-1">СВОД</span>
+                                {% endif %}
+                                {{ row.desc }} 
+                                {% if row.order_id and not row.is_grouped %}
+                                <a href="{{ url_for('orders.order_detail', order_id=row.order_id, return_to=current_url) }}" class="text-decoration-none small ms-1 text-muted" title="Открыть заказ"><i class="fas fa-external-link-alt"></i></a>
+                                {% endif %}
+                            </td>
+                            
+                            <td class="text-end align-middle fw-bold">{% if row.debit > 0 %}{{ row.debit|money }}{% endif %}</td>
+                            <td class="text-end align-middle fw-bold">{% if row.credit > 0 %}{{ row.credit|money }}{% endif %}</td>
+                            
+                            <td class="text-end align-middle fw-bold {% if row.balance > 0 %}text-danger{% else %}text-success{% endif %}" style="background-color: #fafafa;">
+                                {{ row.balance|money }}
+                            </td>
+                        </tr>
+                        
+                        <!-- Скрытая строка с деталями -->
+                        {% if row.doc_items %}
+                        <tr class="collapse rec-detail-row" id="rec_detail_{{ loop.index }}">
+                            <td colspan="7" class="p-0 border-0">
+                                <div class="bg-light border-bottom ps-4">
+                                    <table class="table table-sm table-bordered mb-0 bg-white small shadow-sm" style="table-layout: fixed; width: 100%;">
+                                        <thead class="text-muted bg-light">
+                                            <tr>
+                                                <th style="width: 90px;" class="text-center">Дата</th>
+                                                <!-- ПУСТАЯ КОЛОНКА-РАСПОРКА (22% ширины) -->
+                                                <th style="width: 22%;"></th> 
+                                                <th>Наименование</th>
+                                                <th style="width: 12%;">Размер</th>
+                                                <th style="width: 12%;">Поле</th>
+                                                <th style="width: 90px;" class="text-end">Цена</th>
+                                                <th style="width: 60px;" class="text-center">Кол-во</th>
+                                                <th style="width: 110px;" class="text-end">Сумма</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for item in row.doc_items %}
+                                            {% if item.type == 'payment' %}
+                                            <!-- СТРОКА ОПЛАТЫ ВНУТРИ ГРУППЫ -->
+                                            <tr style="background-color: #f0fff4;">
+                                                <td class="text-center text-success fw-bold">{{ item.date.strftime('%d.%m.%Y') }}</td>
+                                                <td style="background-color: #f0fff4;"></td> 
+                                                <td class="text-success fw-bold" colspan="3">
+                                                    <i class="fas fa-check-circle me-1"></i> {{ item.name }}
+                                                </td>
+                                                <td class="text-end text-muted">-</td>
+                                                <td class="text-center text-muted">-</td>
+                                                <td class="text-end fw-bold text-success">{{ item.sum|money_int }}</td>
+                                            </tr>
+                                            {% else %}
+                                            <!-- СТРОКА ОТГРУЗКИ -->
+                                            <tr>
+                                                <td class="text-center text-muted">{{ item.date.strftime('%d.%m.%Y') }}</td>
+                                                <!-- ПУСТАЯ ЯЧЕЙКА -->
+                                                <td style="background-color: #fcfcfc;"></td> 
+                                                <td class="text-truncate" title="{{ item.name }}">{{ item.name }}</td>
+                                                <td class="text-truncate">{{ item.size }}</td>
+                                                <td class="text-muted text-truncate">{{ item.field }}</td>
+                                                <td class="text-end text-muted">{{ item.price|money_int }}</td>
+                                                <td class="text-center fw-bold">{{ item.qty }}</td>
+                                                <td class="text-end fw-bold text-danger">{{ item.sum|money_int }}</td>
+                                            </tr>
+                                            {% endif %}
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                    <!-- ДОБАВЛЕН ПОДВАЛ С СУММАМИ -->
+                    <tfoot class="bg-light border-top border-2">
+                        <tr class="align-middle">
+                            <td colspan="4" class="text-end fw-bold text-uppercase py-3 pe-3">Итого обороты за период:</td>
+                            <td class="text-end fw-bold text-danger py-3">{{ totals.debit|money }}</td>
+                            <td class="text-end fw-bold text-success py-3">{{ totals.credit|money }}</td>
+                            <td class="text-end fw-bold py-3 bg-white border-start">{{ totals.balance|money }}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            
+            <!-- МОБИЛЬНАЯ ВЕРСИЯ (СВЕРКА) -->
+            <div class="d-md-none p-2 bg-light">
+                {% for row in rows %}
+                <div class="card shadow-sm mb-3 border-0 {% if row.is_grouped %}bg-warning bg-opacity-10 border-warning{% endif %} {% if row.is_payment_row %}payment-row payment-for-{{ row.order_id }}{% endif %}">
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <div class="small text-muted fw-bold">{{ row.date.strftime('%d.%m.%Y') }}</div>
+                            {% if row.invoice_info %}
+                                <span class="badge bg-secondary">{{ row.invoice_info }}</span>
+                            {% endif %}
+                        </div>
+                        
+                        <div class="fw-bold text-dark mb-2 border-bottom pb-2">
+                            {% if row.is_grouped %}<span class="badge bg-warning text-dark me-1">СВОД</span>{% endif %}
+                            {{ row.desc }}
+                            {% if row.order_id and not row.is_grouped %}
+                            <a href="{{ url_for('orders.order_detail', order_id=row.order_id) }}" class="ms-1 text-primary"><i class="fas fa-external-link-alt"></i></a>
+                            {% endif %}
+                        </div>
+
+                        <div class="row g-2 text-center small mb-2">
+                            <div class="col-6 border-end">
+                                <span class="text-muted">Дебет (Отгрузка)</span><br>
+                                <span class="text-danger fw-bold fs-6">{% if row.debit > 0 %}{{ row.debit|money_int }}{% else %}-{% endif %}</span>
+                            </div>
+                            <div class="col-6">
+                                <span class="text-muted">Кредит (Оплата)</span><br>
+                                <span class="text-success fw-bold fs-6">{% if row.credit > 0 %}{{ row.credit|money_int }}{% else %}-{% endif %}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex justify-content-between align-items-center bg-white p-2 rounded border">
+                            <span class="small text-muted text-uppercase fw-bold">Сальдо:</span>
+                            <span class="fs-6 fw-bold {% if row.balance > 0 %}text-danger{% else %}text-success{% endif %}">{{ row.balance|money }}</span>
+                        </div>
+                        
+                        {% if row.doc_items %}
+                        <button class="btn btn-outline-secondary btn-sm w-100 mt-2" type="button" data-bs-toggle="collapse" data-bs-target="#mob_rec_detail_{{ loop.index }}">
+                            Развернуть состав <i class="fas fa-chevron-down"></i>
+                        </button>
+                        <div class="collapse mt-2" id="mob_rec_detail_{{ loop.index }}">
+                            {% for item in row.doc_items %}
+                                <div class="p-2 border rounded mb-2 bg-white small shadow-sm">
+                                    {% if item.type == 'payment' %}
+                                        <div class="text-success fw-bold"><i class="fas fa-check-circle"></i> {{ item.name }}</div>
+                                        <div class="d-flex justify-content-between mt-1 border-top pt-1">
+                                            <span class="text-muted">{{ item.date.strftime('%d.%m.%Y') }}</span>
+                                            <span class="fw-bold text-success">+{{ item.sum|money_int }}</span>
+                                        </div>
+                                    {% else %}
+                                        <div class="fw-bold text-dark">{{ item.name }}</div>
+                                        <div class="text-muted">{{ item.size }} | {{ item.field }}</div>
+                                        <div class="d-flex justify-content-between mt-1 border-top pt-1 align-items-center">
+                                            <span class="text-muted">{{ item.qty }} шт x {{ item.price|money_int }}</span>
+                                            <span class="fw-bold text-danger fs-6">{{ item.sum|money_int }}</span>
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+                <div class="card shadow-sm border-0 bg-dark text-white mt-3">
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between small mb-2">
+                            <span class="text-white-50">Итого дебет:</span><span class="text-warning fw-bold">{{ totals.debit|money }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between small mb-2 border-bottom border-secondary pb-2">
+                            <span class="text-white-50">Итого кредит:</span><span class="text-success fw-bold">{{ totals.credit|money }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center pt-1">
+                            <span class="fw-bold text-uppercase">ИТОГО САЛЬДО:</span>
+                            <span class="fw-bold fs-5 {% if totals.balance > 0 %}text-warning{% else %}text-success{% endif %}">{{ totals.balance|money }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    {% if barter_orders %}
+    <div class="card shadow-sm border-0 mt-4">
+        <div class="card-header bg-warning bg-opacity-25 fw-bold d-flex justify-content-between align-items-center py-3">
+            <span><i class="fas fa-handshake text-warning me-2"></i> Взаимозачеты клиента</span>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0" style="font-size: 13px; border-collapse: collapse;">
+                    <thead>
+                        <tr class="align-middle text-uppercase small text-muted" style="background-color: #f8f9fa; border-bottom: 2px solid #e9ecef;">
+                            <th class="ps-3">Заказ</th>
+                            <th>Дата</th>
+                            <th class="text-end text-warning" style="width: 140px;">Сумма заказа</th>
+                            <th class="text-end text-success" style="width: 140px;">Покрыто расходами</th>
+                            <th class="text-end fw-bold" style="width: 140px;">Остаток долга</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for bo in barter_orders %}
+                        <tr style="border-top: 1px solid #f0f0f0;">
+                            <td class="ps-3 align-middle">
+                                <a href="{{ url_for('orders.order_detail', order_id=bo.order.id) }}" class="text-decoration-none fw-bold">Заказ #{{ bo.order.id }}</a>
+                            </td>
+                            <td class="small align-middle text-muted">{{ bo.order.date.strftime('%d.%m.%Y') }}</td>
+                            <td class="text-end align-middle fw-bold text-warning">{{ bo.total|money }}</td>
+                            <td class="text-end align-middle fw-bold text-success">{{ bo.paid|money }}</td>
+                            <td class="text-end align-middle fw-bold {% if bo.remaining > 0 %}text-danger{% else %}text-secondary{% endif %}" style="background-color: #fafafa;">
+                                {{ bo.remaining|money }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <script>
+        function expandAllDocs() {
+            document.querySelectorAll('.rec-detail-row').forEach(el => el.classList.add('show'));
+            document.querySelectorAll('.doc-toggler i').forEach(el => {
+                el.classList.remove('fa-plus-square');
+                el.classList.add('fa-minus-square');
+            });
+        }
+        function collapseAllDocs() {
+            document.querySelectorAll('.rec-detail-row').forEach(el => el.classList.remove('show'));
+            document.querySelectorAll('.doc-toggler i').forEach(el => {
+                el.classList.remove('fa-minus-square');
+                el.classList.add('fa-plus-square');
+            });
+        }
+        
+        // Функция переключения оплат для конкретного заказа
+        function togglePayments(orderId) {
+            const rows = document.querySelectorAll(`.payment-for-${orderId}`);
+            let isHidden = false;
+            rows.forEach(r => {
+                if (r.style.display === 'none') {
+                    r.style.display = '';
+                    isHidden = false;
+                } else {
+                    r.style.display = 'none';
+                    isHidden = true;
+                }
+            });
+            
+            // Меняем прозрачность иконки, чтобы было понятно
+            const btn = document.querySelector(`.pay-toggler-${orderId}`);
+            if(btn) btn.style.opacity = isHidden ? '0.5' : '1';
+        }
+
+        // Глобальное переключение всех оплат
+        let allPaymentsVisible = true;
+        function toggleAllPayments() {
+            allPaymentsVisible = !allPaymentsVisible;
+            document.querySelectorAll('.payment-row').forEach(r => {
+                r.style.display = allPaymentsVisible ? '' : 'none';
+            });
+            // Обновляем визуально все кнопки
+            document.querySelectorAll('[class*="pay-toggler-"]').forEach(btn => {
+                btn.style.opacity = allPaymentsVisible ? '1' : '0.5';
+            });
+        }
+
+        // Автоматическая смена иконки при клике (для товаров)
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.doc-toggler').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    let icon = this.querySelector('i');
+                    if (icon.classList.contains('fa-plus-square')) {
+                        icon.classList.remove('fa-plus-square');
+                        icon.classList.add('fa-minus-square');
+                    } else {
+                        icon.classList.remove('fa-minus-square');
+                        icon.classList.add('fa-plus-square');
+                    }
+                });
+            });
+        });
+    </script>
+    {% endif %}
+    {% endif %}
+    
+    <!-- 2. ОБОРОТНАЯ ВЕДОМОСТЬ -->
+    {% if active_tab == 'turnover' %}
+    <div class="card p-3 mb-3 bg-light shadow-sm border-success border-start border-4">
+        <form method="GET" action="{{ url_for('finance.reports_turnover') }}" class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label small fw-bold">Растение</label>
+                <select name="plant_id" id="t_plant" class="form-select form-select-sm select-search" required>
+                    <option value="" disabled {% if not filters.get('plant_id') %}selected{% endif %}>Выберите...</option>
+                    {% for p in plants %}
+                    <option value="{{ p.id }}" {% if filters.get('plant_id')|int == p.id %}selected{% endif %}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small fw-bold">Поле</label>
+                <select name="field_id" id="t_field" class="form-select form-select-sm select-search" required>
+                    <option value="" disabled {% if not filters.get('field_id') %}selected{% endif %}>Выберите...</option>
+                    {% for f in fields %}
+                    <option value="{{ f.id }}" {% if filters.get('field_id')|int == f.id %}selected{% endif %}>{{ f.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-bold">Партия (Год)</label>
+                <select name="year" id="t_year" class="form-select form-select-sm" required>
+                    {% if filters.get('year') %}
+                    <option value="{{ filters.get('year') }}" selected>{{ filters.get('year') }}</option>
+                    {% else %}
+                    <option value="" disabled selected>Сначала товар...</option>
+                    {% endif %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small fw-bold">Период</label>
+                <div class="input-group input-group-sm">
+                    <input type="date" name="start_date" value="{{ filters.get('start_date') or '' }}" class="form-control">
+                    <span class="input-group-text">-</span>
+                    <input type="date" name="end_date" value="{{ filters.get('end_date') or '' }}" class="form-control">
+                </div>
+            </div>
+            <div class="col-md-12 mt-3 text-end">
+                <a href="{{ url_for('finance.reports_turnover') }}" class="btn btn-outline-secondary btn-sm">Сброс</a>
+                <button type="submit" class="btn btn-success btn-sm px-4"><i class="fas fa-search me-1"></i> Сформировать</button>
+            </div>
+        </form>
+    </div>
+
+    {% if filters.get('plant_id') %}
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+            <span>Движение товара</span>
+            <span class="badge bg-primary fs-6">Начальный остаток: {{ opening_balance }} шт.</span>
+        </div>
+        <!-- ПК ВЕРСИЯ -->
+        <div class="table-responsive d-none d-md-block">
+            <table class="table table-bordered table-sm table-hover mb-0" style="font-size: 13px;">
+                <thead class="table-light text-center align-middle">
+                    <tr><th width="120">Дата</th><th>Документ / Операция</th><th>Размер</th><th>Автор</th><th>Комментарий</th><th class="text-success" width="100">Приход (+)</th><th class="text-danger" width="100">Расход (-)</th><th class="bg-light fw-bold" width="100">Остаток</th></tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr class="{% if row.type == 'ghost' %}table-warning text-muted{% endif %}">
+                        <td class="text-center">{{ row.date.strftime('%d.%m.%Y %H:%M') }}</td>
+                        <td>{% if row.type == 'ghost' %}<i class="fas fa-ghost me-1"></i>{% endif %}{{ row.doc_name }}</td>
+                        <td class="text-center small">{{ row.size_name }}</td>
+                        <td class="text-center small">{{ row.author }}</td>
+                        <td class="small">{{ row.comment or '' }}</td>
+                        <td class="text-center text-success fw-bold">{% if row.income > 0 %}+{{ row.income }}{% endif %}</td>
+                        <td class="text-center text-danger fw-bold">{% if row.expense > 0 %}-{{ row.expense }}{% endif %}</td>
+                        <td class="text-center fw-bold bg-light">{{ row.balance }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="8" class="text-center p-4 text-muted">В выбранном периоде движений не было.</td></tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="table-success border-success">
+                        <td colspan="7" class="text-end fw-bold text-success text-uppercase">Конечный остаток на дату:</td>
+                        <td class="text-center fw-bold fs-6 text-success bg-white border-success">{{ closing_balance }}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+
+        <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+        <div class="d-md-none bg-light p-2">
+            {% for row in rows %}
+            <div class="card shadow-sm mb-2 border-0 {% if row.type == 'ghost' %}bg-warning bg-opacity-10{% endif %}">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-2 border-bottom pb-2">
+                        <span class="small text-muted fw-bold">{{ row.date.strftime('%d.%m.%y %H:%M') }}</span>
+                        <span class="badge bg-secondary">{{ row.author }}</span>
+                    </div>
+                    <div class="fw-bold text-dark mb-1">
+                        {% if row.type == 'ghost' %}<i class="fas fa-ghost text-warning me-1"></i>{% endif %}
+                        {{ row.doc_name }}
+                    </div>
+                    <div class="small text-muted mb-3">{{ row.size_name }} {% if row.comment %}| <i>{{ row.comment }}</i>{% endif %}</div>
+                    
+                    <div class="d-flex justify-content-between align-items-center bg-white p-2 rounded border">
+                        <div class="d-flex gap-3">
+                            {% if row.income > 0 %}<span class="text-success fw-bold"><i class="fas fa-arrow-down"></i> +{{ row.income }}</span>{% endif %}
+                            {% if row.expense > 0 %}<span class="text-danger fw-bold"><i class="fas fa-arrow-up"></i> -{{ row.expense }}</span>{% endif %}
+                            {% if row.income == 0 and row.expense == 0 %}<span class="text-muted">-</span>{% endif %}
+                        </div>
+                        <div class="text-end">
+                            <span class="small text-muted text-uppercase">Остаток:</span>
+                            <span class="fw-bold fs-6 ms-1 text-dark">{{ row.balance }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="text-center p-4 text-muted border rounded bg-white mt-2">В выбранном периоде движений не было.</div>
+            {% endfor %}
+            <div class="card shadow-sm border-success mt-3">
+                <div class="card-body p-3 bg-success text-white d-flex justify-content-between align-items-center rounded">
+                    <span class="fw-bold text-uppercase">Конечный остаток:</span>
+                    <span class="fw-bold fs-4">{{ closing_balance }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <!-- 3. ФИНАНСОВЫЙ РЕЗУЛЬТАТ -->
+    {% if active_tab == 'financial' and current_user.role in ['admin', 'executive'] %}
+    <div class="card p-3 mb-3 bg-light">
+        <form method="GET" action="{{ url_for('finance.reports_financial') }}" class="d-flex gap-3 align-items-center">
+            <label class="fw-bold">Отчетный год:</label>
+            <select name="year" class="form-select form-select-sm" style="width:100px;">
+                {% for y in years %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-primary btn-sm">Показать</button>
+        </form>
+    </div>
+    
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-danger text-white fw-bold">Расходы ({{ selected_year }})</div>
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr><td>Наличные</td><td class="text-end fw-bold">{{ data.exp_cash|money }}</td></tr>
+                        <tr><td>Безнал</td><td class="text-end fw-bold">{{ data.exp_cashless|money }}</td></tr>
+                        <tr class="table-info small"><td class="ps-3 text-muted">15% от наличных</td><td class="text-end text-muted">{{ data.tax_cash_15|money }}</td></tr>
+                        {% if data.investor_debt > 0 %}
+                        <tr class="table-warning"><td colspan="2" class="fw-bold small text-muted pt-2">Выплаты Партнерам:</td></tr>
+                        {% for inv_name, amt in data.investor_breakdown.items() %}<tr class="table-warning text-muted small"><td class="ps-3">- {{ inv_name }}</td><td class="text-end">{{ amt|money }}</td></tr>{% endfor %}
+                        <tr class="table-warning fw-bold border-top border-warning"><td>ИТОГО Партнерам</td><td class="text-end">{{ data.investor_debt|money }}</td></tr>
+                        {% endif %}
+                        <tr class="table-secondary fw-bold border-top border-dark mt-2"><td>ИТОГО РАСХОДЫ (Всего)</td><td class="text-end">{{ data.total_expenses|money }}</td></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-success text-white fw-bold">Продажи ({{ selected_year }})</div>
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr><td>Зарезервировано</td><td class="text-end text-primary">{{ data.val_reserved|money }}</td></tr>
+                        <tr><td>Отгружено (полностью)</td><td class="text-end fw-bold text-success">{{ data.val_shipped|money }}</td></tr>
+                        <tr class="table-light fw-bold border-top"><td>Потенциал продаж (Всего)</td><td class="text-end">{{ data.total_sales_potential|money }}</td></tr>
+                        <tr class="table-success fw-bold border-top border-dark"><td>Реализованная выручка (Факт)</td><td class="text-end">{{ data.realized_revenue|money }}</td></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="card border-primary shadow text-center p-3"><h5 class="text-muted">Чистая прибыль</h5><h2 class="{% if data.net_profit > 0 %}text-success{% else %}text-danger{% endif %} fw-bold">{{ data.net_profit|money }}</h2></div>
+    {% endif %}
+
+    <!-- 4. МАРЖИНАЛЬНОСТЬ -->
+    {% if active_tab == 'margin' and current_user.role in ['admin', 'executive'] %}
+    <div class="bg-light p-2 mb-3 rounded border shadow-sm">
+        <form method="GET" action="{{ url_for('finance.reports_margin') }}" class="d-flex align-items-center flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-2 bg-white px-2 py-1 rounded border">
+                <label class="fw-bold small">Год:</label>
+                <select name="year" class="form-select form-select-sm border-0" style="width:80px;">
+                    {% for y in years %}<option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>{% endfor %}
+                </select>
+            </div>
+
+            <!-- Фильтр Растения -->
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Растения {% if filters.plants %}<span class="badge bg-secondary">{{ filters.plants|length }}</span>{% endif %}</button>
+                <div class="dropdown-menu p-2 shadow" style="min-width: 250px; max-height: 400px; overflow-y: auto;">
+                    <input type="text" class="form-control form-control-sm mb-2" placeholder="Поиск..." onkeyup="filterList(this, '.chk-plant')">
+                    <div class="mb-2"><a href="#" onclick="toggleChecks('plant', false)">Сбросить</a></div>
+                    {% for p in all_plants %}
+                    <div class="form-check chk-plant">
+                        <input class="form-check-input check-plant" type="checkbox" name="filter_plant" value="{{ p.id }}" id="mp{{p.id}}" {% if p.id in filters.plants %}checked{% endif %}>
+                        <label class="form-check-label small" for="mp{{p.id}}">{{ p.name }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Фильтр Размеры -->
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Размеры {% if filters.sizes %}<span class="badge bg-secondary">{{ filters.sizes|length }}</span>{% endif %}</button>
+                <div class="dropdown-menu p-2 shadow" style="min-width: 200px; max-height: 400px; overflow-y: auto;">
+                    <div class="mb-2"><a href="#" onclick="toggleChecks('size', false)">Сбросить</a></div>
+                    {% for s in all_sizes %}
+                    <div class="form-check">
+                        <input class="form-check-input check-size" type="checkbox" name="filter_size" value="{{ s.id }}" id="ms{{s.id}}" {% if s.id in filters.sizes %}checked{% endif %}>
+                        <label class="form-check-label small" for="ms{{s.id}}">{{ s.name }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Фильтр Поля -->
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Поля {% if filters.fields %}<span class="badge bg-secondary">{{ filters.fields|length }}</span>{% endif %}</button>
+                <div class="dropdown-menu p-2 shadow" style="min-width: 200px; max-height: 400px; overflow-y: auto;">
+                    <div class="mb-2"><a href="#" onclick="toggleChecks('field', false)">Сбросить</a></div>
+                    {% for f in all_fields %}
+                    <div class="form-check">
+                        <input class="form-check-input check-field" type="checkbox" name="filter_field" value="{{ f.id }}" id="mf{{f.id}}" {% if f.id in filters.fields %}checked{% endif %}>
+                        <label class="form-check-label small" for="mf{{f.id}}">{{ f.name }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <button class="btn btn-primary btn-sm px-3"><i class="fas fa-sync-alt"></i></button>
+        </form>
+    </div>
+
+    <!-- ПК ВЕРСИЯ -->
+    <div class="table-responsive d-none d-md-block">
+        <table class="table table-striped table-sm table-hover border" id="marginTable">
+            <thead class="bg-light">
+                <tr>
+                    <th onclick="sortTable('marginTable', 0, 'string')" style="cursor:pointer">Растение <i class="fas fa-sort sort-icon text-muted"></i></th>
+                    <th onclick="sortTable('marginTable', 1, 'string')" style="cursor:pointer">Размер <i class="fas fa-sort sort-icon text-muted"></i></th>
+                    <th onclick="sortTable('marginTable', 2, 'string')" style="cursor:pointer">Поле <i class="fas fa-sort sort-icon text-muted"></i></th>
+                    <th class="text-end" onclick="sortTable('marginTable', 3, 'number')" style="cursor:pointer">Цена продажи <i class="fas fa-sort sort-icon text-muted"></i></th>
+                    <th class="text-end" onclick="sortTable('marginTable', 4, 'number')" style="cursor:pointer">Себестоимость <i class="fas fa-sort sort-icon text-muted"></i></th>
+                    <th class="text-end" onclick="sortTable('marginTable', 5, 'number')" style="cursor:pointer">Маржа (₽) <i class="fas fa-sort sort-icon text-muted"></i></th>
+                    <th class="text-end" onclick="sortTable('marginTable', 6, 'number')" style="cursor:pointer">Маржа (%) <i class="fas fa-sort sort-icon text-muted"></i></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ row.name }}</td>
+                    <td>{{ row.size }}</td>
+                    <td>{{ row.field }}</td>
+                    <td class="text-end fw-bold">{{ row.price|money }}</td>
+                    <td class="text-end text-danger">{{ row.cost|money }}</td>
+                    <td class="text-end fw-bold {% if row.margin > 0 %}text-success{% else %}text-danger{% endif %}">{{ row.margin|money }}</td>
+                    <td class="text-end small">{{ "%.1f"|format(row.margin_percent) }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+    <div class="d-md-none">
+        {% for row in rows %}
+        <div class="card shadow-sm mb-3 border-0">
+            <div class="card-body p-3">
+                <div class="fw-bold text-dark mb-1 fs-6">{{ row.name }}</div>
+                <div class="small text-muted mb-3 pb-2 border-bottom">{{ row.size }} | {{ row.field }}</div>
+                
+                <div class="row g-2 small mb-3 text-center">
+                    <div class="col-6 border-end">
+                        <span class="text-muted">Себестоимость</span><br>
+                        <span class="text-danger fw-bold fs-6">{{ row.cost|money_int }}</span>
+                    </div>
+                    <div class="col-6">
+                        <span class="text-muted">Цена продажи</span><br>
+                        <span class="fw-bold text-dark fs-6">{{ row.price|money_int }}</span>
+                    </div>
+                </div>
+                
+                <div class="d-flex justify-content-between align-items-center bg-light p-2 rounded">
+                    <span class="text-muted small fw-bold text-uppercase">Маржа:</span>
+                    <span class="fw-bold fs-6 {% if row.margin > 0 %}text-success{% else %}text-danger{% endif %}">
+                        {{ row.margin|money_int }} ({{ "%.1f"|format(row.margin_percent) }}%)
+                    </span>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="text-center text-muted py-4">Нет данных по маржинальности</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- 5. ПАРТНЕР -->
+    {% if active_tab == 'investor' and current_user.role in ['admin', 'executive'] %}
+    
+    <!-- 1. ФИЛЬТРЫ -->
+    <div class="bg-light p-2 mb-3 rounded border shadow-sm">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="small text-muted"><i class="fas fa-info-circle"></i> Себестоимость = Закупка + Накопленные расходы (на 31.12 пред. года). Расчет динамический.</div>
+        </div>
+        <form method="GET" action="{{ url_for('finance.reports_investor') }}" class="d-flex align-items-center flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-1 bg-white px-2 py-1 rounded border">
+                <span class="small fw-bold">Период:</span>
+                <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control form-control-sm border-0" style="width: auto;">
+                <span>-</span>
+                <input type="date" name="end_date" value="{{ filters.end or '' }}" class="form-control form-control-sm border-0" style="width: auto;">
+            </div>
+
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Растения {% if filters.plants %}<span class="badge bg-secondary">{{ filters.plants|length }}</span>{% endif %}</button>
+                <div class="dropdown-menu p-2 shadow" style="min-width: 250px; max-height: 400px; overflow-y: auto;">
+                    <input type="text" class="form-control form-control-sm mb-2" placeholder="Поиск..." onkeyup="filterList(this, '.chk-plant-inv')">
+                    <div class="mb-2"><a href="#" onclick="toggleChecks('plant-inv', false)">Сбросить</a></div>
+                    {% for p in all_plants %}
+                    <div class="form-check chk-plant-inv">
+                        <input class="form-check-input check-plant-inv" type="checkbox" name="filter_plant" value="{{ p.id }}" id="ip{{p.id}}" {% if p.id in filters.plants %}checked{% endif %}>
+                        <label class="form-check-label small" for="ip{{p.id}}">{{ p.name }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Поля {% if filters.fields %}<span class="badge bg-secondary">{{ filters.fields|length }}</span>{% endif %}</button>
+                <div class="dropdown-menu p-2 shadow" style="min-width: 200px; max-height: 400px; overflow-y: auto;">
+                    <div class="mb-2"><a href="#" onclick="toggleChecks('field-inv', false)">Сбросить</a></div>
+                    {% for f in all_fields %}
+                    <div class="form-check">
+                        <input class="form-check-input check-field-inv" type="checkbox" name="filter_field" value="{{ f.id }}" id="if{{f.id}}" {% if f.id in filters.fields %}checked{% endif %}>
+                        <label class="form-check-label small" for="if{{f.id}}">{{ f.name }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <button class="btn btn-primary btn-sm px-3"><i class="fas fa-sync-alt"></i></button>
+            
+            <!-- Переключатель "Реальная картина" -->
+            {% if current_user.role == 'admin' %}
+            <div class="form-check form-switch ms-3 mt-1">
+                <input class="form-check-input" type="checkbox" id="realPictureSwitch" name="real_picture" value="1" {% if real_picture %}checked{% endif %} onchange="this.form.submit()">
+                <label class="form-check-label small fw-bold text-muted" for="realPictureSwitch" title="Отключить корректировки фиксированного сальдо">Реальная картина</label>
+            </div>
+            {% endif %}
+            
+            <!-- ИСПРАВЛЕНИЕ: Добавлено hx-boost="false" -->
+            <a href="{{ url_for('finance.reports_investor_export', start_date=filters.start, end_date=filters.end, real_picture=1 if real_picture else 0) }}" 
+               class="btn btn-success btn-sm ms-auto" 
+               hx-boost="false">
+               <i class="fas fa-file-excel"></i> Excel
+            </a>
+        </form>
+    </div>
+
+    <!-- ИНФО-БЛОК -->
+    <div class="alert alert-info alert-dismissible fade show shadow-sm border-info small mb-3" role="alert">
+        <h6 class="fw-bold"><i class="fas fa-info-circle"></i> Справка:</h6>
+        <ul class="mb-0 ps-3">
+            <li><b>Полная себестоимость:</b> Цена закупки + Накопленные расходы (Опер+Аморт) до года продажи.</li>
+            <li><b>Доля за период:</b> <code>(Цена / 2) - Полная себестоимость</code>. Прибыль партнера с продаж.</li>
+            <li><b>Сальдо по акту:</b> Долг партнера (как клиента) перед питомником за услуги/покупки.</li>
+            <li><b>ИТОГО:</b> <code>Сальдо - Доля</code>. Зеленый = Партнер должен нам. Красный = Мы должны партнеру.</li>
+        </ul>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+
+    <!-- 2. СВОДКА ПО ПАРТНЕРАМ (Гармошка) -->
+    <div class="accordion mb-3 shadow-sm" id="accordionInvSummary">
+        <div class="accordion-item border-0">
+            <h2 class="accordion-header">
+                <button class="accordion-button bg-white text-dark fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSummary">
+                    <i class="fas fa-wallet text-warning me-2"></i> Финансовая сводка по Партнерам
+                </button>
+            </h2>
+            <div id="collapseSummary" class="accordion-collapse collapse show" data-bs-parent="#accordionInvSummary">
+                <div class="accordion-body p-0">
+                    <table class="table table-sm table-striped mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Партнер</th>
+                                <th class="text-end">Доля за период</th>
+                                <th class="text-end text-muted">Сальдо по акту</th>
+                                <th class="text-end bg-light fw-bold">ИТОГО</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for inv_id, data in investor_summary.items() %}
+                            <tr>
+                                <td class="fw-bold">{{ data.name }}</td>
+                                <td class="text-end fw-bold text-dark">{{ data.share|money }}</td>
+                                <td class="text-end text-muted">{{ data.balance_act|money }}</td>
+                                <td class="text-end fw-bold fs-6">
+                                    {% if data.net_result > 0 %}
+                                        <span class="text-success">{{ data.net_result|money }}</span>
+                                        <small class="text-muted d-block" style="font-size: 9px;">(Нам должны)</small>
+                                    {% elif data.net_result < 0 %}
+                                        <span class="text-danger">{{ data.net_result|money }}</span>
+                                        <small class="text-muted d-block" style="font-size: 9px;">(К выплате)</small>
+                                    {% else %}
+                                        <span class="text-muted">0.00 ₽</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="4" class="text-center text-muted p-3">Нет данных за выбранный период</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. ДЕТАЛИЗАЦИЯ ОТГРУЗОК (ОСНОВНАЯ ТАБЛИЦА) -->
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+            <span><i class="fas fa-list-ul text-primary me-2"></i> Детализация отгрузок</span>
+            <span class="badge bg-light text-dark border">Всего Доля: {{ total_period_share|money }}</span>
+        </div>
+        
+        <!-- Кнопки фильтрации типов -->
+        <div class="p-2 bg-light border-bottom text-end">
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-secondary" onclick="filterInvestorType('all')">Все</button>
+                <button class="btn btn-outline-success" onclick="filterInvestorType('1')">Только продажи (1)</button>
+                <button class="btn btn-outline-warning text-dark" onclick="filterInvestorType('2')">Свои/Возврат (2)</button>
+            </div>
+        </div>
+
+        <!-- ПК ВЕРСИЯ -->
+        <div class="table-responsive d-none d-md-block">
+            <table class="table table-hover table-bordered table-sm mb-0" style="font-size: 12px;" id="investorDetailTable">
+                <thead class="table-light align-middle text-center small text-muted text-uppercase">
+                    <tr>
+                        <th onclick="sortTable('investorDetailTable', 0, 'string')" style="cursor:pointer">Дата</th>
+                        <th onclick="sortTable('investorDetailTable', 1, 'string')" style="cursor:pointer">Партнер</th>
+                        <th onclick="sortTable('investorDetailTable', 2, 'string')" style="cursor:pointer">Покупатель</th>
+                        <th onclick="sortTable('investorDetailTable', 3, 'string')" style="cursor:pointer">Растение / Поле</th>
+                        
+                        <th class="bg-warning bg-opacity-10 text-dark">Прайс</th>
+                        <th class="bg-danger bg-opacity-10 text-dark" title="Закупка + Накопленные">Себест. (ед)</th>
+                        <th class="bg-primary bg-opacity-10 text-dark" title="(Прайс/2) - Себест">Доля (ед)</th>
+                        
+                        <th onclick="sortTable('investorDetailTable', 7, 'number')" style="cursor:pointer">Кол-во</th>
+                        <th onclick="sortTable('investorDetailTable', 8, 'number')" style="cursor:pointer">Сумма Доли</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in investor_details %}
+                    <tr class="inv-row type-{{ row.type_code }}">
+                        <td class="text-center text-nowrap">{{ row.date.strftime('%d.%m.%Y') }}</td>
+                        <td class="fw-bold text-secondary">{{ row.investor }}</td>
+                        <td>
+                            {{ row.buyer }} 
+                            {% if row.type_code == 2 %}<span class="badge bg-warning text-dark border border-dark ms-1" style="font-size: 9px;">СВОИ</span>{% endif %}
+                            <a href="{{ url_for('orders.order_detail', order_id=row.order_id, return_to=current_url) }}" class="text-muted ms-1 text-decoration-none"><i class="fas fa-external-link-alt small"></i></a>
+                        </td>
+                        <td>
+                            <span class="fw-bold">{{ row.plant }}</span> <span class="text-muted">{{ row.size }}</span>
+                            <div class="text-muted small">Поле: {{ row.field }} ({{ row.batch_year }})</div>
+                        </td>
+                        
+                        <td class="text-end bg-warning bg-opacity-10">{{ row.price|money }}</td>
+                        <td class="text-end bg-danger bg-opacity-10 fw-bold">{{ row.full_cost_unit|money }}</td>
+                        <td class="text-end bg-primary bg-opacity-10 fw-bold text-primary">{{ row.share_unit|money }}</td>
+                        
+                        <td class="text-center fw-bold">{{ row.qty }}</td>
+                        <td class="text-end fw-bold {% if row.total_share > 0 %}text-success{% else %}text-danger{% endif %} fs-6" data-val="{{ row.total_share }}">
+                            {{ row.total_share|money }}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="9" class="text-center p-4 text-muted">Нет данных за выбранный период</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+        <div class="d-md-none bg-light p-2">
+            {% for row in investor_details %}
+            <div class="card shadow-sm mb-3 border-0 inv-row type-{{ row.type_code }}">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-2">
+                        <span class="small text-muted fw-bold">{{ row.date.strftime('%d.%m.%Y') }}</span>
+                        <span class="badge {% if row.type_code == 2 %}bg-warning text-dark{% else %}bg-primary{% endif %}">
+                            {% if row.type_code == 2 %}СВОИ{% else %}ПРОДАЖА{% endif %}
+                        </span>
+                    </div>
+                    
+                    <div class="fw-bold text-dark fs-6">{{ row.plant }} <span class="text-muted fw-normal ms-1">{{ row.size }}</span></div>
+                    <div class="small text-muted mb-3">Поле: {{ row.field }} (Партия: {{ row.batch_year }})</div>
+                    
+                    <div class="p-2 bg-white border rounded small mb-3 shadow-sm">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="text-muted">Партнер:</span><span class="fw-bold text-dark">{{ row.investor }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span class="text-muted">Покупатель:</span>
+                            <span class="fw-bold text-end">{{ row.buyer }} <a href="{{ url_for('orders.order_detail', order_id=row.order_id, return_to=current_url) }}" class="text-primary text-decoration-none"><i class="fas fa-external-link-alt ms-1"></i></a></span>
+                        </div>
+                    </div>
+                    
+                    <div class="row g-2 small mb-3 text-center">
+                        <div class="col-4 border-end">
+                            <div class="text-muted" style="font-size: 10px;">Прайс</div>
+                            <div class="fw-bold text-dark">{{ row.price|money_int }}</div>
+                        </div>
+                        <div class="col-4 border-end">
+                            <div class="text-muted" style="font-size: 10px;">Себест.</div>
+                            <div class="fw-bold text-danger">{{ row.full_cost_unit|money_int }}</div>
+                        </div>
+                        <div class="col-4">
+                            <div class="text-muted" style="font-size: 10px;">Кол-во</div>
+                            <div class="fw-bold fs-6">{{ row.qty }}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between align-items-center bg-success bg-opacity-10 p-2 rounded border border-success border-opacity-25">
+                        <span class="small text-success fw-bold text-uppercase">Итого доля:</span>
+                        <span class="fs-5 fw-bold {% if row.total_share > 0 %}text-success{% else %}text-danger{% endif %}">{{ row.total_share|money_int }}</span>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="text-center p-4 text-muted border rounded bg-white mt-2">Нет данных за выбранный период</div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 6. КАЛЬКУЛЯТОР -->
+    {% if active_tab == 'calculator' and current_user.role in ['admin', 'executive'] %}
+    <div class="row">
+        <div class="col-md-4">
+            <div class="card shadow-sm border-primary">
+                <div class="card-header bg-primary text-white fw-bold">Калькулятор</div>
+                <div class="card-body">
+                    <form method="POST" id="calcForm">
+                        <div id="calcRows">
+                            <div class="calc-row border-bottom pb-2 mb-2">
+                                <div class="mb-1"><select name="plant_id[]" class="form-select form-select-sm" required><option value="" disabled selected>Растение</option>{% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
+                                <div class="row g-1 mb-1">
+                                    <div class="col-6"><select name="size_id[]" class="form-select form-select-sm" required><option value="" disabled selected>Размер</option>{% for s in sizes %}<option value="{{ s.id }}" {% if s.name == 'Саженцы' %}class="seedling-option"{% endif %}>{{ s.name }}</option>{% endfor %}</select></div>
+                                    <div class="col-6"><select name="field_id[]" class="form-select form-select-sm" required onchange="fetchPrice(this)"><option value="" disabled selected>Поле</option>{% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select></div>
+                                </div>
+                                <div class="row g-1 mb-1">
+                                    <div class="col-6"><div class="input-group input-group-sm"><span class="input-group-text">Цена</span><input type="number" step="0.01" name="price[]" class="form-control price-input" placeholder="0.00"></div></div>
+                                    <div class="col-6"><select name="year[]" class="form-select form-select-sm border-warning"><option value="">Год (авто)</option>{% for y in years_range %}<option value="{{ y }}">{{ y }}</option>{% endfor %}</select></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between mt-3"><button type="button" class="btn btn-outline-secondary btn-sm" onclick="addCalcRow()">+ Строка</button><button type="submit" class="btn btn-success btn-sm px-4">Рассчитать</button></div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-8">
+            {% if calc_results %}
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-success text-white fw-bold">
+                    <i class="fas fa-calculator me-2"></i>Результат расчета
+                </div>
+                <div class="card-body p-0">
+                    <!-- ПК ВЕРСИЯ -->
+                    <div class="table-responsive d-none d-md-block">
+                        <table class="table table-bordered table-sm mb-0 table-hover" style="font-size: 13px;">
+                            <thead class="table-light text-center align-middle">
+                                <tr>
+                                    <th>Позиция</th>
+                                    <th>Статус поля</th>
+                                    <th class="bg-white">Цена (Ввод)</th>
+                                    <th title="Закупка + Накопленные расходы">Полная<br>Себест.</th>
+                                    <th>Формула</th>
+                                    <th class="bg-success text-white">Прибыль (Share)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for r in calc_results %}
+                                <tr>
+                                    <td>
+                                        <b>{{ r.plant }}</b> <br>
+                                        <span class="text-muted small">{{ r.size }} ({{ r.year }})</span>
+                                    </td>
+                                    <td class="text-center">
+                                        {% if r.is_investor %}
+                                            <span class="badge bg-warning text-dark border">{{ r.status }}</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">{{ r.status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-end fw-bold">{{ r.input_price|money }}</td>
+                                    <td class="text-end">
+                                        <a href="#" class="text-decoration-none text-muted fw-bold" style="border-bottom: 1px dashed #ccc;" 
+                                           onclick="this.nextElementSibling.style.display = (this.nextElementSibling.style.display === 'none') ? 'block' : 'none'; return false;">
+                                            {{ r.total_cost|money }}
+                                        </a>
+                                        <div class="small bg-light border p-1 mt-1 rounded text-start" style="display: none; font-size: 10px; position: absolute; z-index: 10; min-width: 120px;">
+                                            <div>Закупка: <b>{{ r.purchase_price|money_int }}</b></div>
+                                            <div>Накопл: <b>{{ r.accum_cost|money_int }}</b></div>
+                                        </div>
+                                    </td>
+                                    <td class="text-center small text-muted fst-italic">{{ r.formula }}</td>
+                                    <td class="text-end fw-bold fs-6 {% if r.result_price > 0 %}text-success{% else %}text-danger{% endif %}">
+                                        {{ r.result_price|money }}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+                    <div class="d-md-none bg-light p-2">
+                        {% for r in calc_results %}
+                        <div class="card shadow-sm mb-3 border-0">
+                            <div class="card-body p-3">
+                                <div class="d-flex justify-content-between align-items-start mb-2 border-bottom pb-2">
+                                    <div>
+                                        <div class="fw-bold text-dark fs-6">{{ r.plant }}</div>
+                                        <div class="text-muted small">{{ r.size }} ({{ r.year }})</div>
+                                    </div>
+                                    <span class="badge {% if r.is_investor %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ r.status }}</span>
+                                </div>
+                                
+                                <div class="row g-2 small mb-3 text-center">
+                                    <div class="col-6 border-end">
+                                        <div class="text-muted" style="font-size: 10px;">Прайс (Ввод)</div>
+                                        <div class="fw-bold text-dark fs-6">{{ r.input_price|money_int }}</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="text-muted" style="font-size: 10px;">Себестоимость</div>
+                                        <div class="fw-bold text-danger fs-6">{{ r.total_cost|money_int }}</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="d-flex justify-content-between align-items-center bg-white p-2 rounded border">
+                                    <span class="small fw-bold text-uppercase text-muted">Прибыль:</span>
+                                    <span class="fs-5 fw-bold {% if r.result_price > 0 %}text-success{% else %}text-danger{% endif %}">{{ r.result_price|money_int }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 7. ПРОЕКТЫ (ОБНОВЛЕННАЯ ВЕРСИЯ) -->
+    {% if active_tab == 'projects' and current_user.role in ['admin', 'executive'] %}
+    <div class="card p-3 mb-3 bg-light shadow-sm">
+        <form method="GET" action="{{ url_for('finance.reports_projects') }}" class="d-flex align-items-center gap-2">
+            <label class="fw-bold">Год создания:</label>
+            <select name="year" class="form-select form-select-sm" style="width: 100px;">
+                {% for y in years %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-primary btn-sm">Показать</button>
+        </form>
+    </div>
+
+    <!-- ПК ВЕРСИЯ -->
+    <div class="table-responsive d-none d-md-block">
+        <table class="table table-bordered table-sm bg-white table-hover align-middle mb-0">
+            <thead class="table-light text-center small text-muted text-uppercase">
+                <tr>
+                    <th>Проект</th>
+                    <th>Статус</th>
+                    <th class="bg-success bg-opacity-10 text-dark">Выручка</th>
+                    <th>Себест. Растений<br>(Закуп + Уход)</th>
+                    <th class="bg-danger bg-opacity-10 text-dark">Прямые Расходы<br>(Факт / План)</th>
+                    <th class="bg-primary bg-opacity-10 text-dark fw-bold">Прибыль</th>
+                    <th>Рент. (%)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in projects %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('finance.project_detail', project_id=p.id) }}" class="fw-bold text-dark text-decoration-none">
+                            {{ p.name }} <i class="fas fa-external-link-alt small text-muted ms-1"></i>
+                        </a>
+                        {% if p.orders_count > 0 %}
+                        <div class="small text-muted">Заказов: {{ p.orders_count }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if p.status == 'active' %}
+                        <span class="badge bg-success">Активен</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Закрыт</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end text-success fw-bold">{{ p.revenue|money_int }}</td>
+                    <td class="text-end text-muted">{{ p.plants_cost|money_int }}</td>
+                    
+                    <td class="text-end bg-danger bg-opacity-10">
+                        <div class="fw-bold text-danger">{{ p.direct_expenses|money_int }}</div>
+                        <div class="small text-muted">План: {{ p.plan_expenses|money_int }}</div>
+                    </td>
+                    
+                    <td class="text-end bg-primary bg-opacity-10 fw-bold fs-6">
+                        {{ p.profit|money_int }}
+                    </td>
+                    
+                    <td class="text-center small fw-bold {% if p.margin > 20 %}text-success{% elif p.margin > 0 %}text-warning{% else %}text-danger{% endif %}">
+                        {{ "%.1f"|format(p.margin) }}%
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center py-5 text-muted">Нет проектов за выбранный период</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+    <div class="d-md-none bg-light p-2">
+        {% for p in projects %}
+        <div class="card shadow-sm mb-3 border-0">
+            <div class="card-body p-3">
+                <div class="d-flex justify-content-between align-items-center mb-2 border-bottom pb-2">
+                    <a href="{{ url_for('finance.project_detail', project_id=p.id) }}" class="fw-bold fs-5 text-dark text-decoration-none">
+                        {{ p.name }} <i class="fas fa-link small text-muted ms-1"></i>
+                    </a>
+                    <span class="badge {% if p.status == 'active' %}bg-success{% else %}bg-secondary{% endif %}">
+                        {% if p.status == 'active' %}Активен{% else %}Закрыт{% endif %}
+                    </span>
+                </div>
+                <div class="small text-muted mb-3">Связанных заказов: <b>{{ p.orders_count }}</b></div>
+                
+                <div class="row g-2 small text-center mb-3">
+                    <div class="col-4 border-end">
+                        <div class="text-muted" style="font-size: 10px;">Выручка</div>
+                        <div class="fw-bold text-success fs-6">{{ p.revenue|money_int }}</div>
+                    </div>
+                    <div class="col-4 border-end">
+                        <div class="text-muted" style="font-size: 10px;">Растения</div>
+                        <div class="fw-bold text-muted fs-6">{{ p.plants_cost|money_int }}</div>
+                    </div>
+                    <div class="col-4">
+                        <div class="text-muted" style="font-size: 10px;">Прямые расх.</div>
+                        <div class="fw-bold text-danger fs-6">{{ p.direct_expenses|money_int }}</div>
+                    </div>
+                </div>
+                
+                <div class="d-flex justify-content-between align-items-center bg-white p-2 rounded border">
+                    <span class="small fw-bold text-uppercase text-muted">Прибыль:</span>
+                    <div class="text-end">
+                        <span class="fs-5 fw-bold {% if p.profit > 0 %}text-primary{% else %}text-danger{% endif %}">{{ p.profit|money_int }}</span>
+                        <div class="small fw-bold {% if p.margin > 20 %}text-success{% elif p.margin > 0 %}text-warning{% else %}text-danger{% endif %} mt-1">
+                            Рент: {{ "%.1f"|format(p.margin) }}%
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="text-center py-4 text-muted border rounded bg-white">Нет проектов за выбранный год</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Подгрузка годов при выборе поля в Оборотной ведомости
+        $(document).on('select2:select change', '#t_plant, #t_field', function() {
+            let p = $('#t_plant').val();
+            let f = $('#t_field').val();
+            let ySelect = $('#t_year');
+            if (p && f) {
+                fetch(`/api/turnover_years?plant=${p}&field=${f}`)
+                .then(res => res.json())
+                .then(years => {
+                    ySelect.empty().append('<option value="" disabled selected>Выберите год...</option>');
+                    if(years && years.length > 0) {
+                        years.forEach(y => { ySelect.append(new Option(y, y)); });
+                        if(years.length === 1) { ySelect.val(years); }
+                    } else { ySelect.append('<option disabled>Нет истории на поле</option>'); }
+                })
+                .catch(err => console.error('Ошибка:', err));
+            }
+        });
+        // если при загрузке уже выбраны растение и поле, подгружаем список годов сразу
+        document.addEventListener('DOMContentLoaded', function() {
+            const p0 = $('#t_plant').val();
+            const f0 = $('#t_field').val();
+            if (p0 && f0) {
+                $('#t_plant, #t_field').trigger('change');
+            }
+        });
+    });
+
+    {% if active_tab == 'calculator' %}
+    function addCalcRow() {
+        const container = document.getElementById('calcRows');
+        const firstRow = container.querySelector('.calc-row');
+        const newRow = firstRow.cloneNode(true);
+        newRow.querySelector('.price-input').value = '';
+        container.appendChild(newRow);
+    }
+
+    async function fetchPrice(selectEl) {
+        const row = selectEl.closest('.calc-row');
+        // Находим селекты внутри текущей строки
+        const p = row.querySelector('select[name="plant_id[]"]').value;
+        const s = row.querySelector('select[name="size_id[]"]').value;
+        const f = selectEl.value; // Поле только что выбрали
+        
+        const priceInput = row.querySelector('input[name="price[]"]');
+        const yearSelect = row.querySelector('select[name="year[]"]');
+
+        if(p && s && f) {
+            try {
+                // Делаем запрос к API остатков
+                const res = await fetch(`/api/stock_info?plant=${p}&size=${s}&field=${f}`);
+                const data = await res.json();
+                
+                // 1. Обновляем список годов (Партий)
+                yearSelect.innerHTML = '';
+                if(data.batches && data.batches.length > 0) {
+                    data.batches.forEach(b => {
+                        const opt = document.createElement('option');
+                        opt.value = b.year;
+                        opt.innerText = `${b.year} (Ост: ${b.free})`;
+                        // Сохраняем цену в атрибут, чтобы при смене года можно было менять цену (опционально)
+                        opt.dataset.price = b.price; 
+                        yearSelect.appendChild(opt);
+                    });
+                    
+                    // 2. Авто-заполнение цены из первой доступной партии
+                    if (data.batches[0].price) {
+                        priceInput.value = data.batches[0].price;
+                    }
+                } else {
+                    yearSelect.innerHTML = '<option value="">Нет партий</option>';
+                    priceInput.value = ''; // Если нет товара, цену не знаем
+                }
+            } catch(e) { console.error(e); }
+        }
+    }
+    {% endif %}
+
+    // === НОВЫЕ ФУНКЦИИ (ФИЛЬТРЫ И СОРТИРОВКА) ===
+    
+    function toggleChecks(type, state) {
+        document.querySelectorAll('.check-' + type).forEach(el => el.checked = state);
+    }
+    
+    function filterList(input, selector) {
+        const filter = input.value.toLowerCase();
+        document.querySelectorAll(selector).forEach(div => { 
+            div.style.display = div.textContent.toLowerCase().includes(filter) ? '' : 'none'; 
+        });
+    }
+
+    // Умная сортировка (поддерживает tableId)
+    let sortDirection = 'asc'; 
+    let lastSortCol = -1;
+    
+    function sortTable(tableId, n, type='string') {
+        const table = document.getElementById(tableId);
+        if(!table) return;
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.rows);
+
+        if (lastSortCol === n) { 
+            sortDirection = (sortDirection === 'asc') ? 'desc' : 'asc'; 
+        } else { 
+            sortDirection = 'asc'; 
+        }
+        lastSortCol = n;
+
+        rows.sort((rA, rB) => {
+            let a = rA.cells[n].innerText.trim();
+            let b = rB.cells[n].innerText.trim();
+
+            if (type === 'number') {
+                // Чистим от пробелов и символов валют для чисел
+                a = parseFloat(a.replace(/[^\d.-]/g, '')) || 0;
+                b = parseFloat(b.replace(/[^\d.-]/g, '')) || 0;
+            }
+
+            // Используем localeCompare с опцией numeric: true для правильной сортировки строк (1, 2, 10)
+            if (type === 'string') {
+                return sortDirection === 'asc' 
+                    ? a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'})
+                    : b.localeCompare(a, undefined, {numeric: true, sensitivity: 'base'});
+            } else {
+                return sortDirection === 'asc' ? a - b : b - a;
+            }
+        });
+
+        rows.forEach(row => tbody.appendChild(row));
+        
+        // Обновление иконок
+        document.querySelectorAll(`#${tableId} .sort-icon`).forEach(i => i.className = 'fas fa-sort sort-icon text-muted ms-1');
+        const th = table.rows[0].cells[n];
+        const icon = th.querySelector('.sort-icon');
+        if(icon) icon.className = sortDirection === 'asc' ? 'fas fa-sort-up sort-icon ms-1' : 'fas fa-sort-down sort-icon ms-1';
+    }
+
+    // Фильтр для таблицы инвесторов
+    function filterInvestorType(type) {
+        const rows = document.querySelectorAll('.inv-row');
+        rows.forEach(row => {
+            if (type === 'all') {
+                row.style.display = '';
+            } else {
+                if (row.classList.contains('type-' + type)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}

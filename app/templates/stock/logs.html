@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.table-details { background-color: #f8f9fa; border-left: 4px solid #17a2b8; }
+.table-details td { border-top: none; border-bottom: 1px solid #dee2e6; }
+.rotate-icon { transition: transform 0.2s; }
+.collapsed .rotate-icon { transform: rotate(0deg); }
+.rotate-icon { transform: rotate(90deg); } 
+.inner-table { width: 100%; font-size: 12px; background: white; margin-bottom: 0; }
+.inner-table th { background: #e9ecef; padding: 4px; }
+.inner-table td { padding: 4px; }
+</style>
+<div class="d-flex justify-content-between align-items-center mb-3">
+<h4 class="mb-0 text-success fw-bold"><i class="fas fa-clipboard-list me-2"></i>Журнал системы</h4>
+<div class="d-flex gap-2">
+<input type="text" id="docSearchInput" class="form-control form-control-sm" style="width: 250px;" placeholder="🔍 Поиск (№, тип, коммент)...">
+{% if current_user.role == 'admin' %}
+    <a href="{{ url_for('stock.recalc_stock_balances') }}" class="btn btn-danger btn-sm" onclick="return confirm('Вы уверены? Это пересчитает все остатки с нуля на основе документов.')"><i class="fas fa-tools me-2"></i>Пересчет склада</a>
+    <a href="{{ url_for('main.backup_db') }}" class="btn btn-dark btn-sm"><i class="fas fa-database me-2"></i>Бэкап БД</a>
+    {% endif %}
+</div>
+</div>
+<ul class="nav nav-tabs mb-3" id="logTabs" role="tablist">
+<li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#operations">Операции (Документы)</button></li>
+<li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#actions">Действия пользователей</button></li>
+</ul>
+<div class="tab-content">
+<div class="tab-pane fade show active" id="operations">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover table-bordered align-middle" style="font-size: 13px;" id="docsTable">
+            <thead class="bg-light">
+                <tr><th width="40"></th><th>№</th><th>Дата</th><th>Тип</th><th>Автор</th><th>Комментарий / Содержание</th><th class="text-center">Действия</th></tr>
+            </thead>
+            <tbody>
+                {% for doc in documents %}
+                <tr class="doc-main-row">
+                    <td class="text-center">
+                        <button class="btn btn-sm btn-link p-0 text-decoration-none text-info collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#details{{ doc.id }}" aria-expanded="false"><i class="fas fa-chevron-right rotate-icon"></i></button>
+                    </td>
+                    <td class="fw-bold">{{ doc.id }}</td>
+                    <td>{{ doc.date.strftime('%d.%m.%Y') }}</td>
+                    <td>
+                        {% if doc.doc_type == 'income' %}<span class="badge bg-success">Поступление</span>
+                        {% elif doc.doc_type == 'correction' %}<span class="badge bg-warning text-dark">Коррекция (Импорт)</span>
+                        {% elif doc.doc_type == 'writeoff' %}<span class="badge bg-danger">Списание</span>
+                        {% elif doc.doc_type == 'move' %}<span class="badge bg-primary">Перемещение</span>
+                        {% elif doc.doc_type == 'shipment' %}<span class="badge bg-secondary">Отгрузка</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ doc.user.username }}</td>
+                    <td class="text-muted small">
+                        {{ doc.comment or '' }}
+                        <span style="display:none;">{% for r in doc.rows %} {{ r.plant.name }} {{ r.size.name }} {% endfor %}</span>
+                    </td>
+                    <td class="text-center">
+                        <div class="btn-group btn-group-sm">
+                            <a href="{{ url_for('stock.document_edit', doc_id=doc.id) }}" class="btn btn-outline-primary btn-xs" title="Редактировать"><i class="fas fa-edit"></i></a>
+                            <form method="POST" action="{{ url_for('stock.document_delete', doc_id=doc.id) }}" onsubmit="return confirm('Удалить операцию? Это изменит остатки!');" style="display:inline;">
+                                <button class="btn btn-outline-danger btn-xs" title="Удалить"><i class="fas fa-trash"></i></button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                <tr class="collapse bg-light" id="details{{ doc.id }}">
+                    <td colspan="7" class="p-2 table-details">
+                        <div class="fw-bold mb-1 small text-muted">Состав документа №{{ doc.id }}:</div>
+                        <table class="table table-bordered table-sm inner-table shadow-sm">
+                            <thead><tr><th>Растение</th><th>Размер</th>{% if doc.doc_type in ['income', 'move', 'correction'] %}<th>Куда</th>{% endif %}{% if doc.doc_type in ['writeoff', 'move', 'shipment'] %}<th>Откуда</th>{% endif %}<th>Год (Партия)</th><th class="text-end">Кол-во</th></tr></thead>
+                            <tbody>
+                                {% for row in doc.rows %}
+                                <tr><td>{{ row.plant.name }}</td><td>{{ row.size.name }}</td>{% if doc.doc_type in ['income', 'move', 'correction'] %}<td>{{ row.field_to.name if row.field_to else '-' }}</td>{% endif %}{% if doc.doc_type in ['writeoff', 'move', 'shipment'] %}<td>{{ row.field_from.name if row.field_from else '-' }}</td>{% endif %}<td class="text-center"><span class="badge bg-light text-dark border">{{ row.year }}</span></td><td class="text-end fw-bold">{{ row.quantity }}</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="tab-pane fade" id="actions">
+    <div class="table-responsive" style="max-height: 75vh;">
+        <table class="table table-sm table-striped mb-0">
+            <thead>
+                <tr>
+                    <th>Дата</th>
+                    <th>Пользователь</th>
+                    <th>Действие</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.date.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>{{ log.user.username }}</td>
+                    <td>{{ log.action }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('docSearchInput').addEventListener('keyup', function() {
+let filter = this.value.toLowerCase();
+let rows = document.querySelectorAll('.doc-main-row');
+rows.forEach(row => {
+let text = row.innerText.toLowerCase();
+if (text.includes(filter)) { row.style.display = ''; } else { row.style.display = 'none'; }
+});
+});
+
+document.querySelectorAll('button[data-bs-toggle="collapse"]').forEach(btn => {
+btn.addEventListener('click', function() {
+let icon = this.querySelector('i');
+if (this.classList.contains('collapsed')) { icon.style.transform = 'rotate(0deg)'; } else { icon.style.transform = 'rotate(90deg)'; }
+});
+let icon = btn.querySelector('i');
+icon.style.transform = 'rotate(0deg)';
+});
+
+var collapseElementList = [].slice.call(document.querySelectorAll('.collapse'))
+var collapseList = collapseElementList.map(function (collapseEl) {
+collapseEl.addEventListener('show.bs.collapse', function () {
+let id = this.id;
+let btn = document.querySelector(`button[data-bs-target="#${id}"] i`);
+if(btn) btn.style.transform = 'rotate(90deg)';
+})
+collapseEl.addEventListener('hide.bs.collapse', function () {
+let id = this.id;
+let btn = document.querySelector(`button[data-bs-target="#${id}"] i`);
+if(btn) btn.style.transform = 'rotate(0deg)';
+})
+})
+</script>
+{% endblock %}

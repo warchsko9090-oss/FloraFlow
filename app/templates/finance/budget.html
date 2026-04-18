@@ -1,0 +1,915 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    /* --- ОБЩИЕ СТИЛИ --- */
+    .budget-wrapper {
+        background: #fff; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        overflow: hidden; position: relative; width: 100%;
+    }
+    .budget-toolbar {
+        padding: 15px 20px; background: #fff; border-bottom: 1px solid #f0f0f0;
+    }
+    .table-container { overflow-x: auto; overflow-y: auto; max-height: 70vh; position: relative; width: 100%; }
+    .table-budget {
+        width: 100%; border-collapse: separate; border-spacing: 0;
+        font-size: 12px; font-family: 'Inter', sans-serif;
+    }
+    .table-budget th, .table-budget td {
+        padding: 8px 12px; border-right: 1px solid #f4f5f7; border-bottom: 1px solid #f4f5f7;
+        white-space: nowrap; vertical-align: middle;
+    }
+    .table-budget tbody tr:hover { background-color: #f8f9fa; }
+
+    /* --- СТИЛИ ДЛЯ РЕЖИМА "ОДИН МЕСЯЦ" (КРУПНЕЕ) --- */
+    .view-single-month .table-budget { font-size: 14px; }
+    .view-single-month .col-name { width: auto; max-width: 500px; white-space: normal; }
+    .view-single-month .col-total-group { left: auto !important; position: static !important; }
+    .view-single-month .col-sticky { position: static !important; border-right: none !important; }
+    .view-single-month .text-num { min-width: 120px; font-size: 15px; }
+    .view-single-month input.plan-inp { font-size: 15px; }
+
+    /* --- СТАНДАРТНЫЕ СТИЛИ (ВЕСЬ ГОД) --- */
+    .table-budget thead th {
+        position: sticky; top: 0; z-index: 30; background: #ffffff; color: #495057;
+        font-weight: 700; text-transform: uppercase; height: 45px; border-bottom: 2px solid #dee2e6;
+        letter-spacing: 0.5px; font-size: 11px;
+    }
+    .col-sticky { position: sticky !important; z-index: 20 !important; background-color: #ffffff !important; border-right: 2px solid #e9ecef !important; }
+    .table-budget thead th.col-sticky { z-index: 40 !important; background-color: #ffffff !important; }
+    
+    .col-code { left: 0 !important; width: 50px !important; min-width: 50px !important; max-width: 50px !important; box-sizing: border-box !important; text-align: center; font-weight: bold; color: #adb5bd; }
+    .col-name { left: 50px !important; width: 300px !important; min-width: 300px !important; max-width: 300px !important; box-sizing: border-box !important; white-space: normal !important; line-height: 1.3; }
+    
+    /* Стили блока ИТОГО ЗА ГОД */
+    .table-budget th.col-total-group, .table-budget td.col-total-group {
+        position: sticky !important;
+        background-color: #ffffff !important;
+        z-index: 20 !important;
+    }
+    .table-budget thead th.head-total-group {
+        background-color: #ffffff !important; 
+        color: #d97706 !important; 
+        border-bottom: 2px solid #f59e0b !important;
+        z-index: 40 !important;
+    }
+    
+    /* Итого за год: 3 фиксированные колонки */
+    .col-plan-tot { left: 350px !important; width: 115px !important; min-width: 115px !important; max-width: 115px !important; box-sizing: border-box !important; }
+    .col-fact-tot { left: 465px !important; width: 115px !important; min-width: 115px !important; max-width: 115px !important; box-sizing: border-box !important; }
+    .col-diff-tot { left: 580px !important; width: 115px !important; min-width: 115px !important; max-width: 115px !important; box-sizing: border-box !important; border-right: 2px solid #dee2e6 !important; }
+    
+    /* Для заголовков первой строки */
+    .table-budget thead tr:nth-child(1) .head-total-group { 
+        left: 350px !important; 
+        width: 345px !important; 
+        min-width: 345px !important; 
+        max-width: 345px !important; 
+        box-sizing: border-box !important;
+        border-right: 2px solid #dee2e6 !important; 
+    }
+
+    /* СТРОКА "ВСЕГО" */
+    .row-grand-total td {
+        position: sticky; top: 45px; z-index: 10;
+        background-color: #343a40 !important; color: #f8f9fa !important; font-weight: 700;
+        border-bottom: 3px solid #212529; font-size: 13px;
+    }
+    .row-grand-total td.col-sticky, .row-grand-total td.col-total-group { 
+        z-index: 25 !important; 
+        background-color: #212529 !important; 
+        border-right: 2px solid #495057 !important; 
+    }
+
+    .text-num { text-align: right; min-width: 75px; font-family: 'Consolas', monospace; }
+    
+    /* Цвета для текста */
+    .val-fact { color: #059669; font-weight: 700; }
+    .val-diff-neg { color: #dc2626; font-weight: 700; background-color: #fef2f2; border-radius: 4px; padding: 2px 4px; }
+    .val-diff-pos { color: #16a34a; font-weight: 700; background-color: #f0fdf4; border-radius: 4px; padding: 2px 4px; }
+
+    /* Режим правки */
+    .plan-inp { width: 100%; text-align: right; border: none; background: transparent; padding: 4px; border-radius: 4px; font-family: inherit; transition: 0.2s; }
+    .edit-mode .plan-inp { border-bottom: 1px dashed #fbbf24; background: #fef3c7; color: #b45309; font-weight: bold; cursor: pointer; }
+    .edit-mode .plan-inp:focus { outline: none; background: #fff; border-bottom: 2px solid #f59e0b; }
+    
+    /* Прогресс бары исполнения */
+    .budget-progress { height: 4px; background-color: #e9ecef; border-radius: 2px; overflow: hidden; margin-top: 4px; }
+    .budget-progress-bar { height: 100%; }
+    
+    /* Скрытые элементы фильтра */
+    .dropdown-check-list { min-width: 320px; max-height: 400px; overflow-y: auto; padding: 15px; border-radius: 8px; }
+
+    /* === МОБИЛЬНАЯ АДАПТАЦИЯ (iPhone/Android) === */
+    .month-filters-scroll {
+        display: flex;
+        flex-wrap: wrap; /* По умолчанию на ПК переносится */
+        gap: 5px;
+    }
+
+    @media (max-width: 768px) {
+        .budget-toolbar { padding: 10px; }
+        
+        /* Скролл для кнопок-месяцев на мобильных (горизонтальный свайп) */
+        .month-filters-scroll {
+            display: flex;
+            flex-wrap: nowrap; /* Отключаем перенос строк */
+            overflow-x: auto;
+            padding-bottom: 5px;
+            width: 100%; /* Жестко 100% без вычислений vw */
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none; /* Прячем скроллбар */
+        }
+        .month-filters-scroll::-webkit-scrollbar { display: none; }
+
+        /* Уменьшаем ширину закрепленных колонок слева */
+        .col-code { width: 35px !important; min-width: 35px !important; left: 0; padding: 4px !important; font-size: 10px; }
+        .col-name { left: 35px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; font-size: 11px; padding: 4px !important; }
+        
+        /* САМОЕ ВАЖНОЕ: ОТМЕНЯЕМ закрепление колонки ИТОГО, чтобы она скроллилась */
+        .col-total-group, .col-plan-tot, .col-fact-tot, .col-diff-tot { position: static !important; left: auto !important; z-index: 1 !important; }
+        
+        /* Плотно закрашиваем залипшие колонки, чтобы текст не просвечивал */
+        .table-budget tbody td.col-sticky { background-color: #fff !important; z-index: 5; border-right: 2px solid #dee2e6 !important;}
+        .table-budget thead th.col-sticky { background-color: #f8f9fa !important; z-index: 15; border-right: 2px solid #dee2e6 !important;}
+        .row-grand-total td.col-sticky { background-color: #212529 !important; border-right: 2px solid #000 !important; color: #fff !important;}
+    }
+</style>
+
+<!-- ПАНЕЛЬ УПРАВЛЕНИЯ -->
+<div class="budget-toolbar shadow-sm rounded-top mb-3 d-flex flex-column gap-3">
+    
+    <!-- 1. Заголовок и табы (на ПК в одну линию, на мобилке друг под другом) -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center w-100 gap-3">
+        <div>
+            <div class="page-title">
+                <i class="fas fa-wallet text-success"></i>
+                Финансовый план
+            </div>
+            <div class="page-subtitle">
+                Годовой бюджет и Cashflow. <span class="text-muted small">Период: <b>{{ period_label }}</b></span>
+            </div>
+        </div>
+        
+        <ul class="nav nav-pills bg-light rounded p-1" style="border: 1px solid #e9ecef; width: 100%; max-width: 400px;">
+            <li class="nav-item flex-fill text-center">
+                <a class="nav-link py-1 {% if active_tab == 'budget' %}active bg-success text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='budget') }}">Бюджет</a>
+            </li>
+            <li class="nav-item flex-fill text-center">
+                <a class="nav-link py-1 {% if active_tab == 'cashflow' %}active bg-primary text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cashflow') }}">Cashflow</a>
+            </li>
+        </ul>
+    </div>
+
+    <!-- 2. Элементы управления: Год, Правка, Менюшки (В одну строку с переносом) -->
+    <div class="d-flex flex-wrap justify-content-between align-items-center w-100 gap-2">
+        <div class="d-flex align-items-center gap-3">
+            <form id="yearForm" class="m-0">
+                <input type="hidden" name="tab" value="{{ active_tab }}">
+                <input type="hidden" name="month" value="{{ target_month }}">
+                <select name="year" class="form-select form-select-sm fw-bold bg-light shadow-sm" style="width: 80px; border: 1px solid #ced4da;" onchange="this.form.submit()">
+                    <option value="{{ year }}" selected>{{ year }}</option>
+                    {% for y in range(year-2, year+3) %}
+                        {% if y != year %}<option value="{{ y }}">{{ y }}</option>{% endif %}
+                    {% endfor %}
+                </select>
+            </form>
+            
+            <div class="form-check form-switch m-0 pt-1">
+                <input class="form-check-input cursor-pointer bg-warning border-warning" type="checkbox" id="editModeSwitch" onchange="toggleEditMode()" style="width: 35px; height: 18px;">
+                <label class="form-check-label small fw-bold text-dark cursor-pointer ms-1 mt-1" for="editModeSwitch">Правка</label>
+            </div>
+        </div>
+        
+        <div class="d-flex align-items-center gap-2">
+            <!-- Настройка колонок -->
+            <div class="dropdown">
+                <button class="btn btn-outline-dark btn-sm dropdown-toggle bg-white shadow-sm" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+                    <i class="fas fa-sliders-h"></i>
+                </button>
+                <div class="dropdown-menu dropdown-menu-end p-3 shadow-lg border-0" style="min-width: 250px; border-radius: 12px;">
+                    <h6 class="dropdown-header px-0 text-dark fw-bold mb-2">Настройка колонок</h6>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="togglePlan" checked onchange="toggleColumn('col-plan', this.checked)">
+                        <label class="form-check-label small" for="togglePlan">План</label>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="toggleFact" checked onchange="toggleColumn('col-fact', this.checked)">
+                        <label class="form-check-label small" for="toggleFact">Факт</label>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="toggleDiff" checked onchange="toggleColumn('col-diff', this.checked)">
+                        <label class="form-check-label small" for="toggleDiff">Отклонение</label>
+                    </div>
+                    <hr class="my-2">
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="toggleCumPlan" checked onchange="toggleColumn('col-cum-plan', this.checked)">
+                        <label class="form-check-label small" for="toggleCumPlan">План (Накопительно)</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="toggleCumFact" checked onchange="toggleColumn('col-cum-fact', this.checked)">
+                        <label class="form-check-label small" for="toggleCumFact">Факт (Накопительно)</label>
+                    </div>
+                </div>
+            </div>
+
+            {% if active_tab == 'budget' %}
+            <!-- Фильтр статей -->
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white shadow-sm" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" title="Фильтр статей">
+                    <i class="fas fa-filter"></i>
+                </button>
+                <div class="dropdown-menu dropdown-menu-end dropdown-check-list shadow-lg border-0">
+                    <input type="text" class="form-control form-control-sm mb-3 border-secondary" placeholder="Поиск статьи..." onkeyup="filterItemsList(this)">
+                    <div class="d-flex justify-content-between px-1 mb-2 border-bottom pb-2">
+                        <a href="javascript:void(0)" class="small fw-bold text-decoration-none text-success" onclick="toggleAllItems(true)"><i class="fas fa-check-square"></i> Выбрать все</a>
+                        <a href="javascript:void(0)" class="small fw-bold text-decoration-none text-secondary" onclick="toggleAllItems(false)"><i class="far fa-square"></i> Снять все</a>
+                    </div>
+                    <div id="itemsFilterContainer">
+                        {% for item in items %}
+                        <div class="form-check item-filter-row mb-1">
+                            <input class="form-check-input item-chk" type="checkbox" value="{{ item.id }}" id="chk{{ item.id }}" checked onchange="applyRowsFilter()">
+                            <label class="form-check-label small text-truncate" for="chk{{ item.id }}" style="max-width: 250px; cursor: pointer;">
+                                <span class="text-muted me-1">[{{ item.code }}]</span> {{ item.name }}
+                            </label>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Доп. меню -->
+            <div class="dropdown">
+                <button class="btn btn-light btn-sm border shadow-sm dropdown-toggle" type="button" data-bs-toggle="dropdown"><i class="fas fa-ellipsis-v"></i></button>
+                <ul class="dropdown-menu dropdown-menu-end shadow border-0">
+                    <li><h6 class="dropdown-header">Управление</h6></li>
+                    <li><a class="dropdown-item py-2" href="#" data-bs-toggle="modal" data-bs-target="#addItemModal"><i class="fas fa-plus text-success me-2"></i> Добавить статью</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><h6 class="dropdown-header">Экспорт</h6></li>
+                    <li><a class="dropdown-item py-2" href="{{ url_for('finance.budget_export', year=year, month=target_month) }}" hx-boost="false"><i class="fas fa-file-excel text-success me-2"></i> Скачать Excel</a></li>
+                    <li><a class="dropdown-item py-2" href="{{ url_for('finance.budget', year=year, export='pdf') }}" target="_blank" hx-boost="false"><i class="fas fa-file-pdf text-danger me-2"></i> Скачать PDF</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. Скролл месяцев (Всегда внизу панели, растянут на 100%) -->
+    <div class="month-filters-scroll w-100">
+        <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
+            <a href="{{ url_for('finance.budget', year=year, month='all', tab=active_tab) }}" class="btn {% if target_month == 'all' %}btn-dark fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Год</a>
+            {% for m in range(1, 13) %}
+            <a href="{{ url_for('finance.budget', year=year, month=m, tab=active_tab) }}" class="btn {% if target_month|string == m|string %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" style="min-width: 38px; padding: 4px 0;">{{ m }}</a>
+            {% endfor %}
+        </div>
+        <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
+            <a href="{{ url_for('finance.budget', year=year, month='q1', tab=active_tab) }}" class="btn {% if target_month == 'q1' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q1</a>
+            <a href="{{ url_for('finance.budget', year=year, month='q2', tab=active_tab) }}" class="btn {% if target_month == 'q2' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q2</a>
+            <a href="{{ url_for('finance.budget', year=year, month='q3', tab=active_tab) }}" class="btn {% if target_month == 'q3' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q3</a>
+            <a href="{{ url_for('finance.budget', year=year, month='q4', tab=active_tab) }}" class="btn {% if target_month == 'q4' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q4</a>
+        </div>
+        <div class="btn-group btn-group-sm shadow-sm flex-shrink-0 pe-3">
+            <a href="{{ url_for('finance.budget', year=year, month='spring', tab=active_tab) }}" class="btn {% if target_month == 'spring' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Весна</a>
+            <a href="{{ url_for('finance.budget', year=year, month='autumn', tab=active_tab) }}" class="btn {% if target_month == 'autumn' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Осень</a>
+        </div>
+    </div>
+</div>
+
+<!-- === УНИВЕРСАЛЬНЫЙ ДАШБОРД СВОДКИ === -->
+<div class="row g-3 mb-4 kpi-row">
+    {% if active_tab == 'budget' %}
+        <!-- Логика вычислений для Бюджета Расходов -->
+{% set d_plan = period_totals.plan %}
+    {% set d_fact = period_totals.fact %}
+    {% set d_diff = period_totals.diff %}
+    {% set d_pct = period_totals.pct %}
+        
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm border-start border-4 border-secondary h-100 bg-white">
+                <div class="card-body py-3">
+                    <div class="small text-muted fw-bold text-uppercase mb-1">Годовой План Расходов</div>
+                    <div class="fw-bold fs-4 text-dark">{{ d_plan|money_int }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm border-start border-4 border-primary h-100 bg-white">
+                <div class="card-body py-3">
+                    <div class="small text-muted fw-bold text-uppercase mb-1">Фактические Расходы</div>
+                    <div class="fw-bold fs-4 text-primary">{{ d_fact|money_int }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm border-start border-4 {% if d_diff >= 0 %}border-success{% else %}border-danger{% endif %} h-100 bg-white">
+                <div class="card-body py-3">
+                    <div class="small text-muted fw-bold text-uppercase mb-1">Экономия / Перерасход</div>
+                    <div class="fw-bold fs-4 {% if d_diff >= 0 %}text-success{% else %}text-danger{% endif %}">
+                        {% if d_diff >= 0 %}+{% endif %}{{ d_diff|money_int }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm h-100 bg-light">
+                <div class="card-body py-3 d-flex flex-column justify-content-center">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="small fw-bold text-muted text-uppercase">Исполнение</span>
+                        <span class="small fw-bold text-dark">{{ "%.1f"|format(d_pct) }}%</span>
+                    </div>
+                    <div class="progress shadow-sm" style="height: 10px; border-radius: 5px;">
+                        <div class="progress-bar {% if d_pct <= 90 %}bg-success{% elif d_pct <= 100 %}bg-warning{% else %}bg-danger{% endif %}" style="width: {{ [d_pct, 100]|min }}%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% elif active_tab == 'cashflow' %}
+        <!-- Логика вычислений для Cashflow -->
+        {% set cf_plan_in = cashflow_period_plan %}
+        {% set cf_fact_in = cashflow_period_fact %}
+        {% set cf_plan_out = grand_totals.get(13).get('plan') %}
+        {% set cf_fact_out = grand_totals.get(13).get('fact') %}
+        
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm border-start border-4 border-success h-100 bg-white">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <div class="small text-muted fw-bold text-uppercase">Поступления (План)</div>
+                        <i class="fas fa-arrow-down text-success opacity-50"></i>
+                    </div>
+                    <div class="fw-bold fs-4 text-success">{{ cf_plan_in|money_int }}</div>
+                    <div class="small text-muted mt-1">Факт: <b class="text-dark">{{ cf_fact_in|money_int }}</b></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm border-start border-4 border-danger h-100 bg-white">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <div class="small text-muted fw-bold text-uppercase">Выплаты (План)</div>
+                        <i class="fas fa-arrow-up text-danger opacity-50"></i>
+                    </div>
+                    <div class="fw-bold fs-4 text-danger">{{ cf_plan_out|money_int }}</div>
+                    <div class="small text-muted mt-1">Факт: <b class="text-dark">{{ cf_fact_out|money_int }}</b></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm border-start border-4 border-primary h-100 bg-white">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <div class="small text-muted fw-bold text-uppercase">Чистый поток (План)</div>
+                        <i class="fas fa-equals text-primary opacity-50"></i>
+                    </div>
+                    {% set cf_net_plan = cf_plan_in - cf_plan_out %}
+                    <div class="fw-bold fs-4 {% if cf_net_plan >= 0 %}text-primary{% else %}text-danger{% endif %}">
+                        {{ cf_net_plan|money_int }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm border-start border-4 border-dark h-100 bg-light">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <div class="small text-muted fw-bold text-uppercase">Резерв Кеша (Факт)</div>
+                        <i class="fas fa-vault text-dark opacity-50"></i>
+                    </div>
+                    {% set cf_net_fact = cumulative.get(12).get('fact_balance') %}
+                    <div class="fw-bold fs-4 {% if cf_net_fact >= 0 %}text-dark{% else %}text-danger{% endif %}">
+                        {{ cf_net_fact|money_int }}
+                    </div>
+                    <div class="small text-muted mt-1">На конец года</div>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+</div>
+
+
+<form method="POST" id="planForm">
+{% if active_tab == 'budget' %}
+<input type="hidden" name="save_plan" value="1">
+{% elif active_tab == 'cashflow' %}
+<input type="hidden" name="save_cashflow" value="1">
+{% endif %}
+
+<div class="budget-wrapper {% if target_month != 'all' %}view-single-month{% endif %}">
+    <div class="table-container">
+        
+        <!-- === ТАБЛИЦА БЮДЖЕТА РАСХОДОВ === -->
+        {% if active_tab == 'budget' %}
+        <table class="table-budget budget-table">
+            <thead>
+                <tr>
+                    <!-- ФИКСИРОВАННЫЕ КОЛОНКИ -->
+                    <th rowspan="2" class="col-sticky col-code">Код</th>
+                    <th rowspan="2" class="col-sticky col-name border-end">Статья бюджета</th>
+                    
+                    <!-- ИТОГО ГОД -->
+                    <th colspan="3" class="col-sticky col-total-group head-total-group text-center">ИТОГО ЗА ГОД</th>
+                    
+                    <!-- МЕСЯЦЫ -->
+                    {% if target_month == 'all' %}
+                        {% for m in range(1, 13) %}
+                        <th colspan="3" class="text-center border-start border-2 border-light">{{ month_names.get(m) }}</th>
+                        {% endfor %}
+                    {% else %}
+                        <th colspan="3" class="text-center bg-primary bg-opacity-10 border-start border-primary border-2 text-primary fs-6">{{ period_label }} (Детализация)</th>
+                    {% endif %}
+                </tr>
+                <tr>
+                    <!-- Подзаголовки ИТОГО -->
+                    <th class="col-sticky col-total-group col-plan-tot head-total-group text-end small col-plan">План</th>
+                    <th class="col-sticky col-total-group col-fact-tot head-total-group text-end small col-fact">Факт</th>
+                    <th class="col-sticky col-total-group col-diff-tot head-total-group text-end small col-diff border-end" style="border-right-color: #f59e0b !important;">Откл</th>
+
+                    <!-- Подзаголовки МЕСЯЦЕВ -->
+                    {% if target_month == 'all' %}
+                        {% for m in range(1, 13) %}
+                        <th class="text-end small text-muted border-start bg-light col-plan">Пл</th>
+                        <th class="text-end small text-muted bg-light col-fact">Фк</th>
+                        <th class="text-end small text-muted bg-light col-diff">От</th>
+                        {% endfor %}
+                    {% else %}
+                        <th class="text-end small text-dark border-start bg-white col-plan" style="width: 150px;">Лимит (План)</th>
+                        <th class="text-end small text-dark bg-white col-fact" style="width: 150px;">Израсходовано</th>
+                        <th class="text-end small text-dark bg-white col-diff" style="width: 150px;">Остаток</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                <!-- СТРОКА "ВСЕГО" -->
+                <tr class="row-grand-total">
+                    <td class="col-sticky col-code text-center"><i class="fas fa-sigma"></i></td>
+                    <td class="col-sticky col-name text-end pe-3 border-end">ОПЕРАЦИОННЫЕ РАСХОДЫ:</td>
+                    
+                    <td class="col-sticky col-total-group col-plan-tot text-num col-plan">{{ grand_totals.get(13).get('plan')|money_int }}</td>
+                    <td class="col-sticky col-total-group col-fact-tot text-num text-warning col-fact">{{ grand_totals.get(13).get('fact')|money_int }}</td>
+                    <td class="col-sticky col-total-group col-diff-tot text-num border-end col-diff border-dark">{{ grand_totals.get(13).get('diff')|money_int }}</td>
+
+                    {% if target_month == 'all' %}
+                        {% for m in range(1, 13) %}
+                        <td class="text-num border-start border-secondary col-plan">{{ grand_totals.get(m).get('plan')|money_int }}</td>
+                        <td class="text-num text-warning col-fact">{{ grand_totals.get(m).get('fact')|money_int }}</td>
+                        <td class="text-num small opacity-75 col-diff">{{ grand_totals.get(m).get('diff')|money_int }}</td>
+                        {% endfor %}
+                    {% else %}
+                        <td class="text-num border-start border-primary fs-5 col-plan">{{ period_totals.plan|money }}</td>
+                        <td class="text-num text-warning fs-5 col-fact">{{ period_totals.fact|money }}</td>
+                        <td class="text-num fs-5 col-diff">{{ period_totals.diff|money }}</td>
+                    {% endif %}
+                </tr>
+
+                <!-- СТРОКИ СТАТЕЙ -->
+                {% for item in items %}
+                {% set row = data.get(item.id) %}
+                <tr class="budget-row" data-id="{{ item.id }}">
+                    <td class="col-sticky col-code bg-white">{{ item.code }}</td>
+                    <td class="col-sticky col-name bg-white border-end">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-truncate fw-bold text-dark" title="{{ item.name }}">{{ item.name }}</span>
+                            {% if current_user.role == 'admin' %}
+                            <i class="fas fa-cog text-muted ms-2 opacity-25 hover-opacity-100 transition" style="cursor: pointer; font-size: 11px;" onclick="editItem({{ item.id }}, '{{ item.code }}', '{{ item.name }}', {{ 'true' if item.is_amortization else 'false' }})"></i>
+                            {% endif %}
+                        </div>
+                    </td>
+
+                    <!-- ИТОГО -->
+                    <td class="col-sticky col-total-group col-plan-tot text-num col-plan">{{ row.get('total').get('plan')|money_int }}</td>
+                    
+                    <!-- Факт с прогресс-баром -->
+                    <td class="col-sticky col-total-group col-fact-tot text-num val-fact col-fact px-2">
+                        <div class="d-flex flex-column align-items-end">
+                            <span>{{ row.get('total').get('fact')|money_int }}</span>
+                            {% set pct = row.get('total').get('percent_raw')|default(0) %}
+                            {% if row.get('total').get('plan') > 0 %}
+                            <div class="budget-progress w-100 opacity-75">
+                                <div class="budget-progress-bar {% if pct < 80 %}bg-success{% elif pct <= 100 %}bg-warning{% else %}bg-danger{% endif %}" style="width: {{[pct, 100]|min }}%"></div>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </td>
+                    
+                    <td class="col-sticky col-total-group col-diff-tot text-num border-end col-diff">
+                        {% set df = row.get('total').get('diff') %}
+                        {% if df < 0 %}
+                            <span class="val-diff-neg">{{ df|money_int }}</span>
+                        {% elif df > 0 %}
+                            <span class="val-diff-pos">+{{ df|money_int }}</span>
+                        {% else %}
+                            <span class="text-muted opacity-50">0</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- МЕСЯЦЫ -->
+                    {% if target_month == 'all' %}
+                        {% for m in range(1, 13) %}
+                            {% set d = row.get('months').get(m) %}
+                            <!-- Важно: name атрибут остается со скобками для бэкенда -->
+                            <td class="text-num border-start bg-white col-plan p-0">
+                                <input type="text" name="plan[{{ item.id }}][{{ m }}]" value="{{ d.get('plan')|money_int|replace(' ', '') }}" class="plan-inp">
+                            </td>
+                            <td class="text-num val-fact bg-white col-fact">{{ d.get('fact')|money_int }}</td>
+                            <td class="text-num small bg-white col-diff">
+                                {% set mdf = d.get('diff') %}
+                                {% if mdf < 0 %}
+                                    <span class="text-danger fw-bold">{{ mdf|money_int }}</span>
+                                {% elif mdf > 0 %}
+                                    <span class="text-success">{{ mdf|money_int }}</span>
+                                {% else %}
+                                    <span class="text-muted opacity-25">-</span>
+                                {% endif %}
+                            </td>
+                        {% endfor %}
+                    {% else %}
+                        {% set m_int = target_month|int %}
+                        {% set is_month = m_int > 0 %}
+                        {% if is_month %}
+                            {% set plan_val = row.period.plan %}
+                            {% set fact_val = row.period.fact %}
+                            {% set diff_val = row.period.diff %}
+                            {% set plan_input_name = "plan[" ~ item.id ~ "][" ~ m_int ~ "]" %}
+                            {% set plan_input_value = row.get('months').get(m_int).get('plan') %}
+                        {% else %}
+                            {% set plan_val = row.period.plan %}
+                            {% set fact_val = row.period.fact %}
+                            {% set diff_val = row.period.diff %}
+                        {% endif %}
+                        <td class="text-num border-start border-primary bg-primary bg-opacity-10 col-plan p-1">
+                            {% if is_month %}
+                            <input type="text" name="plan[{{ item.id }}][{{ m_int }}]" value="{{ plan_input_value|money_int|replace(' ', '') }}" class="plan-inp fw-bold text-dark fs-5 text-end">
+                            {% else %}
+                            <span class="fw-bold text-dark fs-5">{{ plan_val|money }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-num val-fact bg-primary bg-opacity-10 col-fact fs-5">{{ fact_val|money }}</td>
+                        <td class="text-num bg-primary bg-opacity-10 col-diff fs-5 text-end">
+                            {% if diff_val < 0 %}
+                                <span class="badge bg-danger shadow-sm">{{ diff_val|money }}</span>
+                            {% elif diff_val > 0 %}
+                                <span class="badge bg-success shadow-sm">+{{ diff_val|money }}</span>
+                            {% else %}
+                                <span class="text-muted fw-bold">0</span>
+                            {% endif %}
+                        </td>
+                    {% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+        <!-- === ТАБЛИЦА CASHFLOW === -->
+        {% elif active_tab == 'cashflow' %}
+        <table class="table-budget cashflow-table mt-3">
+            <thead>
+                <tr>
+                    <th class="col-sticky col-code text-center"><i class="fas fa-layer-group"></i></th>
+                    <th class="col-sticky col-name border-end">Статья движения средств</th>
+                    <th colspan="3" class="col-sticky col-total-group head-total-group text-center">ИТОГО ЗА ГОД</th>
+                    {% if target_month == 'all' %}
+                        {% for m in range(1, 13) %}
+                            <th colspan="3" class="text-center border-start border-2">{{ month_names.get(m) }}</th>
+                        {% endfor %}
+                    {% else %}
+                        <th colspan="3" class="text-center bg-primary bg-opacity-10 border-start border-primary border-2 text-primary">{{ period_label }}</th>
+                    {% endif %}
+                </tr>
+                <tr>
+                    <th class="col-sticky col-code">&nbsp;</th>
+                    <th class="col-sticky col-name border-end">&nbsp;</th>
+                    <th class="col-sticky col-total-group col-plan-tot text-end small col-plan">План</th>
+                    <th class="col-sticky col-total-group col-fact-tot text-end small col-fact">Факт</th>
+                    <th class="col-sticky col-total-group col-diff-tot text-end small col-diff border-end" style="border-right-color: #f59e0b !important;">Откл</th>
+                    {% if target_month == 'all' %}
+                        {% for m in range(1, 13) %}
+                        <td class="text-end small text-muted border-start bg-light col-plan">Пл</td>
+                        <td class="text-end small text-muted bg-light col-fact">Фк</td>
+                        <td class="text-end small text-muted bg-light col-diff">От</td>
+                        {% endfor %}
+                    {% else %}
+                        <th class="text-end small text-dark border-start bg-white col-plan" style="width: 150px;">План</th>
+                        <th class="text-end small text-dark bg-white col-fact" style="width: 150px;">Факт</th>
+                        <th class="text-end small text-dark bg-white col-diff" style="width: 150px;">Откл</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                <!-- ПОСТУПЛЕНИЯ -->
+                <tr class="bg-white">
+                    <td class="col-sticky col-code text-center text-success"><i class="fas fa-arrow-down"></i></td>
+                    <td class="col-sticky col-name fw-bold text-success border-end ps-4">Поступления (Входящие)</td>
+                    <td class="col-sticky col-total-group col-plan-tot text-num col-plan">{{ cashflow_total_plan|money_int }}</td>
+                    <td class="col-sticky col-total-group col-fact-tot text-num fw-bold text-success col-fact">{{ cashflow_total_fact|money_int }}</td>
+                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff border-end" style="border-right-color: #dee2e6 !important;">
+                        {% set diff_in = cashflow_total_fact - cashflow_total_plan %}
+                        <span class="{% if diff_in >= 0 %}text-success{% else %}text-danger{% endif %} fw-bold">{{ diff_in|money_int }}</span>
+                    </td>
+
+                    {% if target_month == 'all' %}
+                        {% for m in range(1, 13) %}
+                        <td class="text-num border-start col-plan bg-white p-0">
+                            {% if current_user.role == 'admin' %}
+                            <input type="text" name="cashflow[{{ m }}]" value="{{ cashflow_data.get(m).get('plan')|money_int|replace(' ', '') }}" class="plan-inp text-success">
+                            {% else %}
+                            <div class="pe-2 text-success">{{ cashflow_data.get(m).get('plan')|money_int }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="text-num text-success fw-bold col-fact bg-white">{{ cashflow_data.get(m).get('fact')|money_int }}</td>
+                        <td class="text-num col-diff bg-white small">
+                            {% set md_in = cashflow_data.get(m).get('fact') - cashflow_data.get(m).get('plan') %}
+                            <span class="{% if md_in >= 0 %}text-success{% else %}text-danger{% endif %}">{{ md_in|money_int }}</span>
+                        </td>
+                        {% endfor %}
+                    {% else %}
+                        {% set m_int = target_month|int %}
+                        {% set is_month = m_int > 0 %}
+                        <td class="text-num border-start col-plan bg-white p-1">
+                            {% if is_month %}
+                                {% if current_user.role == 'admin' %}
+                                <input type="text" name="cashflow[{{ m_int }}]" value="{{ cashflow_data.get(m_int).get('plan')|money_int|replace(' ', '') }}" class="plan-inp text-success fs-5 fw-bold text-end">
+                                {% else %}
+                                <div class="pe-2 text-success fs-5 fw-bold text-end">{{ cashflow_data.get(m_int).get('plan')|money }}</div>
+                                {% endif %}
+                            {% else %}
+                                <div class="pe-2 text-success fs-5 fw-bold text-end">{{ cashflow_period_plan|money }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="text-num text-success fs-5 fw-bold col-fact bg-white">
+                            {% if is_month %}{{ cashflow_data.get(m_int).get('fact')|money }}{% else %}{{ cashflow_period_fact|money }}{% endif %}
+                        </td>
+                        <td class="text-num col-diff bg-white fs-5 text-end">
+                            {% if is_month %}
+                                {% set md_in = cashflow_data.get(m_int).get('fact') - cashflow_data.get(m_int).get('plan') %}
+                            {% else %}
+                                {% set md_in = cashflow_period_fact - cashflow_period_plan %}
+                            {% endif %}
+                            <span class="badge {% if md_in >= 0 %}bg-success{% else %}bg-danger{% endif %} shadow-sm">{{ md_in|money }}</span>
+                        </td>
+                    {% endif %}
+                </tr>
+
+                <!-- РАСХОДЫ -->
+                <tr class="bg-white">
+                    <td class="col-sticky col-code text-center text-danger"><i class="fas fa-arrow-up"></i></td>
+                    <td class="col-sticky col-name fw-bold text-danger border-end ps-4">Выплаты (Исходящие)</td>
+                    <td class="col-sticky col-total-group col-plan-tot text-num col-plan">{{ grand_totals.get(13).get('plan')|money_int }}</td>
+                    <td class="col-sticky col-total-group col-fact-tot text-num fw-bold text-danger col-fact">{{ grand_totals.get(13).get('fact')|money_int }}</td>
+                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff border-end" style="border-right-color: #dee2e6 !important;">
+                        {% set diff_out = grand_totals.get(13).get('plan') - grand_totals.get(13).get('fact') %}
+                        <span class="{% if diff_out >= 0 %}text-success{% else %}text-danger{% endif %} fw-bold">{{ diff_out|money_int }}</span>
+                    </td>
+                    {% if target_month == 'all' %}
+                        {% for m in range(1, 13) %}
+                        <td class="text-num border-start col-plan bg-white">{{ grand_totals.get(m).get('plan')|money_int }}</td>
+                        <td class="text-num text-danger fw-bold col-fact bg-white">{{ grand_totals.get(m).get('fact')|money_int }}</td>
+                        <td class="text-num col-diff bg-white small">
+                            {% set md_out = grand_totals.get(m).get('plan') - grand_totals.get(m).get('fact') %}
+                            <span class="{% if md_out >= 0 %}text-success{% else %}text-danger{% endif %}">{{ md_out|money_int }}</span>
+                        </td>
+                        {% endfor %}
+                    {% else %}
+                        <td class="text-num border-start col-plan bg-white fs-5 text-end pe-3">{{ period_totals.plan|money }}</td>
+                        <td class="text-num text-danger fs-5 fw-bold col-fact bg-white">{{ period_totals.fact|money }}</td>
+                        <td class="text-num col-diff bg-white fs-5 text-end">
+                            {% set md_out = period_totals.plan - period_totals.fact %}
+                            <span class="badge {% if md_out >= 0 %}bg-success{% else %}bg-danger{% endif %} shadow-sm">{{ md_out|money }}</span>
+                        </td>
+                    {% endif %}
+                </tr>
+
+                    <!-- НАКОПИТЕЛЬНЫЙ БАЛАНС -->
+                    <tr class="row-grand-total">
+                        <td class="col-sticky col-code text-center"><i class="fas fa-wallet"></i></td>
+                        <td class="col-sticky col-name text-end pe-3 border-end">ОСТАТОК КЕША (Кум.):</td>
+                        <td class="col-sticky col-total-group col-plan-tot text-num col-cum-plan text-muted" style="background-color: #212529 !important;">{{ cumulative.get(12).get('plan_balance')|money_int }}</td>
+                        <td class="col-sticky col-total-group col-fact-tot text-num col-cum-fact fw-bold text-white" style="background-color: #212529 !important;">{{ cumulative.get(12).get('fact_balance')|money_int }}</td>
+                        <td class="col-sticky col-total-group col-diff-tot text-num col-diff border-end" style="border-right-color: #dee2e6 !important; background-color: #212529 !important;">
+                            {% set diff_bal = cumulative.get(12).get('fact_balance') - cumulative.get(12).get('plan_balance') %}
+                            <span class="{% if diff_bal >= 0 %}text-success{% else %}text-danger{% endif %} fw-bold">{{ diff_bal|money_int }}</span>
+                        </td>
+                        {% if target_month == 'all' %}
+                            {% for m in range(1, 13) %}
+                            <td class="text-num border-start border-secondary col-cum-plan text-white-50">{{ cumulative.get(m).get('plan_balance')|money_int }}</td>
+                            <td class="text-num col-cum-fact text-white">{{ cumulative.get(m).get('fact_balance')|money_int }}</td>
+                            <td class="text-num col-diff small">
+                                {% set md_bal = cumulative.get(m).get('fact_balance') - cumulative.get(m).get('plan_balance') %}
+                                <span class="{% if md_bal >= 0 %}text-success{% else %}text-danger{% endif %}">{{ md_bal|money_int }}</span>
+                            </td>
+                            {% endfor %}
+                        {% else %}
+                            <td class="text-num border-start border-primary col-cum-plan fs-5 text-white-50">{{ cumulative.get(period_end_month).get('plan_balance')|money }}</td>
+                            <td class="text-num col-cum-fact fs-5 text-white">{{ cumulative.get(period_end_month).get('fact_balance')|money }}</td>
+                            <td class="text-num col-diff fs-5 text-end">
+                                {% set md_bal = cumulative.get(period_end_month).get('fact_balance') - cumulative.get(period_end_month).get('plan_balance') %}
+                                <span class="badge {% if md_bal >= 0 %}bg-success{% else %}bg-danger{% endif %} shadow-sm">{{ md_bal|money }}</span>
+                            </td>
+                        {% endif %}
+                    </tr>
+
+                <!-- СВОДНАЯ СТРОКА: НАКОПИТЕЛЬНЫЙ ФАКТ (БЕЗ ПЛАНА) -->
+                <tr class="table-info fw-bold border-top border-dark border-2">
+                    <td class="col-sticky" colspan="2" style="background-color: #d1ecf1; z-index:3;">Остаток ДС (накопит. факт)</td>
+                    <td class="col-sticky col-total-group col-plan-tot text-num col-cum-plan" style="background-color: #d1ecf1 !important; z-index:4;"></td>
+                    <td class="col-sticky col-total-group col-fact-tot text-num col-cum-fact fw-bold text-primary" style="background-color: #d1ecf1 !important; z-index:4;">
+                        {{ (cashflow_total_fact|default(0) - (grand_totals.get('fact') if grand_totals.get('fact') is not none else 0))|money_int }}
+                    </td>
+                    <td class="col-sticky col-total-group col-diff-tot col-diff border-end" style="border-right-color: #dee2e6 !important; background-color: #d1ecf1 !important; z-index:4;"></td>
+                    
+                    {% if target_month == 'all' %}
+                        {% set ns_cf = namespace(accum=0) %}
+                        {% for m in range(1, 13) %}
+                            {% set exp_fact = 0 %}
+                            {% for i_id, row in data.items() %}
+                                {% set exp_fact = exp_fact + row.months[m].fact %}
+                            {% endfor %}
+                            {% set inc_fact = cashflow_data.get(m).get('fact')|default(0) %}
+                            {% set ns_cf.accum = ns_cf.accum + inc_fact - exp_fact %}
+                            <td class="col-cum-plan border-start border-secondary" style="background-color: #d1ecf1;"></td>
+                            <td class="text-center text-primary fw-bold col-cum-fact" style="font-size: 14px; background-color: #d1ecf1;">
+                                {{ ns_cf.accum|money_int }}
+                            </td>
+                            <td class="col-diff small" style="background-color: #d1ecf1;"></td>
+                        {% endfor %}
+                    {% else %}
+                        {# Для выбранного периода (не "all") #}
+                        {% set ns_cf = namespace(accum=0) %}
+                        {% for m in selected_months %}
+                            {% set m_int = m|int %}
+                            {% set exp_fact = 0 %}
+                            {% for i_id, row in data.items() %}
+                                {% set exp_fact = exp_fact + row.months[m_int].fact %}
+                            {% endfor %}
+                            {% set inc_fact = cashflow_data.get(m_int).get('fact')|default(0) %}
+                            {% set ns_cf.accum = ns_cf.accum + inc_fact - exp_fact %}
+                            <td class="col-cum-plan border-start border-primary" style="background-color: #d1ecf1;"></td>
+                            <td class="text-center text-primary fw-bold col-cum-fact fs-5" style="background-color: #d1ecf1;">
+                                {{ ns_cf.accum|money_int }}
+                            </td>
+                            <td class="col-diff" style="background-color: #d1ecf1;"></td>
+                        {% endfor %}
+                    {% endif %}
+                </tr>
+                </tbody>
+            </table>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Плавающая кнопка сохранения в режиме правки -->
+<div id="saveBtnContainer" class="fixed-bottom p-3 text-center" style="display:none; pointer-events: none; z-index: 1050; background: linear-gradient(to top, rgba(255,255,255,0.9) 0%, transparent 100%);">
+    <button type="submit" class="btn btn-warning text-dark shadow-lg fw-bold px-5 py-3" style="pointer-events: auto; border-radius: 50px; font-size: 16px; border: 2px solid #f59e0b;">
+        <i class="fas fa-save me-2"></i> Сохранить введенные лимиты
+    </button>
+</div>
+</form>
+
+<!-- Modal Add/Edit (Оставлен без изменений, только косметика) -->
+<div class="modal fade" id="addItemModal" tabindex="-1">
+  <div class="modal-dialog border-0 shadow-lg">
+    <div class="modal-content">
+      <form method="POST">
+          <div class="modal-header bg-dark text-white border-0">
+            <h5 class="modal-title fw-bold"><i class="fas fa-tag me-2"></i>Статья бюджета</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body bg-light">
+            <input type="hidden" name="action" id="itemAction" value="add_item">
+            <input type="hidden" name="id" id="itemId">
+            <div class="mb-3">
+                <label class="fw-bold small text-muted text-uppercase">Код статьи</label>
+                <input type="text" name="code" id="itemCode" class="form-control" required placeholder="Напр: 1.1">
+            </div>
+            <div class="mb-3">
+                <label class="fw-bold small text-muted text-uppercase">Название</label>
+                <input type="text" name="name" id="itemName" class="form-control" required placeholder="Закупка материалов">
+            </div>
+            <div class="form-check form-switch mt-4">
+                <input class="form-check-input" type="checkbox" name="is_amortization" id="itemAmort">
+                <label class="form-check-label fw-bold" for="itemAmort">Амортизация (размазывается на 5 лет)</label>
+            </div>
+          </div>
+          <div class="modal-footer bg-white border-0 d-flex justify-content-between">
+            <button type="submit" name="action" value="delete_item" class="btn btn-outline-danger" id="btnDelete" style="display:none;" onclick="return confirm('Точно удалить статью? Это невозможно отменить.')"><i class="fas fa-trash"></i> Удалить</button>
+            <button type="submit" class="btn btn-success fw-bold px-4"><i class="fas fa-check"></i> Сохранить</button>
+          </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+    // Режим правки с красивой активацией
+    function toggleEditMode() {
+        const isEdit = document.getElementById('editModeSwitch').checked;
+        const container = document.querySelector('.table-budget');
+        const inputs = document.querySelectorAll('.plan-inp');
+        if(isEdit) {
+            container.classList.add('edit-mode');
+            inputs.forEach(i => i.removeAttribute('readonly'));
+            document.getElementById('saveBtnContainer').style.display = 'block';
+            // Прокрутка чуть вниз для привлечения внимания
+        } else {
+            container.classList.remove('edit-mode');
+            inputs.forEach(i => i.setAttribute('readonly', true));
+            document.getElementById('saveBtnContainer').style.display = 'none';
+        }
+    }
+
+    // Управление видимостью колонок
+    function toggleColumn(colClass, enabled) {
+        document.querySelectorAll('.' + colClass).forEach(el => {
+            if (enabled) el.classList.remove('d-none');
+            else el.classList.add('d-none');
+        });
+        saveColumnPrefs();
+    }
+
+    function saveColumnPrefs() {
+        const prefs = {
+            plan: document.getElementById('togglePlan').checked,
+            fact: document.getElementById('toggleFact').checked,
+            diff: document.getElementById('toggleDiff').checked,
+            cumPlan: document.getElementById('toggleCumPlan').checked,
+            cumFact: document.getElementById('toggleCumFact').checked,
+        };
+        localStorage.setItem('budgetColumnPrefs_v2', JSON.stringify(prefs));
+    }
+
+    function loadColumnPrefs() {
+        const raw = localStorage.getItem('budgetColumnPrefs_v2');
+        if (!raw) return;
+        try {
+            const prefs = JSON.parse(raw);
+            if (prefs.plan !== undefined) {
+                document.getElementById('togglePlan').checked = prefs.plan;
+                toggleColumn('col-plan', prefs.plan);
+            }
+            if (prefs.fact !== undefined) {
+                document.getElementById('toggleFact').checked = prefs.fact;
+                toggleColumn('col-fact', prefs.fact);
+            }
+            if (prefs.diff !== undefined) {
+                document.getElementById('toggleDiff').checked = prefs.diff;
+                toggleColumn('col-diff', prefs.diff);
+            }
+            if (prefs.cumPlan !== undefined) {
+                document.getElementById('toggleCumPlan').checked = prefs.cumPlan;
+                toggleColumn('col-cum-plan', prefs.cumPlan);
+            }
+            if (prefs.cumFact !== undefined) {
+                document.getElementById('toggleCumFact').checked = prefs.cumFact;
+                toggleColumn('col-cum-fact', prefs.cumFact);
+            }
+        } catch (e) {
+            console.warn('Не удалось загрузить настройки колонок', e);
+        }
+    }
+
+    // Редактирование статьи
+    function editItem(id, code, name, amort) {
+        document.getElementById('itemAction').value = 'edit_item';
+        document.getElementById('itemId').value = id;
+        document.getElementById('itemCode').value = code;
+        document.getElementById('itemName').value = name;
+        document.getElementById('itemAmort').checked = amort;
+        document.getElementById('btnDelete').style.display = 'block';
+        new bootstrap.Modal(document.getElementById('addItemModal')).show();
+    }
+
+    // ФИЛЬТР СТАТЕЙ (Клиентский JS)
+    function filterItemsList(input) {
+        const filter = input.value.toLowerCase();
+        document.querySelectorAll('.item-filter-row').forEach(div => {
+            const text = div.textContent.toLowerCase();
+            div.style.display = text.includes(filter) ? '' : 'none';
+        });
+    }
+
+    function toggleAllItems(state) {
+        document.querySelectorAll('.item-chk').forEach(el => {
+            // Меняем только видимые в списке фильтра (если использовался поиск)
+            if(el.closest('.item-filter-row').style.display !== 'none') {
+                el.checked = state;
+            }
+        });
+        applyRowsFilter();
+    }
+
+    function applyRowsFilter() {
+        // Собираем массив выбранных ID
+        const checkedInputs = Array.from(document.querySelectorAll('.item-chk:checked'));
+        const checkedIds = checkedInputs.map(el => el.value);
+        
+        document.querySelectorAll('.budget-row').forEach(row => {
+            const id = row.getAttribute('data-id');
+            if (checkedIds.indexOf(id) !== -1) {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', loadColumnPrefs);
+</script>
+{% endblock %}

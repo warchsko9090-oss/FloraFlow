@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    .cell-heat { text-align: center; color: transparent; font-size: 1px; transition: 0.2s; cursor: default; }
+    .cell-heat:hover { color: black; font-size: 11px; transform: scale(1.1); font-weight: bold; border: 1px solid #333; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4><i class="fas fa-th text-warning"></i> Сезонность продаж (Тепловая карта)</h4>
+    <form method="GET" class="d-flex gap-2">
+        <select name="year" class="form-select form-select-sm" onchange="this.form.submit()">
+            {% for y in years %}<option value="{{ y }}" {% if y == target_year %}selected{% endif %}>{{ y }}</option>{% endfor %}
+        </select>
+    </form>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="table-responsive">
+        <table class="table table-bordered table-sm mb-0 align-middle" style="font-size: 12px;">
+            <thead class="table-light text-center">
+                <tr>
+                    <th class="text-start ps-3" style="width: 200px;">Клиент</th>
+                    {% for m_name in month_names.values() %}
+                    <th style="width: 6%;">{{ m_name[:3] }}</th>
+                    {% endfor %}
+                    <th style="width: 10%;">Итого</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for client, data in matrix %}
+                <tr>
+                    <td class="fw-bold ps-3 text-truncate" style="max-width: 200px;" title="{{ client }}">{{ client }}</td>
+                    {% for val in data.data %}
+                    <td class="p-0 position-relative">
+                        {% if val > 0 %}
+                        <!-- Расчет прозрачности цвета (Heatmap) -->
+                        {% set alpha = (val / max_val * 0.8) + 0.1 %}
+                        <div class="cell-heat w-100 h-100 py-2" style="background-color: rgba(46, 125, 50, {{ alpha }});" title="{{ val|money }}">
+                            {{ val|money_int }}
+                        </div>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                    <td class="text-end fw-bold bg-light pe-2">{{ data.total|money_int }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="14" class="text-center p-4">Нет данных за этот год</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

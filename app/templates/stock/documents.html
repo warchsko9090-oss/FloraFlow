@@ -1,0 +1,1023 @@
+{% extends "base.html" %}
+{% block content %}
+<script>window.showSeedlingsAlways = true;</script>
+<style>
+    .nav-tabs .nav-link { color: #495057 !important; font-weight: 600; background-color: transparent; }
+    .nav-tabs .nav-link.active { color: #198754 !important; font-weight: bold; background-color: #fff; border-color: #dee2e6 #dee2e6 #fff; }
+    .nav-tabs .nav-link:hover { border-color: #e9ecef #e9ecef #dee2e6; color: #1b5e20 !important; }
+    .row-remove-btn { color: #dc3545; cursor: pointer; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0 text-success fw-bold"><i class="fas fa-file-invoice me-2"></i>Журнал документов</h4>
+    <button class="btn btn-outline-secondary btn-sm no-print" type="button" data-bs-toggle="collapse" data-bs-target="#filterCollapse" aria-expanded="false" aria-controls="filterCollapse">
+        <i class="fas fa-filter me-1"></i> Фильтры поиска
+    </button>
+</div>
+
+<!-- ПАНЕЛЬ ФИЛЬТРОВ -->
+<div class="collapse {% if filters.start or filters.end or filters.client_id or filters.doc_type or filters.plant_id or filters.size_id or filters.field_id %}show{% endif %}" id="filterCollapse">
+    <div class="card p-2 mb-3 bg-light shadow-sm border-0 no-print">
+        <form method="GET" class="d-flex align-items-center gap-3 flex-wrap" id="docFilterForm" hx-boost="false">
+            <input type="hidden" name="active_tab" id="activeTabInput" value="{{ active_tab }}">
+            
+            <div class="d-flex align-items-center bg-white px-2 py-1 rounded border shadow-sm">
+                <i class="fas fa-calendar-alt text-muted me-2"></i>
+                <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control form-control-sm border-0" style="width: auto;">
+                <span class="text-muted mx-1">-</span>
+                <input type="date" name="end_date" value="{{ filters.end or '' }}" class="form-control form-control-sm border-0" style="width: auto;">
+            </div>
+
+            <div style="min-width: 200px;">
+                <select name="client_id" class="form-select form-select-sm select-search">
+                    <option value="">Все клиенты</option>
+                    {% for c in clients %}
+                    <option value="{{ c.id }}" {% if filters.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div style="min-width: 220px;">
+                <select name="doc_type" class="form-select form-select-sm">
+                    <option value="" {% if not filters.doc_type %}selected{% endif %}>Все типы документов</option>
+                    <option value="shipment" {% if filters.doc_type == 'shipment' %}selected{% endif %}>Отгрузки (Склад)</option>
+                    <option value="field_recount" {% if filters.doc_type == 'field_recount' %}selected{% endif %}>Карточки пересчета</option>
+                    <option value="inventory_draft" {% if filters.doc_type == 'inventory_draft' %}selected{% endif %}>Черновики инвентаризации</option>
+                    <option value="ghost" {% if filters.doc_type == 'ghost' %}selected{% endif %}>Исторические (Ghost)</option>
+                </select>
+            </div>
+
+            <div style="min-width: 200px;">
+                <select name="plant_id" class="form-select form-select-sm select-search">
+                    <option value="">Все растения</option>
+                    {% for p in plants %}
+                    <option value="{{ p.id }}" {% if filters.plant_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div style="min-width: 200px;">
+                <select name="size_id" class="form-select form-select-sm select-search">
+                    <option value="">Все размеры</option>
+                    {% for s in sizes %}
+                    <option value="{{ s.id }}" {% if filters.size_id == s.id %}selected{% endif %}>{{ s.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div style="min-width: 200px;">
+                <select name="field_id" class="form-select form-select-sm select-search">
+                    <option value="">Все поля / размеры</option>
+                    {% for f in fields %}
+                    <option value="{{ f.id }}" {% if filters.field_id == f.id %}selected{% endif %}>{{ f.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-sm px-3 shadow-sm"><i class="fas fa-search me-1"></i> Найти</button>
+            <a href="{{ url_for('stock.documents', active_tab=active_tab) }}" class="btn btn-outline-secondary btn-sm shadow-sm"><i class="fas fa-times"></i> Сброс</a>
+        </form>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-3" id="docTabs" role="tablist">
+  {% if current_user.role != 'user2' %}
+  <li class="nav-item"><button class="nav-link text-warning fw-bold {% if active_tab == 'drafts' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#drafts"><i class="fas fa-clipboard-check"></i> Сверка Инвентаризаций</button></li>
+  {% endif %}
+  <li class="nav-item"><button class="nav-link {% if active_tab == 'move' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#move">Перемещение</button></li>
+  <li class="nav-item"><button class="nav-link {% if active_tab == 'income' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#income">Поступление</button></li>
+  <li class="nav-item"><button class="nav-link {% if active_tab == 'shipments' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#shipments">Отгрузки (Факт)</button></li>
+  {% if current_user.role == 'admin' %}
+  <li class="nav-item"><button class="nav-link text-danger {% if active_tab == 'writeoff' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#writeoff">Списание</button></li>
+  {% endif %}
+  <li class="nav-item"><button class="nav-link {% if active_tab == 'regrading' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#regrading">Изменение остатков</button></li>
+</ul>
+{% if current_user.role == 'admin' %}
+<div class="d-flex justify-content-end mb-2">
+    <button class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#manualShipmentModal">
+        <i class="fas fa-truck me-1"></i> Создать ручную отгрузку (Факт)
+    </button>
+</div>
+
+<!-- МОДАЛЬНОЕ ОКНО РУЧНОЙ ОТГРУЗКИ -->
+<div class="modal fade" id="manualShipmentModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="POST">
+                <input type="hidden" name="doc_type" value="shipment">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">Ручная отгрузка (без Заказа)</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Дата операции</label>
+                            <input type="date" name="date" class="form-control" value="{{ current_year }}-{{ '%02d' % 1 }}-{{ '%02d' % 1 }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Комментарий</label>
+                            <input type="text" name="comment" class="form-control" placeholder="Например: Продажа мимо кассы">
+                        </div>
+                    </div>
+                    
+                    <table class="table table-sm table-bordered" id="shipmentTable">
+                        <thead>
+                            <tr class="table-light">
+                                <th>Растение</th>
+                                <th>Размер</th>
+                                <th>Откуда (Поле)</th>
+                                <th style="width: 80px;">Год</th>
+                                <th style="width: 100px;">Кол-во</th>
+                                <th style="width: 30px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>
+                                    <select name="plant[]" class="form-select form-select-sm select-search" required>
+                                        <option value="">Выбор...</option>
+                                        {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                                    </select>
+                                </td>
+                                <td>
+                                    <select name="size[]" class="form-select form-select-sm select-search" required>
+                                        {% for s in sizes %}<option value="{{ s.id }}" {% if s.name == 'Саженцы' %}class="seedling-option"{% endif %}>{{ s.name }}</option>{% endfor %}
+                                    </select>
+                                </td>
+                                <td>
+                                    <select name="field_from[]" class="form-select form-select-sm select-search" required>
+                                        {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                                    </select>
+                                </td>
+                                <td><input type="number" name="year[]" class="form-control form-control-sm" value="{{ current_year }}" required></td>
+                                <td><input type="number" name="quantity[]" class="form-control form-control-sm" placeholder="Шт" required></td>
+                                <td><button type="button" class="btn btn-outline-danger btn-sm border-0" onclick="removeRow(this)">&times;</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addShipmentRow()">+ Добавить строку</button>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-danger">Провести отгрузку</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="tab-content" id="myTabContent">
+  
+  <!-- НОВАЯ ВКЛАДКА СВЕРКИ (Только Админ) -->
+  {% if current_user.role != 'user2' %}
+  <div class="tab-pane fade {% if active_tab == 'drafts' %}show active{% endif %}" id="drafts">
+      <div class="alert alert-warning py-2 small">
+          <i class="fas fa-info-circle"></i> Это <b>Черновики</b> из мобильного приложения. Они пока не повлияли на остатки. Проверьте ФАКТ (можно редактировать) и нажмите "Провести", чтобы изменить склад.
+      </div>
+      
+      {% for item in drafts_data %}
+      {% set doc = item.doc %}
+      <div class="card mb-4 border-warning shadow-sm">
+          <div class="card-header bg-warning bg-opacity-25 fw-bold d-flex justify-content-between align-items-center py-2">
+              <div>
+                  <span class="text-dark">Док #{{ doc.id }}</span>
+                  <small class="text-muted ms-2">{{ doc.date.strftime('%d.%m.%Y %H:%M') }}</small>
+              </div>
+              <div class="small fw-normal text-muted">{{ doc.comment }}</div>
+          </div>
+          
+          <form method="POST" action="{{ url_for('stock.approve_inventory', doc_id=doc.id) }}">
+              <div class="table-responsive">
+                  <table class="table table-sm table-hover mb-0 align-middle text-center" style="font-size: 13px;">
+                      <thead class="table-light">
+                          <tr>
+                              <th class="text-start">Растение</th>
+                              <th>Размер</th>
+                              <th class="text-muted">По базе (шт)</th>
+                              <th class="bg-warning bg-opacity-10" style="width: 150px;">ФАКТ (шт)</th>
+                              <th>Отклонение</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          {% for r in item.rows %}
+                          <tr>
+                              <td class="text-start fw-bold">{{ r.plant_name }}</td>
+                              <td>{{ r.size_name }}</td>
+                              <td class="text-muted fs-6">{{ r.db_qty }}</td>
+                              <td class="bg-warning bg-opacity-10 p-1">
+                                  <input type="number" name="fact_{{ r.row_id }}" value="{{ r.fact }}" class="form-control form-control-sm text-center fw-bold border-warning" min="0">
+                              </td>
+                              <td class="fw-bold {% if r.delta > 0 %}text-success{% elif r.delta < 0 %}text-danger{% else %}text-muted{% endif %} fs-6">
+                                  {% if r.delta > 0 %}+{{ r.delta }}{% else %}{{ r.delta }}{% endif %}
+                              </td>
+                          </tr>
+                          {% endfor %}
+                      </tbody>
+                  </table>
+              </div>
+              <div class="card-footer bg-white text-end py-2 d-flex justify-content-between">
+                  <button type="submit" formaction="{{ url_for('stock.document_delete', doc_id=doc.id) }}" class="btn btn-outline-danger btn-sm" onclick="return confirm('Удалить черновик без проведения?');">Удалить черновик</button>
+                  <button type="submit" class="btn btn-success fw-bold shadow-sm" onclick="return confirm('Провести? Остатки в базе будут заменены на ФАКТ из этой таблицы.');"><i class="fas fa-check-double me-1"></i> ПРОВЕСТИ НА СКЛАД</button>
+              </div>
+          </form>
+      </div>
+      {% else %}
+      <div class="text-center py-5 text-muted border bg-light rounded">
+          <i class="fas fa-check-circle fa-3x mb-3 text-success"></i><br>
+          Нет новых черновиков для проверки
+      </div>
+      {% endfor %}
+  </div>
+  {% endif %}
+  
+  <!-- ПЕРЕМЕЩЕНИЕ -->
+  <div class="tab-pane fade {% if active_tab == 'move' %}show active{% endif %}" id="move">
+      <form method="POST">
+          <input type="hidden" name="doc_type" value="move">
+          <table class="table table-bordered table-sm" id="moveTable">
+              <thead>
+                  <tr>
+                      <th>Растение</th>
+                      <th>Размер</th>
+                      <th>Откуда</th>
+                      <th>Год (Партия)</th>
+                      <th>Куда</th>
+                      <th width="100">Кол-во</th>
+                      <th width="30"></th>
+                  </tr>
+              </thead>
+              <tbody>
+                  <tr class="move-row">
+                      <td>
+                          <select name="plant[]" class="form-select form-select-sm plant-select select-search" required onchange="updateBatchSelect(this)">
+                              <option value="" disabled selected>...</option>
+                              {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td>
+                          <select name="size[]" class="form-select form-select-sm size-select select-search" required onchange="updateBatchSelect(this)">
+                              {% for s in sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td>
+                          <select name="field_from[]" class="form-select form-select-sm field-select select-search" required onchange="updateBatchSelect(this)">
+                              {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td>
+                          <select name="year[]" class="form-select form-select-sm year-select" required>
+                              <option value="" disabled selected>-</option>
+                          </select>
+                      </td>
+                      <td>
+                          <select name="field_to[]" class="form-select form-select-sm select-search" required>
+                              {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td><input type="number" name="quantity[]" class="form-control form-control-sm" required min="1"></td>
+                      <td class="text-center align-middle"><i class="fas fa-times row-remove-btn" onclick="removeRow(this)"></i></td>
+                  </tr>
+              </tbody>
+          </table>
+          <button type="button" class="btn btn-sm btn-outline-primary mb-3" onclick="addRow('moveTable')">+ Добавить строку</button>
+          <button type="submit" class="btn btn-success btn-sm mb-3">Провести перемещение</button>
+      </form>
+  </div>
+
+  <!-- ПОСТУПЛЕНИЕ -->
+  <div class="tab-pane fade {% if active_tab == 'income' %}show active{% endif %}" id="income">
+      <form method="POST">
+          <input type="hidden" name="doc_type" value="income">
+          
+          <div class="mb-3 d-flex align-items-center">
+              <label class="me-2 fw-bold">Год партии:</label>
+              <input type="number" name="income_year" value="{{ current_year }}" class="form-control form-control-sm" style="width: 100px;" required>
+              <small class="text-muted ms-2">Будет присвоен всем позициям в документе</small>
+          </div>
+
+          <table class="table table-bordered table-sm" id="incomeTable">
+              <thead>
+                  <tr>
+                      <th>Растение</th>
+                      <th>Размер</th>
+                      <th>Куда (Поле)</th>
+                      <th width="100">Кол-во</th>
+                      <th width="30"></th>
+                  </tr>
+              </thead>
+              <tbody>
+                  <tr class="income-row">
+                      <td>
+                          <select name="plant[]" class="form-select form-select-sm select-search" required>
+                              {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td>
+                          <select name="size[]" class="form-select form-select-sm select-search" required>
+                              {% for s in sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td>
+                          <select name="field_to[]" class="form-select form-select-sm select-search" required>
+                              {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td><input type="number" name="quantity[]" class="form-control form-control-sm" required min="1"></td>
+                      <td class="text-center align-middle"><i class="fas fa-times row-remove-btn" onclick="removeRow(this)"></i></td>
+                  </tr>
+              </tbody>
+          </table>
+          <button type="button" class="btn btn-sm btn-outline-primary mb-3" onclick="addRow('incomeTable')">+ Добавить строку</button>
+          <button type="submit" class="btn btn-success btn-sm mb-3">Оформить поступление</button>
+      </form>
+  </div>
+
+  <!-- СПИСАНИЕ -->
+  {% if current_user.role == 'admin' %}
+  <div class="tab-pane fade {% if active_tab == 'writeoff' %}show active{% endif %}" id="writeoff">
+      <form method="POST">
+          <input type="hidden" name="doc_type" value="writeoff">
+          <table class="table table-bordered table-sm" id="writeoffTable">
+              <thead>
+                  <tr>
+                      <th>Растение</th>
+                      <th>Размер</th>
+                      <th>Откуда (Поле)</th>
+                      <th>Год (Партия)</th>
+                      <th width="100">Кол-во</th>
+                      <th width="30"></th>
+                  </tr>
+              </thead>
+              <tbody>
+                  <tr class="writeoff-row">
+                      <td>
+                          <select name="plant[]" class="form-select form-select-sm plant-select select-search" required onchange="updateBatchSelect(this)">
+                              <option value="" disabled selected>...</option>
+                              {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td>
+                          <select name="size[]" class="form-select form-select-sm size-select select-search" required onchange="updateBatchSelect(this)">
+                              {% for s in sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td>
+                          <select name="field_from[]" class="form-select form-select-sm field-select select-search" required onchange="updateBatchSelect(this)">
+                              {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                          </select>
+                      </td>
+                      <td>
+                          <select name="year[]" class="form-select form-select-sm year-select" required>
+                              <option value="" disabled selected>-</option>
+                          </select>
+                      </td>
+                      <td><input type="number" name="quantity[]" class="form-control form-control-sm" required min="1"></td>
+                      <td class="text-center align-middle"><i class="fas fa-times row-remove-btn" onclick="removeRow(this)"></i></td>
+                  </tr>
+              </tbody>
+          </table>
+          <button type="button" class="btn btn-sm btn-outline-primary mb-3" onclick="addRow('writeoffTable')">+ Добавить строку</button>
+          <button type="submit" class="btn btn-danger btn-sm mb-3">Списать</button>
+      </form>
+  </div>
+  {% endif %}
+
+  <!-- ИЗМЕНЕНИЕ РАЗМЕРА / ПЕРЕСЧЕТ ПО ПОЛЮ -->
+  <div class="tab-pane fade {% if active_tab == 'regrading' %}show active{% endif %}" id="regrading">
+      <div class="alert alert-info py-2 small border-info bg-info bg-opacity-10">
+          <i class="fas fa-ruler-combined me-2"></i>
+          Выберите поле, внесите фактические остатки после пересчета и сохраните карточку. Изменения сразу отражаются на складе.
+      </div>
+      <form method="POST">
+          <input type="hidden" name="doc_type" value="field_recount">
+          <div class="card border-0 shadow-sm mb-3">
+              <div class="card-body bg-light">
+                  <div class="row g-2 align-items-end">
+                      <div class="col-md-12">
+                          <label class="small text-muted mb-1">Поле для пересчета</label>
+                          <select id="recountFieldSelect" name="recount_field_id" class="form-select form-select-sm select-search" required>
+                              <option value="" selected disabled>Выберите поле...</option>
+                              {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                          </select>
+                      </div>
+                  </div>
+              </div>
+          </div>
+
+          <div class="table-responsive">
+              <table class="table table-sm table-bordered" id="fieldRecountTable">
+                  <thead class="table-light">
+                      <tr>
+                          <th>Наименование</th>
+                          <th>Размер</th>
+                          <th>Год партии</th>
+                          <th class="text-center">Остаток сейчас</th>
+                          <th class="text-center">Факт после пересчета</th>
+                      </tr>
+                  </thead>
+                  <tbody id="fieldRecountBody">
+                      <tr>
+                          <td colspan="5" class="text-center text-muted py-3">Выберите поле, чтобы загрузить остатки</td>
+                      </tr>
+                  </tbody>
+              </table>
+          </div>
+          <div class="d-flex justify-content-between mt-2">
+            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addRecountRow()">
+                <i class="fas fa-plus"></i> Добавить отсутствующую позицию
+            </button>
+            <button type="submit" class="btn btn-primary btn-sm shadow-sm">
+                <i class="fas fa-save me-1"></i> Сохранить карточку пересчета
+            </button>
+          </div>
+
+          <!-- Скрытый шаблон для новой строки пересчета -->
+          <template id="recountRowTemplate">
+              <tr>
+                  <td>
+                      <select name="recount_plant_id[]" class="form-select form-select-sm select-search" required>
+                          <option value="" disabled selected>Выберите растение...</option>
+                          {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                      </select>
+                  </td>
+                  <td>
+                      <select name="recount_size_id[]" class="form-select form-select-sm select-search" required>
+                          <option value="" disabled selected>Размер...</option>
+                          {% for s in sizes %}<option value="{{ s.id }}" {% if s.name == 'Саженцы' %}class="seedling-option"{% endif %}>{{ s.name }}</option>{% endfor %}
+                      </select>
+                  </td>
+                  <td>
+                      <input type="number" name="recount_year[]" class="form-control form-control-sm" value="{{ current_year }}" required>
+                  </td>
+                  <td class="text-center align-middle text-muted fw-bold">0</td>
+                  <td>
+                      <div class="d-flex align-items-center gap-2">
+                          <input type="number" name="recount_fact_qty[]" class="form-control form-control-sm text-center border-primary" min="0" required placeholder="Факт шт">
+                          <i class="fas fa-times text-danger" style="cursor:pointer;" onclick="this.closest('tr').remove();" title="Удалить"></i>
+                      </div>
+                  </td>
+              </tr>
+          </template>
+      </form>
+
+      <hr class="my-4">
+      <h6 class="fw-bold text-secondary mb-3"><i class="fas fa-layer-group me-1"></i> Карточки пересчета</h6>
+      {% for card in recount_cards %}
+      <div class="card mb-3 border-secondary shadow-sm">
+          <div class="card-header bg-light d-flex justify-content-between align-items-center py-2">
+              <div>
+                  <span class="fw-bold">Карточка #{{ card.doc.id }}</span>
+                  <span class="text-muted ms-2">{{ card.doc.date.strftime('%d.%m.%Y %H:%M') }}</span>
+                  <span class="badge bg-secondary ms-2">{{ card.field_name }}</span>
+              </div>
+              <div class="small text-muted">Создал: {{ card.doc.user.username if card.doc.user else '-' }}</div>
+          </div>
+          <div class="card-body p-0">
+              <div class="table-responsive">
+                  <table class="table table-sm mb-0">
+                      <thead class="table-light">
+                          <tr>
+                              <th>Позиция</th>
+                              <th>Год</th>
+                              <th class="text-center text-success">Приход</th>
+                              <th class="text-center text-danger">Списание</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          {% for r in card.rows_in %}
+                          <tr>
+                              <td>{{ r.plant_name }} ({{ r.size_name }})</td>
+                              <td>{{ r.year }}</td>
+                              <td class="text-center text-success fw-bold">+{{ r.qty }}</td>
+                              <td class="text-center text-muted">-</td>
+                          </tr>
+                          {% endfor %}
+                          {% for r in card.rows_out %}
+                          <tr>
+                              <td>{{ r.plant_name }} ({{ r.size_name }})</td>
+                              <td>{{ r.year }}</td>
+                              <td class="text-center text-muted">-</td>
+                              <td class="text-center text-danger fw-bold">-{{ r.qty }}</td>
+                          </tr>
+                          {% endfor %}
+                          {% if not card.rows_in and not card.rows_out %}
+                          <tr><td colspan="4" class="text-center text-muted">Нет изменений</td></tr>
+                          {% endif %}
+                      </tbody>
+                      <tfoot class="table-light">
+                          <tr>
+                              <td colspan="2" class="text-end fw-bold">Итог:</td>
+                              <td class="text-center text-success fw-bold">+{{ card.total_in }}</td>
+                              <td class="text-center text-danger fw-bold">-{{ card.total_out }}</td>
+                          </tr>
+                      </tfoot>
+                  </table>
+              </div>
+          </div>
+          <div class="card-footer bg-white py-2 d-flex justify-content-end gap-2">
+              {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('stock.document_edit', doc_id=card.doc.id, return_to=current_url) }}" class="btn btn-outline-primary btn-sm">
+                  <i class="fas fa-edit me-1"></i> Редактировать
+              </a>
+              <form method="POST" action="{{ url_for('stock.document_delete', doc_id=card.doc.id) }}" class="d-inline">
+                  <input type="hidden" name="return_to" value="{{ current_url }}" />
+                  <button class="btn btn-outline-danger btn-sm" onclick="return confirm('Удалить карточку пересчета? Остатки будут откатены.');">
+                      <i class="fas fa-trash me-1"></i> Удалить
+                  </button>
+              </form>
+              {% endif %}
+          </div>
+      </div>
+      {% else %}
+      <div class="text-center text-muted py-4 border rounded bg-light">
+          Пока нет сохраненных карточек пересчета
+      </div>
+      {% endfor %}
+  </div>
+
+  <!-- ОТГРУЗКИ (ЖУРНАЛ) -->
+  <div class="tab-pane fade {% if active_tab == 'shipments' %}show active{% endif %}" id="shipments">
+      
+      <!-- НОВАЯ КНОПКА: Только для Админа -->
+       {% if current_user.role == 'admin' %}
+      <div class="mb-3 p-2 bg-warning bg-opacity-10 border border-warning rounded">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+              <div>
+                  <strong class="text-dark"><i class="fas fa-history"></i> Исторические данные (Ghost):</strong>
+                  <span class="text-muted small">Ввод старых отгрузок для отчетов (не списывает склад).</span>
+              </div>
+              <a href="{{ url_for('stock.order_create_ghost') }}" class="btn btn-warning btn-sm shadow-sm text-dark fw-bold">
+                  <i class="fas fa-plus"></i> Создать вручную
+              </a>
+          </div>
+          
+          <!-- Блок Импорта и Массового редактирования -->
+          <div class="d-flex gap-2 align-items-center bg-white p-2 rounded border border-warning">
+              <span class="small fw-bold text-muted">Действия:</span>
+              
+              <!-- Кнопка массового редактирования -->
+              <div class="btn-group btn-group-sm me-2">
+                  <button class="btn btn-outline-primary" onclick="openMassEditModal()">
+                      <i class="fas fa-users-cog"></i> Сменить клиента
+                  </button>
+                  <button class="btn btn-outline-dark" onclick="submitMergeGhost()">
+                      <i class="fas fa-compress-arrows-alt"></i> Объединить (по № счета)
+                  </button>
+              </div>
+
+              <div class="vr mx-2"></div>
+              <span class="small fw-bold text-muted">Импорт:</span>
+
+              <a href="{{ url_for('stock.download_ghost_template') }}" class="btn btn-outline-secondary btn-sm" title="Скачать шаблон Excel">
+                  <i class="fas fa-download"></i> Шаблон
+              </a>
+              
+              <form method="POST" action="{{ url_for('stock.import_ghost_orders') }}" enctype="multipart/form-data" class="d-flex gap-1">
+                  <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx" style="width: 200px;" required>
+                  <button class="btn btn-secondary btn-sm" title="Загрузить"><i class="fas fa-upload"></i></button>
+              </form>
+          </div>
+      </div>
+      {% endif %}
+
+      <div class="table-responsive">
+          <table class="table table-sm table-striped table-docs table-hover">
+              <thead>
+                  <tr>
+                      <th style="width: 30px;" class="text-center">
+                          <input type="checkbox" id="checkAllGhost" onclick="toggleGhostChecks(this)">
+                      </th>
+                      <th>Дата</th>
+                      <th>Тип</th>
+                      <th>Клиент</th>
+                      <th>Позиция</th>
+                      <th>Кол-во</th>
+                      <th>Поле</th>
+                      <th>Инфо/Действия</th>
+                  </tr>
+              </thead>
+              <tbody>
+                  <!-- Реальные отгрузки (Документы) -->
+                  {% for doc in shipments %}
+                      {% for row in doc.rows %}
+                      <tr>
+                          <td></td> <!-- Пустая ячейка под чекбокс -->
+                          <td>{{ doc.date.strftime('%d.%m.%Y') }}</td>
+                          <td><span class="badge bg-secondary">Склад</span></td>
+                          <td>{% if doc.order %}{{ doc.order.client.name }}{% endif %}</td>
+                          <td>{{ row.plant.name }} {{ row.size.name }}</td>
+                          <td>{{ row.quantity }}</td>
+                          <td>{{ row.field_from.name }}</td>
+                          <td>
+                              {% if doc.order_id %}
+                                  <a href="{{ url_for('orders.order_detail', order_id=doc.order_id) }}">Заказ #{{ doc.order_id }}</a>
+                              {% else %}
+                                  {{ doc.comment }}
+                              {% endif %}
+                              {% if current_user.role == 'admin' %}
+                                  <a href="{{ url_for('stock.document_edit', doc_id=doc.id, return_to=current_url) }}" class="btn btn-link btn-sm p-0 ms-2" title="Редактировать документ"><i class="fas fa-edit"></i></a>
+                                  <form method="POST" action="{{ url_for('stock.document_delete', doc_id=doc.id) }}" class="d-inline">
+                                      <input type="hidden" name="return_to" value="{{ current_url }}" />
+                                      <button class="btn btn-link btn-sm p-0 ms-2 text-danger" onclick="return confirm('Удалить документ? Это действие откатит остатки.');" title="Удалить документ"><i class="fas fa-trash"></i></button>
+                                  </form>
+                              {% endif %}
+                          </td>
+                          </td>
+                      </tr>
+                      {% endfor %}
+                  {% endfor %}
+
+                  <!-- НОВЫЙ БЛОК: Призрачные отгрузки (Заказы) -->
+                  {% for o in ghost_orders %}
+                      {% for item in o.filtered_items %}
+                      <tr class="table-warning">
+                          <td class="text-center align-middle">
+                              <input type="checkbox" class="ghost-check form-check-input" value="{{ o.id }}">
+                          </td>
+                          <td class="text-muted">{{ o.date.strftime('%d.%m.%Y') }}</td>
+                          <td><span class="badge bg-warning text-dark">Ghost</span></td>
+                          <td class="text-muted">{{ o.client.name }}</td>
+                          <td class="text-muted">{{ item.plant.name }} {{ item.size.name }}</td>
+                          <td class="fw-bold text-muted">{{ item.quantity }}</td>
+                          <td class="text-muted">{{ item.field.name }}</td>
+                          <td>
+                             <div class="d-flex gap-2 align-items-center">
+                                 <span class="small text-muted me-2">ID: {{ o.id }}</span>
+                                 <!-- Редактировать через стандартную детальную страницу заказа -->
+                                 <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="text-primary" title="Редактировать"><i class="fas fa-edit"></i></a>
+                                 
+                                 <form method="POST" action="{{ url_for('stock.delete_ghost_order', order_id=o.id) }}" onsubmit="return confirm('Удалить эту историческую запись навсегда?');">
+                                     <button class="btn btn-link text-danger p-0 border-0"><i class="fas fa-trash"></i></button>
+                                 </form>
+                             </div>
+                          </td>
+                      </tr>
+                      {% endfor %}
+                  {% endfor %}
+              </tbody>
+          </table>
+      </div>
+  </div>
+</div>
+
+<!-- Модальное окно Массового редактирования -->
+{% if current_user.role == 'admin' %}
+<div class="modal fade" id="massEditModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('stock.mass_edit_ghost_orders') }}">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title">Смена клиента (Ghost)</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Выбрано записей: <strong id="selectedCount">0</strong></p>
+                    <div id="hiddenInputsContainer"></div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Новый клиент</label>
+                        <select name="new_client_id" class="form-select select-search" required style="width: 100%;">
+                            <option value="">Выберите клиента...</option>
+                            {% for c in clients %}
+                            <option value="{{ c.id }}">{{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Применить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    function submitMergeGhost() {
+        const checks = document.querySelectorAll('.ghost-check:checked');
+        if (checks.length < 2) {
+            alert('Выберите минимум 2 заказа для объединения!');
+            return;
+        }
+        
+        if (!confirm(`Вы точно хотите объединить ${checks.length} выбранных заказов в один? \nВсе товары перенесутся в самый ранний заказ, остальные будут удалены.`)) {
+            return;
+        }
+
+        // Создаем невидимую форму и отправляем
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = "{{ url_for('stock.merge_ghost_orders') }}";
+        
+        checks.forEach(c => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'order_ids[]';
+            input.value = c.value;
+            form.appendChild(input);
+        });
+        
+        document.body.appendChild(form);
+        form.submit();
+    }
+
+    function toggleGhostChecks(source) {
+        document.querySelectorAll('.ghost-check').forEach(c => c.checked = source.checked);
+    }
+
+    function openMassEditModal() {
+        const checks = document.querySelectorAll('.ghost-check:checked');
+        if (checks.length === 0) {
+            alert('Выберите хотя бы одну историческую отгрузку (Ghost)');
+            return;
+        }
+
+        document.getElementById('selectedCount').innerText = checks.length;
+        
+        // Собираем ID
+        const container = document.getElementById('hiddenInputsContainer');
+        container.innerHTML = '';
+        
+        // Используем Set, чтобы избежать дублей (если одна отгрузка имеет несколько строк товаров, 
+        // но чекбокс стоит у каждой строки, а заказ один)
+        const uniqueIds = new Set();
+        checks.forEach(c => uniqueIds.add(c.value));
+
+        uniqueIds.forEach(id => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'order_ids[]';
+            input.value = id;
+            container.appendChild(input);
+        });
+
+        new bootstrap.Modal(document.getElementById('massEditModal')).show();
+    }
+</script>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Сохраняем активную вкладку (чтобы фильтры не переключали на "Перемещение")
+    document.addEventListener('DOMContentLoaded', function() {
+        const activeTabInput = document.getElementById('activeTabInput');
+        if (!activeTabInput) return;
+        const tabEl = document.querySelector('#docTabs button.nav-link.active');
+        if (tabEl) activeTabInput.value = tabEl.getAttribute('data-bs-target').replace('#','');
+
+        document.querySelectorAll('#docTabs button[data-bs-toggle="tab"]').forEach(btn => {
+            btn.addEventListener('shown.bs.tab', function(e) {
+                activeTabInput.value = e.target.getAttribute('data-bs-target').replace('#','');
+            });
+        });
+
+        // Гарантируем, что на submit формы отправляется текущая активная вкладка
+        const filterForm = document.getElementById('docFilterForm');
+        if (filterForm) {
+            filterForm.addEventListener('submit', function() {
+                const active = document.querySelector('#docTabs button.nav-link.active');
+                if (active && activeTabInput) {
+                    activeTabInput.value = active.getAttribute('data-bs-target').replace('#','');
+                }
+            });
+        }
+    });
+
+    // Универсальная функция добавления строки
+    function addRow(tableId) {
+        const table = document.getElementById(tableId);
+        const tbody = table.querySelector('tbody');
+        const firstRow = tbody.querySelector('tr'); // Шаблон
+        
+        const newRow = firstRow.cloneNode(true);
+        
+        // Очистка инпутов
+        newRow.querySelectorAll('input').forEach(input => input.value = '');
+        
+        // Очистка Select2 (ВАЖНО для корректного клонирования)
+        $(newRow).find('.select2-container').remove(); 
+        $(newRow).find('select')
+            .removeClass('select2-hidden-accessible')
+            .removeAttr('data-select2-id')
+            .removeAttr('aria-hidden')
+            .removeAttr('tabindex');
+
+        // Добавляем строку
+        tbody.appendChild(newRow);
+
+        // Инициализируем Select2 на новой строке
+        initSelect2(newRow);
+    }
+    
+    // Специальная функция для модального окна отгрузки
+    function addShipmentRow() {
+        let tbody = document.querySelector('#shipmentTable tbody');
+        let firstRow = tbody.rows[0];
+        let newRow = firstRow.cloneNode(true);
+        newRow.querySelectorAll('input').forEach(i => i.value = '');
+        let yearInp = newRow.querySelector('input[name="year[]"]');
+        if(yearInp) yearInp.value = new Date().getFullYear();
+
+        $(newRow).find('.select2-container').remove();
+        $(newRow).find('select').removeClass('select2-hidden-accessible').removeAttr('data-select2-id').removeAttr('aria-hidden').removeAttr('tabindex');
+
+        tbody.appendChild(newRow);
+        initSelect2(newRow);
+    }
+
+    // ИСПРАВЛЕННАЯ ФУНКЦИЯ УДАЛЕНИЯ
+    function removeRow(btn) {
+        // Ищем ближайший TR (строку)
+        const row = btn.closest('tr');
+        const tbody = row.parentNode; // Получаем tbody
+        
+        // Проверяем, сколько строк осталось
+        if (tbody.querySelectorAll('tr').length > 1) {
+            // Удаляем Select2 перед удалением строки (чистим мусор)
+            $(row).find('select').select2('destroy');
+            row.remove();
+        } else { 
+            alert('Документ должен содержать хотя бы одну строку'); 
+        }
+    }
+
+    // Подгрузка остатков
+    async function updateBatchSelect(el) {
+        const row = el.closest('tr');
+        const p = $(row).find('.plant-select').val();
+        const s = $(row).find('.size-select').val();
+        const f = $(row).find('.field-select').val();
+        const yearSel = row.querySelector('.year-select');
+        
+        if(p && s && f && yearSel) {
+            try {
+                const res = await fetch(`/api/stock_info?plant=${p}&size=${s}&field=${f}`);
+                const data = await res.json();
+                yearSel.innerHTML = '';
+                if(data.batches && data.batches.length > 0) {
+                    data.batches.forEach(b => {
+                        const opt = document.createElement('option');
+                        opt.value = b.year;
+                        opt.innerText = `${b.year} (Доступно: ${b.free})`;
+                        yearSel.appendChild(opt);
+                    });
+                } else {
+                    yearSel.innerHTML = '<option disabled>Нет остатков</option>';
+                }
+                // Обновляем UI Select2, если он применен к году
+                if ($(yearSel).hasClass('select2-hidden-accessible')) {
+                    $(yearSel).trigger('change'); 
+                }
+            } catch (e) { console.error(e); }
+        }
+    }
+    
+    $(document).on('select2:select', '.plant-select, .size-select, .field-select', function(e) {
+        updateBatchSelect(this);
+    });
+
+    // Функция добавления новой строки в карточку пересчета
+    function addRecountRow() {
+        const fieldSelect = document.getElementById('recountFieldSelect');
+        if (!fieldSelect.value) {
+            alert('Сначала выберите поле, на котором проводится пересчет!');
+            return;
+        }
+
+        const tbody = document.getElementById('fieldRecountBody');
+        
+        // Если там висит текстовая заглушка (например "Нет остатков" или "Выберите поле"), удаляем её
+        if (tbody.querySelector('td[colspan]')) {
+            tbody.innerHTML = '';
+        }
+
+        // Клонируем содержимое из скрытого <template>
+        const template = document.getElementById('recountRowTemplate');
+        const clone = template.content.cloneNode(true);
+        
+        tbody.appendChild(clone);
+        
+        // Инициализируем Select2 для выпадающих списков только в новой строке
+        const newRow = tbody.lastElementChild;
+        initSelect2(newRow);
+    }
+
+    async function loadFieldRecountItems(fieldId) {
+        const tbody = document.getElementById('fieldRecountBody');
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Загрузка...</td></tr>';
+        try {
+            const res = await fetch(`/api/field_recount/items?field_id=${fieldId}`);
+            const data = await res.json();
+            tbody.innerHTML = '';
+            if (!data.items || data.items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">По этому полю нет остатков</td></tr>';
+                return;
+            }
+
+            data.items.forEach(item => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>
+                        ${item.plant_name}
+                        <input type="hidden" name="recount_plant_id[]" value="${item.plant_id}">
+                    </td>
+                    <td>
+                        ${item.size_name}
+                        <input type="hidden" name="recount_size_id[]" value="${item.size_id}">
+                    </td>
+                    <td>
+                        ${item.year}
+                        <input type="hidden" name="recount_year[]" value="${item.year}">
+                    </td>
+                    <td class="text-center fw-bold">${item.current_qty}</td>
+                    <td>
+                        <input type="number" name="recount_fact_qty[]" class="form-control form-control-sm text-center" min="0" value="${item.current_qty}" required>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        } catch (e) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-3">Ошибка загрузки остатков</td></tr>';
+        }
+    }
+
+    function initDocumentsPage() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const activeTabId = urlParams.get('active_tab');
+        const activeTabInput = document.getElementById('activeTabInput');
+        
+        // Если в URL есть сохраненная вкладка, активируем её
+        if (activeTabId) {
+            const tabButton = document.querySelector(`button[data-bs-target="${activeTabId}"]`);
+            if (tabButton) {
+                const tabInstance = new bootstrap.Tab(tabButton);
+                tabInstance.show();
+            }
+        }
+
+        // При нажатии на любую вкладку, сохраняем её ID в скрытое поле формы
+        const tabButtons = document.querySelectorAll('button[data-bs-toggle="tab"]');
+        tabButtons.forEach(btn => {
+            if (btn.dataset.documentsBound === '1') return;
+            btn.addEventListener('shown.bs.tab', function (e) {
+                const target = e.target.getAttribute('data-bs-target');
+                if (activeTabInput) activeTabInput.value = target;
+
+                // Если открыли вкладку пересчета и поле уже выбрано — подгружаем сразу.
+                if (target === '#regrading') {
+                    const recountFieldSelect = document.getElementById('recountFieldSelect');
+                    if (recountFieldSelect && recountFieldSelect.value) {
+                        loadFieldRecountItems(recountFieldSelect.value);
+                    }
+                }
+            });
+            btn.dataset.documentsBound = '1';
+        });
+        
+        // Устанавливаем изначальное значение в форму
+        const currentActive = document.querySelector('.nav-link.active');
+        if (currentActive && activeTabInput) {
+            activeTabInput.value = currentActive.getAttribute('data-bs-target');
+        }
+
+        // Загрузка строк пересчета по выбранному полю
+        const recountFieldSelect = document.getElementById('recountFieldSelect');
+        if (recountFieldSelect) {
+            const handleRecountFieldChange = function() {
+                const value = recountFieldSelect.value;
+                if (value) loadFieldRecountItems(value);
+            };
+
+            if (recountFieldSelect.dataset.bound !== '1') {
+                recountFieldSelect.addEventListener('change', handleRecountFieldChange);
+                recountFieldSelect.dataset.bound = '1';
+            }
+            // Для select2 в HTMX-страницах вешаем namespaced-обработчик.
+            $(recountFieldSelect)
+                .off('select2:select.recount')
+                .on('select2:select.recount', handleRecountFieldChange);
+
+            // Если поле уже выбрано (например, после swap) — загружаем список сразу.
+            if (recountFieldSelect.value) {
+                loadFieldRecountItems(recountFieldSelect.value);
+            }
+        }
+    }
+
+// --- Инициализация страницы при обычной и HTMX-навигации ---
+    document.addEventListener('DOMContentLoaded', initDocumentsPage);
+    document.addEventListener('htmx:afterSwap', function() {
+        if (document.getElementById('docFilterForm')) {
+            initDocumentsPage();
+        }
+    });
+</script>
+
+
+
+{% endblock %}

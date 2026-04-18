@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Оформление заказа</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* Оптимизация для мобильных */
+        body { 
+            background-color: #f0f2f5; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            padding-bottom: 120px; 
+            touch-action: manipulation;
+        }
+        .header { 
+            background: linear-gradient(135deg, #2E7D32 0%, #43A047 100%); 
+            color: white; padding: 25px 15px; border-bottom-left-radius: 20px; border-bottom-right-radius: 20px; 
+            box-shadow: 0 4px 15px rgba(46,125,50,0.2); margin-bottom: 20px;
+        }
+        
+        /* Липкий поиск */
+        .sticky-search {
+            position: sticky;
+            top: 10px;
+            z-index: 100;
+            margin-bottom: 15px;
+        }
+        .search-input {
+            border-radius: 20px;
+            padding-left: 45px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+            border: 2px solid transparent;
+            transition: 0.2s;
+        }
+        .search-input:focus {
+            border-color: #43A047;
+            box-shadow: 0 4px 15px rgba(67, 160, 71, 0.15);
+        }
+        .search-icon {
+            position: absolute;
+            left: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #9ca3af;
+            z-index: 101;
+        }
+        
+        .product-card { border-radius: 16px; border: none; box-shadow: 0 4px 10px rgba(0,0,0,0.03); margin-bottom: 12px; }
+        .plant-card-top { display: flex; align-items: flex-start; gap: 12px; }
+        .plant-thumb {
+            width: 92px;
+            height: 92px;
+            object-fit: cover;
+            border-radius: 12px;
+            flex-shrink: 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            background: #e5e7eb;
+        }
+        .plant-meta { min-width: 0; flex: 1; }
+        .price-badge { background: #E8F5E9; color: #1B5E20; padding: 5px 10px; border-radius: 8px; font-weight: 800; font-size: 16px; }
+        
+        .qty-control { display: flex; align-items: center; background: #f8f9fa; border-radius: 12px; padding: 4px; width: 130px;}
+        .qty-btn { width: 35px; height: 35px; border-radius: 10px; border: none; background: white; color: #2E7D32; font-weight: bold; font-size: 18px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .qty-btn:active { background: #E8F5E9; transform: scale(0.95); }
+        .qty-input { width: 40px; text-align: center; border: none; background: transparent; font-weight: bold; font-size: 16px; padding: 0; }
+        .qty-input:focus { outline: none; }
+        
+        .cart-panel { 
+            position: fixed; bottom: 0; left: 0; right: 0; background: white; 
+            padding: 15px 20px; padding-bottom: calc(15px + env(safe-area-inset-bottom)); 
+            box-shadow: 0 -5px 20px rgba(0,0,0,0.08); z-index: 1000; border-top-left-radius: 20px; border-top-right-radius: 20px;
+        }
+        
+        .gallery-stage {
+            min-height: 280px;
+            max-height: 80vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #111827;
+        }
+        .gallery-img {
+            width: 100%;
+            max-height: 80vh;
+            object-fit: contain;
+            border-radius: 12px;
+            background: #111827;
+            touch-action: none;
+            transform-origin: center center;
+            transition: transform 0.08s linear;
+        }
+        .gallery-filename {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 8px 10px;
+            background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.7) 100%);
+            color: #fff;
+            font-size: 13px;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        @media (max-width: 420px) {
+            .plant-thumb { width: 82px; height: 82px; }
+            .price-badge { font-size: 14px; padding: 4px 8px; }
+            .gallery-stage { min-height: 220px; }
+            .gallery-img { max-height: 70vh; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header text-center">
+    <h3 class="fw-bold m-0"><i class="fas fa-leaf me-2"></i>Свободные остатки</h3>
+    <p class="m-0 mt-1 opacity-75 small">Актуальный прайс и оформление заказа</p>
+</div>
+
+<div class="container px-3">
+    <form method="POST" id="orderForm">
+        
+        <!-- ДАННЫЕ КЛИЕНТА (Оставили только Имя/Название) -->
+        <div class="card product-card p-3 mb-4 border-start border-4 border-success">
+            <div class="mb-1">
+                <input type="text" name="customer_name" class="form-control form-control-lg bg-light border-0 fw-bold" required placeholder="Введите Ваше Имя или Компанию *">
+            </div>
+        </div>
+
+        <!-- УМНЫЙ ПОИСК -->
+        <div class="sticky-search">
+            <i class="fas fa-search search-icon"></i>
+            <input type="text" id="searchInput" class="form-control form-control-lg search-input" placeholder="Поиск растения..." onkeyup="filterCatalog()">
+        </div>
+
+        <h6 class="fw-bold text-muted mb-3 ps-2">КАТАЛОГ РАСТЕНИЙ</h6>
+
+        <div id="catalogList">
+            {% for item in items %}
+            <div class="card product-card p-3 catalog-item">
+                <div class="plant-card-top mb-2">
+                    {% if item.photo_url %}
+                    <img src="{{ item.photo_url }}" class="plant-thumb" alt="{{ item.plant_name }}" loading="lazy" decoding="async">
+                    {% endif %}
+                    <div class="plant-meta" style="padding-right: 10px;">
+                        <h6 class="fw-bold text-dark mb-1 lh-sm plant-title" style="font-size: 15px;">{{ item.plant_name }}</h6>
+                        <span class="badge bg-secondary fw-normal">{{ item.size_name }}</span>
+                        
+                        {% if item.has_photos %}
+                        <button
+                            type="button"
+                            class="btn btn-sm btn-outline-success rounded-pill ms-2 py-0 px-2"
+                            style="font-size: 11px;"
+                            data-plant-id="{{ item.plant_id }}"
+                            data-plant-name="{{ item.plant_name|e }}"
+                            onclick="openGalleryFromButton(this)"
+                        >
+                            <i class="fas fa-camera"></i> Фото
+                        </button>
+                        {% endif %}
+                    </div>
+                    <div class="price-badge item-price" data-price="{{ item.price }}">
+                        {{ "{:,.0f}".format(item.price).replace(',', ' ') }} ₽
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mt-3 pt-2 border-top">
+                    <div class="small text-muted">
+                        Доступно: <strong class="text-success">{{ item.free_qty }} шт</strong>
+                    </div>
+                    
+                    <div class="qty-control shadow-sm">
+                        <button type="button" class="qty-btn" onclick="changeQty(this, -1)">-</button>
+                        <input type="number" name="qty_{{ item.plant_id }}_{{ item.size_id }}" 
+                               class="qty-input" value="0" min="0" max="{{ item.free_qty }}" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done">
+                        <button type="button" class="qty-btn" onclick="changeQty(this, 1)">+</button>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="text-center text-muted py-5">
+                <i class="fas fa-box-open fa-3x mb-3 opacity-50"></i>
+                <p>К сожалению, свободных остатков сейчас нет.</p>
+            </div>
+            {% endfor %}
+            
+            <!-- Сообщение "Ничего не найдено" (скрыто по умолчанию) -->
+            <div id="noResultsMsg" class="text-center text-muted py-4" style="display: none;">
+                <i class="fas fa-search fa-2x mb-2 opacity-25"></i>
+                <p>По вашему запросу ничего не найдено.</p>
+            </div>
+        </div>
+
+        <!-- КОРЗИНА -->
+        <div class="cart-panel d-flex justify-content-between align-items-center">
+            <div class="d-flex flex-column">
+                <span class="text-muted small fw-bold text-uppercase" style="font-size: 10px;">Итого к оплате</span>
+                <span class="fw-bold text-dark" style="font-size: 22px;"><span id="totalSumDisplay">0</span> ₽</span>
+            </div>
+            <button type="submit" class="btn btn-success btn-lg fw-bold rounded-pill shadow" id="submitBtn" disabled style="padding: 10px 25px;">
+                Оформить <i class="fas fa-arrow-right ms-2"></i>
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- МОДАЛЬНОЕ ОКНО ГАЛЕРЕИ -->
+<div class="modal fade" id="galleryModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0" style="border-radius: 20px; overflow: hidden;">
+            <div class="modal-header bg-success text-white border-0 py-2">
+                <h6 class="modal-title fw-bold" id="galleryTitle">Фотографии</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-0 bg-dark">
+                <div id="galleryCarousel" class="carousel slide" data-bs-ride="carousel">
+                    <div class="carousel-inner" id="galleryImages"></div>
+                    <button class="carousel-control-prev" type="button" data-bs-target="#galleryCarousel" data-bs-slide="prev">
+                        <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+                    </button>
+                    <button class="carousel-control-next" type="button" data-bs-target="#galleryCarousel" data-bs-slide="next">
+                        <span class="carousel-control-next-icon" aria-hidden="true"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // --- ЛОГИКА ЖИВОГО ПОИСКА ---
+    function filterCatalog() {
+        const filter = document.getElementById('searchInput').value.toLowerCase();
+        const cards = document.querySelectorAll('.catalog-item');
+        let visibleCount = 0;
+        
+        cards.forEach(card => {
+            // Ищем по тексту внутри тега с классом plant-title
+            const title = card.querySelector('.plant-title').innerText.toLowerCase();
+            if (title.includes(filter)) {
+                card.style.display = "";
+                visibleCount++;
+            } else {
+                card.style.display = "none";
+            }
+        });
+        
+        // Показываем/скрываем заглушку "Ничего не найдено"
+        document.getElementById('noResultsMsg').style.display = (visibleCount === 0) ? "block" : "none";
+    }
+
+    // --- ЛОГИКА ПЛЮС/МИНУС И СУММЫ ---
+    function changeQty(btn, delta) {
+        const input = btn.parentElement.querySelector('.qty-input');
+        let val = parseInt(input.value) || 0;
+        const max = parseInt(input.getAttribute('max')) || 0;
+
+        val += delta;
+        if (val < 0) val = 0;
+        if (val > max) val = max; 
+
+        input.value = val;
+        
+        const card = btn.closest('.product-card');
+        if (val > 0) {
+            card.style.border = "2px solid #43A047";
+            card.style.backgroundColor = "#F1F8E9";
+        } else {
+            card.style.border = "none";
+            card.style.backgroundColor = "#fff";
+        }
+
+        calculateTotal();
+    }
+
+    function normalizeQtyInput(input) {
+        let raw = String(input.value ?? '').trim();
+        if (raw === '') raw = '0';
+        raw = raw.replace(/[^\d]/g, '');
+        let val = parseInt(raw || '0', 10);
+        if (Number.isNaN(val) || val < 0) val = 0;
+        const max = parseInt(input.getAttribute('max'), 10) || 0;
+        if (val > max) val = max;
+        input.value = String(val);
+
+        const card = input.closest('.product-card');
+        if (card) {
+            if (val > 0) {
+                card.style.border = "2px solid #43A047";
+                card.style.backgroundColor = "#F1F8E9";
+            } else {
+                card.style.border = "none";
+                card.style.backgroundColor = "#fff";
+            }
+        }
+    }
+
+    function calculateTotal() {
+        let total = 0;
+        let hasItems = false;
+        
+        document.querySelectorAll('.qty-input').forEach(input => {
+            let val = parseInt(input.value) || 0;
+            if (val > 0) {
+                hasItems = true;
+                let price = parseFloat(input.closest('.product-card').querySelector('.item-price').getAttribute('data-price')) || 0;
+                total += val * price;
+            }
+        });
+
+        document.getElementById('totalSumDisplay').innerText = total.toLocaleString('ru-RU');
+        document.getElementById('submitBtn').disabled = !hasItems;
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('.qty-input').forEach((input) => {
+            input.addEventListener('input', () => {
+                normalizeQtyInput(input);
+                calculateTotal();
+            });
+            input.addEventListener('blur', () => {
+                normalizeQtyInput(input);
+                calculateTotal();
+            });
+        });
+    });
+
+    // --- ЛОГИКА ГАЛЕРЕИ ФОТОГРАФИЙ ---
+    function openGalleryFromButton(btn) {
+        openGallery(btn.dataset.plantId, btn.dataset.plantName);
+    }
+
+    async function openGallery(plantId, plantName) {
+        document.getElementById('galleryTitle').innerText = plantName;
+        const container = document.getElementById('galleryImages');
+        container.innerHTML = '<div class="text-center text-white py-5"><i class="fas fa-spinner fa-spin fa-2x"></i></div>';
+        
+        const myModal = new bootstrap.Modal(document.getElementById('galleryModal'));
+        myModal.show();
+
+        try {
+            const res = await fetch(`/public/client/photos/${plantId}`);
+            const data = await res.json();
+            
+            container.innerHTML = '';
+            if (data.items && data.items.length > 0) {
+                data.items.forEach((photo, index) => {
+                    const activeClass = index === 0 ? 'active' : '';
+                    container.innerHTML += `
+                        <div class="carousel-item ${activeClass}">
+                            <div class="gallery-stage">
+                            <img src="${photo.image_url}" class="gallery-img zoomable-img" alt="Фото растения" loading="lazy" decoding="async">
+                            <div class="gallery-filename">${photo.display_name || ''}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+                initGalleryZoom();
+            } else {
+                container.innerHTML = '<div class="text-center text-white py-5">Фотографий нет</div>';
+            }
+        } catch (e) {
+            container.innerHTML = '<div class="text-center text-danger py-5">Ошибка загрузки</div>';
+        }
+    }
+
+    function initGalleryZoom() {
+        const images = document.querySelectorAll('.zoomable-img');
+        images.forEach((img) => {
+            let scale = 1;
+            let startDist = 0;
+            let baseScale = 1;
+            let posX = 0;
+            let posY = 0;
+            let startX = 0;
+            let startY = 0;
+            let panning = false;
+
+            const applyTransform = () => {
+                img.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+            };
+
+            const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+            const resetView = () => {
+                scale = 1;
+                posX = 0;
+                posY = 0;
+                applyTransform();
+            };
+
+            const getDistance = (t1, t2) => {
+                const dx = t1.clientX - t2.clientX;
+                const dy = t1.clientY - t2.clientY;
+                return Math.sqrt(dx * dx + dy * dy);
+            };
+
+            img.addEventListener('touchstart', (event) => {
+                if (event.touches.length === 2) {
+                    startDist = getDistance(event.touches[0], event.touches[1]);
+                    baseScale = scale;
+                } else if (event.touches.length === 1 && scale > 1) {
+                    panning = true;
+                    startX = event.touches[0].clientX - posX;
+                    startY = event.touches[0].clientY - posY;
+                }
+            }, { passive: false });
+
+            img.addEventListener('touchmove', (event) => {
+                if (event.touches.length === 2) {
+                    event.preventDefault();
+                    const newDist = getDistance(event.touches[0], event.touches[1]);
+                    if (startDist > 0) {
+                        scale = clamp(baseScale * (newDist / startDist), 1, 4);
+                        if (scale === 1) {
+                            posX = 0;
+                            posY = 0;
+                        }
+                        applyTransform();
+                    }
+                } else if (event.touches.length === 1 && panning && scale > 1) {
+                    event.preventDefault();
+                    const moveX = event.touches[0].clientX - startX;
+                    const moveY = event.touches[0].clientY - startY;
+                    const maxX = ((scale - 1) * img.clientWidth) / 2;
+                    const maxY = ((scale - 1) * img.clientHeight) / 2;
+                    posX = clamp(moveX, -maxX, maxX);
+                    posY = clamp(moveY, -maxY, maxY);
+                    applyTransform();
+                }
+            }, { passive: false });
+
+            img.addEventListener('touchend', (event) => {
+                if (event.touches.length < 2) {
+                    startDist = 0;
+                }
+                if (event.touches.length === 0) {
+                    panning = false;
+                }
+            });
+
+            img.addEventListener('dblclick', () => {
+                if (scale > 1) {
+                    resetView();
+                } else {
+                    scale = 2;
+                    applyTransform();
+                }
+            });
+        });
+
+        const galleryElement = document.getElementById('galleryCarousel');
+        galleryElement.addEventListener('slide.bs.carousel', () => {
+            document.querySelectorAll('.zoomable-img').forEach((img) => {
+                img.style.transform = 'translate(0px, 0px) scale(1)';
+            });
+        }, { once: true });
+    }
+</script>
+</body>
+</html>

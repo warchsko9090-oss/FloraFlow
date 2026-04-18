@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0 text-primary fw-bold"><i class="fas fa-list-alt me-2"></i>Реестр счетов</h4>
+</div>
+
+<!-- Панель фильтров -->
+<div class="card p-3 mb-4 bg-light border-0 shadow-sm">
+    <form method="GET" class="row g-3 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label small fw-bold text-muted text-uppercase">Клиент</label>
+            <select name="client_id" class="form-select select-search">
+                <option value="">Все клиенты</option>
+                {% for c in clients %}
+                <option value="{{ c.id }}" {% if filters.client_id and filters.client_id|int == c.id %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label small fw-bold text-muted text-uppercase">Период (по дате счета)</label>
+            <div class="input-group">
+                <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control">
+                <span class="input-group-text bg-white border-start-0 border-end-0">-</span>
+                <input type="date" name="end_date" value="{{ filters.end or '' }}" class="form-control">
+            </div>
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-primary w-100"><i class="fas fa-search me-2"></i> Найти</button>
+        </div>
+        <div class="col-md-2">
+            <a href="{{ url_for('finance.invoices_summary') }}" class="btn btn-outline-secondary w-100">Сброс</a>
+        </div>
+    </form>
+</div>
+
+<!-- Таблица (Для ПК) -->
+<div class="card shadow-sm border-0 d-none d-md-block">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0" id="invSummaryTable" style="font-size: 13px;">
+            <thead class="table-light">
+                <tr>
+                    <th onclick="sortTable('invSummaryTable', 0, 'string')" style="cursor:pointer">Дата <i class="fas fa-sort text-muted small ms-1"></i></th>
+                    <th onclick="sortTable('invSummaryTable', 1, 'string')" style="cursor:pointer">№ Счета <i class="fas fa-sort text-muted small ms-1"></i></th>
+                    <th onclick="sortTable('invSummaryTable', 2, 'string')" style="cursor:pointer">Клиент <i class="fas fa-sort text-muted small ms-1"></i></th>
+                    <th class="text-center" onclick="sortTable('invSummaryTable', 3, 'number')" style="cursor:pointer">Заказов <i class="fas fa-sort text-muted small ms-1"></i></th>
+                    <th class="text-end" onclick="sortTable('invSummaryTable', 4, 'number')" style="cursor:pointer">Сумма Счета <i class="fas fa-sort text-muted small ms-1"></i></th>
+                    <th class="text-end" onclick="sortTable('invSummaryTable', 5, 'number')" style="cursor:pointer">Оплачено <i class="fas fa-sort text-muted small ms-1"></i></th>
+                    <th class="text-end" onclick="sortTable('invSummaryTable', 6, 'number')" style="cursor:pointer">Долг <i class="fas fa-sort text-muted small ms-1"></i></th>
+                    <th class="text-end" onclick="sortTable('invSummaryTable', 7, 'number')" style="cursor:pointer">Отгружено <i class="fas fa-sort text-muted small ms-1"></i></th>
+                    <th class="text-center">Статус</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in invoices %}
+                <tr class="{% if not row.has_invoice %}bg-light text-muted{% endif %}" 
+                    style="cursor: pointer;" 
+                    onclick="{% if row.has_invoice %}window.location.href='{{ url_for('orders.invoice_detail', client_id=row.client_id, invoice_number=row.invoice_number) }}'{% else %}alert('У этой группы нет номера счета, переходите через список заказов.'){% endif %}">
+                    
+                    <td>{{ row.date.strftime('%d.%m.%Y') }}</td>
+                    
+                    <td>
+                        {% if row.has_invoice %}
+                            <span class="fw-bold text-primary">{{ row.invoice_number }}</span>
+                        {% else %}
+                            <span class="fst-italic text-muted">Без номера</span>
+                        {% endif %}
+                    </td>
+                    
+                    <td class="fw-bold">{{ row.client_name }}</td>
+                    
+                    <td class="text-center">
+                        <span class="badge bg-light text-dark border">{{ row.orders_count }}</span>
+                    </td>
+                    
+                    <td class="text-end fw-bold" data-val="{{ row.total_sum }}">
+                        {{ row.total_sum|money }}
+                    </td>
+                    
+                    <td class="text-end text-success" data-val="{{ row.paid_sum }}">
+                        {{ row.paid_sum|money }}
+                    </td>
+                    
+                    <td class="text-end" data-val="{{ row.debt }}">
+                        {% if row.debt > 0 %}
+                            <span class="text-danger fw-bold">{{ row.debt|money }}</span>
+                        {% else %}
+                            <span class="text-success"><i class="fas fa-check"></i></span>
+                        {% endif %}
+                    </td>
+                    
+                    <td class="text-end text-muted" data-val="{{ row.shipped_sum }}">
+                        {{ row.shipped_sum|money }}
+                    </td>
+                    
+                    <td class="text-center">
+                        {% if row.status == 'paid' %}
+                            <span class="badge bg-success">Оплачен</span>
+                        {% elif row.status == 'partial' %}
+                            <span class="badge bg-warning text-dark">Частично</span>
+                        {% else %}
+                            <span class="badge bg-danger">Не оплачен</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="9" class="text-center py-5 text-muted">
+                        <i class="fas fa-search fa-2x mb-3"></i><br>Нет счетов по заданным критериям
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Мобильные карточки -->
+<div class="d-md-none mt-3">
+    {% for row in invoices %}
+    <div class="card shadow-sm mb-3 border-0 {% if not row.has_invoice %}bg-light text-muted{% endif %}"
+         onclick="{% if row.has_invoice %}window.location.href='{{ url_for('orders.invoice_detail', client_id=row.client_id, invoice_number=row.invoice_number) }}'{% else %}alert('У этой группы нет номера счета, переходите через список заказов.'){% endif %}">
+        <div class="card-body p-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <div>
+                    {% if row.has_invoice %}
+                        <span class="fw-bold text-primary fs-6"><i class="fas fa-file-invoice me-1"></i> {{ row.invoice_number }}</span>
+                    {% else %}
+                        <span class="fst-italic text-muted">Без номера</span>
+                    {% endif %}
+                </div>
+                <span class="small text-muted">{{ row.date.strftime('%d.%m.%Y') }}</span>
+            </div>
+            
+            <div class="fw-bold text-dark mb-3 pb-2 border-bottom">{{ row.client_name }}</div>
+            
+            <div class="row g-2 mb-2 small">
+                <div class="col-6 border-end">
+                    <span class="text-muted">Сумма:</span><br>
+                    <span class="fw-bold fs-6">{{ row.total_sum|money_int }}</span>
+                </div>
+                <div class="col-6 ps-3">
+                    <span class="text-muted">Оплачено:</span><br>
+                    <span class="fw-bold text-success fs-6">{{ row.paid_sum|money_int }}</span>
+                </div>
+                <div class="col-6 border-end">
+                    <span class="text-muted">Отгружено:</span><br>
+                    <span class="fw-bold">{{ row.shipped_sum|money_int }}</span>
+                </div>
+                <div class="col-6 ps-3">
+                    <span class="text-muted">Долг:</span><br>
+                    {% if row.debt > 0 %}
+                        <span class="text-danger fw-bold">{{ row.debt|money_int }}</span>
+                    {% else %}
+                        <span class="text-success fw-bold"><i class="fas fa-check"></i> 0</span>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <div class="d-flex justify-content-between align-items-center border-top pt-2 mt-2">
+                <span class="badge bg-secondary">Заказов: {{ row.orders_count }}</span>
+                {% if row.status == 'paid' %}
+                    <span class="badge bg-success">Оплачен</span>
+                {% elif row.status == 'partial' %}
+                    <span class="badge bg-warning text-dark">Частично</span>
+                {% else %}
+                    <span class="badge bg-danger">Не оплачен</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-4">Нет счетов по заданным критериям</div>
+    {% endfor %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title"><i class="fas fa-file-signature"></i> Черновики клиентов</div>
+        <div class="page-subtitle">Заявки из публичного клиентского интерфейса.</div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm">К заказам</a>
+    </div>
+</div>
+
+<div class="filter-panel mb-3">
+    <form method="GET" class="d-flex gap-2">
+        <select class="form-select form-select-sm" name="mode" style="max-width: 240px;">
+            <option value="new" {% if mode == 'new' %}selected{% endif %}>Новые</option>
+            <option value="approved" {% if mode == 'approved' %}selected{% endif %}>Подтвержденные</option>
+            <option value="rejected" {% if mode == 'rejected' %}selected{% endif %}>Отклоненные</option>
+            <option value="all" {% if mode == 'all' %}selected{% endif %}>Все</option>
+        </select>
+        <button class="btn btn-success btn-sm">Показать</button>
+    </form>
+</div>
+
+<div class="card section-card">
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Дата</th>
+                    <th>Клиент</th>
+                    <th>Телефон</th>
+                    <th>Позиций</th>
+                    <th>Кол-во</th>
+                    <th>Статус</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in drafts %}
+                <tr>
+                    <td>#{{ d.doc.id }}</td>
+                    <td>{{ d.doc.date|dateru }}</td>
+                    <td>{{ d.meta.customer_name }}</td>
+                    <td>{{ d.meta.phone or '-' }}</td>
+                    <td>{{ d.items_count }}</td>
+                    <td>{{ d.items_qty }}</td>
+                    <td>
+                        {% if d.doc.doc_type == 'client_draft' %}
+                        <span class="badge bg-warning text-dark">new</span>
+                        {% elif d.doc.doc_type == 'client_draft_approved' %}
+                        <span class="badge bg-success">approved</span>
+                        {% else %}
+                        <span class="badge bg-secondary">rejected</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('orders.client_draft_detail', doc_id=d.doc.id) }}">Открыть</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center text-muted py-4">Нет заявок</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

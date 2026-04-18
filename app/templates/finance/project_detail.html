@@ -1,0 +1,576 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- ШАПКА -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h4 class="mb-0 fw-bold">
+            <span class="text-muted me-2">Проект:</span> {{ project.name }}
+            {% if project.status == 'active' %}
+            <span class="badge bg-success ms-2 fs-6">Активен</span>
+            {% else %}
+            <span class="badge bg-secondary ms-2 fs-6">Закрыт</span>
+            {% endif %}
+        </h4>
+        <small class="text-muted">{{ project.description }}</small>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#editProjectModal"><i class="fas fa-cog"></i> Настройки</button>
+        <a href="{{ url_for('finance.projects_list') }}" class="btn btn-secondary btn-sm">Назад</a>
+    </div>
+</div>
+
+<!-- ФИНАНСОВАЯ ЭКОНОМИКА ПРОЕКТА -->
+<div class="row g-3 mb-4">
+    <!-- 1. Выручка -->
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-success">
+            <div class="card-body py-2">
+                <small class="text-uppercase text-muted fw-bold">Выручка (План)</small>
+                <h4 class="mb-0 fw-bold text-success">{{ stats.revenue|money }}</h4>
+                <small class="text-muted">Заказов: {{ project.orders|length }}</small>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 2. Себестоимость Растений -->
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-warning bg-warning bg-opacity-10">
+            <div class="card-body py-2">
+                <small class="text-uppercase text-muted fw-bold">Себестоимость Растений</small>
+                <h4 class="mb-0 fw-bold text-dark">{{ stats.plants_cost|money }}</h4>
+                <small class="text-muted" style="font-size: 10px;">Закупка + Уход (Накопленные)</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. Прямые Расходы -->
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-danger">
+            <div class="card-body py-2">
+                <div class="d-flex justify-content-between">
+                    <small class="text-uppercase text-muted fw-bold">Прямые расходы</small>
+                    <small class="text-muted">План: {{ stats.plan_expenses|money_int }}</small>
+                </div>
+                <h4 class="mb-0 fw-bold text-danger">{{ stats.fact_expenses|money }}</h4>
+                <a href="#expensesBlock" class="small text-decoration-none">Детализация &darr;</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. Прибыль -->
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-primary">
+            <div class="card-body py-2">
+                <small class="text-uppercase text-muted fw-bold">Чистая Прибыль</small>
+                <h4 class="mb-0 fw-bold {% if stats.profit > 0 %}text-primary{% else %}text-danger{% endif %}">{{ stats.profit|money }}</h4>
+                <small class="fw-bold {% if stats.margin > 30 %}text-success{% else %}text-muted{% endif %}">
+                    Рентабельность: {{ "%.1f"|format(stats.margin) }}%
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- ЛЕВАЯ КОЛОНКА: РАСТЕНИЯ И ЗАКАЗЫ -->
+    <div class="col-md-7">
+        
+        <!-- 1. СОСТАВ ПРОЕКТА (Растения) -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-seedling text-success me-2"></i> Состав проекта (Растения)</span>
+                {% if current_user.role == 'admin' and project.status == 'active' %}
+                <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#addItemModal">
+                    <i class="fas fa-plus"></i> Добавить
+                </button>
+                {% endif %}
+            </div>
+            <!-- ПК ВЕРСИЯ -->
+            <div class="table-responsive d-none d-md-block">
+                <table class="table table-hover align-middle mb-0" style="font-size: 13px;">
+                    <thead class="bg-light">
+                        <tr>
+                            <th>Растение</th>
+                            <th>Размер</th>
+                            <th class="text-center">Кол-во</th>
+                            {% if current_user.role == 'admin' %}<th></th>{% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in project.items %}
+                        <tr>
+                            <td class="fw-bold">{{ item.plant.name }}</td>
+                            <td>{{ item.size.name }}</td>
+                            <td class="text-center fw-bold">{{ item.quantity }}</td>
+                            {% if current_user.role == 'admin' %}
+                            <td class="text-end">
+                                {% if project.status == 'active' %}
+                                <form method="POST" onsubmit="return confirm('Удалить из проекта?');" class="m-0">
+                                    <input type="hidden" name="delete_item" value="1">
+                                    <input type="hidden" name="item_id" value="{{ item.id }}">
+                                    <button class="btn btn-link text-danger p-0 btn-sm"><i class="fas fa-times"></i></button>
+                                </form>
+                                {% endif %}
+                            </td>
+                            {% endif %}
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-3">Список пуст. Добавьте растения.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+            <div class="d-md-none bg-light p-2">
+                {% for item in project.items %}
+                <div class="card shadow-sm mb-2 border-0">
+                    <div class="card-body p-3 d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="fw-bold text-dark">{{ item.plant.name }}</div>
+                            <div class="small text-muted">{{ item.size.name }}</div>
+                        </div>
+                        <div class="d-flex align-items-center gap-3">
+                            <span class="badge bg-secondary fs-6">{{ item.quantity }} шт</span>
+                            {% if current_user.role == 'admin' and project.status == 'active' %}
+                            <form method="POST" onsubmit="return confirm('Удалить?');" class="m-0">
+                                <input type="hidden" name="delete_item" value="1">
+                                <input type="hidden" name="item_id" value="{{ item.id }}">
+                                <button class="btn btn-link text-danger p-0"><i class="fas fa-trash-alt"></i></button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-3 border rounded bg-white">Список пуст</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- 2. СВЯЗАННЫЕ ЗАКАЗЫ -->
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-shopping-cart text-primary me-2"></i> Связанные продажи (Заказы)</span>
+                {% if project.status == 'active' %}
+                <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#linkOrderModal">
+                    <i class="fas fa-link"></i> Привязать
+                </button>
+                {% endif %}
+            </div>
+            <ul class="list-group list-group-flush small">
+                {% for o in project.orders %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="fw-bold text-decoration-none">Заказ #{{ o.id }}</a>
+                        <span class="text-muted ms-2">{{ o.client.name }}</span>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-light text-dark border">{{ o.status }}</span>
+                        <span class="fw-bold text-success">+ {{ o.total_sum|money }}</span>
+                        
+                        {% if project.status == 'active' %}
+                        <form method="POST" onsubmit="return confirm('Отвязать заказ?');" class="m-0" hx-boost="false">
+                            <input type="hidden" name="unlink_order" value="1">
+                            <input type="hidden" name="order_id" value="{{ o.id }}">
+                            <button class="btn btn-link text-muted p-0 btn-sm" title="Отвязать"><i class="fas fa-unlink"></i></button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </li>
+                {% else %}
+                <li class="list-group-item text-center text-muted py-3">Нет привязанных заказов</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+
+    <!-- ПРАВАЯ КОЛОНКА: БЮДЖЕТ И РАСХОДЫ -->
+    <div class="col-md-5">
+        
+        <!-- 3. БЮДЖЕТ (ПЛАН) -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-bullseye text-secondary me-2"></i> Исполнение бюджета</span>
+                {% if project.status == 'active' %}
+                <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#addBudgetModal">
+                    <i class="fas fa-plus"></i>
+                </button>
+                {% endif %}
+            </div>
+            
+            <!-- ПК ВЕРСИЯ -->
+            <div class="table-responsive d-none d-md-block">
+                <table class="table table-sm table-hover mb-0" style="font-size: 12px;">
+                    <thead class="table-light text-center">
+                        <tr>
+                            <th class="text-start">Статья</th>
+                            <th>План</th>
+                            <th>Факт</th>
+                            <th>Откл.</th>
+                            <th style="width: 20px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in budget_comparison %}
+                        <tr>
+                            <td class="fw-bold text-dark">{{ row.name }}</td>
+                            <td class="text-end text-muted">{{ row.plan|money_int }}</td>
+                            <td class="text-end fw-bold text-danger">{{ row.fact|money_int }}</td>
+                            <td class="text-end fw-bold {% if row.diff >= 0 %}text-success{% else %}text-danger{% endif %}">
+                                {{ row.diff|money_int }}
+                            </td>
+                            <td class="text-center">
+                                {% if project.status == 'active' %}
+                                <form method="POST" onsubmit="return confirm('Удалить статью?');" class="m-0" hx-boost="false">
+                                    <input type="hidden" name="delete_budget" value="1">
+                                    <input type="hidden" name="budget_id" value="{{ row.id }}">
+                                    <button class="btn btn-link text-muted p-0 btn-xs"><i class="fas fa-times"></i></button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-center text-muted py-2">Бюджет не сформирован</td></tr>
+                        {% endfor %}
+                        
+                        <!-- Нераспределенный факт -->
+                        {% if stats.unallocated_fact > 0 %}
+                        <tr class="bg-warning bg-opacity-10">
+                            <td class="fw-bold text-dark fst-italic">Без статьи (Прочее)</td>
+                            <td class="text-end text-muted">-</td>
+                            <td class="text-end fw-bold text-danger">{{ stats.unallocated_fact|money_int }}</td>
+                            <td class="text-end text-danger">{{ (0 - stats.unallocated_fact)|money_int }}</td>
+                            <td></td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                    <tfoot class="bg-light fw-bold text-end" style="font-size: 12px;">
+                        <tr>
+                            <td class="text-start">ИТОГО:</td>
+                            <td>{{ stats.total_plan|money_int }}</td>
+                            <td class="text-danger">{{ stats.total_fact|money_int }}</td>
+                            <td class="{% if (stats.total_plan - stats.total_fact) >= 0 %}text-success{% else %}text-danger{% endif %}">
+                                {{ (stats.total_plan - stats.total_fact)|money_int }}
+                            </td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+
+            <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+            <div class="d-md-none bg-light p-2">
+                {% for row in budget_comparison %}
+                <div class="card shadow-sm mb-2 border-0">
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2 border-bottom pb-2">
+                            <span class="fw-bold text-dark">{{ row.name }}</span>
+                            {% if project.status == 'active' %}
+                            <form method="POST" onsubmit="return confirm('Удалить статью?');" class="m-0" hx-boost="false">
+                                <input type="hidden" name="delete_budget" value="1">
+                                <input type="hidden" name="budget_id" value="{{ row.id }}">
+                                <button class="btn btn-link text-muted p-0"><i class="fas fa-times"></i></button>
+                            </form>
+                            {% endif %}
+                        </div>
+                        <div class="d-flex justify-content-between small mb-1">
+                            <span class="text-muted">План:</span>
+                            <span class="fw-bold text-dark">{{ row.plan|money_int }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between small mb-2">
+                            <span class="text-muted">Факт:</span>
+                            <span class="fw-bold text-danger">{{ row.fact|money_int }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between small align-items-center bg-white p-2 rounded border">
+                            <span class="text-muted text-uppercase fw-bold" style="font-size: 10px;">Отклонение:</span>
+                            <span class="fw-bold {% if row.diff >= 0 %}text-success{% else %}text-danger{% endif %}">{{ row.diff|money_int }}</span>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-3 border rounded bg-white">Бюджет не сформирован</div>
+                {% endfor %}
+                
+                <!-- Нераспределенный факт -->
+                {% if stats.unallocated_fact > 0 %}
+                <div class="card shadow-sm mb-2 border-warning bg-warning bg-opacity-10">
+                    <div class="card-body p-3">
+                        <div class="fw-bold text-dark fst-italic border-bottom pb-2 mb-2">Без статьи (Прочее)</div>
+                        <div class="d-flex justify-content-between small mb-1">
+                            <span class="text-muted">Факт:</span>
+                            <span class="fw-bold text-danger">{{ stats.unallocated_fact|money_int }}</span>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- 4. РАСХОДЫ (ЖУРНАЛ) -->
+        <div class="card shadow-sm border-0" id="expensesBlock">
+            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-receipt text-danger me-2"></i> Лента расходов (Факт)</span>
+                <div>
+                    {% if project.status == 'active' %}
+                    <button class="btn btn-sm btn-danger shadow-sm" data-bs-toggle="modal" data-bs-target="#addFactExpenseModal">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                    {% endif %}
+                    <a href="{{ url_for('finance.expenses') }}" class="btn btn-xs btn-outline-secondary ms-1">Журнал</a>
+                </div>
+            </div>
+            <!-- ПК ВЕРСИЯ -->
+            <div class="table-responsive d-none d-md-block">
+                <table class="table table-sm table-striped mb-0" style="font-size: 11px;">
+                    <thead>
+                        <tr>
+                            <th>Дата</th>
+                            <th>Статья / Инфо</th>
+                            <th class="text-end">Сумма</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for e in project.expenses %}
+                        <tr>
+                            <td>{{ e.date.strftime('%d.%m') }}</td>
+                            <td>
+                                <b class="text-dark">{{ e.project_budget_item.name if e.project_budget_item else e.item.name }}</b>
+                                <span class="text-muted text-truncate d-block" style="max-width: 200px;">{{ e.description }}</span>
+                            </td>
+                            <td class="text-end fw-bold text-danger">- {{ e.amount|money_int }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="text-center text-muted py-3">Расходов нет</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+            <div class="d-md-none bg-light p-2">
+                {% for e in project.expenses %}
+                <div class="card shadow-sm mb-2 border-0">
+                    <div class="card-body p-3 d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="small text-muted mb-1">{{ e.date.strftime('%d.%m.%Y') }}</div>
+                            <div class="fw-bold text-dark">{{ e.project_budget_item.name if e.project_budget_item else e.item.name }}</div>
+                            <div class="small text-muted fst-italic">{{ e.description }}</div>
+                        </div>
+                        <div class="fw-bold text-danger fs-6">- {{ e.amount|money_int }}</div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-3 border rounded bg-white">Расходов нет</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Edit Project -->
+<div class="modal fade" id="editProjectModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" hx-boost="false">
+                <input type="hidden" name="update_project" value="1">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title">Настройки проекта</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label>Название</label>
+                        <input type="text" name="name" value="{{ project.name }}" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label>Описание</label>
+                        <textarea name="description" class="form-control" rows="3">{{ project.description }}</textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label>Статус</label>
+                        <select name="status" class="form-select">
+                            <option value="active" {% if project.status == 'active' %}selected{% endif %}>Активен (В работе)</option>
+                            <option value="closed" {% if project.status == 'closed' %}selected{% endif %}>Закрыт (Архив)</option>
+                        </select>
+                        <div class="form-text small">Закрытые проекты не отображаются в списке выбора при вводе расходов.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary w-100">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Add Item (Plants) -->
+{% if current_user.role == 'admin' %}
+<div class="modal fade" id="addItemModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" hx-boost="false">
+                <input type="hidden" name="add_item" value="1">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title">Добавить растение</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label>Растение</label>
+                        <select name="plant_id" class="form-select select-search" required style="width: 100%;">
+                            {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label>Размер</label>
+                        <select name="size_id" class="form-select select-search" required style="width: 100%;">
+                            {% for s in sizes %}<option value="{{ s.id }}" {% if s.name == 'Саженцы' %}class="seedling-option"{% endif %}>{{ s.name }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label>Количество (план)</label>
+                        <input type="number" name="quantity" class="form-control" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-success w-100">Добавить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Modal Add Budget -->
+<div class="modal fade" id="addBudgetModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <form method="POST" hx-boost="false">
+                <input type="hidden" name="add_budget" value="1">
+                <div class="modal-header bg-secondary text-white py-2">
+                    <h6 class="modal-title">Статья расходов (План)</h6>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-2">
+                        <label>Название</label>
+                        <input type="text" name="name" class="form-control form-control-sm" placeholder="Например: Логистика" required>
+                    </div>
+                    <div class="mb-2">
+                        <label>Сумма (План)</label>
+                        <input type="number" step="0.01" name="amount" class="form-control form-control-sm" required>
+                    </div>
+                </div>
+                <div class="modal-footer py-1">
+                    <button type="submit" class="btn btn-secondary btn-sm w-100">Добавить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Add FACT Expense -->
+<div class="modal fade" id="addFactExpenseModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" hx-boost="false">
+                <input type="hidden" name="add_fact_expense" value="1">
+                <div class="modal-header bg-danger text-white py-2">
+                    <h6 class="modal-title">Добавить фактический расход</h6>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="small">Дата</label>
+                            <input type="date" name="date" class="form-control form-control-sm" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="small">Сумма</label>
+                            <input type="number" step="0.01" name="amount" class="form-control form-control-sm" required>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-2">
+                        <label class="small">Статья бюджета</label>
+                        <select name="budget_item_id" class="form-select form-select-sm select-search" required style="width: 100%;">
+                            {% for b in budget_items_all %}
+                            <option value="{{ b.id }}">{{ b.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="small text-success fw-bold">Привязка к заказу (Опция)</label>
+                        <select name="order_id" class="form-select form-select-sm">
+                            <option value="">- Общий расход по проекту -</option>
+                            {% for o in project.orders %}
+                            <option value="{{ o.id }}">Заказ #{{ o.id }} ({{ o.client.name }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="small">Описание</label>
+                        <input type="text" name="description" class="form-control form-control-sm">
+                    </div>
+                    
+                    <div class="mb-2">
+                        <label class="small">Тип оплаты</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="payment_type" id="pt_cashless" value="cashless" checked>
+                            <label class="btn btn-outline-secondary btn-sm" for="pt_cashless">Безнал</label>
+                            <input type="radio" class="btn-check" name="payment_type" id="pt_cash" value="cash">
+                            <label class="btn btn-outline-secondary btn-sm" for="pt_cash">Нал</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer py-1">
+                    <button type="submit" class="btn btn-danger w-100">Провести расход</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Link Order -->
+<div class="modal fade" id="linkOrderModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" hx-boost="false">
+                <input type="hidden" name="link_order" value="1">
+                <div class="modal-header bg-primary text-white py-2">
+                    <h6 class="modal-title">Привязать существующий заказ</h6>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info py-2 small">
+                        Выберите заказ для привязки. Если заказ уже относится к другому проекту, он будет перенесен сюда.
+                    </div>
+                    <label class="fw-bold small">Выберите заказ:</label>
+                    <select name="order_id" class="form-select select-search" required style="width: 100%;">
+                        <option value="">...</option>
+                        {% for o in all_orders %}
+                            {# Пропускаем заказ, если он УЖЕ привязан к ТЕКУЩЕМУ проекту (зачем его привязывать снова?) #}
+                            {% if o.project_id != project.id %}
+                                <option value="{{ o.id }}">
+                                    {{ o.date.strftime('%d.%m.%Y') }} | #{{ o.id }} {{ o.client.name }} ({{ o.total_sum|money_int }})
+                                    {% if o.project %} 
+                                        &nbsp; [ЗАНЯТ: {{ o.project.name|truncate(15) }}]
+                                    {% endif %}
+                                </option>
+                            {% endif %}
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="modal-footer py-1">
+                    <button type="submit" class="btn btn-primary w-100">Привязать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-clipboard-check text-primary"></i>
+            Отчет по выкопке
+        </div>
+        <div class="page-subtitle">
+            Проверка введенных бригадирами выкопок и распределения по заказам.
+        </div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">В меню</a>
+    </div>
+</div>
+
+<!-- Фильтр даты -->
+<div class="filter-panel">
+    <form method="GET" class="d-flex align-items-center gap-2">
+        <label class="fw-bold text-muted small text-uppercase">Дата работ:</label>
+        <input type="date" name="date" value="{{ target_date }}" class="form-control form-control-sm" style="width: auto;" onchange="this.form.submit()">
+    </form>
+</div>
+
+{% if logs %}
+<form method="POST" onsubmit="showDiggingReportOverlay()">
+    <div class="card shadow-sm border-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-sm align-middle mb-0" style="font-size: 13px;">
+                <thead class="table-light text-center">
+                    <tr>
+                        <th>Время</th>
+                        <th>Кто внес</th>
+                        <th>Клиент / Заказ</th>
+                        <th>Растение</th>
+                        <th>Кол-во (Факт)</th>
+                        <th>Распределение</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td class="text-center text-muted">{{ log.created_at.strftime('%H:%M') }}</td>
+                        <td class="text-center">
+                            <span class="badge bg-light text-dark border">{{ log.user.username }}</span>
+                        </td>
+                        <td>
+                            {% if log.item %}
+                                <div class="fw-bold">{{ log.item.order.client.name }}</div>
+                                <a href="{{ url_for('orders.order_detail', order_id=log.item.order_id) }}" class="small text-decoration-none">
+                                    Заказ #{{ log.item.order_id }}
+                                </a>
+                            {% else %}
+                                <div class="fw-bold text-danger">Не распределено</div>
+                                <div class="small text-muted">(нет привязки к заказу)</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if log.item %}
+                                {{ log.item.plant.name }} <br>
+                                <span class="text-muted small">{{ log.item.size.name }} | {{ log.item.field.name }}</span>
+                            {% else %}
+                                {{ log.plant.name }} <br>
+                                <span class="text-muted small">{{ log.size.name }} | {{ log.field.name }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center" style="width: 120px;">
+                            <input type="number" name="log_qty_{{ log.id }}" value="{{ log.quantity }}" 
+                                   class="form-control form-control-sm text-center fw-bold border-success" min="0"
+                                   {% if log.status != 'pending' and current_user.role != 'admin' %}disabled{% endif %}>
+                        </td>
+                        <td class="text-center" style="width: 250px;">
+                            {% if log.order_item_id %}
+                                <span class="badge bg-success">Привязано</span>
+                            {% else %}
+                                {% set options = candidates.get(log.id, []) %}
+                                {% if options %}
+                                <select name="assign_{{ log.id }}" class="form-select form-select-sm" {% if log.status != 'pending' and current_user.role != 'admin' %}disabled{% endif %}>
+                                    <option value="">Выбрать заказ...</option>
+                                    {% for item in options %}
+                                    <option value="{{ item.id }}">Заказ #{{ item.order_id }} ({{ item.order.client.name }}): осталось {{ (item.quantity - item.dug_quantity)|int }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% else %}
+                                <span class="text-muted small">Нет подходящих заказов</span>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td class="text-center" style="width: 120px;">
+                            {% if log.status == 'pending' or current_user.role == 'admin' %}
+                            <button type="submit" name="delete_{{ log.id }}" value="1" class="btn btn-sm btn-outline-danger" title="Удалить запись">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            {% else %}
+                            <span class="text-muted small">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer bg-white text-end p-2">
+            <button type="submit" id="submitDiggingReportBtn" class="btn btn-success shadow-sm fw-bold">
+                <i class="fas fa-save me-1"></i> Сохранить правки
+            </button>
+        </div>
+    </div>
+</form>
+{% else %}
+<div class="alert alert-light text-center py-5 border">
+    <i class="fas fa-trowel fa-3x text-muted mb-3"></i>
+    <h5>Нет данных за эту дату</h5>
+    <p class="text-muted">Бригадир еще не внес отчеты или выкопки не было.</p>
+</div>
+{% endif %}
+
+<!-- Оверлей загрузки для отчета -->
+<div id="diggingReportLoadingOverlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; color: white; backdrop-filter: blur(3px);">
+    <i class="fas fa-spinner fa-spin fa-4x mb-3 text-success"></i>
+    <h5 class="fw-bold text-center px-4">Сохраняем изменения...<br><small class="fw-normal mt-2 d-block text-white-50">Пожалуйста, подождите ⏳</small></h5>
+</div>
+
+<script>
+    function showDiggingReportOverlay() {
+        document.getElementById('diggingReportLoadingOverlay').style.display = 'flex';
+        const btn = document.getElementById('submitDiggingReportBtn');
+        if(btn) {
+            btn.disabled = true;
+            btn.classList.replace('btn-success', 'btn-secondary');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i> Сохранение... ⏳';
+        }
+    }
+</script>
+{% endblock %}

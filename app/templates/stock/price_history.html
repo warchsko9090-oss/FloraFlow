@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0 text-success fw-bold"><i class="fas fa-history me-2"></i>История цен продаж</h4>
+    <a href="{{ url_for('directory.directory') }}" class="btn btn-secondary btn-sm">Назад в Справочники</a>
+</div>
+
+<div class="row">
+    <!-- Форма добавления -->
+    <div class="col-md-4">
+
+            <!-- Блок Импорта Excel -->
+        <div class="card border-primary shadow-sm mb-3">
+            <div class="card-header bg-primary text-white py-2 small fw-bold">
+            <i class="fas fa-file-excel"></i> Массовая загрузка цен
+            </div>
+            <div class="card-body p-2">
+                <a href="{{ url_for('stock.price_history_download_template') }}" class="text-decoration-none small d-block mb-2 text-center fw-bold">
+                    <i class="fas fa-download"></i> Скачать шаблон (Excel)
+                </a>
+                <form method="POST" action="{{ url_for('stock.price_history_import') }}" enctype="multipart/form-data">
+                    <div class="input-group input-group-sm">
+                        <input type="file" name="file" class="form-control" accept=".xlsx" required>
+                        <button class="btn btn-primary"><i class="fas fa-upload"></i></button>
+                    </div>
+                </form>
+                <div class="mt-2 small text-muted lh-1" style="font-size: 10px;">
+                    * Ключ: Растение + Размер + Поле + Год. Если совпадет — цена обновится.
+                </div>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm bg-light">
+            <div class="card-body">
+                <h6 class="mb-3">Установить цену на год</h6>
+                <form method="POST">
+                    <input type="hidden" name="action" value="add">
+                    <div class="mb-2">
+                        <label class="small text-muted">Год</label>
+                        <input type="number" name="year" class="form-control form-control-sm" value="{{ current_year }}" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="small text-muted">Растение</label>
+                        <select name="plant_id" class="form-select form-select-sm" required>
+                            {% for p in plants %}
+                            <option value="{{ p.id }}">{{ p.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="small text-muted">Размер</label>
+                        <select name="size_id" class="form-select form-select-sm" required>
+                            {% for s in sizes %}
+                            <option value="{{ s.id }}">{{ s.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="small text-muted">Поле</label>
+                        <select name="field_id" class="form-select form-select-sm" required>
+                            {% for f in fields %}
+                            <option value="{{ f.id }}">{{ f.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="small text-muted">Цена продажи (₽)</label>
+                        <input type="number" step="0.01" name="price" class="form-control form-control-sm" required>
+                    </div>
+                    <button class="btn btn-primary btn-sm w-100">Сохранить цену</button>
+                    <small class="d-block mt-2 text-muted text-center" style="font-size: 11px;">
+                        * Если запись существует, она будет обновлена
+                    </small>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Таблица истории -->
+    <div class="col-md-8">
+        <div class="table-responsive" style="max-height: 70vh;">
+            <table class="table table-sm table-bordered table-striped bg-white" style="font-size: 12px;">
+                <thead class="table-light sticky-top">
+                    <tr>
+                        <th>Год</th>
+                        <th>Растение</th>
+                        <th>Размер</th>
+                        <th>Поле</th>
+                        <th class="text-end">Цена</th>
+                        <th width="30"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in history %}
+                    <tr>
+                        <td class="text-center fw-bold {% if item.year == current_year %}text-success{% endif %}">{{ item.year }}</td>
+                        <td>{{ item.plant.name }}</td>
+                        <td>{{ item.size.name }}</td>
+                        <td>{{ item.field.name }}</td>
+                        <td class="text-end">{{ item.price|money }}</td>
+                        <td class="text-center">
+                            <form method="POST" onsubmit="return confirm('Удалить эту цену?');">
+                                <input type="hidden" name="action" value="delete">
+                                <input type="hidden" name="id" value="{{ item.id }}">
+                                <button class="btn btn-link text-danger p-0 btn-xs"><i class="fas fa-times"></i></button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="text-center text-muted">История пуста. Используются цены из текущих остатков.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

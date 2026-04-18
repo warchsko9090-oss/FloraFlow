@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- PWA Meta Tags -->
+    <link rel="manifest" href="{{ url_for('main.manifest') }}">
+    <meta name="theme-color" content="#2E7D32">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="{{ url_for('main.app_icon') }}">
+    
+    <title>Зелёный Фонд ERP</title>
+
+    <!-- СТИЛИ -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/nprogress@0.2.0/nprogress.css">
+
+    <!-- БИБЛИОТЕКИ -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/i18n/ru.js"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/nprogress@0.2.0/nprogress.js"></script>
+
+    <style>
+    option.seedling-option { display: none; }
+    html { 
+        -webkit-text-size-adjust: 100%; 
+        -moz-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+    }
+    body { 
+        font-family: 'Inter', sans-serif;
+        font-size: 14px; 
+        background: radial-gradient(circle at top left, #F1F8E9 0, #F8F9FA 45%, #FFFFFF 100%);
+        color: #4B5563 !important; 
+        padding-bottom: 80px; 
+        width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 { 
+        color: #111827 !important; 
+        font-weight: 700; 
+        letter-spacing: -0.5px; 
+    }
+
+    /* ЕДИНЫЙ КАРКАС СТРАНИЦ */
+    #main-container {
+        max-width: 1440px;
+        width: 100%;
+        padding: 0 1rem;
+        margin: 0 auto;
+    }
+
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1.5rem;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+    }
+
+    .page-title {
+        font-size: 1.4rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: #1B5E20;
+    }
+
+    @media (max-width: 768px) {
+        .page-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .page-actions {
+            justify-content: flex-start;
+            width: 100%;
+            gap: 0.5rem;
+        }
+        .filter-panel {
+            padding: 0.75rem 0.75rem;
+        }
+        
+        .table-budget, .table-cost {
+            min-width: 600px;
+            font-size: 12px;
+        }
+        .table-budget .col-name { min-width: 180px !important; max-width: 180px !important; }
+        .table-budget .col-code { width: 40px !important; }
+        
+        /* Исправление уплывающей шапки и чата на мобильных (iOS Safari) */
+        body {
+            position: relative;
+        }
+        .navbar-1c {
+            position: sticky;
+            top: 0;
+            z-index: 1050;
+            /* Исправляет баг рендеринга sticky в iOS */
+            -webkit-transform: translate3d(0,0,0);
+        }
+    }
+
+    /* Обеспечиваем прокрутку больших таблиц на мобилках */
+    .table-responsive {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Мелкие улучшения для особо широких таблиц */
+    .table-budget, .table-cost {
+        min-width: 800px;
+    }
+
+    .page-subtitle {
+        font-size: 0.9rem;
+        color: #6B7280;
+        margin-top: 0.15rem;
+    }
+
+    .page-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        justify-content: flex-end;
+    }
+
+    .filter-panel {
+        background: #FFFFFF;
+        border-radius: 14px;
+        padding: 0.85rem 1rem;
+        border: 1px solid #E5E7EB;
+        box-shadow: 0 8px 20px rgba(15, 118, 110, 0.04);
+        margin-bottom: 1.25rem;
+    }
+
+    .filter-panel form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 0.75rem;
+        align-items: center;
+    }
+
+    .kpi-row {
+        margin-bottom: 1.25rem;
+    }
+
+    .kpi-card {
+        border-radius: 14px;
+        border: none;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+    }
+
+    .section-card {
+        border-radius: 14px;
+        border: 1px solid #E5E7EB;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+    }
+
+    /* NProgress Color */
+    #nprogress .bar { background: #43A047 !important; height: 3px !important; }
+    #nprogress .peg { box-shadow: 0 0 10px #43A047, 0 0 5px #43A047 !important; }
+
+    /* Анимация контента */
+    .fade-me-in.htmx-settling { opacity: 0; }
+    .fade-me-in { opacity: 1; transition: opacity 0.3s ease-out; }
+
+    .btn { transition: all 0.2s ease-in-out; }
+    .btn:active { transform: scale(0.95); }
+    .card { 
+        border: none; 
+        border-radius: 14px; 
+        transition: transform 0.18s ease-out, box-shadow 0.18s ease-out, border-color 0.18s ease-out; 
+        background-color: #FFFFFF;
+    }
+    .card:hover { 
+        transform: translateY(-2px); 
+        box-shadow: 0 16px 35px rgba(15, 23, 42, 0.12) !important; 
+        border-color: rgba(34, 197, 94, 0.45);
+    }
+
+    .table { border-collapse: separate; border-spacing: 0; }
+    .table thead th { border-top: none; border-bottom: 2px solid #e9ecef; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; font-weight: 700; color: #6c757d; }
+    
+    ul.navbar-nav { list-style: none !important; padding-left: 0 !important; margin: 0 !important; }
+    .nav-item { list-style: none !important; }
+
+    /* Unified sub-tabs style (like Документальный журнал) */
+    .nav-tabs .nav-link { color: #495057 !important; font-weight: 600; background-color: transparent; border: 1px solid transparent; }
+    .nav-tabs .nav-link.active { color: #198754 !important; font-weight: 700; background-color: #fff; border-color: #dee2e6 #dee2e6 #fff; }
+    .nav-tabs .nav-link:hover { border-color: #e9ecef #e9ecef #dee2e6; color: #1b5e20 !important; }
+
+    .navbar-1c { 
+        background: linear-gradient(135deg, #2E7D32 0%, #43A047 100%); 
+        position: sticky; top: 0; z-index: 1050; 
+        box-shadow: 0 4px 20px rgba(46,125,50,0.25);
+        -webkit-app-region: drag; 
+    }
+    .navbar-1c a, .navbar-1c button, .navbar-1c .nav-link, .navbar-1c .navbar-toggler { -webkit-app-region: no-drag; }
+    .navbar-1c .nav-link { color: rgba(255,255,255,0.9) !important; padding: 8px 12px !important; font-weight: 500; }
+    .navbar-1c .nav-link.active, .navbar-1c .nav-link:hover { color: white !important; background: rgba(255,255,255,0.2); border-radius: 8px; }
+        
+    .btn-primary { background-color: #2E7D32; border-color: #2E7D32; color: white; }
+    .btn-primary:hover { background-color: #1B5E20 !important; border-color: #1B5E20 !important; }
+    .text-primary { color: #2E7D32 !important; }
+    a { color: #2E7D32; text-decoration: none; }
+    
+    .chat-chip { cursor: pointer; transition: 0.2s; white-space: nowrap; }
+    .chat-chip:hover { background-color: #e9ecef !important; transform: translateY(-1px); }
+    .cursor-pointer { cursor: pointer; }
+    .feedback-btn:hover { transform: scale(1.2); transition: 0.2s; color: #2E7D32 !important; }
+
+    #chatMessages table { font-size: 12px; margin-top: 5px; width: 100%; border-collapse: collapse; }
+    #chatMessages td, #chatMessages th { padding: 4px 6px; border: 1px solid #e0e0e0; vertical-align: middle; }
+    #chatMessages th { background: #f8f9fa; font-weight: 600; color: #555; }
+    #chatMessages b { color: #2E7D32; font-weight: 700; }
+    
+    /* Стили для таблиц внутри чата (AI) */
+    .chat-table-wrapper {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin-bottom: 5px;
+        border-radius: 4px;
+        border: 1px solid #eee;
+    }
+    
+    /* Фикс шапки чата на мобильных устройствах */
+    #chatWindow {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        /* Предотвращение всплытия на iOS при прокрутке */
+        position: fixed;
+    }
+    
+    .chat-header {
+        flex-shrink: 0;
+        z-index: 10;
+    }
+    
+    #chatMessages {
+        flex-grow: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 10px;
+    }
+    
+    .chat-footer {
+        flex-shrink: 0;
+        background: white;
+        z-index: 10;
+        border-top: 1px solid #eee;
+    }
+
+    /* ИНДИКАТОР СТАТУСА СЕТИ */
+    #networkStatus {
+        position: fixed; bottom: 20px; left: 20px; z-index: 1060;
+        background: white; border-radius: 30px; 
+        padding: 5px 12px; font-size: 12px; font-weight: bold;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        display: flex; align-items: center; gap: 8px;
+        transition: all 0.3s; opacity: 0.9;
+        border: 1px solid #eee;
+    }
+    #networkStatus.offline { border: 1px solid #dc3545; color: #dc3545; }
+    #networkStatus.syncing { border: 1px solid #ffc107; color: #d39e00; }
+    #networkStatus.online { border: 1px solid #198754; color: #198754; }
+
+    @media print { #chatButton, #chatWindow, #networkStatus { display: none !important; } }
+    </style>
+</head>
+<body hx-boost="true">
+
+{% if current_user.is_authenticated %}
+<nav class="navbar navbar-expand-lg navbar-dark navbar-1c px-3">
+    <a class="navbar-brand fw-bold me-4" href="{{ url_for('orders.orders_list') }}"><i class="fas fa-leaf"></i> Зелёный Фонд</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navContent"><span class="navbar-toggler-icon"></span></button>
+    
+    <div class="collapse navbar-collapse" id="navContent">
+        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+            
+            <!-- 1. ПРОДАЖИ -->
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('orders.orders_list') }}"><i class="fas fa-shopping-basket me-1"></i> Заказы</a></li>
+            
+            <!-- 2. CRM и АНАЛИТИКА (Новая группа) -->
+            {% if current_user.role in ['admin', 'executive', 'user'] %}
+            <li class="nav-item dropdown">
+                <a class="nav-link dropdown-toggle" href="#" id="dropCRM" role="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="fas fa-chart-line me-1"></i> CRM</a>
+                <ul class="dropdown-menu shadow border-0" aria-labelledby="dropCRM">
+                    {% if current_user.role in ['admin', 'executive'] %}
+                    <li><a class="dropdown-item" href="{{ url_for('crm.crm_client_analytics') }}"><i class="fas fa-users me-2 text-primary"></i> Аналитика по клиентам</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('crm.crm_abc') }}"><i class="fas fa-sort-amount-down me-2 text-success"></i> ABC/XYZ Анализ</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('crm.crm_seasonality') }}"><i class="fas fa-calendar-alt me-2 text-warning"></i> Сезонность</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('crm.crm_yoy') }}"><i class="fas fa-chart-area me-2 text-info"></i> Сравнение периодов (YoY)</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="{{ url_for('crm.crm_price_calculator') }}"><i class="fas fa-tags me-2 text-danger"></i> Анализ рынка</a></li>
+                    {% else %}
+                    <li><a class="dropdown-item disabled" href="#">Доступно руководителю</a></li>
+                    {% endif %}
+                </ul>
+            </li>
+            {% endif %}
+
+            <!-- 3. СКЛАД -->
+            <li class="nav-item dropdown">
+                <a class="nav-link dropdown-toggle" href="#" id="dropStock" role="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="fas fa-warehouse me-1"></i> Склад</a>
+                <ul class="dropdown-menu shadow border-0" aria-labelledby="dropStock">
+                    <li><a class="dropdown-item" href="{{ url_for('stock.inventory_mobile') }}"><i class="fas fa-mobile-alt me-2 text-danger"></i> <b>Моб. Инвентаризация</b></a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="{{ url_for('stock.stock_report') }}"><i class="fas fa-boxes me-2 text-success"></i> Остатки</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('stock.documents') }}"><i class="fas fa-file-invoice me-2 text-primary"></i> Журнал документов</a></li>
+                    {% if current_user.role != 'user2' %}
+                    <li><a class="dropdown-item" href="{{ url_for('finance.reports_turnover') }}"><i class="fas fa-exchange-alt me-2 text-warning"></i> Оборотная ведомость</a></li>
+                    {% endif %}
+                    {% if current_user.role in ['admin', 'executive'] %}
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="{{ url_for('stock.price_history') }}"><i class="fas fa-history me-2 text-muted"></i> История цен</a></li>
+                    {% endif %}
+                </ul>
+            </li>
+
+            <!-- 4. ПРОИЗВОДСТВО (Объединили выкопку) -->
+            <li class="nav-item dropdown">
+                <a class="nav-link dropdown-toggle" href="#" id="dropProd" role="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="fas fa-seedling me-1"></i> Производство</a>
+                <ul class="dropdown-menu shadow border-0" aria-labelledby="dropProd">
+                    <li><a class="dropdown-item" href="{{ url_for('digging.mobile_index') }}"><i class="fas fa-trowel me-2 text-warning"></i> Ввод выкопки</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('digging.analytics') }}"><i class="fas fa-chart-line me-2 text-info"></i> Аналитика выкопки</a></li>
+                    {% if current_user.role != 'user2' %}
+                    <li><a class="dropdown-item" href="{{ url_for('digging.manager_report') }}"><i class="fas fa-clipboard-check me-2 text-success"></i> Отчет по выкопке</a></li>
+                    {% endif %}
+                </ul>
+            </li>
+
+            <!-- 5. ФИНАНСЫ (Структурировано) -->
+            {% if current_user.role in ['admin', 'executive', 'user'] %}
+            <li class="nav-item dropdown">
+                <a class="nav-link dropdown-toggle" href="#" id="dropFinance" role="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="fas fa-coins me-1"></i> Финансы</a>
+                <ul class="dropdown-menu shadow border-0" aria-labelledby="dropFinance">
+                    
+                    <li><h6 class="dropdown-header">Взаиморасчеты</h6></li>
+                    <li><a class="dropdown-item" href="{{ url_for('finance.invoices_summary') }}"><i class="fas fa-list-alt me-2 text-primary"></i> Реестр счетов Клиентам</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('finance.reports_reconciliation') }}"><i class="fas fa-handshake me-2 text-info"></i> Акт сверки с клиентом</a></li>
+                    
+                    {% if current_user.role in ['admin', 'executive'] %}
+                    <li><hr class="dropdown-divider"></li>
+                    <li><h6 class="dropdown-header">Внутренний учет</h6></li>
+                    <!-- НОВЫЙ ПУНКТ НИЖЕ -->
+                    <li><a class="dropdown-item" href="{{ url_for('finance.projects_list') }}"><i class="fas fa-tasks me-2 text-primary"></i> <b>Проекты</b></a></li>
+                    
+                    <li><a class="dropdown-item" href="{{ url_for('finance.expenses') }}?tab=invoices"><i class="fas fa-file-invoice-dollar me-2 text-danger"></i> Счета и расходы</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('finance.budget') }}"><i class="fas fa-wallet me-2"></i> Бюджет</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('finance.cost_report') }}"><i class="fas fa-calculator me-2"></i> Себестоимость</a></li>
+                    
+                    <li><hr class="dropdown-divider"></li>
+                    <li><h6 class="dropdown-header">Прибыль и Отчеты</h6></li>
+                    <li><a class="dropdown-item" href="{{ url_for('finance.reports_financial') }}"><i class="fas fa-piggy-bank me-2 text-success"></i> Фин. результат</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('finance.reports_margin') }}"><i class="fas fa-percent me-2"></i> Маржинальность</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('finance.reports_investor') }}"><i class="fas fa-briefcase me-2"></i> Партнер</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('finance.reports_calculator') }}"><i class="fas fa-divide me-2"></i> Калькулятор Партнера</a></li>
+                    {% endif %}
+                </ul>
+            </li>
+            {% endif %}
+
+            <!-- 6. КАДРЫ -->
+            {% if current_user.role in ['admin', 'user2', 'executive', 'brigadier'] %}
+            <li class="nav-item dropdown">
+                <a class="nav-link dropdown-toggle" href="#" id="dropHr" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="fas fa-user-tie me-1"></i> Кадры
+                </a>
+                <ul class="dropdown-menu shadow border-0" aria-labelledby="dropHr">
+                    <li><a class="dropdown-item" href="{{ url_for('hr.personnel') }}"><i class="fas fa-users me-2"></i> Табель и выплаты</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('hr.foreign_employees') }}"><i class="fas fa-passport me-2 text-primary"></i> Иностранные сотрудники и патенты</a></li>
+                </ul>
+            </li>
+            {% endif %}
+
+            <!-- 7. НАСТРОЙКИ и СПРАВОЧНИКИ (Все в одном) -->
+            <li class="nav-item dropdown">
+                <a class="nav-link dropdown-toggle" href="#" id="dropSettings" role="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="fas fa-cog me-1"></i> Настройки</a>
+                <ul class="dropdown-menu shadow border-0" aria-labelledby="dropSettings">
+                    <li><a class="dropdown-item" href="{{ url_for('directory.directory') }}"><i class="fas fa-book me-2"></i> Справочники (База)</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('stock.changelog') }}"><i class="fas fa-rocket me-2 text-primary"></i> <b>Change Log (Обновления)</b></a></li>
+                    {% if current_user.role in ['admin', 'executive'] %}
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="{{ url_for('directory.archive') }}"><i class="fas fa-archive me-2 text-warning"></i> Архив файлов</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('auth.users_manage') }}"><i class="fas fa-users-cog me-2"></i> Пользователи</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('chat.manage') }}"><i class="fas fa-robot me-2"></i> Обучение AI-помощника</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('stock.logs') }}"><i class="fas fa-clipboard-list me-2"></i> Логи системы</a></li>
+                    {% endif %}
+                </ul>
+            </li>
+
+        </ul>
+        
+        <div class="ms-auto d-flex align-items-center gap-3">
+            <a href="{{ url_for('main.guide') }}" class="btn btn-sm btn-light text-success fw-bold shadow-sm" title="Инструкция"><i class="fas fa-question-circle fa-lg me-1"></i> Справка</a>
+            <div class="text-white d-none d-lg-block text-end" style="line-height: 1.2;">
+                <small class="d-block opacity-75" style="font-size: 10px;">{{ current_user.role }}</small>
+                <span>{{ current_user.username }}</span>
+            </div>
+            <a href="{{ url_for('auth.logout') }}" class="btn btn-sm btn-outline-light border-0"><i class="fas fa-sign-out-alt"></i></a>
+        </div>
+    </div>
+</nav>
+{% endif %}
+
+<div class="container-fluid py-3 fade-me-in" id="main-container">
+    {% with messages = get_flashed_messages() %}
+    {% if messages %}
+        {% for message in messages %}
+        <div class="alert alert-success shadow-sm py-2 px-3 border-0 rounded-3 mb-3" style="background-color: #E8F5E9; color: #1B5E20;">
+            <i class="fas fa-check-circle me-2"></i> {{ message }}
+        </div>
+        {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+</div>
+
+<!-- ИНДИКАТОР СТАТУСА СЕТИ (СЛЕВА ВНИЗУ) -->
+<div id="networkStatus" class="online d-print-none">
+    <i class="fas fa-wifi"></i> <span id="statusText">В сети</span>
+</div>
+
+<!-- КНОПКА ЧАТА (СПРАВА ВНИЗУ) -->
+<button id="chatButton" class="btn btn-success rounded-circle shadow-lg d-flex align-items-center justify-content-center d-print-none" 
+        style="position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; z-index: 1040; border: 2px solid white;"
+        onclick="toggleChat()">
+    <i class="fas fa-comment-dots fa-lg"></i>
+</button>
+
+<div id="chatWindow" class="card shadow-lg border-0 d-print-none" style="position: fixed; bottom: 90px; right: 20px; width: 350px; height: 500px; z-index: 1040; display: none; flex-direction: column; border-radius: 16px;">
+    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center" style="border-top-left-radius: 16px; border-top-right-radius: 16px;">
+        <span class="fw-bold"><i class="fas fa-robot me-2"></i>Помощник</span>
+        <button type="button" class="btn-close btn-close-white btn-sm" onclick="toggleChat()"></button>
+    </div>
+    <div class="card-body bg-light overflow-auto p-3" id="chatMessages" style="flex: 1; font-size: 13px;">
+        <div class="d-flex mb-2"><div class="bg-white p-2 rounded shadow-sm border text-dark" style="max-width: 85%;">Привет! Я ваш помощник. Чем могу помочь?</div></div>
+        <div class="d-flex flex-wrap gap-2 mb-3" id="chatChips"></div>
+    </div>
+    <div class="card-footer bg-white p-2">
+        <div class="input-group">
+            <input type="text" id="chatInput" class="form-control form-control-sm border-success" placeholder="Ваш вопрос..." onkeypress="if(event.keyCode==13) sendChat()">
+            <button class="btn btn-success btn-sm" onclick="sendChat()"><i class="fas fa-paper-plane"></i></button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- ГЛОБАЛЬНЫЕ НАСТРОЙКИ ---
+    document.addEventListener("htmx:configRequest", function() { NProgress.start(); });
+    document.addEventListener("htmx:afterRequest", function() { NProgress.done(); });
+    
+    // --- УДАЛЕНИЕ ЛИШНИХ BACKDROP / ОТКЛЮЧЕНИЕ СКРОЛЛА ---
+    function cleanupModalBackdrops() {
+        document.body.classList.remove('modal-open');
+        document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+    }
+
+    // --- HTMX SWAP EVENT ---
+    document.addEventListener('htmx:afterSwap', function(evt) {
+        initSelect2(evt.detail.elt); 
+        
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.map(function (tooltipTriggerEl) { return new bootstrap.Tooltip(tooltipTriggerEl); });
+
+        // Перезапуск выпадающих меню (Bootstrap)
+        var dropdownElementList = [].slice.call(document.querySelectorAll('.dropdown-toggle'));
+        dropdownElementList.map(function (dropdownToggleEl) { return new bootstrap.Dropdown(dropdownToggleEl); });
+
+        loadChatChips();
+        cleanupModalBackdrops();
+    });
+
+    // --- SELECT2 INIT ---
+    function initSelect2(scope = document) {
+        $(scope).find('.select-search').each(function() {
+            var $this = $(this);
+            if ($this.hasClass("select2-hidden-accessible")) return;
+            if ($this.closest('.modal').length > 0 && !$this.closest('.modal').hasClass('show')) return;
+
+            try {
+                $this.select2({
+                    theme: 'bootstrap-5',
+                    language: 'ru',
+                    width: '100%',
+                    dropdownParent: $this.closest('.modal').length ? $this.closest('.modal') : $(document.body)
+                });
+            } catch(e) { console.warn('Select2 init warning:', e); }
+        });
+        // после инициализации ищем опции-саженцы и прячем/показываем их
+        applySeedlingFilter(scope);
+    }
+
+    // === SEEDLING OPTION FILTER ===
+    // controls visibility of <option class="seedling-option"> elements
+    window.showSeedlingsAlways = window.showSeedlingsAlways || false;
+    function applySeedlingFilter(scope = document) {
+        const show = window.showSeedlingsAlways || document.getElementById('toggleSeedlings')?.checked;
+        $(scope).find('select').each(function() {
+            $(this).find('option.seedling-option').each(function() {
+                if (show) $(this).show();
+                else $(this).hide();
+            });
+        });
+    }
+
+    // глобальный слушатель для переключателя
+    document.addEventListener('change', function(e){
+        if (e.target && e.target.id === 'toggleSeedlings') {
+            applySeedlingFilter();
+        }
+    });
+
+    // --- ОТКЛЮЧЕНИЕ HTMX BOOST ДЛЯ СКАЧИВАНИЯ ФАЙЛОВ ---
+    function disableBoostForDownloads(scope = document) {
+        const selectors = [
+            'a[href$=".xlsx"]',
+            'a[href$=".xls"]',
+            'a[href$=".pdf"]',
+            'a[href$=".db"]',
+            'a[href*="download"]',  /* <-- Изменили правило, чтобы ловило ЛЮБЫЕ скачивания */
+            'a[href*="/export"]'
+        ];
+        const els = scope.querySelectorAll(selectors.join(','));
+        els.forEach(el => {
+            el.setAttribute('hx-boost', 'false');
+            if (!el.hasAttribute('target')) {
+                el.setAttribute('target', '_blank');
+            }
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        disableBoostForDownloads();
+    });
+
+    document.addEventListener('htmx:afterSwap', function(evt) {
+        disableBoostForDownloads(evt.detail.elt);
+    });
+
+    // --- SERVICE WORKER & SMART CACHE WARMING ---
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js').then(reg => {
+                console.log('SW Registered');
+                // Запуск прогрева при старте
+                setTimeout(warmCache, 1500);
+            
+                // ПЕРИОДИЧЕСКАЯ ПРОВЕРКА (Раз в 60 секунд)
+                // Если кто-то другой изменил базу, мы это увидим и обновим кэш
+                setInterval(warmCache, 60000);
+            });
+        });
+    }
+
+    // Функция УМНОГО прогрева (с тихим режимом)
+    async function warmCache() {
+        const statusEl = document.getElementById('networkStatus');
+        const textEl = document.getElementById('statusText');
+        
+        if (!navigator.onLine) return;
+
+        try {
+            // 1. Спрашиваем версию
+            const response = await fetch('/api/cache-manifest');
+            if (!response.ok) throw new Error('Manifest error');
+            
+            const data = await response.json();
+            const serverVersion = data.version;
+            const clientVersion = localStorage.getItem('erp_cache_version');
+
+            // 2. Сравниваем
+            if (serverVersion === clientVersion) {
+                // Если версии совпадают - просто убеждаемся, что статус "В сети"
+                // Не меняем иконку на "галочку", чтобы не мигало лишний раз
+                if (!statusEl.classList.contains('online')) {
+                    statusEl.className = 'online';
+                    textEl.innerText = 'В сети';
+                }
+                return; 
+            }
+
+            // 3. Если версии разные - качаем (Тут уже показываем анимацию)
+            console.log(`Syncing new version: ${serverVersion}`);
+            statusEl.className = 'syncing';
+            textEl.innerHTML = '<i class="fas fa-sync fa-spin"></i> Синхронизация...';
+
+            for (const url of data.urls) {
+                try {
+                    await fetch(url, { priority: 'low', cache: 'reload' });
+                } catch(e) { console.log('Cache fail:', url); }
+            }
+
+            localStorage.setItem('erp_cache_version', serverVersion);
+            
+            statusEl.className = 'online';
+            textEl.innerHTML = '<i class="fas fa-check-double"></i> Актуально';
+            
+            // Через 3 секунды убираем надпись "Актуально" на просто "В сети"
+            setTimeout(updateNetworkStatus, 3000);
+
+        } catch (e) {
+            console.error('Warming failed', e);
+            // Не меняем статус на ошибку при фоновом опросе, чтобы не пугать
+        }
+    }
+
+    // --- NETWORK STATUS INDICATOR ---
+    function updateNetworkStatus() {
+        const el = document.getElementById('networkStatus');
+        const txt = document.getElementById('statusText');
+        if (navigator.onLine) {
+            el.className = 'online';
+            txt.innerText = 'В сети';
+        } else {
+            el.className = 'offline';
+            txt.innerHTML = '<i class="fas fa-slash"></i> Офлайн (Чтение)';
+        }
+    }
+
+    window.addEventListener('online', updateNetworkStatus);
+    window.addEventListener('offline', updateNetworkStatus);
+
+    $(document).ready(function() { 
+        initSelect2(document); 
+        loadChatChips(); 
+        updateNetworkStatus();
+        cleanupModalBackdrops();
+
+        // Сбрасываем значения файловых полей при загрузке страницы.
+        // Это решает баг мобильных браузеров (особенно Xiaomi/Android), когда после закрытия/открытия 
+        // приложения браузер "помнит" выбранный файл, и при повторном выборе того же файла событие change не срабатывает.
+        document.querySelectorAll('input[type="file"]').forEach(inp => {
+            try { inp.value = ''; } catch(e) {}
+        });
+    });
+    
+    document.addEventListener('shown.bs.modal', function (event) { initSelect2(event.target); });
+
+    // --- CHAT ---
+    function toggleChat() {
+        const w = document.getElementById('chatWindow');
+        w.style.display = (w.style.display === 'none') ? 'flex' : 'none';
+        if(w.style.display === 'flex') { const inp = document.getElementById('chatInput'); if(inp) setTimeout(() => inp.focus(), 100); }
+    }
+    async function loadChatChips() {
+        try {
+            const container = document.getElementById('chatChips');
+            if(!container) return; 
+            const res = await fetch('/chat/chips');
+            const data = await res.json();
+            container.innerHTML = '';
+            data.chips.forEach(chip => { container.innerHTML += `<span class="badge bg-white text-success border border-success chat-chip p-2" onclick="sendQuery('${chip}')">${chip}</span>`; });
+        } catch(e) {}
+    }
+    function sendQuery(text) { const inp = document.getElementById('chatInput'); if(inp) { inp.value = text; sendChat(); } }
+    async function sendChat() {
+        const inp = document.getElementById('chatInput');
+        if(!inp) return;
+        const txt = inp.value.trim();
+        if(!txt) return;
+        const box = document.getElementById('chatMessages');
+        box.innerHTML += `<div class="d-flex justify-content-end mb-2"><div class="bg-success text-white p-2 rounded shadow-sm" style="max-width: 85%;">${txt}</div></div>`;
+        inp.value = '';
+        box.scrollTop = box.scrollHeight;
+        const loadingId = 'loading-' + Date.now();
+        box.innerHTML += `<div id="${loadingId}" class="text-muted small ms-2"><i class="fas fa-spinner fa-spin"></i> Думаю...</div>`;
+        try {
+            const res = await fetch('/chat/ask', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: txt}) });
+            const data = await res.json();
+            const loader = document.getElementById(loadingId);
+            if(loader) loader.remove();
+            const feedbackHtml = `<div class="mt-1 d-flex gap-2"><i class="fas fa-thumbs-up text-secondary cursor-pointer feedback-btn" onclick="rateAnswer(${data.log_id}, true, this)"></i><i class="fas fa-thumbs-down text-secondary cursor-pointer feedback-btn" onclick="rateAnswer(${data.log_id}, false, this)"></i></div>`;
+            box.innerHTML += `<div class="d-flex mb-3 flex-column align-items-start"><div class="bg-white p-2 rounded shadow-sm border text-dark w-100" style="overflow-x: auto; max-width: 100%;">${data.answer}</div>${feedbackHtml}</div>`;
+            box.scrollTop = box.scrollHeight;
+        } catch(e) {
+            const loader = document.getElementById(loadingId);
+            if(loader) loader.remove();
+            box.innerHTML += `<div class="text-danger small text-center">Ошибка связи</div>`;
+        }
+    }
+    async function rateAnswer(logId, isHelpful, btnElement) {
+        const parent = btnElement.parentElement;
+        parent.innerHTML = isHelpful ? '<i class="fas fa-check text-success small"> Спасибо!</i>' : '<i class="fas fa-check text-muted small"> Принято</i>';
+        try { await fetch('/chat/feedback', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({log_id: logId, is_helpful: isHelpful}) }); } catch(e) {}
+    }
+
+    // --- PHOTO UPLOADER & COMPRESSOR ---
+    function setupPhotoUploader(inputId, previewId) {
+        const input = document.getElementById(inputId);
+        const preview = document.getElementById(previewId);
+        if (!input || !preview) return;
+
+        // Защита от повторного навешивания обработчика
+        if (input.dataset.uploaderInitialized) return;
+        input.dataset.uploaderInitialized = 'true';
+
+        input.addEventListener('change', async function(e) {
+            preview.innerHTML = '<div class="text-center w-100 py-2"><div class="spinner-border spinner-border-sm text-success" role="status"></div><span class="small text-muted ms-2">Обработка фото...</span></div>';
+            
+            const files = Array.from(e.target.files);
+            if (files.length === 0) {
+                preview.innerHTML = '';
+                return;
+            }
+
+            let dt = null;
+            try {
+                dt = new DataTransfer();
+            } catch (err) {
+                console.warn("DataTransfer не поддерживается браузером, сжатие пропущено", err);
+            }
+
+            const newPreviewHtml = document.createElement('div');
+            newPreviewHtml.className = "d-flex flex-wrap gap-2 w-100";
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                let fileToPreview = file;
+
+                if (file.type.startsWith('image/')) {
+                    if (dt) {
+                        try {
+                            const compressedFile = await compressImage(file, 1600, 1600, 0.8);
+                            dt.items.add(compressedFile);
+                            fileToPreview = compressedFile;
+                        } catch (err) {
+                            console.error('Ошибка сжатия фото:', err);
+                            dt.items.add(file);
+                        }
+                    }
+                } else if (dt) {
+                    dt.items.add(file);
+                }
+
+                try {
+                    const imgContainer = document.createElement('div');
+                    imgContainer.className = 'position-relative border rounded shadow-sm';
+                    imgContainer.style.width = '70px';
+                    imgContainer.style.height = '70px';
+                    imgContainer.style.overflow = 'hidden';
+
+                    const img = document.createElement('img');
+                    img.src = URL.createObjectURL(fileToPreview);
+                    img.style.width = '100%';
+                    img.style.height = '100%';
+                    img.style.objectFit = 'cover';
+
+                    imgContainer.appendChild(img);
+                    newPreviewHtml.appendChild(imgContainer);
+                } catch (previewErr) {
+                    console.error('Ошибка создания превью:', previewErr);
+                }
+            }
+            
+            preview.innerHTML = '';
+            preview.appendChild(newPreviewHtml);
+            
+            if (dt) {
+                input.files = dt.files;
+            }
+        });
+    }
+
+    function compressImage(file, maxWidth, maxHeight, quality) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = (event) => {
+                const img = new Image();
+                img.src = event.target.result;
+                img.onload = () => {
+                    let width = img.width;
+                    let height = img.height;
+                    
+                    if (width > maxWidth || height > maxHeight) {
+                        if (width / height > maxWidth / maxHeight) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        } else {
+                            width = Math.round((width * maxHeight) / height);
+                            height = maxHeight;
+                        }
+                    }
+                    
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    
+                    canvas.toBlob((blob) => {
+                        if (blob) {
+                            try {
+                                resolve(new File([blob], file.name, { type: 'image/jpeg', lastModified: Date.now() }));
+                            } catch(e) {
+                                reject(new Error('File constructor not supported'));
+                            }
+                        } else {
+                            reject(new Error('Canvas toBlob failed'));
+                        }
+                    }, 'image/jpeg', quality);
+                };
+                img.onerror = (e) => reject(e);
+            };
+            reader.onerror = (e) => reject(e);
+        });
+    }
+</script>
+
+{# Chart.js: глобально, чтобы графики работали при навигации hx-boost (скрипты из подгружаемого фрагмента ненадёжны). #}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

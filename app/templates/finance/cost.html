@@ -1,0 +1,489 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    .table-cost { font-size: 13px; }
+    .table-cost th.header-main { background-color: #ECFDF5; border-bottom: 1px solid #D1FAE5; text-align: center; vertical-align: middle; color: #065F46; }
+    .table-cost th.header-sub { background-color: #F9FAFB; font-size: 10px; color: #6B7280; text-transform: uppercase; text-align: center; font-weight: 600; }
+    .text-amort { color: #2563EB; font-weight: 600; }
+    .text-op { color: #059669; font-weight: 600; }
+    .inp-price { width: 80px; text-align: right; border: none; background: transparent; border-bottom: 1px dashed #ccc; font-size: 12px; }
+    .inp-price:focus { outline: none; border-bottom: 2px solid var(--primary-color); background: #fff; }
+    .dropdown-check-list { min-width: 300px; max-height: 400px; overflow-y: auto; padding: 10px; }
+    .sortable { cursor: pointer; user-select: none; }
+    .sortable:hover { background-color: #e5e7eb; }
+    .sort-icon { font-size: 10px; margin-left: 4px; color: #999; }
+    .bg-val { background-color: #FEF9C3 !important; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-balance-scale"></i>
+            Себестоимость
+        </div>
+        <div class="page-subtitle">
+            Свод себестоимости по годам, амортизация и влияние на цену по партиям.
+        </div>
+    </div>
+    <div class="d-flex gap-2">
+        {% if active_tab == 'summary' %}
+        <div class="dropdown">
+            <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside"><i class="fas fa-filter text-muted"></i> Фильтр</button>
+            <div class="dropdown-menu dropdown-check-list shadow border-0">
+                <form method="GET" id="filterForm">
+                    <input type="hidden" name="tab" value="summary">
+                <div class="px-2 mb-2">
+                    <label class="form-label small mb-1">Период</label>
+                    <select name="period" class="form-select form-select-sm">
+                        <option value="" {% if not selected_period %}selected{% endif %}>Весь год</option>
+                        <option value="q1" {% if selected_period == 'q1' %}selected{% endif %}>1 кв. (янв-мар)</option>
+                        <option value="q2" {% if selected_period == 'q2' %}selected{% endif %}>2 кв. (апр-июн)</option>
+                        <option value="q3" {% if selected_period == 'q3' %}selected{% endif %}>3 кв. (июл-сен)</option>
+                        <option value="q4" {% if selected_period == 'q4' %}selected{% endif %}>4 кв. (окт-дек)</option>
+                        <option value="spring" {% if selected_period == 'spring' %}selected{% endif %}>Весна (янв-июн)</option>
+                        <option value="autumn" {% if selected_period == 'autumn' %}selected{% endif %}>Осень (июл-дек)</option>
+                    </select>
+                </div>
+                    <div class="d-flex justify-content-between align-items-center px-2">
+                        <h6 class="dropdown-header p-0 text-uppercase small fw-bold">Скрыть года:</h6>
+                        <div><a href="#" class="small text-decoration-none" onclick="toggleChecks('year', true)">Все</a> / <a href="#" class="small text-decoration-none" onclick="toggleChecks('year', false)">Ничего</a></div>
+                    </div>
+                    {% for y in years %}
+                    <div class="form-check ms-3">
+                        <input class="form-check-input check-year" type="checkbox" name="hide_year" value="{{ y }}" id="hy{{y}}" {% if y in hidden_years %}checked{% endif %}>
+                        <label class="form-check-label small" for="hy{{y}}">{{ y }}</label>
+                    </div>
+                    {% endfor %}
+                    <div class="dropdown-divider"></div>
+                    <div class="d-flex justify-content-between align-items-center px-2">
+                        <h6 class="dropdown-header p-0 text-uppercase small fw-bold">Скрыть статьи:</h6>
+                        <div><a href="#" class="small text-decoration-none" onclick="toggleChecks('item', true)">Все</a> / <a href="#" class="small text-decoration-none" onclick="toggleChecks('item', false)">Ничего</a></div>
+                    </div>
+                    {% for item in all_items %}
+                    <div class="form-check ms-3">
+                        <input class="form-check-input check-item" type="checkbox" name="hide_item" value="{{ item.id }}" id="hi{{item.id}}" {% if item.id in hidden_items %}checked{% endif %}>
+                        <label class="form-check-label small" for="hi{{item.id}}">{{ item.name }}</label>
+                    </div>
+                    {% endfor %}
+                    <div class="mt-2 text-center sticky-bottom bg-white pt-2"><button class="btn btn-primary btn-sm w-100">Применить</button></div>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+        <a href="{{ url_for('finance.cost_report', filter_year=selected_year, period=selected_period, export='excel') }}" 
+           class="btn btn-success btn-sm" 
+           hx-boost="false">
+           <i class="fas fa-file-excel"></i> Excel
+        </a>
+    </div>
+</div>
+
+
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><a class="nav-link {% if active_tab == 'summary' %}active{% endif %}" href="?tab=summary{% if selected_period %}&period={{ selected_period }}{% endif %}">Свод</a></li>
+  <li class="nav-item"><a class="nav-link {% if active_tab == 'amortization' %}active{% endif %}" href="?tab=amortization{% if selected_period %}&period={{ selected_period }}{% endif %}">Амортизация</a></li>
+  <li class="nav-item"><a class="nav-link {% if active_tab == 'impact' %}active{% endif %}" href="?tab=impact{% if selected_period %}&period={{ selected_period }}{% endif %}">Влияние на цену</a></li>
+</ul>
+
+<div class="tab-content">
+    {% if active_tab == 'summary' %}
+    <div class="table-responsive" style="max-height: 75vh;">
+        <table class="table table-bordered table-cost mb-0">
+            <thead class="sticky-top" style="z-index: 10;">
+                <tr>
+                    <th rowspan="2" class="header-main text-start ps-3" style="min-width: 200px; border-right: 2px solid #E5E7EB;">Статья / Показатель</th>
+                    {% for y in visible_years %}
+                    <th colspan="2" class="header-main">{{ y }} <br><span class="badge bg-white text-dark border fw-normal mt-1 text-muted">Кол-во: {{ summary_totals[y]['qty'] }}</span></th>
+                    {% endfor %}
+                </tr>
+                <tr>
+                    {% for y in visible_years %}
+                    <th class="header-sub">Сумма</th>
+                    <th class="header-sub" style="border-right: 2px solid #E5E7EB;">На ед.</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="bg-light"><td colspan="{{ 1 + visible_years|length * 2 }}" class="fw-bold ps-3 text-uppercase text-muted small">Операционные расходы</td></tr>
+                {% for row in op_rows %}
+                <tr>
+                    <td class="ps-3">{{ row.name }}</td>
+                    {% for y in visible_years %}
+                        {% set val = row['data'][y]['sum'] %}
+                        <td class="text-end {% if val > 0 %}bg-val{% endif %}">{{ val|money }}</td>
+                        <td class="text-end text-muted {% if val > 0 %}bg-val{% endif %}" style="border-right: 2px solid #f3f4f6;">{{ row['data'][y]['per_unit']|money }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+                <tr style="background-color: #ECFDF5; font-weight: bold; border-top: 1px solid #10B981;">
+                    <td class="ps-3 text-op">ИТОГО ОПЕРАЦИОННЫЕ</td>
+                    {% for y in visible_years %}
+                    <td class="text-end text-op">{{ summary_totals[y]['op']|money }}</td>
+                    <td class="text-end text-op" style="border-right: 2px solid #D1FAE5;">{{ summary_totals[y]['op_unit']|money }}</td>
+                    {% endfor %}
+                </tr>
+                <tr class="bg-light mt-3"><td colspan="{{ 1 + visible_years|length * 2 }}" class="fw-bold ps-3 text-uppercase text-muted small pt-3">Амортизация</td></tr>
+                {% for row in amort_rows %}
+                <tr>
+                    <td class="ps-3">{{ row.name }}</td>
+                    {% for y in visible_years %}
+                        {% set val = row['data'][y]['sum'] %}
+                        <td class="text-end {% if val > 0 %}bg-val{% endif %}">{{ val|money }}</td>
+                        <td class="text-end text-muted {% if val > 0 %}bg-val{% endif %}" style="border-right: 2px solid #f3f4f6;">{{ row['data'][y]['per_unit']|money }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+                <tr style="background-color: #EFF6FF; font-weight: bold; border-top: 1px solid #3B82F6;">
+                    <td class="ps-3 text-amort">ИТОГО АМОРТИЗАЦИЯ (ед.) <i class="fas fa-info-circle ms-1 text-muted small" title="Кликните на цену для правки"></i></td>
+                    {% for y in visible_years %}
+                    {% set is_man_amort = summary_totals[y]['is_manual_amort'] %}
+                    <td class="text-end text-amort">{{ summary_totals[y]['amort']|money_int }}</td>
+                    <td class="text-end position-relative" style="border-right: 2px solid #DBEAFE;">
+                        {% if current_user.role == 'admin' %}
+                        <a href="#" class="text-decoration-none d-block w-100" onclick="openCostOverrideModal({{ y }}, '{{ summary_totals[y]['total_unit'] or '' }}', '{{ summary_totals[y]['amort_unit'] or '' }}'); return false;">
+                            {% if is_man_amort %}<span class="badge bg-primary text-white">{{ summary_totals[y]['amort_unit']|money }}</span>{% else %}<span class="text-amort" style="border-bottom: 1px dashed #ccc;">{{ summary_totals[y]['amort_unit']|money }}</span>{% endif %}
+                        </a>
+                        {% else %}{{ summary_totals[y]['amort_unit']|money }}{% endif %}
+                    </td>
+                    {% endfor %}
+                </tr>
+            </tbody>
+            <tfoot>
+                <tr class="table-row-warm fw-bold">
+                    <td class="ps-3 text-uppercase" style="color: #ffffff !important;">ВСЕГО СЕБЕСТОИМОСТЬ (ед.)</td>
+                    {% for y in visible_years %}
+                    {% set is_man_total = summary_totals[y]['is_manual_total'] %}
+                    <td class="text-end" style="color: #ffffff !important;">{{ summary_totals[y]['total']|money_int }}</td>
+                    <td class="text-end position-relative" style="border-right: 2px solid rgba(245,158,11,0.2);">
+                        {% if current_user.role == 'admin' %}
+                        <a href="#" class="text-decoration-none d-block w-100" onclick="openCostOverrideModal({{ y }}, '{{ summary_totals[y]['total_unit'] or '' }}', '{{ summary_totals[y]['amort_unit'] or '' }}'); return false;">
+                            {% if is_man_total %}<span class="badge bg-warning text-dark border border-dark">{{ summary_totals[y]['total_unit']|money }}</span>{% else %}<span class="text-white" style="border-bottom: 1px dashed #ccc;">{{ summary_totals[y]['total_unit']|money }}</span>{% endif %}
+                        </a>
+                        {% else %}<span class="text-white">{{ summary_totals[y]['total_unit']|money }}</span>{% endif %}
+                    </td>
+                    {% endfor %}
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% endif %}
+
+    {% if active_tab == 'amortization' %}
+    <div class="table-responsive">
+        <table class="table table-bordered table-sm table-cost text-center align-middle">
+            <thead>
+                <tr>
+                    <th class="bg-white text-start ps-3">Год расхода (Источник) -></th>
+                    {% for y in active_amort_years %}
+                    <th class="bg-light">{{ y }} <br><small class="text-muted fw-normal">{{ raw_source.get(y, 0)|money }}</small></th>
+                    {% endfor %}
+                </tr>
+                <tr>
+                    <th class="bg-light text-start ps-3">Год начисления (В себест.)</th>
+                    <th colspan="{{ active_amort_years|length }}"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for target_year in years %}
+                <tr>
+                    <td class="fw-bold bg-light text-start ps-3">{{ target_year }}</td>
+                    {% for source_year in active_amort_years %}
+                        {% set val = waterfall.get(target_year, {}).get(source_year, 0) %}
+                        <td class="{% if val > 0 %}bg-primary bg-opacity-10 text-primary fw-bold{% endif %}">{% if val > 0 %}{{ val|money }}{% else %}<span class="text-muted text-opacity-25">-</span>{% endif %}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% if active_tab == 'impact' %}
+    <div class="card mb-3 border-0 shadow-sm" style="border-left: 5px solid var(--accent-color) !important;">
+        <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+                <h6 class="mb-1 text-dark fw-bold">Расчет для {{ selected_year }} года</h6>
+                <small class="text-muted">Расходы года: <b>{{ impact_summary_card.year_cost|money }}</b> / Кол-во растений: <b>{{ impact_summary_card.total_qty }} шт.</b></small>
+            </div>
+            <div class="text-end">
+                <span class="fs-4 fw-bold text-danger">{{ impact_summary_card.unit_cost|money }}</span>
+                <br><small class="text-muted text-uppercase" style="font-size:10px;">Себестоимость года (за 1 шт.)</small>
+            </div>
+            <div class="text-end ms-4 border-start ps-4">
+                <span class="fs-4 fw-bold text-dark">{{ cumulative_cost|money }}</span>
+                <br><small class="text-muted text-uppercase" style="font-size:10px;">Накопленная себест. (2017-{{ selected_year }})</small>
+            </div>
+        </div>
+    </div>
+
+    <form method="GET" class="card p-2 mb-3 border-0 shadow-sm d-flex flex-row align-items-center flex-wrap gap-2">
+        <input type="hidden" name="tab" value="impact">
+        
+        <div class="d-flex align-items-center gap-2 bg-light px-2 py-1 rounded">
+            <label class="fw-bold small text-muted">Год</label>
+            <select name="filter_year" class="form-select form-select-sm border-0 bg-transparent fw-bold" style="width: 80px;">
+                {% for y in years %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="btn-group btn-group-sm" role="group">
+            <button type="button" class="btn btn-outline-secondary" onclick="setImpactYear({{ current_year }})">Текущий</button>
+            <button type="button" class="btn btn-outline-secondary" onclick="setImpactYear({{ current_year-1 }})">Прошлый</button>
+        </div>
+        <div class="d-flex align-items-center gap-2 bg-light px-2 py-1 rounded">
+            <label class="fw-bold small text-muted">Период</label>
+            <select name="period" class="form-select form-select-sm border-0 bg-transparent fw-bold" style="width: 180px;">
+                <option value="" {% if not selected_period %}selected{% endif %}>Весь год</option>
+                <option value="q1" {% if selected_period == 'q1' %}selected{% endif %}>1 квартал (янв-мар)</option>
+                <option value="q2" {% if selected_period == 'q2' %}selected{% endif %}>2 квартал (апр-июн)</option>
+                <option value="q3" {% if selected_period == 'q3' %}selected{% endif %}>3 квартал (июл-сен)</option>
+                <option value="q4" {% if selected_period == 'q4' %}selected{% endif %}>4 квартал (окт-дек)</option>
+                <option value="spring" {% if selected_period == 'spring' %}selected{% endif %}>Весна (янв-июн)</option>
+                <option value="autumn" {% if selected_period == 'autumn' %}selected{% endif %}>Осень (июл-дек)</option>
+            </select>
+        </div>
+
+        <!-- Фильтр Растения -->
+        <div class="dropdown">
+            <button class="btn btn-sm dropdown-toggle border-0 {% if selected_plants %}btn-primary text-white{% else %}btn-outline-secondary{% endif %}" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Растения {% if selected_plants %}<span class="badge bg-white text-dark">{{ selected_plants|length }}</span>{% endif %}</button>
+            <div class="dropdown-menu dropdown-check-list shadow border-0" style="min-width: 250px; max-height: 400px; overflow-y: auto;">
+                <input type="text" class="form-control form-control-sm mb-2 mx-2" style="width: 90%;" placeholder="Поиск..." onkeyup="filterList(this, '.chk-plant-c')">
+                <div class="px-2 pb-2"><a href="#" class="small text-decoration-none" onclick="toggleChecks('plant-c', false)">Сбросить</a></div>
+                {% for p in all_plants %}
+                <div class="form-check ms-3 chk-plant-c">
+                    <input class="form-check-input check-plant-c" type="checkbox" name="filter_plant" value="{{ p.id }}" id="fp{{p.id}}" {% if p.id in selected_plants %}checked{% endif %}>
+                    <label class="form-check-label small" for="fp{{p.id}}">{{ p.name }}</label>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Фильтр Поля -->
+        <div class="dropdown">
+            <button class="btn btn-sm dropdown-toggle border-0 {% if selected_fields %}btn-primary text-white{% else %}btn-outline-secondary{% endif %}" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Поля {% if selected_fields %}<span class="badge bg-white text-dark">{{ selected_fields|length }}</span>{% endif %}</button>
+            <div class="dropdown-menu dropdown-check-list shadow border-0" style="min-width: 200px; max-height: 400px; overflow-y: auto;">
+                <div class="px-2 pb-2"><a href="#" class="small text-decoration-none" onclick="toggleChecks('field-c', false)">Сбросить</a></div>
+                {% for f in all_fields %}
+                <div class="form-check ms-3">
+                    <input class="form-check-input check-field-c" type="checkbox" name="filter_field" value="{{ f.id }}" id="ff{{f.id}}" {% if f.id in selected_fields %}checked{% endif %}>
+                    <label class="form-check-label small" for="ff{{f.id}}">{{ f.name }}</label>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <button class="btn btn-primary btn-sm px-4 ms-auto">Показать отчет </button>
+    </form>
+    
+    <!-- НОВАЯ КНОПКА ЗАПИСИ -->
+    <div class="alert alert-warning d-flex justify-content-between align-items-center py-2 shadow-sm border-warning">
+        <div class="small">
+            <i class="fas fa-robot text-dark me-2"></i> 
+            <b>Важно для AI:</b> Нажмите кнопку справа, чтобы сохранить рассчитанную себестоимость в базу. <br>
+            Без этого Чат-бот будет видеть 0.
+        </div>
+        <form method="POST" action="{{ url_for('finance.save_cost_to_db') }}">
+            <button class="btn btn-warning btn-sm fw-bold text-dark shadow-sm">
+                <i class="fas fa-save"></i> Записать расчет в Базу
+            </button>
+        </form>
+    </div>
+    <!-- КОНЕЦ КНОПКИ -->
+
+    <div class="table-responsive">
+        <table class="table table-hover table-sm border align-middle table-cost" id="impactTable">
+            <thead>
+                <tr>
+                    <th class="sortable" onclick="sortTable(0, false)">Растение <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="sortable" onclick="sortTable(1, true)">Партия (Год) <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="sortable" onclick="sortTable(2, false)">Поле <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="text-end sortable" onclick="sortTable(3, true)">Кол-во (шт) <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="text-end bg-warning bg-opacity-10 text-dark sortable" onclick="sortTable(4, true)">Цена закупки <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="text-end text-muted sortable" onclick="sortTable(5, true)">Себест. накоп. (Опер) <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="text-end text-primary sortable" onclick="sortTable(6, true)">Аморт. накоп. <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="text-end fw-bold bg-light sortable" onclick="sortTable(7, true)">Итого за ед. <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="text-end fw-bold sortable" onclick="sortTable(8, true)">Итоговая сумма <i class="fas fa-sort sort-icon"></i></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in impact_rows %}
+                <tr>
+                    <td>{{ row.name }}</td>
+                    <td class="text-center">
+                        <span class="badge {% if row.year == selected_year %}bg-primary{% else %}bg-secondary{% endif %} text-white">{{ row.year }}</span>
+                    </td>
+                    <td class="text-muted small">{{ row.field }}</td>
+                    <td class="text-end fw-bold">{{ row.quantity }}</td>
+                    <td class="text-end bg-warning bg-opacity-10" onclick="event.stopPropagation();">
+                        {% if current_user.role == 'admin' %}
+                        <form method="POST" style="display:inline;" class="no-print">
+                            <input type="hidden" name="update_purchase_price" value="1">
+                            <input type="hidden" name="plant_id" value="{{ row.plant_id }}">
+                            <input type="hidden" name="field_id" value="{{ row.field_id }}">
+                            <input type="hidden" name="year" value="{{ row.year }}">
+                            <input type="hidden" name="selected_year" value="{{ selected_year }}">
+                            <input type="text" name="purchase_price" value="{{ row.purchase_price|money_int|replace('₽', '')|trim }}" class="inp-price text-dark fw-bold" onblur="this.form.submit()" title="Применится ко всем размерам этой партии">
+                        </form>
+                        <span class="d-none d-print-inline">{{ row.purchase_price|money }}</span>
+                        {% else %}{{ row.purchase_price|money }}{% endif %}
+                    </td>
+                    <td class="text-end text-muted">{{ row.accum_opex|money }}</td>
+                    <td class="text-end text-primary">{{ row.accum_amort|money }}</td>
+                    <td class="text-end fw-bold bg-light">{{ row.total_unit_cost|money }}</td>
+                    <td class="text-end fw-bold text-dark">{{ row.total_cost|money }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr class="table-row-warm fw-bold">
+                    <td colspan="3" class="text-end text-uppercase" style="color: #fff !important;">ИТОГО:</td>
+                    <td class="text-end" style="color: #fff !important;">{{ impact_summary_card.total_qty }}</td>
+                    <td colspan="4"></td>
+                    <td class="text-end" style="font-size:14px; color: #fff !important;">{{ impact_table_total|money }}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% endif %}
+</div>
+
+<div class="modal fade" id="costOverrideModal" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content">
+      <form method="POST" action="{{ url_for('finance.save_cost_override') }}">
+          <div class="modal-header bg-light py-2"><h6 class="modal-title text-dark">Корректировка: <span id="overrideYearDisplay"></span> год</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+          <div class="modal-body">
+            <input type="hidden" name="year" id="overrideYear">
+            <input type="hidden" name="return_year" value="{{ selected_year }}">
+            <div class="alert alert-warning py-1 px-2 mb-3" style="font-size: 11px;">Вводите значения <b>на 1 растение</b>. Пусто = авто.</div>
+            <div class="mb-3"><label class="form-label small fw-bold text-primary">Амортизация (на ед.)</label><input type="number" step="0.01" name="amortization" id="overrideAmort" class="form-control form-control-sm border-primary"></div>
+            <div class="mb-2"><label class="form-label small fw-bold text-danger">ИТОГО Себестоимость</label><input type="number" step="0.01" name="amount" id="overrideAmount" class="form-control form-control-sm border-danger"></div>
+          </div>
+          <div class="modal-footer py-1"><button type="submit" class="btn btn-success btn-sm w-100">Сохранить</button></div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleChecks(type, state) {
+    document.querySelectorAll('.check-' + type).forEach(el => el.checked = state);
+}
+
+function toggleChecks(type, state) {
+    document.querySelectorAll('.check-' + type).forEach(el => el.checked = state);
+}
+function filterList(input, selector) {
+    const filter = input.value.toLowerCase();
+    document.querySelectorAll(selector).forEach(div => { 
+        div.style.display = div.textContent.toLowerCase().includes(filter) ? '' : 'none'; 
+    });
+}
+
+let sortDirection = 'asc'; let lastSortCol = -1;
+
+function sortTable(n, isNumber=false) {
+  const table = document.getElementById("impactTable");
+  const tbody = table.querySelector('tbody');
+  const rows = Array.from(tbody.rows);
+
+  if (lastSortCol === n) { sortDirection = (sortDirection === 'asc') ? 'desc' : 'asc'; } 
+  else { sortDirection = 'asc'; }
+  lastSortCol = n;
+
+  rows.sort((rA, rB) => {
+      let a = rA.cells[n].innerText.trim();
+      let b = rB.cells[n].innerText.trim();
+
+      if (isNumber) {
+          a = parseFloat(a.replace(/[^\d.-]/g, '')) || 0;
+          b = parseFloat(b.replace(/[^\d.-]/g, '')) || 0;
+          return sortDirection === 'asc' ? a - b : b - a;
+      } else {
+          // Умная сортировка строк (1, 2, 10)
+          return sortDirection === 'asc' 
+              ? a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'})
+              : b.localeCompare(a, undefined, {numeric: true, sensitivity: 'base'});
+      }
+  });
+
+  rows.forEach(row => tbody.appendChild(row));
+  
+  // Иконки
+  document.querySelectorAll('.sort-icon').forEach(i => i.className = 'fas fa-sort sort-icon text-muted ms-1');
+  const th = table.rows[0].cells[n];
+  const icon = th.querySelector('.sort-icon');
+  if(icon) icon.className = sortDirection === 'asc' ? 'fas fa-sort-up sort-icon ms-1' : 'fas fa-sort-down sort-icon ms-1';
+}
+
+function setImpactYear(year) {
+    const sel = document.querySelector('select[name="filter_year"]');
+    if (!sel) return;
+    sel.value = year;
+    const form = sel.closest('form');
+    if (form) form.submit();
+}
+
+function openCostOverrideModal(year, totalVal, amortVal) {
+    document.getElementById('overrideYear').value = year;
+    document.getElementById('overrideYearDisplay').innerText = year;
+    function cleanVal(v) {
+        if (!v || v === 'None') return '';
+        if (typeof v === 'number') return v.toFixed(2);
+        let s = String(v).replace(/[^\d.,]/g, '').replace(',', '.');
+        return s ? parseFloat(s).toFixed(2) : '';
+    }
+    document.getElementById('overrideAmount').value = cleanVal(totalVal);
+    document.getElementById('overrideAmort').value = cleanVal(amortVal);
+    new bootstrap.Modal(document.getElementById('costOverrideModal')).show();
+}
+
+// Автоматическое скрытие старых годов в "Своде себестоимости" (оставляем последние 3 года)
+document.addEventListener('DOMContentLoaded', function () {
+    const isSummaryTab = '{{ active_tab }}' === 'summary';
+    const storageKey = 'cost_summary_autohide_applied_v2';
+    const alreadyApplied = localStorage.getItem(storageKey) === '1';
+
+    if (!isSummaryTab || alreadyApplied) {
+        return;
+    }
+
+    const yearCheckboxes = Array.from(document.querySelectorAll('.check-year'));
+    const userModified = yearCheckboxes.some(cb => cb.checked);
+    if (userModified) {
+        return;
+    }
+
+    if (yearCheckboxes.length <= 3) {
+        return;
+    }
+
+    const years = yearCheckboxes
+        .map(cb => parseInt(cb.value, 10))
+        .filter(n => !isNaN(n))
+        .sort((a, b) => a - b);
+
+    if (years.length <= 3) {
+        return;
+    }
+
+    const cutoff = years[years.length - 3];
+
+    yearCheckboxes.forEach(cb => {
+        const y = parseInt(cb.value, 10);
+        if (!isNaN(y) && y < cutoff) {
+            cb.checked = true;
+        }
+    });
+
+    localStorage.setItem(storageKey, '1');
+    const filterForm = document.getElementById('filterForm');
+    if (filterForm) {
+        filterForm.submit();
+    }
+});
+</script>
+{% endblock %}

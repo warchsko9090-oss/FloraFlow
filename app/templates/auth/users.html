@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-9">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h4 class="mb-0 text-success fw-bold"><i class="fas fa-users-cog me-2"></i>Пользователи</h4>
+            <button class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#addUserModal">
+                <i class="fas fa-plus"></i> Новый
+            </button>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body p-0">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="bg-light">
+                        <tr>
+                            <th>Логин</th>
+                            <th>Роль</th>
+                            <th class="text-end">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr>
+                            <td class="fw-bold">{{ user.username }}</td>
+                            <td>
+                                {% if user.role == 'admin' %}<span class="badge bg-danger">Admin</span>
+                                {% elif user.role == 'user' %}<span class="badge bg-primary">Менеджер</span>
+                                {% else %}<span class="badge bg-secondary">{{ user.role }}</span>{% endif %}
+                            </td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-primary" onclick="openEditUserModal('{{ user.id }}', '{{ user.username }}', '{{ user.role }}')"><i class="fas fa-pen"></i></button>
+                                <button class="btn btn-sm btn-outline-warning" onclick="openPassModal('{{ user.id }}', '{{ user.username }}')"><i class="fas fa-key"></i></button>
+                                {% if user.id != current_user.id %}
+                                <form method="POST" class="d-inline" onsubmit="return confirm('Удалить {{ user.username }}?');">
+                                    <input type="hidden" name="action" value="delete"><input type="hidden" name="user_id" value="{{ user.id }}">
+                                    <button class="btn btn-sm btn-outline-danger"><i class="fas fa-trash"></i></button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Add -->
+<div class="modal fade" id="addUserModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form method="POST"><div class="modal-header bg-success text-white"><h5 class="modal-title">Новый пользователь</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" name="action" value="add"><div class="mb-3"><label>Логин</label><input type="text" name="username" class="form-control" required></div><div class="mb-3"><label>Пароль</label><input type="text" name="password" class="form-control" required></div><div class="mb-3"><label>Роль</label><select name="role" class="form-select"><option value="user">Менеджер</option><option value="admin">Администратор</option><option value="executive">Руководитель</option><option value="user2">Кадровик</option></select></div></div><div class="modal-footer"><button type="submit" class="btn btn-success">Создать</button></div></form></div></div></div>
+
+<!-- Modal Password -->
+<div class="modal fade" id="changePassModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form method="POST"><div class="modal-header bg-warning"><h5 class="modal-title">Смена пароля</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" name="action" value="change_password"><input type="hidden" name="user_id" id="passUserId"><p>Для: <b id="passUserName"></b></p><div class="mb-3"><label>Новый пароль</label><input type="text" name="new_password" class="form-control" required></div></div><div class="modal-footer"><button type="submit" class="btn btn-warning">Сохранить</button></div></form></div></div></div>
+
+<!-- Modal Edit User -->
+<div class="modal fade" id="editUserModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST">
+        <div class="modal-header bg-primary text-white">
+            <h5 class="modal-title">Редактирование профиля</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" name="action" value="edit_user">
+            <input type="hidden" name="user_id" id="editUserId">
+            <div class="mb-3">
+                <label>Логин (Имя)</label>
+                <input type="text" name="username" id="editUserName" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label>Роль</label>
+                <select name="role" id="editUserRole" class="form-select">
+                    <option value="user">Менеджер (User)</option>
+                    <option value="admin">Администратор (Admin)</option>
+                    <option value="executive">Руководитель (Executive)</option>
+                    <option value="user2">Кадровик (User2)</option>
+                </select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="submit" class="btn btn-primary">Обновить данные</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function openPassModal(id, name) {
+        document.getElementById('passUserId').value = id;
+        document.getElementById('passUserName').innerText = name;
+        new bootstrap.Modal(document.getElementById('changePassModal')).show();
+    }
+    
+    function openEditUserModal(id, name, role) {
+        document.getElementById('editUserId').value = id;
+        document.getElementById('editUserName').value = name;
+        document.getElementById('editUserRole').value = role;
+        new bootstrap.Modal(document.getElementById('editUserModal')).show();
+    }
+</script>
+
+{% if current_user.role == 'admin' %}
+<div class="card mt-4 border-danger shadow-sm">
+    <div class="card-header bg-danger text-white fw-bold">
+        <i class="fas fa-shield-alt me-2"></i> Защита (Заблокированные IP)
+    </div>
+    <div class="card-body p-0">
+        {% if blocked_ips %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle">
+                <thead class="bg-light">
+                    <tr>
+                        <th class="ps-3">IP-адрес бота/пользователя</th>
+                        <th class="text-center">Неудачных попыток</th>
+                        <th>Время блокировки</th>
+                        <th class="text-end pe-3">Действие</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for b in blocked_ips %}
+                    <tr>
+                        <td class="ps-3 fw-bold text-danger">{{ b.ip_address }}</td>
+                        <td class="text-center">{{ b.failed_attempts }}</td>
+                        <td>{{ b.locked_at.strftime('%d.%m.%Y %H:%M') if b.locked_at else 'Неизвестно' }}</td>
+                        <td class="text-end pe-3">
+                            <form method="POST" onsubmit="return confirm('Уверены, что хотите разблокировать этот IP?');">
+                                <input type="hidden" name="action" value="unblock_ip">
+                                <input type="hidden" name="ip_address" value="{{ b.ip_address }}">
+                                <button type="submit" class="btn btn-outline-success btn-sm fw-bold">
+                                    <i class="fas fa-unlock-alt me-1"></i> Разбанить
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-4 text-center text-muted">
+            <i class="fas fa-check-circle fa-2x text-success mb-2"></i><br>
+            В данный момент нет заблокированных IP-адресов. Система в безопасности.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

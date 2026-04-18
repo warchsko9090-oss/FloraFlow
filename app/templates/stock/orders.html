@@ -1,0 +1,392 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    /* === СТИЛИ ДЛЯ ТАБЛИЦЫ ЗАКАЗОВ (ПК) === */
+    .table-orders { 
+        width: 100%; 
+        border-collapse: collapse; 
+        font-size: 13px; 
+        background-color: transparent; /* Прозрачный фон, чтобы видны были отступы */
+    }
+    
+    /* Шапка таблицы */
+    .table-orders th { 
+        background-color: #E8F5E9; /* Светло-зеленый */
+        color: #1B5E20; 
+        font-weight: 700; 
+        text-transform: uppercase; 
+        font-size: 11px; 
+        padding: 12px 8px;
+        border-bottom: 2px solid #2E7D32;
+        border-top: none;
+        vertical-align: middle;
+        text-align: center;
+    }
+    
+    /* Ячейки таблицы */
+    .table-orders td { 
+        background-color: #fff; /* Белый фон карточек */
+        padding: 12px 8px; 
+        vertical-align: top; /* Выравнивание по верху */
+        border-bottom: 1px solid #f0f0f0;
+        color: #333;
+    }
+
+    /* === ГЛАВНЫЙ ЭФФЕКТ "ОСТРОВКОВ" === */
+    /* Добавляем толстую границу цвета фона страницы сверху каждого нового заказа */
+    .row-separator td { 
+        border-top: 15px solid #F8F9FA !important; /* Цвет фона base.html */
+        position: relative;
+    }
+    
+    /* Убираем отступ у самого первого заказа в списке, чтобы не было дырки под шапкой */
+    tbody tr:first-child.row-separator td { border-top: none !important; }
+
+    /* Эффект наведения мыши на заказ */
+    .table-orders tr:hover td { 
+        background-color: #FFFDE7; /* Нежный желтый при наведении */
+        transition: background-color 0.2s;
+    }
+
+    /* === ЦВЕТНЫЕ СТАТУСЫ СЛЕВА === */
+    /* Левая граница первой ячейки (где кнопки) */
+    .table-orders td:first-child { 
+        border-left: 5px solid transparent; 
+        border-radius: 4px 0 0 4px; /* Скругление слева */
+    }
+    .table-orders td:last-child {
+        border-radius: 0 4px 4px 0; /* Скругление справа */
+        border-right: 1px solid #e0e0e0;
+    }
+
+    /* Цвета полосок */
+    .status-reserved td:first-child { border-left-color: #2196F3; } /* Синий */
+    .status-in_progress td:first-child { border-left-color: #FF9800; } /* Оранжевый */
+    .status-shipped td:first-child { border-left-color: #4CAF50; } /* Зеленый */
+    .status-canceled td:first-child { border-left-color: #F44336; opacity: 0.6; } /* Красный */
+
+    /* Бейджи статусов (текст) */
+    .badge-status { padding: 4px 8px; border-radius: 6px; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
+    .badge-reserved { background: #E3F2FD; color: #1565C0; }
+    .badge-in_progress { background: #FFF3E0; color: #E65100; }
+    .badge-shipped { background: #E8F5E9; color: #2E7D32; }
+    .badge-canceled { background: #FFEBEE; color: #C62828; }
+
+    /* Статусы оплаты */
+    .pay-paid { color: #2E7D32; font-weight: 700; }
+    .pay-partial { color: #F57C00; font-weight: 700; }
+    .pay-unpaid { color: #C62828; font-weight: 600; }
+
+    /* МОБИЛЬНЫЕ СТИЛИ (оставляем без изменений) */
+    .mobile-card { border: 1px solid #e0e0e0; border-radius: 12px; background: white; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); overflow: hidden; }
+    .mobile-card-header { padding: 12px; background: #fff; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+    .mobile-card-header.collapsed { border-bottom: none; }
+    .mobile-card-header:not(.collapsed) { border-bottom: 1px solid #f0f0f0; background: #f9f9f9; }
+    .mobile-card-body { padding: 0; background: #fafafa; }
+    .mobile-item { padding: 10px 12px; border-bottom: 1px solid #eee; font-size: 13px; display: flex; justify-content: space-between; }
+    .mobile-item:last-child { border-bottom: none; }
+    .mobile-actions { padding: 10px; text-align: center; background: #fff; border-top: 1px solid #eee; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+    .dot-reserved { background: #2196F3; }
+    .dot-in_progress { background: #FF9800; }
+    .dot-shipped { background: #4CAF50; }
+    .dot-canceled { background: #F44336; }
+</style>
+
+<!-- ЗАГОЛОВОК И ФИЛЬТРЫ -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div class="d-flex align-items-center">
+        <h4 class="mb-0 border-0 me-3" style="color: #2e7d32; font-weight: 700;">Заказы</h4>
+        <div class="btn-group btn-group-sm shadow-sm">
+            <a href="{{ url_for('orders.orders_list', mode='active') }}" class="btn {% if mode != 'trash' %}btn-success text-white{% else %}btn-white border{% endif %}">Активные</a>
+            {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('orders.orders_list', mode='trash') }}" class="btn {% if mode == 'trash' %}btn-danger{% else %}btn-white border text-danger{% endif %}"><i class="fas fa-trash-alt"></i></a>
+            {% endif %}
+        </div>
+    </div>
+    {% if mode != 'trash' %}
+    <a href="{{ url_for('orders.order_create') }}" class="btn btn-success btn-sm shadow-sm fw-bold px-3"><i class="fas fa-plus-circle me-1"></i> <span class="d-none d-sm-inline">Новый заказ</span></a>
+    {% endif %}
+</div>
+
+<!-- Панель фильтров (белая, аккуратная) -->
+<div class="bg-white p-3 mb-4 rounded-3 border shadow-sm d-flex gap-3 align-items-center flex-wrap" style="position: relative; z-index: 10;">
+    <form method="GET" class="d-flex gap-2 flex-wrap align-items-center w-100" id="filterForm">
+        <input type="hidden" name="mode" value="{{ mode }}">
+        
+        <div class="d-flex align-items-center bg-light rounded px-2 border">
+            <i class="fas fa-calendar-alt text-muted me-2"></i>
+            <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control form-control-sm border-0 bg-light" style="width: auto;">
+            <span class="text-muted mx-1">-</span>
+            <input type="date" name="end_date" value="{{ filters.end or '' }}" class="form-control form-control-sm border-0 bg-light" style="width: auto;">
+        </div>
+
+        <select name="filter_client" class="form-select form-select-sm select-search" style="max-width: 200px;">
+            <option value="">Все клиенты</option>
+            {% for c in all_clients %}
+            <option value="{{ c.id }}" {% if filters.clients and c.id in filters.clients %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+        </select>
+
+        {% if mode != 'trash' %}
+        <select name="filter_status" class="form-select form-select-sm" style="width: auto;">
+            <option value="">Все статусы</option>
+            <option value="reserved" {% if 'reserved' in filters.statuses %}selected{% endif %}>Резерв</option>
+            <option value="in_progress" {% if 'in_progress' in filters.statuses %}selected{% endif %}>В работе</option>
+            <option value="shipped" {% if 'shipped' in filters.statuses %}selected{% endif %}>Отгружен</option>
+            <option value="canceled" {% if 'canceled' in filters.statuses %}selected{% endif %}>Отменен</option>
+        </select>
+        {% endif %}
+        
+        <button class="btn btn-primary btn-sm px-3"><i class="fas fa-search"></i></button>
+        <a href="{{ url_for('orders.orders_list', mode=mode) }}" class="btn btn-light border btn-sm text-muted"><i class="fas fa-times"></i></a>
+        
+        <!-- ИСПРАВЛЕНИЕ: Добавлена кнопка экспорта с hx-boost="false" -->
+        <a href="{{ url_for('orders.export_orders', mode=mode, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end) }}" 
+           class="btn btn-success btn-sm ms-2" 
+           hx-boost="false">
+           <i class="fas fa-file-excel"></i> Excel
+        </a>
+    </form>
+</div>
+
+<!-- ============================================ -->
+<!--           ВЕРСИЯ ДЛЯ ПК (TABLE)              -->
+<!-- ============================================ -->
+<div class="table-responsive d-none d-md-block">
+    <table class="table-orders">
+        <colgroup>
+            <col style="width: 50px;"> <!-- Кнопки -->
+            <col style="width: 90px;"> <!-- Дата -->
+            <col style="width: 150px;"> <!-- Клиент -->
+            <col style="width: 200px;"> <!-- Культура -->
+            <col style="width: 90px;"> <!-- Размер -->
+            <col style="width: 90px;"> <!-- Поле -->
+            <col style="width: 70px;"> <!-- Кол-во -->
+            <col style="width: 110px;"> <!-- Цена -->
+            <col style="width: 140px;"> <!-- Сумма -->
+            <col style="width: 60px;"> <!-- Отгр -->
+            <col style="width: 100px;"> <!-- Счет -->
+            <col style="width: 100px;"> <!-- Оплата -->
+            <col style="width: 90px;"> <!-- Статус -->
+        </colgroup>
+        <thead>
+            <tr>
+                <th><i class="fas fa-cog"></i></th>
+                <th>№ / Дата</th>
+                <th class="text-start ps-3">Клиент</th>
+                <th class="text-start ps-3">Культура</th>
+                <th>Размер</th>
+                <th>Поле</th>
+                <th>Кол-во</th>
+                <th class="text-end">Цена</th>
+                <th class="text-end">Сумма</th>
+                <th>Отгр.</th>
+                <th>Счет</th>
+                <th>Оплата</th>
+                <th>Статус</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in orders %}
+            {% set o = item.order %}
+            {% set rows = item.order_items %}
+            {% set rowspan = item.rowspan %}
+            
+            <!-- ГЛАВНАЯ СТРОКА ЗАКАЗА (С row-separator) -->
+            <tr class="row-separator status-{{ o.status }}">
+                <!-- Кнопки действий -->
+                <td rowspan="{{ rowspan }}" class="text-center">
+                    <div class="d-flex flex-column gap-1 align-items-center">
+                        <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="btn btn-outline-primary btn-sm border-0 py-0" title="Открыть">
+                            <i class="fas fa-folder-open fa-lg"></i>
+                        </a>
+                        {% if current_user.role == 'admin' %}
+                            {% if o.is_deleted %}
+                            <form method="POST" onsubmit="return confirm('Восстановить?');">
+                                <input type="hidden" name="action" value="restore"><input type="hidden" name="order_id" value="{{ o.id }}">
+                                <button class="btn btn-link text-success p-0"><i class="fas fa-trash-restore"></i></button>
+                            </form>
+                            {% else %}
+                            <form method="POST" onsubmit="return confirm('В корзину?');">
+                                <input type="hidden" name="action" value="delete"><input type="hidden" name="order_id" value="{{ o.id }}">
+                                <button class="btn btn-link text-danger p-0"><i class="fas fa-trash"></i></button>
+                            </form>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </td>
+
+                <!-- Номер и Дата -->
+                <td rowspan="{{ rowspan }}" class="text-center">
+                    <span class="fw-bold text-dark fs-6">#{{ o.id }}</span><br>
+                    <small class="text-muted" style="font-size: 10px;">{{ o.date|dateru }}</small>
+                </td>
+
+                <!-- Клиент -->
+                <td rowspan="{{ rowspan }}" class="fw-bold text-dark">
+                    {{ o.client.name }}
+                </td>
+                
+                <!-- ПЕРВАЯ ПОЗИЦИЯ ТОВАРА -->
+                {% if rows|length > 0 %}
+                    {% set first = rows[0] %}
+                    <td class="text-dark">{{ first.plant.name }}</td>
+                    <td class="text-center text-muted small">{{ first.size.name }}</td>
+                    <td class="text-center text-muted small">{{ first.field.name }}</td>
+                    <td class="text-center fw-bold">{{ first.quantity }}</td>
+                    <td class="text-end text-muted">{{ first.price|money }}</td>
+                    <td class="text-end text-muted">{{ first.sum|money }}</td>
+                    <td class="text-center {% if first.shipped_quantity >= first.quantity %}text-success fw-bold{% else %}text-muted{% endif %}">{{ first.shipped_quantity }}</td>
+                {% else %}
+                    <td colspan="7" class="text-center text-muted fst-italic">Нет позиций</td>
+                {% endif %}
+                
+                <!-- Счет -->
+                <td rowspan="{{ rowspan }}" class="text-center small text-muted">
+                    {% if o.invoice_number %}
+                        <span class="fw-bold text-dark">{{ o.invoice_number }}</span><br>{{ o.invoice_date|dateru }}
+                    {% else %}-{% endif %}
+                </td>
+
+                <!-- Оплата -->
+                <td rowspan="{{ rowspan }}" class="text-center pay-{{ o.payment_status }}">
+                    {{ o.paid_sum|money }}
+                    <br><span class="badge bg-light text-dark border fw-normal" style="font-size: 9px;">
+                        {% if o.payment_status == 'paid' %}ОПЛАЧЕН{% elif o.payment_status == 'partial' %}ЧАСТИЧНО{% else %}ДОЛГ{% endif %}
+                    </span>
+                </td>
+
+                <!-- Статус -->
+                <td rowspan="{{ rowspan }}" class="text-center">
+                    {% if o.is_deleted %}
+                        <span class="badge bg-danger">УДАЛЕН</span>
+                    {% elif o.status == 'reserved' %}
+                        <span class="badge-status badge-reserved">Резерв</span>
+                    {% elif o.status == 'in_progress' %}
+                        <span class="badge-status badge-in_progress">В работе</span>
+                    {% elif o.status == 'shipped' %}
+                        <span class="badge-status badge-shipped">Отгружен</span>
+                    {% elif o.status == 'canceled' %}
+                        <span class="badge-status badge-canceled">Отмена</span>
+                    {% endif %}
+                </td>
+            </tr>
+
+            <!-- ОСТАЛЬНЫЕ ПОЗИЦИИ (Если есть) -->
+            {% for i in range(1, rows|length) %}
+            <tr class="status-{{ o.status }}">
+                {% set r = rows[i] %}
+                <td class="text-dark">{{ r.plant.name }}</td>
+                <td class="text-center text-muted small">{{ r.size.name }}</td>
+                <td class="text-center text-muted small">{{ r.field.name }}</td>
+                <td class="text-center fw-bold">{{ r.quantity }}</td>
+                <td class="text-end text-muted text-nowrap">{{ r.price|money }}</td>
+                <td class="text-end text-muted text-nowrap">{{ r.sum|money }}</td>
+                <td class="text-center {% if r.shipped_quantity >= r.quantity %}text-success fw-bold{% else %}text-muted{% endif %}">{{ r.shipped_quantity }}</td>
+            </tr>
+            {% endfor %}
+
+            <!-- ИТОГО ПО ЗАКАЗУ (ИСПРАВЛЕНО ВЫРАВНИВАНИЕ) -->
+            {% if o.status != 'canceled' and not o.is_deleted %}
+            <tr class="status-{{ o.status }}" style="background-color: #F8F9FA;">
+                <!-- Объединяем первые 8 колонок (до Цены включительно) для подписи -->
+                <td colspan="8" class="text-end small text-uppercase text-muted pt-2 pb-2 align-middle">
+                    Итого заказ:
+                </td>
+                <!-- Колонка 9: Сумма (выравниваем ровно под столбцом Сумма) -->
+                <td class="text-end fw-bold text-dark fs-6 pt-2 pb-2 text-nowrap border-top">
+                    {{ o.total_sum|money }}
+                </td>
+                <!-- Остальные пустые колонки справа (4 шт: Отгр, Счет, Оплата, Статус) -->
+                <td colspan="4"></td>
+            </tr>
+            {% endif %}
+            
+            {% endfor %}
+            
+            <!-- ОБЩИЙ ИТОГ (ВНИЗУ) -->
+            <tr style="background-color: #FFF9C4; border-top: 3px solid #FBC02D;">
+                <!-- Подпись растягиваем до колонки цены включительно (8 колонок) -->
+                <td colspan="8" class="text-end fw-bold text-uppercase py-3 align-middle">ВСЕГО (По списку):</td>
+                <!-- Сумма ровно в 9-й колонке -->
+                <td class="text-end fw-bold fs-5 text-dark py-3 text-nowrap">{{ stats.sum|money }}</td>
+                <!-- Отгружено в 10-й -->
+                <td class="text-center fw-bold py-3 text-nowrap">{{ stats.shipped_fact }} шт.</td>
+                <!-- Остаток -->
+                <td colspan="3" class="py-3"></td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ============================================ -->
+<!--           ВЕРСИЯ ДЛЯ МОБИЛЬНОГО (CARDS)      -->
+<!-- ============================================ -->
+<div class="d-md-none">
+    {% for item in orders %}
+    {% set o = item.order %}
+    <div class="mobile-card shadow-sm">
+        <!-- Шапка карточки -->
+        <div class="mobile-card-header collapsed" data-bs-toggle="collapse" data-bs-target="#order-{{ o.id }}">
+            <div class="d-flex flex-column">
+                <div class="d-flex align-items-center mb-1">
+                    <span class="status-dot dot-{{ o.status }}"></span>
+                    <span class="fw-bold text-dark me-2">#{{ o.id }}</span>
+                    <small class="text-muted">{{ o.date|dateru }}</small>
+                </div>
+                <div class="text-primary fw-bold text-truncate" style="max-width: 180px;">{{ o.client.name }}</div>
+            </div>
+            <div class="text-end">
+                <div class="fw-bold text-dark">{{ o.total_sum|money_int }}</div>
+                <small class="{% if o.payment_status == 'paid' %}text-success{% elif o.payment_status == 'partial' %}text-warning{% else %}text-danger{% endif %} fw-bold" style="font-size: 10px;">
+                    {% if o.payment_status == 'paid' %}ОПЛАЧЕН{% elif o.payment_status == 'partial' %}ЧАСТИЧНО{% else %}ДОЛГ{% endif %}
+                </small>
+                <div class="mt-1"><i class="fas fa-chevron-down text-muted small"></i></div>
+            </div>
+        </div>
+
+        <!-- Тело карточки -->
+        <div id="order-{{ o.id }}" class="collapse mobile-card-body">
+            {% for r in item.order_items %}
+            <div class="mobile-item">
+                <div style="flex: 1;">
+                    <div class="fw-bold text-secondary">{{ r.plant.name }}</div>
+                    <div class="small text-muted">{{ r.size.name }} | {{ r.field.name }}</div>
+                </div>
+                <div class="text-end ms-2">
+                    <div class="fw-bold">{{ r.quantity }} шт.</div>
+                    <div class="text-muted small">{{ r.price|money_int }}</div>
+                    {% if r.shipped_quantity > 0 %}
+                    <div class="badge bg-success bg-opacity-25 text-success border border-success px-1" style="font-size: 9px;">Отгр: {{ r.shipped_quantity }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <div class="p-3 text-center text-muted small">Нет позиций</div>
+            {% endfor %}
+
+            <div class="mobile-actions d-flex gap-2">
+                <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="btn btn-outline-primary btn-sm flex-grow-1">Открыть</a>
+                {% if current_user.role == 'admin' %}
+                <form method="POST" class="flex-grow-1" onsubmit="return confirm('Удалить?');">
+                    <input type="hidden" name="action" value="delete"><input type="hidden" name="order_id" value="{{ o.id }}">
+                    <button class="btn btn-outline-danger btn-sm w-100">Удалить</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    
+    <!-- ИТОГО ДЛЯ МОБИЛЬНОГО -->
+    <div class="card bg-warning bg-opacity-10 border border-warning p-3 mt-3 shadow-sm">
+        <div class="d-flex justify-content-between align-items-center">
+            <span class="fw-bold text-dark small text-uppercase">ВСЕГО (Активные):</span>
+            <span class="fw-bold fs-5 text-dark">{{ stats.sum|money }}</span>
+        </div>
+        <div class="text-end small text-muted">Отгружено: {{ stats.shipped_fact }} шт.</div>
+    </div>
+</div>
+
+{% endblock %}

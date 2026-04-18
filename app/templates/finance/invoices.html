@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+    /* Статусы приоритета */
+    .priority-high { border-left: 5px solid #dc3545 !important; }
+    .priority-normal { border-left: 5px solid #0d6efd !important; }
+    .priority-low { border-left: 5px solid #6c757d !important; }
+    
+    .badge-high { background-color: #dc3545; color: white; }
+    .badge-normal { background-color: #0d6efd; color: white; }
+    .badge-low { background-color: #6c757d; color: white; }
+
+    /* Мобильная карточка */
+    .inv-card {
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        margin-bottom: 15px;
+        overflow: hidden;
+        border: 1px solid #eee;
+    }
+    .inv-card-header {
+        padding: 10px 15px;
+        background: #f8f9fa;
+        border-bottom: 1px solid #eee;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .inv-card-body {
+        padding: 15px;
+    }
+    .inv-row-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        font-size: 13px;
+    }
+    .inv-label { color: #6c757d; }
+    .inv-value { font-weight: 600; color: #333; text-align: right; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="text-danger fw-bold"><i class="fas fa-file-invoice-dollar me-2"></i>Счета на оплату</h4>
+    {% if current_user.role == 'admin' %}
+    <button class="btn btn-danger btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#uploadModal">
+        <i class="fas fa-plus-circle me-1"></i> Загрузить счет
+    </button>
+    {% endif %}
+</div>
+
+<!-- СВОДКА (Dash) -->
+<div class="row g-2 mb-3">
+    <div class="col-6 col-md-3">
+        <div class="p-2 border rounded bg-white shadow-sm border-start border-4 border-danger h-100">
+            <div class="small text-muted fw-bold text-uppercase">🔥 Срочно</div>
+            <div class="d-flex justify-content-between align-items-end">
+                <span class="fw-bold text-dark">{{ summary.high|money_int }}</span>
+                <span class="badge bg-danger rounded-pill">{{ summary.count_high }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="p-2 border rounded bg-white shadow-sm border-start border-4 border-primary h-100">
+            <div class="small text-muted fw-bold text-uppercase">Обычные</div>
+            <div class="d-flex justify-content-between align-items-end">
+                <span class="fw-bold text-dark">{{ summary.normal|money_int }}</span>
+                <span class="badge bg-primary rounded-pill">{{ summary.count_normal }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="p-2 border rounded bg-white shadow-sm border-start border-4 border-secondary h-100">
+            <div class="small text-muted fw-bold text-uppercase">Низкий приор.</div>
+            <div class="d-flex justify-content-between align-items-end">
+                <span class="fw-bold text-dark">{{ summary.low|money_int }}</span>
+                <span class="badge bg-secondary rounded-pill">{{ summary.count_low }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="p-2 border rounded bg-dark text-white shadow-sm h-100">
+            <div class="small text-white-50 fw-bold text-uppercase">ИТОГО К ОПЛАТЕ</div>
+            <div class="d-flex justify-content-between align-items-end">
+                <span class="fw-bold fs-5">{{ summary.total|money_int }}</span>
+                <span class="badge bg-light text-dark rounded-pill">{{ summary.count_total }}</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if not invoices %}
+<div class="alert alert-light text-center border py-5">
+    <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+    <h5>Все счета оплачены!</h5>
+    <p class="text-muted">Нет активных задач на оплату.</p>
+</div>
+{% endif %}
+
+<!-- ВИД ДЛЯ ПК (Таблица) -->
+<div class="d-none d-md-block">
+    <div class="card shadow-sm border-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0" style="font-size: 13px;">
+                <thead class="bg-light">
+                    <tr>
+                        <th>Приоритет</th>
+                        <th>Статья бюджета</th>
+                        <th>Сумма</th>
+                        <th>Осталось</th>
+                        <th>Оплатить до</th>
+                        <th>Файл / Комментарий</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for inv in invoices %}
+                    <tr>
+                        <td>
+                            {% if inv.priority == 'high' %}<span class="badge badge-high">ВАЖНО</span>
+                            {% elif inv.priority == 'normal' %}<span class="badge badge-normal">Обычный</span>
+                            {% else %}<span class="badge badge-low">Низкий</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if inv.item %}
+                                <span class="fw-bold text-dark">{{ inv.item.name }}</span><br>
+                                <small class="text-muted">{{ inv.item.code }}</small>
+                            {% else %}-{% endif %}
+                        </td>
+                        <td>
+                            <span class="fs-6 fw-bold text-danger">{{ inv.amount|money }}</span>
+                        </td>
+                        <td>
+                            <span class="fs-6 fw-bold {% if inv.remaining == 0 %}text-success{% elif inv.remaining < inv.amount %}text-warning{% else %}text-dark{% endif %}">
+                                {{ inv.remaining|money }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if inv.due_date %}
+                                {% set diff = (inv.due_date - today).days %}
+                                <div class="{% if diff < 0 %}text-danger fw-bold{% elif diff < 3 %}text-warning fw-bold text-dark{% endif %}">
+                                    {{ inv.due_date.strftime('%d.%m.%Y') }}
+                                    {% if diff < 0 %}(Просрочено!){% endif %}
+                                </div>
+                            {% else %}-{% endif %}
+                        </td>
+                        <td>
+                            {% set ext = inv.original_name.split('.')[-1].lower() if inv.original_name and '.' in inv.original_name else '' %}
+                            {% set icon = 'file' %}
+                            {% set icon_color = 'text-secondary' %}
+                            {% if ext in ['pdf'] %}
+                                {% set icon = 'file-pdf' %}
+                                {% set icon_color = 'text-danger' %}
+                            {% elif ext in ['jpg','jpeg','png','gif','bmp','webp'] %}
+                                {% set icon = 'file-image' %}
+                                {% set icon_color = 'text-success' %}
+                            {% elif ext in ['xls','xlsx'] %}
+                                {% set icon = 'file-excel' %}
+                                {% set icon_color = 'text-success' %}
+                            {% elif ext in ['doc','docx'] %}
+                                {% set icon = 'file-word' %}
+                                {% set icon_color = 'text-primary' %}
+                            {% endif %}
+                            <a href="{{ url_for('finance.invoice_download', inv_id=inv.id) }}" class="text-decoration-none fw-bold">
+                                <i class="fas fa-{{ icon }} {{ icon_color }} me-1"></i> {{ inv.original_name }}
+                            </a>
+                            {% if inv.comment %}
+                            <div class="text-muted small mt-1"><i>{{ inv.comment }}</i></div>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <a href="{{ url_for('finance.invoice_download', inv_id=inv.id) }}" class="btn btn-outline-secondary btn-sm" title="Скачать"><i class="fas fa-download"></i></a>
+                            {% if current_user.role == 'admin' %}
+                            <a href="{{ url_for('finance.expenses') }}?invoice_id={{ inv.id }}" class="btn btn-outline-primary btn-sm" title="Оформить расход"><i class="fas fa-wallet"></i></a>
+                            <form method="POST" class="d-inline" onsubmit="return confirm('Счет оплачен? Он исчезнет из списка.');" hx-boost="false">
+                                <input type="hidden" name="action" value="mark_paid">
+                                <input type="hidden" name="id" value="{{ inv.id }}">
+                                <button class="btn btn-success btn-sm" title="Оплачено"><i class="fas fa-check"></i></button>
+                            </form>
+                            <form method="POST" class="d-inline" onsubmit="return confirm('Удалить навсегда?');" hx-boost="false">
+                                <input type="hidden" name="action" value="delete">
+                                <input type="hidden" name="id" value="{{ inv.id }}">
+                                <button class="btn btn-outline-danger btn-sm" title="Удалить"><i class="fas fa-trash"></i></button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- ВИД ДЛЯ МОБИЛЬНОГО (Карточки) -->
+<div class="d-md-none">
+    {% for inv in invoices %}
+    <div class="inv-card priority-{{ inv.priority }}">
+        <div class="inv-card-header">
+            <div>
+                {% if inv.priority == 'high' %}<span class="badge badge-high">🔥 СРОЧНО</span>
+                {% elif inv.priority == 'normal' %}<span class="badge badge-normal">Обычный</span>
+                {% else %}<span class="badge badge-low">Не к спеху</span>{% endif %}
+            </div>
+            <div class="fw-bold text-danger fs-5">{{ inv.amount|money_int }}</div>
+        </div>
+        <div class="inv-card-body">
+            <div class="inv-row-item">
+                <span class="inv-label">Статья:</span>
+                <span class="inv-value">{{ inv.item.name if inv.item else 'Без статьи' }}</span>
+            </div>
+            <div class="inv-row-item">
+                <span class="inv-label">Срок оплаты:</span>
+                <span class="inv-value">
+                    {% if inv.due_date %}
+                        {{ inv.due_date.strftime('%d.%m.%Y') }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </span>
+            </div>
+            <div class="inv-row-item">
+                <span class="inv-label">Осталось:</span>
+                <span class="inv-value">
+                    <span class="fw-bold {% if inv.remaining == 0 %}text-success{% elif inv.remaining < inv.amount %}text-warning{% endif %}">
+                        {{ inv.remaining|money_int }}
+                    </span>
+                </span>
+            </div>
+            
+            {% if inv.comment %}
+            <div class="bg-light p-2 rounded small text-muted mb-3 fst-italic border">
+                {{ inv.comment }}
+            </div>
+            {% endif %}
+
+            <a href="{{ url_for('finance.invoice_download', inv_id=inv.id) }}" class="btn btn-outline-danger w-100 mb-2 fw-bold">
+                <i class="fas fa-file-pdf me-2"></i> Скачать счет (PDF)
+            </a>
+
+            {% if current_user.role == 'admin' %}
+            <div class="d-flex gap-2">
+                <a href="{{ url_for('finance.expenses') }}?invoice_id={{ inv.id }}" class="btn btn-outline-primary w-100"><i class="fas fa-wallet me-2"></i> Расход</a>
+                <form method="POST" class="w-100" onsubmit="return confirm('Оплачено?');" hx-boost="false">
+                    <input type="hidden" name="action" value="mark_paid">
+                    <input type="hidden" name="id" value="{{ inv.id }}">
+                    <button class="btn btn-success w-100"><i class="fas fa-check me-2"></i> Оплачено</button>
+                </form>
+                <form method="POST" onsubmit="return confirm('Удалить?');" hx-boost="false">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="id" value="{{ inv.id }}">
+                    <button class="btn btn-outline-secondary"><i class="fas fa-trash"></i></button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Модальное окно загрузки (Только Админ) -->
+{% if current_user.role == 'admin' %}
+<div class="modal fade" id="uploadModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" enctype="multipart/form-data" hx-boost="false">
+                <input type="hidden" name="action" value="upload">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">Новый счет на оплату</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Файл (PDF/изображение/документ)</label>
+                        <input type="file" name="file" class="form-control" accept="*/*" required>
+                        <div class="form-text">Любой формат: PDF, JPG, PNG, DOCX и т.п.</div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label small fw-bold">Сумма счета</label>
+                            <input type="number" step="0.01" name="amount" class="form-control" required placeholder="0.00">
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label small fw-bold">Оплатить до</label>
+                            <input type="date" name="due_date" class="form-control" value="{{ today }}">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Статья бюджета</label>
+                        <select name="budget_item_id" class="form-select select-search">
+                            <option value="">- Не выбрано -</option>
+                            {% for item in budget_items %}
+                            <option value="{{ item.id }}">{{ item.code }} {{ item.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Приоритет</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="priority" id="p_high" value="high">
+                            <label class="btn btn-outline-danger" for="p_high">Срочно</label>
+
+                            <input type="radio" class="btn-check" name="priority" id="p_norm" value="normal" checked>
+                            <label class="btn btn-outline-primary" for="p_norm">Обычный</label>
+
+                            <input type="radio" class="btn-check" name="priority" id="p_low" value="low">
+                            <label class="btn btn-outline-secondary" for="p_low">Низкий</label>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Комментарий</label>
+                        <textarea name="comment" class="form-control" rows="2" placeholder="Например: Аванс за доставку..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-danger w-100">Загрузить счет</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-passport"></i>
+            Иностранные сотрудники и патенты
+        </div>
+        <div class="page-subtitle">Карточки сотрудников, документы и контроль сроков патента.</div>
+    </div>
+</div>
+
+<div class="card section-card p-3">
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th>Сотрудник</th>
+                    <th>Телефон</th>
+                    <th>Дом</th>
+                    <th>Патент до</th>
+                    <th>Осталось дней</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>
+                        <div class="fw-bold">{{ row.profile.full_name if row.profile else row.employee.name }}</div>
+                        <div class="small text-muted">{{ row.employee.name }}</div>
+                    </td>
+                    <td>{{ row.profile.phone if row.profile else '-' }}</td>
+                    <td>{{ row.profile.registration_address|house_number if row.profile else '-' }}</td>
+                    <td>{{ row.period.end_date.strftime('%d.%m.%Y') if row.period else '-' }}</td>
+                    <td>
+                        {% if row.days_left is none %}
+                            -
+                        {% elif row.days_left < 0 %}
+                            <span class="badge bg-danger">Просрочен</span>
+                        {% elif row.days_left <= 14 %}
+                            <span class="badge bg-warning text-dark">{{ row.days_left }} дн.</span>
+                        {% else %}
+                            <span class="badge bg-success">{{ row.days_left }} дн.</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <a href="{{ url_for('hr.foreign_employee_card', employee_id=row.employee.id) }}" class="btn btn-sm btn-primary">Открыть карточку</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

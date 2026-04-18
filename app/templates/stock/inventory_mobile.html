@@ -1,0 +1,321 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+    /* Блокируем зум при быстром нажатии */
+    body { touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+    
+    .setup-screen { display: block; }
+    .count-screen { display: none; }
+    
+    .counter-card {
+        background: #fff; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        border: 2px solid #E8F5E9; overflow: hidden; margin-bottom: 15px;
+        display: flex; flex-direction: column;
+    }
+    .counter-header { background: #E8F5E9; padding: 10px; text-align: center; font-weight: bold; font-size: 18px; color: #2E7D32; }
+    .counter-body { display: flex; height: 100px; }
+    
+    .btn-minus { width: 30%; background: #fff; border: none; border-right: 2px solid #eee; color: #dc3545; font-size: 30px; }
+    .btn-minus:active { background: #FFEBEE; }
+    
+    .btn-plus { width: 70%; background: #fff; border: none; color: #2E7D32; font-size: 50px; font-weight: bold; position: relative;}
+    .btn-plus:active { background: #E8F5E9; }
+    
+    .flash-overlay {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(76, 175, 80, 0.3); opacity: 0; pointer-events: none; transition: opacity 0.1s;
+    }
+    .btn-plus.flashing .flash-overlay { opacity: 1; transition: none; }
+</style>
+
+<div class="row justify-content-center">
+    <div class="col-md-6 col-lg-4">
+        
+        <!-- ЭКРАН 1: НАСТРОЙКА (Выбор поля и растения) -->
+        <div id="setupScreen" class="setup-screen">
+            <h4 class="fw-bold mb-3 text-center"><i class="fas fa-clipboard-list text-danger"></i> Инвентаризация</h4>
+            
+            <div class="card shadow-sm border-0 mb-3">
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="fw-bold small text-muted">Поле (Где мы?)</label>
+                        <!-- Добавили onchange="loadYears()" -->
+                        <select id="invField" class="form-select select-search" onchange="loadYears()">
+                            <option value="" disabled selected>Выберите поле...</option>
+                            {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="fw-bold small text-muted">Растение (Что считаем?)</label>
+                        <!-- Добавили onchange="loadYears()" -->
+                        <select id="invPlant" class="form-select select-search" onchange="loadYears()">
+                            <option value="" disabled selected>Выберите растение...</option>
+                            {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="fw-bold small text-muted">Год партии</label>
+                        <!-- Заменили input на select -->
+                        <select id="invYear" class="form-select border-success">
+                            <option value="" disabled selected>Сначала выберите Поле и Растение</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <button class="btn btn-success btn-lg w-100 shadow fw-bold" onclick="startInventory()">
+                <i class="fas fa-play me-2"></i> НАЧАТЬ ПОДСЧЕТ
+            </button>
+        </div>
+
+        <div id="countScreen" class="count-screen">
+            <div class="d-flex justify-content-between align-items-center mb-3 bg-white p-2 rounded shadow-sm border">
+                <button class="btn btn-outline-secondary btn-sm" onclick="cancelInventory()"><i class="fas fa-arrow-left"></i></button>
+                <div class="text-center lh-1">
+                    <div class="fw-bold text-dark" id="displayPlantName">Растение</div>
+                    <small class="text-muted" id="displayFieldYear">Поле | Год</small>
+                </div>
+                <button class="btn btn-success btn-sm fw-bold" onclick="saveInventory()">ФИНИШ</button>
+            </div>
+
+            <!-- Добавление нового размера (если вдруг его нет в базе) -->
+            <div class="input-group mb-3 shadow-sm">
+                <select id="sizeSelector" class="form-select">
+                    <option value="" disabled selected>Добавить размер вручную...</option>
+                    {% for s in sizes %}<option value="{{ s.id }}" data-name="{{ s.name }}" {% if s.name == 'Саженцы' %}class="seedling-option"{% endif %}>{{ s.name }}</option>{% endfor %}
+                </select>
+                <button class="btn btn-primary" onclick="addCounterManual()"><i class="fas fa-plus"></i></button>
+            </div>
+
+            <!-- Контейнер для счетчиков -->
+            <div id="countersContainer">
+                <div class="text-center p-4" id="loaderState" style="display:none;">
+                    <i class="fas fa-spinner fa-spin fa-2x text-muted"></i>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    let currentData = { fieldId: null, plantId: null, year: null };
+    let counters = {}; // { sizeId: count }
+    let sizeTones = {}; // { sizeId: frequency }
+
+    // --- ЗВУКОВОЙ ДВИЖОК ---
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    let audioCtx;
+
+    function initAudio() {
+        if (!audioCtx) audioCtx = new AudioContext();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playFeedback(type, sizeId) {
+        initAudio();
+        
+        if (navigator.vibrate) {
+            if (type === 'plus') navigator.vibrate(40);
+            else if (type === 'minus') navigator.vibrate([30, 50, 30]);
+        }
+
+        const osc = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        osc.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        if (type === 'plus') {
+            // Уникальный тон для каждого размера
+            const freq = sizeTones[sizeId] || 800; 
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime); 
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime); 
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.08); 
+        } else if (type === 'minus') {
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(250, audioCtx.currentTime); 
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.15);
+        }
+    }
+
+// --- АВТОЗАГРУЗКА ГОДОВ ПАРТИИ ---
+    async function loadYears() {
+        const f = document.getElementById('invField').value;
+        const p = document.getElementById('invPlant').value;
+        const ySelect = document.getElementById('invYear');
+        
+        if (f && p) {
+            ySelect.innerHTML = '<option value="" disabled selected>Загрузка...</option>';
+            try {
+                const res = await fetch(`/api/inventory/get_years?plant_id=${p}&field_id=${f}`);
+                const data = await res.json();
+                
+                ySelect.innerHTML = '';
+                if (data.years && data.years.length > 0) {
+                    if (data.years.length === 1) {
+                        // Если год один - выбираем его автоматически
+                        ySelect.innerHTML = `<option value="${data.years[0]}" selected>${data.years[0]} г.</option>`;
+                    } else {
+                        // Если несколько - просим выбрать
+                        ySelect.innerHTML = '<option value="" disabled selected>Выберите год партии...</option>';
+                        data.years.forEach(y => {
+                            ySelect.innerHTML += `<option value="${y}">${y} г.</option>`;
+                        });
+                    }
+                } else {
+                    ySelect.innerHTML = '<option value="" disabled selected>На этом поле нет остатков</option>';
+                }
+            } catch(e) {
+                ySelect.innerHTML = '<option value="" disabled selected>Ошибка загрузки</option>';
+            }
+        } else {
+            ySelect.innerHTML = '<option value="" disabled selected>Сначала выберите Поле и Растение</option>';
+        }
+    }
+
+    // --- ЛОГИКА ЭКРАНОВ И АВТОЗАГРУЗКИ ---
+    async function startInventory() {
+        const f = document.getElementById('invField');
+        const p = document.getElementById('invPlant');
+        const y = document.getElementById('invYear');
+
+        if(!f.value || !p.value || !y.value) {
+            alert("Заполните Поле, Растение и Год!");
+            return;
+        }
+
+        currentData = { fieldId: f.value, plantId: p.value, year: y.value };
+        counters = {};
+        sizeTones = {}; // Сбрасываем тональности
+        document.getElementById('countersContainer').innerHTML = '<div class="text-center p-4"><i class="fas fa-spinner fa-spin fa-2x text-muted"></i></div>';
+
+        document.getElementById('displayPlantName').innerText = p.options[p.selectedIndex].text;
+        document.getElementById('displayFieldYear').innerText = `${f.options[f.selectedIndex].text} | ${y.value} г.`;
+
+        document.getElementById('setupScreen').style.display = 'none';
+        document.getElementById('countScreen').style.display = 'block';
+        initAudio(); 
+
+        // Автозагрузка размеров с поля
+        try {
+            const res = await fetch(`/api/inventory/get_sizes?plant_id=${p.value}&field_id=${f.value}&year=${y.value}`);
+            const data = await res.json();
+            
+            document.getElementById('countersContainer').innerHTML = '';
+            
+            if (data.sizes && data.sizes.length > 0) {
+                data.sizes.forEach(s => {
+                    addCounterUI(s.id, s.name);
+                });
+            } else {
+                document.getElementById('countersContainer').innerHTML = '<div class="alert alert-warning small text-center mt-3">На этом поле не найдено известных размеров. Добавьте их вручную из списка выше.</div>';
+            }
+        } catch(e) {
+            alert("Ошибка загрузки данных с поля.");
+        }
+    }
+
+    function cancelInventory() {
+        if(Object.keys(counters).length > 0 && !confirm("Сбросить текущие подсчеты?")) return;
+        document.getElementById('setupScreen').style.display = 'block';
+        document.getElementById('countScreen').style.display = 'none';
+    }
+
+    // --- ЛОГИКА СЧЕТЧИКОВ ---
+    function addCounterManual() {
+        const sel = document.getElementById('sizeSelector');
+        const sizeId = sel.value;
+        if (!sizeId) return;
+        const sizeName = sel.options[sel.selectedIndex].dataset.name;
+        addCounterUI(sizeId, sizeName);
+        sel.value = ""; 
+    }
+
+    function addCounterUI(sizeId, sizeName) {
+        if (counters[sizeId] !== undefined) return;
+        
+        counters[sizeId] = 0; // Изначально 0 (чтобы отправилось, даже если не тапали)
+        
+        // Каждому размеру даем свой тон (начинаем с 400Hz, шаг 150Hz)
+        const toneIndex = Object.keys(sizeTones).length;
+        sizeTones[sizeId] = 400 + (toneIndex * 150);
+        
+        // Убираем сообщение об ошибке, если есть
+        const alertBox = document.querySelector('#countersContainer .alert');
+        if(alertBox) alertBox.remove();
+
+        const container = document.getElementById('countersContainer');
+        const html = `
+            <div class="counter-card" id="card-${sizeId}">
+                <div class="counter-header">${sizeName}</div>
+                <div class="counter-body">
+                    <button class="btn-minus" onclick="changeCount(${sizeId}, -1)"><i class="fas fa-minus"></i></button>
+                    <button class="btn-plus" id="btn-plus-${sizeId}" onclick="changeCount(${sizeId}, 1)">
+                        <div class="flash-overlay"></div>
+                        <span id="val-${sizeId}">0</span>
+                    </button>
+                </div>
+            </div>
+        `;
+        container.insertAdjacentHTML('beforeend', html); // Добавляем вниз, чтобы порядок сохранялся
+    }
+
+    function changeCount(sizeId, delta) {
+        let current = counters[sizeId];
+        let newVal = current + delta;
+        if (newVal < 0) newVal = 0;
+        counters[sizeId] = newVal;
+
+        document.getElementById(`val-${sizeId}`).innerText = newVal;
+
+        if (delta > 0) {
+            playFeedback('plus', sizeId); // Передаем ID для тональности
+            const btn = document.getElementById(`btn-plus-${sizeId}`);
+            btn.classList.add('flashing');
+            setTimeout(() => btn.classList.remove('flashing'), 100);
+        } else if (delta < 0 && current > 0) {
+            playFeedback('minus', sizeId);
+        }
+    }
+
+    // --- СОХРАНЕНИЕ В ЧЕРНОВИК ---
+    async function saveInventory() {
+        if (Object.keys(counters).length === 0) {
+            alert("Вы не добавили ни одного размера!");
+            return;
+        }
+
+        if (!confirm("Завершить инвентаризацию? Результат отправится на проверку.")) return;
+
+        const payload = {
+            field_id: currentData.fieldId,
+            plant_id: currentData.plantId,
+            year: currentData.year,
+            counts: counters // Отправляем ВСЕ размеры (даже те, где остался 0)
+        };
+
+        try {
+            const res = await fetch('/api/inventory/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await res.json();
+
+            if (result.status === 'ok') {
+                alert("Успешно! Данные отправлены на проверку.");
+                window.location.href = "{{ url_for('stock.stock_report') }}";
+            } else {
+                alert("Ошибка: " + result.message);
+            }
+        } catch (e) {
+            alert("Ошибка связи с сервером. Проверьте интернет.");
+        }
+    }
+</script>
+{% endblock %}

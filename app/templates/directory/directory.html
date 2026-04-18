@@ -1,0 +1,301 @@
+{% extends "base.html" %}
+{% block content %}
+<h4 class="mb-0 text-success fw-bold"><i class="fas fa-book me-2"></i>Справочники</h4>
+
+<div class="row">
+    {% if current_user.role == 'admin' %}
+    <div class="col-md-3 border-end">
+        <div class="card mb-3 shadow-sm border-0 bg-light">
+            <div class="card-body p-3">
+                <h6 class="text-muted fw-bold mb-3"><i class="fas fa-plus-circle"></i> Добавить вручную</h6>
+                <form method="POST">
+                    <input type="hidden" name="action" value="add">
+                    <div class="mb-2">
+                        <select name="type" id="addTypeSelect" class="form-select form-select-sm" onchange="toggleFieldOptions(this.value)">
+                            <option value="plant">Растение</option>
+                            <option value="size">Размер (Товарность)</option>
+                            <option value="field">Поле (Склад)</option>
+                            <option value="client">Клиент</option>
+                            <option value="supplier">Поставщик</option>
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <input type="text" name="name" class="form-control form-control-sm" placeholder="Наименование" required>
+                    </div>
+                    <div id="fieldOptionsDiv" style="display:none;">
+                        <div class="mb-2">
+                            <label class="small text-muted text-primary fw-bold"><i class="fas fa-user-tie"></i> Партнер</label>
+                            <select name="investor_id" class="form-select form-select-sm border-primary">
+                                <option value="">- Нет -</option>
+                                {% for c in clients %}
+                                <option value="{{ c.id }}">{{ c.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">Год посадки (дефолт)</label>
+                            <input type="number" name="planting_year" class="form-control form-control-sm" value="2017">
+                        </div>
+                    </div>
+                    <div id="clientOptionsDiv" style="display:none;">
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">Фикс. сальдо (нач. долг)</label>
+                            <input type="number" step="0.01" name="fixed_balance" class="form-control form-control-sm" placeholder="Например: 1950000">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">Дата фикс. сальдо</label>
+                            <input type="date" name="fixed_balance_date" class="form-control form-control-sm">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-success btn-sm w-100">Добавить</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 bg-white border mb-3">
+            <div class="card-body p-2">
+                <h6 class="text-muted fw-bold mb-2 small"><i class="fas fa-book"></i> Справочники (Excel)</h6>
+                <a href="{{ url_for('directory.download_directory_template') }}" class="text-decoration-none small d-block mb-2">Скачать шаблон</a>
+                <form method="POST" action="{{ url_for('directory.import_directory') }}" enctype="multipart/form-data">
+                    <div class="input-group input-group-sm">
+                        <input type="file" name="file" class="form-control" accept=".xlsx" required>
+                        <button class="btn btn-outline-primary"><i class="fas fa-upload"></i></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 bg-warning bg-opacity-10 border border-warning">
+            <div class="card-body p-2">
+                <h6 class="text-warning fw-bold mb-2 small"><i class="fas fa-boxes"></i> Ввод Остатков (Excel)</h6>
+                <a href="{{ url_for('directory.download_stock_template') }}" class="text-decoration-none small d-block mb-2 text-warning">Скачать шаблон остатков</a>
+                <form method="POST" action="{{ url_for('directory.stock_import') }}" enctype="multipart/form-data">
+                    <div class="input-group input-group-sm">
+                        <input type="file" name="file" class="form-control border-warning" accept=".xlsx" required>
+                        <button class="btn btn-warning text-white"><i class="fas fa-upload"></i></button>
+                    </div>
+                </form>
+                <small class="text-muted" style="font-size: 9px;">Перезаписывает кол-во и цены по паре Растение+Размер+Поле+Год</small>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="col-md-9">
+        <a href="{{ url_for('stock.price_history') }}" class="btn btn-outline-secondary btn-sm mb-3">История цен</a>
+        <div class="row">
+            {% macro render_list(title, items, type) %}
+            <div class="col-md-4 mb-4">
+                <div class="card h-100 shadow-sm">
+                    <form method="POST" onsubmit="return confirm('Удалить выбранные записи?');">
+                        <input type="hidden" name="action" value="bulk_delete">
+                        <input type="hidden" name="type" value="{{ type }}">
+                        
+                        <div class="card-header bg-white fw-bold py-2 border-bottom-0 d-flex justify-content-between align-items-center">
+                            <span>{{ title }} <span class="badge bg-light text-dark rounded-pill">{{ items|length }}</span></span>
+                            {% if current_user.role == 'admin' %}
+                            <button type="submit" class="btn btn-outline-danger btn-xs" title="Удалить отмеченные"><i class="fas fa-trash-alt"></i></button>
+                            {% endif %}
+                        </div>
+                        <ul class="list-group list-group-flush small overflow-auto" style="max-height: 300px;">
+                            {% for item in items %}
+                            <li class="list-group-item py-1 d-flex justify-content-between align-items-center px-2">
+                                <div class="d-flex align-items-center text-truncate" style="max-width: 85%;">
+                                    {% if current_user.role == 'admin' %}
+                                    <input class="form-check-input me-2" type="checkbox" name="ids[]" value="{{ item.id }}">
+                                    {% endif %}
+                                    <span class="text-truncate" title="{{ item.name }}">
+                                        {{ item.name }}
+                                        {% if type == 'field' %}
+                                        <br><span class="badge bg-{{ item.planting_year|year_class }}" style="font-size: 9px;">{{ item.planting_year }}</span>
+                                        {% if item.investor %}<span class="badge bg-primary" style="font-size: 9px;">{{ item.investor.name }}</span>{% endif %}
+                                        {% endif %}
+                                    </span>
+                                </div>
+                                {% if current_user.role == 'admin' %}
+                                <div class="d-flex ms-1 gap-2 align-items-center">
+                                    {% if type == 'plant' %}
+                                    <button type="button" class="btn btn-link p-0 text-success" onclick="openPhotoModal({{ item.id }})" title="Фотографии для клиентов">
+                                        <i class="fas fa-camera" style="font-size: 12px;"></i>
+                                    </button>
+                                    {% endif %}
+                                    <button type="button" class="btn btn-link p-0 text-secondary" 
+                                        onclick="editItem('{{ type }}', {{ item.id }}, '{{ item.name }}', 
+                                        {% if type == 'field' %}{{ item.investor_id or 'null' }}, {{ item.planting_year or 2017 }}, null, null{% elif type == 'client' %}null, null, {{ item.fixed_balance or 'null' }}, '{{ item.fixed_balance_date.strftime('%Y-%m-%d') if item.fixed_balance_date else '' }}'{% else %}null, null, null, null{% endif %})" 
+                                        title="Изменить"><i class="fas fa-pen" style="font-size: 10px;"></i></button>
+                                </div>
+                                {% endif %}
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </form>
+                </div>
+            </div>
+            {% endmacro %}
+            {{ render_list('Растения', plants, 'plant') }}
+            {{ render_list('Размеры', sizes, 'size') }}
+            {{ render_list('Поля / Склады', fields, 'field') }}
+            {{ render_list('Клиенты', clients, 'client') }}
+            {{ render_list('Поставщики', suppliers, 'supplier') }}
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <form method="POST">
+          <div class="modal-header py-2"><h6 class="modal-title">Редактирование</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+          <div class="modal-body">
+            <input type="hidden" name="action" value="edit"><input type="hidden" name="type" id="editType"><input type="hidden" name="id" id="editId">
+            <div class="mb-2"><label class="small text-muted">Новое наименование</label><input type="text" name="name" id="editName" class="form-control form-control-sm" required></div>
+            <div class="mb-2 field-only" style="display:none;">
+                <label class="small text-muted fw-bold text-primary">Партнер</label>
+                <select name="investor_id" id="editInvestorId" class="form-select form-select-sm border-primary">
+                    <option value="">- Нет -</option>
+                    {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="mb-2 field-only" style="display:none;">
+                <label class="small text-muted">Год посадки</label>
+                <input type="number" name="planting_year" id="editPlantingYear" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">Фикс. сальдо (нач. долг)</label>
+                <input type="number" step="0.01" name="fixed_balance" id="editFixedBalance" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">Дата фикс. сальдо</label>
+                <input type="date" name="fixed_balance_date" id="editFixedBalanceDate" class="form-control form-control-sm">
+            </div>
+          </div>
+          <div class="modal-footer py-1"><button type="submit" class="btn btn-success btn-sm w-100">Сохранить</button></div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Модальное окно управления фото (ТЕПЕРЬ ОНО ВНУТРИ БЛОКА CONTENT) -->
+<div class="modal fade" id="photoModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="fas fa-images me-2"></i>Фото: <span id="photoPlantName"></span></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body bg-light">
+                <!-- Форма загрузки -->
+                <form id="photoUploadForm" method="POST" action="{{ url_for('directory.upload_plant_photos') }}" enctype="multipart/form-data" class="mb-3 p-3 bg-white border rounded shadow-sm">
+                    <input type="hidden" name="plant_id" id="photoUploadPlantId">
+                    <label class="small fw-bold text-muted mb-2">Добавить новые фото</label>
+                    <div class="input-group input-group-sm">
+                        <input type="file" name="photos" id="plantPhotoInput" class="form-control" accept="image/*" multiple required>
+                        <button type="submit" class="btn btn-success"><i class="fas fa-upload"></i> Загрузить</button>
+                    </div>
+                    <div id="plantPhotoPreview" class="d-flex flex-wrap gap-2 mt-2"></div>
+                    <div class="small text-muted mt-2">Фото автоматически сжимаются перед отправкой для более быстрой загрузки.</div>
+                </form>
+
+                <!-- Галерея текущих фото -->
+                <h6 class="small fw-bold text-muted mb-2">Загруженные фото:</h6>
+                <div id="photoGallery" class="row g-2">
+                    <div class="text-center text-muted small w-100 py-3"><i class="fas fa-spinner fa-spin"></i> Загрузка...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+
+
+<script>
+
+let currentPhotoPlantId = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (typeof setupPhotoUploader === 'function') {
+        setupPhotoUploader('plantPhotoInput', 'plantPhotoPreview');
+    }
+});
+
+    function openPhotoModal(plantId) {
+        currentPhotoPlantId = plantId;
+        document.getElementById('photoUploadPlantId').value = plantId;
+        document.getElementById('plantPhotoPreview').innerHTML = '';
+        new bootstrap.Modal(document.getElementById('photoModal')).show();
+        loadPhotos(plantId);
+    }
+
+    async function loadPhotos(plantId) {
+        const gallery = document.getElementById('photoGallery');
+        gallery.innerHTML = '<div class="text-center text-muted small w-100 py-3"><i class="fas fa-spinner fa-spin"></i> Загрузка...</div>';
+        
+        try {
+            const res = await fetch(`/directory/plant/${plantId}/photos`);
+            const data = await res.json();
+            document.getElementById('photoPlantName').innerText = data.plant_name;
+            
+            gallery.innerHTML = '';
+            if (data.photos.length === 0) {
+                gallery.innerHTML = '<div class="text-center text-muted small w-100 py-3">Фотографий пока нет</div>';
+                return;
+            }
+
+            data.photos.forEach(photo => {
+                gallery.innerHTML += `
+                    <div class="col-4">
+                        <div class="position-relative border rounded overflow-hidden shadow-sm" style="height: 100px;">
+                            <img src="${photo.url}" style="width: 100%; height: 100%; object-fit: cover;">
+                            <button class="btn btn-danger btn-sm position-absolute top-0 end-0 m-1 p-0 d-flex align-items-center justify-content-center" 
+                                    style="width: 24px; height: 24px;" 
+                                    onclick="deletePhoto('${photo.name}')" title="Удалить">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+        } catch (e) {
+            gallery.innerHTML = '<div class="text-danger small w-100 py-3 text-center">Ошибка загрузки</div>';
+        }
+    }
+
+    async function deletePhoto(filename) {
+        if (!confirm('Удалить эту фотографию?')) return;
+        try {
+            await fetch(`/directory/plant/${currentPhotoPlantId}/photos/${filename}/delete`, {method: 'POST'});
+            loadPhotos(currentPhotoPlantId);
+        } catch(e) { alert('Ошибка удаления'); }
+    }
+
+    function toggleFieldOptions(type) {
+        document.getElementById('fieldOptionsDiv').style.display = (type === 'field') ? 'block' : 'none';
+        document.getElementById('clientOptionsDiv').style.display = (type === 'client') ? 'block' : 'none';
+    }
+
+    function editItem(type, id, name, investorId, plantingYear, fixedBalance, fixedBalanceDate) {
+        document.getElementById('editType').value = type;
+        document.getElementById('editId').value = id;
+        document.getElementById('editName').value = name;
+        const fieldOnly = document.querySelectorAll('.field-only');
+        const clientOnly = document.querySelectorAll('.client-only');
+        
+        fieldOnly.forEach(el => el.style.display = 'none');
+        clientOnly.forEach(el => el.style.display = 'none');
+
+        if (type === 'field') {
+            fieldOnly.forEach(el => el.style.display = 'block');
+            document.getElementById('editInvestorId').value = investorId ? investorId : "";
+            document.getElementById('editPlantingYear').value = plantingYear ? plantingYear : 2017;
+        } else if (type === 'client') {
+            clientOnly.forEach(el => el.style.display = 'block');
+            document.getElementById('editFixedBalance').value = fixedBalance ? fixedBalance : "";
+            document.getElementById('editFixedBalanceDate').value = fixedBalanceDate ? fixedBalanceDate : "";
+        }
+        new bootstrap.Modal(document.getElementById('editModal')).show();
+    }
+</script>
+{% endblock %}

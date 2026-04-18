@@ -1,0 +1,579 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="text-primary fw-bold"><i class="fas fa-tags me-2"></i>Калькулятор прайс-цены (Конкуренты)</h4>
+</div>
+
+<div class="row">
+    
+    <!-- Левая колонка: Меню и Загрузка -->
+    <div class="col-md-3">
+        
+        <!-- Генератор Промта -->
+        <div class="card mb-3 shadow-sm border-info bg-white">
+            <div class="card-header bg-info text-white py-2 small fw-bold">
+                <i class="fas fa-robot me-1"></i> Генератор Промта
+            </div>
+            <div class="card-body p-2">
+                <form action="{{ url_for('crm.crm_download_ai_prompt') }}" method="POST" enctype="multipart/form-data" data-hx-boost="false">
+                    
+                    <!-- 1. Выбор регионов -->
+                    <div class="mb-2">
+                        <label class="small text-muted fw-bold">1. Регионы поиска</label>
+                        <select name="regions" class="form-select form-select-sm select-search" multiple="multiple" style="width: 100%;">
+                            <!-- ЦФО выбран по умолчанию -->
+                            <option value="ЦФО (Москва и МО, Тула, Воронеж, Калуга, Тверь)" selected>ЦФО (Основной)</option>
+                            {% for reg in regions_list %}
+                            <option value="{{ reg }}">{{ reg }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- 2. Загрузка списка -->
+                    <div class="mb-2">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <label class="small text-muted fw-bold">2. Список растений</label>
+                            <a href="{{ url_for('crm.crm_download_prompt_input_template') }}" class="text-decoration-none" style="font-size: 10px;">
+                                <i class="fas fa-download"></i> Шаблон
+                            </a>
+                        </div>
+                        <input type="file" name="plant_file" class="form-control form-control-sm" accept=".xlsx" required>
+                        <div class="form-text" style="font-size: 9px; line-height: 1.1;">
+                            Excel: Наименование | Размер | Стрижка
+                        </div>
+                    </div>
+
+                    <button class="btn btn-info btn-sm w-100 text-white fw-bold mt-2">
+                        <i class="fas fa-file-alt me-1"></i> Создать Промт (txt)
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        {% if current_user.role == 'admin' %}
+        <div class="card mb-3 shadow-sm border-primary">
+            <div class="card-header bg-primary text-white py-2 small fw-bold">
+                <i class="fas fa-upload me-1"></i> Загрузка Excel
+            </div>
+            <div class="card-body p-2">
+                <!-- Ссылка на шаблон -->
+                <div class="mb-3 text-center">
+                    <a href="{{ url_for('crm.crm_price_calculator_template') }}" class="text-decoration-none small fw-bold text-success" download data-hx-boost="false">
+                        <i class="fas fa-file-excel me-1"></i> Скачать шаблон Excel
+                    </a>
+                </div>
+
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="mb-2">
+                        <label class="small text-muted">Название выгрузки</label>
+                        <input type="text" name="name" class="form-control form-control-sm" placeholder="Например: Апрель 2025">
+                    </div>
+                    <div class="mb-2">
+                        <label class="small text-muted">Файл (xlsx)</label>
+                        <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx" required>
+                    </div>
+                    <div class="alert alert-light p-1 small border mb-2" style="font-size: 10px; line-height: 1.2;">
+                        Структура столбцов:<br>
+                        1. Наименование (как в базе)<br>
+                        2. Размер (как в базе)<br>
+                        3. Цена конкурента (число)<br>
+                        4. Название конкурента
+                    </div>
+                    <button class="btn btn-primary btn-sm w-100">Загрузить и Сравнить</button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-light py-2 small fw-bold">История сравнений</div>
+            <div class="list-group list-group-flush small" style="max-height: 400px; overflow-y: auto;">
+                {% for snap in snapshots %}
+                <div class="list-group-item p-0 d-flex align-items-center {% if current and current.id == snap.id %}active{% endif %}">
+                    <!-- Ссылка на открытие -->
+                    <a href="{{ url_for('crm.crm_price_calculator', snapshot_id=snap.id) }}" class="p-2 flex-grow-1 text-decoration-none {% if current and current.id == snap.id %}text-white{% else %}text-dark{% endif %}">
+                        <div class="d-flex w-100 justify-content-between">
+                            <span class="fw-bold">{{ snap.name }}</span>
+                            <small>{{ snap.date.strftime('%d.%m.%y') }}</small>
+                        </div>
+                    </a>
+                    
+                    <!-- Кнопка удаления (только для админа) -->
+                    {% if current_user.role == 'admin' %}
+                    <form method="POST" action="{{ url_for('crm.crm_delete_snapshot', snapshot_id=snap.id) }}" onsubmit="return confirm('Удалить эту выгрузку? Это действие нельзя отменить.');" class="pe-2">
+                        <button class="btn btn-sm p-0 border-0 {% if current and current.id == snap.id %}text-white{% else %}text-danger{% endif %}" title="Удалить">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+                {% else %}
+                <div class="p-3 text-center text-muted">Нет загрузок</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Правая колонка -->
+    <div class="col-md-9">
+        <!-- Навигация (Вкладки) -->
+        <ul class="nav nav-tabs mb-3" id="crmTabs" role="tablist">
+            <li class="nav-item">
+                <button class="nav-link active fw-bold" id="tab-table" data-bs-toggle="tab" data-bs-target="#content-table" type="button">
+                    <i class="fas fa-table me-2"></i>Сравнение (Текущее)
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link fw-bold text-dark" id="tab-chart" data-bs-toggle="tab" data-bs-target="#content-chart" type="button">
+                    <i class="fas fa-chart-line me-2 text-warning"></i>Динамика рынка
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content">
+            
+            <!-- ВКЛАДКА 1: ТАБЛИЦА (То, что было раньше) -->
+            <div class="tab-pane fade show active" id="content-table">
+                <!-- Блок фильтров -->
+                <div class="card p-2 mb-3 bg-light border-0 shadow-sm">
+                    <div class="d-flex gap-2 flex-wrap align-items-end">
+                        <div class="flex-grow-1">
+                            <label class="small text-muted fw-bold">Поиск по названию</label>
+                            <input type="text" id="filterPlant" class="form-control form-control-sm" placeholder="Например: Туя..." onkeyup="applyTableFilters()">
+                        </div>
+                        <div class="flex-grow-1">
+                            <label class="small text-muted fw-bold">Конкурент</label>
+                            <select id="filterComp" class="form-select form-select-sm" onchange="applyTableFilters()">
+                                <option value="">Все конкуренты</option>
+                                <!-- Опции заполняются JS автоматически -->
+                            </select>
+                        </div>
+                        <div>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="resetFilters()">Сброс</button>
+                        </div>
+                    </div>
+                </div>
+                {% if current %}
+                
+                <!-- Дашборд -->
+                {% set ns = namespace(total_diff=0, count=0, expensive_cnt=0, cheap_cnt=0) %}
+                {% for r in rows %}
+                    {% set ns.count = ns.count + 1 %}
+                    {% set ns.total_diff = ns.total_diff + r.diff_rub %}
+                    {% if r.diff_rub > 0 %}{% set ns.expensive_cnt = ns.expensive_cnt + 1 %}{% endif %}
+                    {% if r.diff_rub < 0 %}{% set ns.cheap_cnt = ns.cheap_cnt + 1 %}{% endif %}
+                {% endfor %}
+
+                <div class="row g-3 mb-3">
+                    <div class="col-md-4">
+                        <div class="card border-0 shadow-sm bg-danger bg-opacity-10 border-start border-danger border-4">
+                            <div class="card-body p-2">
+                                <small class="text-danger fw-bold text-uppercase">Мы дороже (Риск)</small>
+                                <div class="d-flex justify-content-between align-items-end">
+                                    <h4 class="mb-0 fw-bold text-dark">{{ ns.expensive_cnt }} <span class="fs-6 text-muted">поз.</span></h4>
+                                    <i class="fas fa-arrow-up text-danger mb-1"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card border-0 shadow-sm bg-success bg-opacity-10 border-start border-success border-4">
+                            <div class="card-body p-2">
+                                <small class="text-success fw-bold text-uppercase">Мы дешевле (Демпинг)</small>
+                                <div class="d-flex justify-content-between align-items-end">
+                                    <h4 class="mb-0 fw-bold text-dark">{{ ns.cheap_cnt }} <span class="fs-6 text-muted">поз.</span></h4>
+                                    <i class="fas fa-arrow-down text-success mb-1"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card border-0 shadow-sm bg-light border-start border-secondary border-4">
+                            <div class="card-body p-2">
+                                <small class="text-muted fw-bold text-uppercase">Всего позиций</small>
+                                <div class="d-flex justify-content-between align-items-end">
+                                    <h4 class="mb-0 fw-bold text-dark">{{ ns.count }}</h4>
+                                    <span class="badge bg-white text-dark border">{{ current.date.strftime('%d.%m') }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Таблица -->
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0 fw-bold text-primary">{{ current.name }}</h6>
+                        <small class="text-muted">Анализ цен на {{ current.date.strftime('%d.%m.%Y') }}</small>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm align-middle mb-0" style="font-size: 13px;">
+                            <thead class="bg-light text-center text-uppercase small text-muted">
+                                <tr>
+                                    <!-- 0: Товар -->
+                                    <th class="text-start ps-3 cursor-pointer" onclick="sortTable(0, 'string')" style="width: 25%;">
+                                        Товар / Конкурент <i class="fas fa-sort text-muted ms-1"></i>
+                                    </th>
+                                    <!-- 1: Ссылка -->
+                                    <th style="width: 5%;">Инфо</th>
+                                    <!-- 2: Их цена -->
+                                    <th class="cursor-pointer" onclick="sortTable(2, 'number')" style="width: 10%;">
+                                        Их цена <i class="fas fa-sort text-muted ms-1"></i>
+                                    </th>
+                                    <!-- 3: Наша цена -->
+                                    <th class="cursor-pointer" onclick="sortTable(3, 'number')" style="width: 10%;">
+                                        Наша цена <i class="fas fa-sort text-muted ms-1"></i>
+                                    </th>
+                                    <!-- 4: Разница -->
+                                    <th class="cursor-pointer" onclick="sortTable(4, 'number')" style="width: 15%;">
+                                        Разница <i class="fas fa-sort text-muted ms-1"></i>
+                                    </th>
+                                    <!-- 5: Себес -->
+                                    <th class="cursor-pointer" onclick="sortTable(5, 'number')" style="width: 10%;">
+                                        Себест. <i class="fas fa-sort text-muted ms-1"></i>
+                                    </th>
+                                    <!-- 6: Маржа -->
+                                    <th class="cursor-pointer" onclick="sortTable(6, 'number')" style="width: 15%;">
+                                        Наша Маржа <i class="fas fa-sort text-muted ms-1"></i>
+                                    </th>
+                                    <!-- 7: Потенциал -->
+                                    <th class="cursor-pointer" onclick="sortTable(7, 'number')" style="width: 15%;">
+                                        Потенциал <i class="fas fa-sort text-muted ms-1"></i>
+                                    </th>
+                                    <!-- 8: Действия -->
+                                    <th style="width: 6%;">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="calcTableBody">
+                                {% for r in rows %}
+                                {% set diff_percent = ((r.diff_rub / r.comp_price * 100)|round|int) if r.comp_price > 0 else 0 %}
+                                <tr class="calc-row {% if r.diff_rub > 0 %}bg-danger bg-opacity-10{% elif r.diff_rub < 0 %}bg-success bg-opacity-10{% endif %}" style="--bs-bg-opacity: .05;">
+                                    
+                                    <!-- 0: Название + Размер + Конкурент (Все в одной ячейке для поиска) -->
+                                    <td class="text-start ps-3 border-start">
+                                        <div class="fw-bold text-dark plant-name">{{ r.plant }}</div>
+                                        <div class="d-flex align-items-center justify-content-between mt-1">
+                                            <span class="badge bg-white text-dark border shadow-sm">{{ r.size }}</span>
+                                            <span class="text-muted fst-italic small competitor-name">{{ r.competitor }}</span>
+                                        </div>
+                                    </td>
+
+                                    <!-- 1: Ссылка -->
+                                    <td class="text-center bg-white">
+                                        {% if r.link %}
+                                        <!-- Умная проверка ссылки: если нет http, добавляем https:// -->
+                                        <a href="{{ r.link if r.link.startswith('http') else 'https://' + r.link }}" target="_blank" class="btn btn-sm btn-light border text-primary py-0 px-1" title="Перейти к источнику">
+                                            <i class="fas fa-external-link-alt" style="font-size: 10px;"></i>
+                                        </a>
+                                        {% endif %}
+                                    </td>
+
+                                    <!-- 2: Их цена -->
+                                    <td class="text-center fw-bold text-dark bg-white" data-val="{{ r.comp_price }}">
+                                        {{ r.comp_price|money_int }}
+                                    </td>
+                                    <!-- 3: Наша цена -->
+                                    <td class="text-center text-muted bg-white" style="border-right: 2px solid #eee;" data-val="{{ r.our_price }}">
+                                        {{ r.our_price|money_int }}
+                                    </td>
+
+                                    <!-- 4: Разница -->
+                                    <td class="text-center bg-white" data-val="{{ r.diff_rub }}">
+                                        {% if r.our_price == 0 %}
+                                            <span class="badge bg-secondary">Нет товара</span>
+                                        {% elif r.diff_rub > 0 %}
+                                            <div class="text-danger fw-bold">+{{ r.diff_rub|money_int }}</div>
+                                            <span class="badge bg-danger text-white" style="font-size: 9px;">ДОРОЖЕ {{ diff_percent }}%</span>
+                                        {% elif r.diff_rub < 0 %}
+                                            <div class="text-success fw-bold">{{ r.diff_rub|money_int }}</div>
+                                            <span class="badge bg-success text-white" style="font-size: 9px;">ДЕШЕВЛЕ {{ diff_percent|abs }}%</span>
+                                        {% else %}
+                                            <span class="badge bg-light text-muted border">= Равны</span>
+                                        {% endif %}
+                                    </td>
+
+                                    <!-- 5: Себес -->
+                                    <td class="text-center text-muted small bg-white" data-val="{{ r.cost }}">
+                                        {{ r.cost|money_int }}
+                                    </td>
+
+                                    <!-- 6: Маржа -->
+                                    <td class="text-center bg-white" data-val="{{ r.our_margin }}">
+                                        <div class="fw-bold {% if r.our_margin > 0 %}text-success{% else %}text-danger{% endif %}">{{ r.our_margin|money_int }}</div>
+                                    </td>
+
+                                    <!-- 7: Потенциал -->
+                                    <td class="text-center bg-white" data-val="{{ r.comp_margin_scenario }}">
+                                        <div class="fw-bold {% if r.comp_margin_scenario > 0 %}text-primary{% else %}text-danger{% endif %}">{{ r.comp_margin_scenario|money_int }}</div>
+                                    </td>
+                                    <!-- 8: Удаление -->
+                                    <td class="text-center bg-white" style="width: 80px;">
+                                        {% if current_user.role == 'admin' %}
+                                        <form method="POST" action="{{ url_for('crm.crm_delete_row', row_id=r.id) }}" onsubmit="return confirm('Удалить эту строку из отчета?');">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить">
+                                                <i class="fas fa-trash-alt"></i>
+                                            </button>
+                                        </form>
+                                        {% else %}
+                                        <span class="text-muted small">-</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% else %}
+                <div class="alert alert-light border text-center py-5">
+                    <i class="fas fa-file-excel fa-3x mb-3 text-success"></i>
+                    <h5>Данных пока нет</h5>
+                    <p class="text-muted">Загрузите файл слева или выберите из истории.</p>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- ВКЛАДКА 2: ГРАФИКИ (Новая) -->
+            <div class="tab-pane fade" id="content-chart">
+                <div class="card shadow-sm border-0 bg-light mb-3">
+                    <div class="card-body">
+                        <label class="fw-bold small text-uppercase text-muted mb-2">Выберите товар для анализа:</label>
+                        <select id="productSelect" class="form-select select-search">
+                            <option value="">Поиск товара...</option>
+                            {% for p in product_options %}
+                            <option value="{{ p }}">{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-white fw-bold">
+                        <i class="fas fa-chart-line me-2 text-warning"></i>История изменения цен
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 400px; position: relative;">
+                            <canvas id="priceChart"></canvas>
+                            <div id="chartPlaceholder" class="position-absolute top-50 start-50 translate-middle text-muted text-center" style="width: 100%;">
+                                <i class="fas fa-search fa-2x mb-2"></i><br>
+                                Выберите товар сверху, чтобы увидеть график
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %} <!-- Это закрывает блок content -->
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    // Инициализация поиска в селекте
+    $(document).ready(function() {
+        $('#productSelect').select2({
+            theme: 'bootstrap-5',
+            placeholder: "Выберите товар...",
+            width: '100%'
+        });
+    });
+
+    let myChart = null;
+
+    // Обработка выбора товара
+    $('#productSelect').on('change', async function() {
+        const selection = $(this).val();
+        if (!selection) return;
+
+        const placeholder = document.getElementById('chartPlaceholder');
+        placeholder.style.display = 'none';
+
+        try {
+            const response = await fetch('/crm/api/price_history', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({selection: selection})
+            });
+
+            if (!response.ok) {
+                const text = await response.text();
+                console.error('Ошибка ответа сервера:', response.status, text);
+                placeholder.style.display = '';
+                placeholder.innerText = 'Не удалось загрузить данные (сервер вернул ошибку).';
+                return;
+            }
+
+            const data = await response.json();
+
+            if (data.error) {
+                placeholder.style.display = '';
+                placeholder.innerText = data.error;
+                return;
+            }
+
+            renderChart(data);
+
+        } catch (e) {
+            console.error(e);
+            placeholder.style.display = '';
+            placeholder.innerText = 'Ошибка загрузки данных. Проверьте консоль.';
+        }
+    });
+
+    function renderChart(data) {
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        
+        // Подготовка данных для Chart.js
+        const datasets = [];
+        
+        // Цвета для конкурентов
+        const colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];
+        let colorIdx = 0;
+
+        for (const [name, values] of Object.entries(data.datasets)) {
+            const isUs = (name === 'Наш Питомник');
+            
+            datasets.push({
+                label: name,
+                data: values,
+                borderColor: isUs ? '#2E7D32' : colors[colorIdx % colors.length], // Мы зеленые, они цветные
+                backgroundColor: isUs ? '#2E7D32' : colors[colorIdx % colors.length],
+                borderWidth: isUs ? 4 : 2, // Наша линия жирнее
+                pointRadius: isUs ? 5 : 3,
+                tension: 0.1,
+                borderDash: isUs ? [] : [5, 5], // Конкуренты пунктиром для отличия (опционально, можно убрать)
+                spanGaps: true // Соединять точки, если были пропуски в загрузках
+            });
+            if (!isUs) colorIdx++;
+        }
+
+        if (myChart) myChart.destroy();
+
+        myChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.labels,
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) label += ': ';
+                                if (context.parsed.y !== null) {
+                                    label += new Intl.NumberFormat('ru-RU').format(context.parsed.y) + ' ₽';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false, // Чтобы лучше видеть динамику изменений
+                        title: { display: true, text: 'Цена (₽)' }
+                    }
+                }
+            }
+        });
+    }
+
+    // === ЛОГИКА ФИЛЬТРОВ И СОРТИРОВКИ ДЛЯ КАЛЬКУЛЯТОРА ===
+    
+    // 1. Сбор уникальных конкурентов в фильтр при загрузке
+    document.addEventListener('DOMContentLoaded', function() {
+        const compSet = new Set();
+        document.querySelectorAll('.competitor-name').forEach(el => {
+            compSet.add(el.innerText.trim());
+        });
+        
+        const select = document.getElementById('filterComp');
+        if(select) {
+            Array.from(compSet).sort().forEach(comp => {
+                const opt = document.createElement('option');
+                opt.value = comp;
+                opt.innerText = comp;
+                select.appendChild(opt);
+            });
+        }
+    });
+
+    // 2. Функция фильтрации
+    function applyTableFilters() {
+        const textFilter = document.getElementById('filterPlant').value.toLowerCase();
+        const compFilter = document.getElementById('filterComp').value;
+        
+        const rows = document.querySelectorAll('.calc-row');
+        
+        rows.forEach(row => {
+            const plantText = row.querySelector('.plant-name').innerText.toLowerCase();
+            const compText = row.querySelector('.competitor-name').innerText;
+            
+            const matchText = plantText.includes(textFilter);
+            const matchComp = (compFilter === "") || (compText === compFilter);
+            
+            if (matchText && matchComp) {
+                row.style.display = "";
+            } else {
+                row.style.display = "none";
+            }
+        });
+    }
+
+    function resetFilters() {
+        document.getElementById('filterPlant').value = "";
+        document.getElementById('filterComp').value = "";
+        applyTableFilters();
+    }
+
+    // 3. Функция сортировки
+    let currentSortDir = 'asc';
+    let currentSortCol = -1;
+
+    function sortTable(colIndex, type) {
+        const tbody = document.getElementById('calcTableBody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+
+        // Переключаем направление
+        if (currentSortCol === colIndex) {
+            currentSortDir = (currentSortDir === 'asc') ? 'desc' : 'asc';
+        } else {
+            currentSortDir = 'asc';
+        }
+        currentSortCol = colIndex;
+
+        rows.sort((a, b) => {
+            let valA, valB;
+
+            if (type === 'number') {
+                // Берем чистое число из data-val (мы добавили этот атрибут в HTML)
+                valA = parseFloat(a.children[colIndex].getAttribute('data-val')) || 0;
+                valB = parseFloat(b.children[colIndex].getAttribute('data-val')) || 0;
+            } else {
+                // Текст
+                valA = a.children[colIndex].innerText.trim().toLowerCase();
+                valB = b.children[colIndex].innerText.trim().toLowerCase();
+            }
+
+            if (valA < valB) return currentSortDir === 'asc' ? -1 : 1;
+            if (valA > valB) return currentSortDir === 'asc' ? 1 : -1;
+            return 0;
+        });
+
+        // Возвращаем отсортированные строки в таблицу
+        rows.forEach(row => tbody.appendChild(row));
+    }
+
+</script>
+
+{% endblock %}

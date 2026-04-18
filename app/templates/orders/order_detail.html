@@ -1,0 +1,973 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between mb-3 align-items-center">
+    <div>
+        <h4 class="mb-0 d-inline-block me-3">Заказ №{{ order.id }}</h4>
+        {% set status_label = order.status %}
+        {% set status_class = 'bg-primary' %}
+        {% if order.status == 'canceled' %}
+            {% set status_label = 'Отменен' %}
+            {% set status_class = 'bg-secondary' %}
+        {% elif order.status == 'shipped' %}
+            {% set status_label = 'Отгружен' %}
+            {% set status_class = 'bg-success' %}
+        {% elif order.status == 'ready' %}
+            {% set status_label = 'Готов к отгрузке' %}
+            {% set status_class = 'bg-info text-dark' %}
+        {% elif order.status == 'in_progress' %}
+            {% set status_label = 'В работе' %}
+            {% set status_class = 'bg-warning text-dark' %}
+        {% elif order.status == 'reserved' %}
+            {% set status_label = 'Резерв' %}
+            {% set status_class = 'bg-primary' %}
+        {% endif %}
+        <span class="badge {{ status_class }} fs-6">
+            {{ status_label }}
+        </span>
+        <span class="text-muted ms-2">{{ order.date|dateru }}</span>
+    </div>
+    <a href="{{ return_to or url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm"><i class="fas fa-arrow-left"></i> Назад</a>
+</div>
+
+<div class="form-check mb-3">
+    <input class="form-check-input" type="checkbox" id="toggleSeedlings">
+    <label class="form-check-label" for="toggleSeedlings">Показать саженцы</label>
+</div>
+
+<!-- БЛОК "СВЯЗАННЫЕ ДОКУМЕНТЫ" (Цепочка) -->
+<style>
+    /* ДЕРЕВО ДОКУМЕНТОВ */
+    .doc-tree-container {
+        display: flex;
+        align-items: flex-start;
+        padding: 10px 0;
+        overflow-x: auto;
+    }
+
+    /* Узлы (Карточки) */
+    .doc-node {
+        min-width: 220px;
+        max-width: 250px;
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 10px;
+        position: relative;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        font-size: 12px;
+        transition: 0.2s;
+        margin-bottom: 10px;
+    }
+    
+    /* Эффект наведения и кликабельность для ссылок */
+    .doc-node.clickable:hover { 
+        box-shadow: 0 4px 10px rgba(0,0,0,0.15); 
+        transform: translateY(-2px); 
+        z-index: 5; 
+        border-color: #FF9800;
+        cursor: pointer;
+    }
+    
+    /* Цветовые акценты */
+    .node-invoice { border-left: 5px solid #607D8B; background: #ECEFF1; }
+    .node-order { border-left: 5px solid #FF9800; }
+    .node-order.current { border: 2px solid #FF9800; background: #FFF3E0; } /* Текущий заказ выделен */
+    .node-payment { border-left: 4px solid #4CAF50; margin-left: 20px; font-size: 11px; }
+    .node-shipment { border-left: 4px solid #2196F3; margin-left: 20px; font-size: 11px; }
+
+    /* Структура */
+    .tree-level { display: flex; flex-direction: column; justify-content: center; margin-right: 40px; position: relative; }
+    .tree-branch { display: flex; flex-direction: column; gap: 15px; position: relative; }
+    
+    /* Линии связи */
+    .connector-h {
+        position: absolute; left: 100%; top: 25px; width: 40px; height: 2px; background: #ccc;
+    }
+    .branch-item { position: relative; }
+    
+    /* Вертикальная линия для списка заказов */
+    .branch-line-v {
+        position: absolute; left: -20px; top: 0; bottom: 0; width: 2px; background: #ccc;
+    }
+    /* Горизонтальная линия от вертикальной к заказу */
+    .branch-line-h {
+        position: absolute; left: -20px; top: 25px; width: 20px; height: 2px; background: #ccc;
+    }
+    
+    /* Линии для детей заказа (оплаты/отгрузки) */
+    .sub-item-line {
+        position: absolute; left: -15px; top: 18px; width: 15px; height: 2px; background: #eee;
+    }
+    .sub-item-wrapper { position: relative; border-left: 2px solid #eee; padding-left: 0; margin-left: 10px; }
+</style>
+
+<div class="card mb-3 shadow-sm bg-light">
+    <div class="card-header bg-white py-1">
+        <button class="btn btn-link text-decoration-none text-dark fw-bold p-0 w-100 text-start collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#chainCollapse">
+            <i class="fas fa-project-diagram text-primary me-2"></i> Связанные документы
+            <i class="fas fa-chevron-down float-end mt-1 small text-muted"></i>
+        </button>
+    </div>
+    <!-- Убрали класс 'show', теперь скрыто по умолчанию -->
+    <div id="chainCollapse" class="collapse"> 
+        <div class="card-body p-3 overflow-auto">
+            <div class="doc-tree-container">
+                
+                <!-- 0. УРОВЕНЬ: ПРОЕКТ (ЕСЛИ ЕСТЬ) -->
+                {% if order.project %}
+                <div class="tree-level">
+                    <div class="doc-node clickable" style="border-left: 5px solid #9C27B0; background: #F3E5F5;">
+                        <a href="{{ url_for('finance.project_detail', project_id=order.project.id) }}" class="text-decoration-none stretched-link text-dark">
+                            <div class="fw-bold text-primary mb-1"><i class="fas fa-project-diagram"></i> ПРОЕКТ</div>
+                            <div class="fw-bold">{{ order.project.name }}</div>
+                            <div class="small text-muted mt-1">Перейти к проекту &rarr;</div>
+                        </a>
+                    </div>
+                    <div class="connector-h"></div>
+                </div>
+                {% endif %}
+
+                <!-- 1. УРОВЕНЬ: СЧЕТ (КОРЕНЬ) -->
+                {% if order.invoice_number %}
+                <div class="tree-level">
+                    <div class="doc-node node-invoice clickable bg-light">
+                        <!-- Ссылка на новую страницу Счета -->
+                        <a href="{{ url_for('orders.invoice_detail', client_id=order.client_id, invoice_number=order.invoice_number) }}" class="text-decoration-none stretched-link">
+                            <div class="fw-bold text-secondary mb-1"><i class="fas fa-file-invoice"></i> ОБЩИЙ СЧЕТ <i class="fas fa-external-link-alt ms-1 small"></i></div>
+                            <div class="fs-6 fw-bold text-dark text-decoration-underline">№ {{ order.invoice_number }}</div>
+                            <div class="text-muted mb-1">{{ order.invoice_date|dateru }}</div>
+                            <div class="small text-muted border-top border-secondary pt-1 mt-1 d-flex justify-content-between">
+                                <span>Заказов: <b>{{ orders_data|length }}</b></span>
+                                <span class="badge bg-secondary text-white">Открыть</span>
+                            </div>
+                        </a>
+                    </div>
+                    <!-- Линия к заказам -->
+                    <div class="connector-h"></div>
+                </div>
+                {% endif %}
+
+                <!-- 2. УРОВЕНЬ: СПИСОК ЗАКАЗОВ -->
+                <div class="tree-branch">
+                    <!-- Рисуем вертикальную линию, если есть родитель-счет и заказов > 1 -->
+                    {% if order.invoice_number and orders_data|length > 1 %}
+                    <div class="branch-line-v" style="top: 25px; bottom: 25px;"></div> 
+                    {% endif %}
+
+                    {% for item in orders_data %}
+                    {% set ord = item.order %}
+                    <div class="branch-item">
+                        <!-- Линия от ствола к заказу -->
+                        {% if order.invoice_number %}
+                        <div class="branch-line-h"></div>
+                        {% endif %}
+
+                        <!-- КАРТОЧКА ЗАКАЗА -->
+                        <!-- Добавили класс clickable для неактивных заказов -->
+                        <div class="doc-node node-order {% if item.is_current %}current{% else %}clickable{% endif %}">
+                            <div class="d-flex justify-content-between mb-1">
+                                <!-- stretched-link делает кликабельной всю карточку -->
+                                <a href="{% if return_to %}{{ url_for('orders.order_detail', order_id=ord.id, return_to=return_to) }}{% else %}{{ url_for('orders.order_detail', order_id=ord.id) }}{% endif %}" class="fw-bold text-decoration-none stretched-link {% if item.is_current %}text-dark{% else %}text-primary{% endif %}">
+                                    <i class="fas fa-shopping-cart"></i> Заказ #{{ ord.id }}
+                                </a>
+                                <span class="badge bg-light text-dark border">{{ ord.status }}</span>
+                            </div>
+                            <div class="text-muted small">{{ ord.date|dateru }}</div>
+                            {% if current_user.role != 'user2' %}
+                            <div class="d-flex justify-content-between mt-2 border-top pt-1">
+                                <span class="fw-bold">{{ ord.total_sum|money_int }}</span>
+                                {% if ord.payment_status == 'paid' %}
+                                    <i class="fas fa-check-circle text-success" title="Оплачен"></i>
+                                {% elif ord.payment_status == 'partial' %}
+                                    <i class="fas fa-adjust text-warning" title="Частично"></i>
+                                {% else %}
+                                    <i class="fas fa-times-circle text-danger" title="Не оплачен"></i>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            {% if item.is_current %}
+                            <div class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-light" style="z-index: 10;">
+                                Вы здесь
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- 3. УРОВЕНЬ: ДЕТИ ЗАКАЗА (Оплаты и Отгрузки) -->
+                        <div class="sub-item-wrapper">
+                            
+                            <!-- ОПЛАТЫ -->
+                            {% if current_user.role != 'user2' %}
+                            {% for p in ord.payments %}
+                            <div class="position-relative mb-2">
+                                <div class="sub-item-line"></div>
+                                <div class="doc-node node-payment">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-success fw-bold"><i class="fas fa-money-bill-wave"></i> Платеж</span>
+                                        <small class="text-muted">{{ p.date|dateru }}</small>
+                                    </div>
+                                    <div class="fw-bold text-success">+ {{ p.amount|money }}</div>
+                                    {% if p.comment %}<div class="text-truncate text-muted fst-italic" style="max-width: 150px;">{{ p.comment }}</div>{% endif %}
+                                </div>
+                            </div>
+                            {% endfor %}
+                            {% endif %}
+
+                            <!-- ОТГРУЗКИ -->
+                            {% for group in item.shipments %}
+                            <div class="position-relative mb-2">
+                                <div class="sub-item-line"></div>
+                                <div class="doc-node node-shipment {% if group.type == 'ghost' %}border-warning{% endif %}">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="fw-bold text-primary"><i class="fas fa-truck"></i> Факт</span>
+                                        <small class="text-muted">{{ group.date.strftime('%d.%m') }}</small>
+                                    </div>
+                                    <div>Товаров: <b>{{ group.total_qty }} шт.</b></div>
+                                    {% if group.comment %}
+                                    <div class="text-truncate text-muted fst-italic" style="max-width: 150px;">{{ group.comment }}</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% endfor %}
+                            
+                        </div> <!-- Конец детей -->
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if current_user.role != 'user2' %}
+<div class="card mb-4 border-success">
+    <div class="card-body p-3 bg-light">
+        <div class="row text-center">
+            <div class="col-md-4 border-end">
+                <small class="text-muted text-uppercase fw-bold">Сумма заказа</small>
+                <div class="fs-4 fw-bold text-dark">{{ order.total_sum|money }}</div>
+            </div>
+            <div class="col-md-4 border-end">
+                <small class="text-muted text-uppercase fw-bold">Оплачено</small>
+                <div class="fs-4 fw-bold text-success">{{ order.paid_sum|money }}</div>
+            </div>
+            <div class="col-md-4">
+                <small class="text-muted text-uppercase fw-bold">Остаток к оплате</small>
+                {% set debt = order.total_sum - order.paid_sum %}
+                <div class="fs-4 fw-bold {% if debt > 0 %}text-danger{% else %}text-secondary{% endif %}">
+                    {{ debt|money }}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if order.is_barter and current_user.role in ['admin', 'executive'] %}
+<div class="card mb-4 border-warning">
+    <div class="card-body p-3 bg-light">
+        <div class="row text-center">
+            <div class="col-md-4 border-end">
+                <small class="text-muted text-uppercase fw-bold">Сумма по взаимозачету</small>
+                <div class="fs-4 fw-bold text-warning">{{ order.total_sum|money }}</div>
+            </div>
+            <div class="col-md-4 border-end">
+                <small class="text-muted text-uppercase fw-bold">Оплачено расходами</small>
+                {% set barter_paid = order.barter_expenses|sum(attribute='amount') %}
+                <div class="fs-4 fw-bold text-success">{{ barter_paid|money }}</div>
+            </div>
+            <div class="col-md-4">
+                <small class="text-muted text-uppercase fw-bold">Остаток долга клиента</small>
+                {% set barter_debt = order.total_sum - barter_paid %}
+                <div class="fs-4 fw-bold {% if barter_debt > 0 %}text-danger{% else %}text-secondary{% endif %}">
+                    {{ barter_debt|money }}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+<div class="row">
+    <div class="col-md-3">
+        <div class="card mb-3 shadow-sm">
+            <div class="card-header bg-white fw-bold">Данные клиента</div>
+            <div class="card-body">
+                {% if current_user.role != 'user2' %}
+                <form method="POST" class="d-none d-md-block">
+                    <input type="hidden" name="update_info" value="1">
+                    <div class="mb-2">
+                        <label class="small text-muted">Клиент</label>
+                        <select name="client_id" class="form-select form-select-sm select-search">
+                            {% for c in clients %}
+                            <option value="{{ c.id }}" {% if c.id == order.client_id %}selected{% endif %}>{{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <hr class="my-2">
+                    <div class="mb-2">
+                        <label class="small text-muted">Номер счета</label>
+                        <input type="text" name="invoice_number" value="{{ order.invoice_number or '' }}" class="form-control form-control-sm">
+                    </div>
+                    <div class="mb-2">
+                        <label class="small text-muted">Дата счета</label>
+                        <input type="date" name="invoice_date" value="{{ order.invoice_date }}" class="form-control form-control-sm">
+                    </div>
+                    {% if current_user.role in ['admin', 'executive'] %}
+                    <div class="mb-2">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="is_barter_edit" name="is_barter" {% if order.is_barter %}checked{% endif %}>
+                            <label class="form-check-label text-warning fw-bold" for="is_barter_edit">Взаимозачет</label>
+                        </div>
+                    </div>
+                    {% endif %}
+                    
+                    <!-- БЛОК ПРИВЯЗКИ К ПРОЕКТУ -->
+                    <hr class="my-2">
+                    <div class="mb-2">
+                        <label class="small fw-bold text-success"><i class="fas fa-project-diagram"></i> Проект</label>
+                        <div class="input-group input-group-sm">
+                            <select name="project_id" class="form-select">
+                                <option value="">- Не привязан -</option>
+                                {% for p in active_projects %}
+                                <option value="{{ p.id }}" {% if order.project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+                                {% endfor %}
+                                {% if order.project and order.project.status != 'active' %}
+                                <option value="{{ order.project.id }}" selected>{{ order.project.name }} (Закрыт)</option>
+                                {% endif %}
+                            </select>
+                            <button type="submit" name="link_project" value="1" class="btn btn-outline-success" title="Обновить привязку"><i class="fas fa-check"></i></button>
+                        </div>
+                    </div>
+                    <!-- КОНЕЦ БЛОКА -->
+
+                    {% if order.status != 'canceled' %}
+                    <button type="submit" class="btn btn-primary btn-sm w-100">Сохранить изменения</button>
+                    {% endif %}
+                </form>
+                <div class="d-md-none">
+                    <p class="mb-2"><i class="fas fa-user me-2 text-muted"></i>{{ order.client.name }}</p>
+                    <p class="mb-2">Счет: <b>{{ order.invoice_number or '-' }}</b></p>
+                    <p class="mb-0">Проект: <b>{% if order.project %}{{ order.project.name }}{% else %}-{% endif %}</b></p>
+                </div>
+                {% else %}
+                <p class="mb-2"><i class="fas fa-user me-2 text-muted"></i>{{ order.client.name }}</p>
+                <p>Счет: <b>{{ order.invoice_number or '-' }}</b></p>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if current_user.role != 'user2' %}
+        <div class="card mb-3 shadow-sm">
+            <div class="card-header bg-white fw-bold">Платежи</div>
+            <div class="card-body p-2">
+                <ul class="list-group list-group-flush mb-2 small">
+                    {% for p in order.payments %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center p-1 bg-light mb-1 border rounded">
+                        <div>
+                            <span class="d-block">{{ p.date|dateru }}</span>
+                            {% if p.comment %}<small class="text-muted" style="font-size:10px;">{{ p.comment }}</small>{% endif %}
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            {% if p.file_path %}
+                            <a href="{{ url_for('orders.download_payment_file', payment_id=p.id) }}" class="text-success" title="Скачать платежку" target="_blank"><i class="fas fa-file-invoice-dollar"></i></a>
+                            {% endif %}
+                            <span class="fw-bold">{{ p.amount|money }}</span>
+                            {% if current_user.role in ['admin', 'executive', 'user'] and order.status != 'canceled' %}
+                            <button type="button" class="btn btn-link text-primary p-0 btn-sm d-none d-md-inline-block" onclick="showEditPaymentModal({{ p.id }}, '{{ p.date }}', {{ p.amount }}, '{{ p.comment or '' }}', '{{ p.payment_type }}')" title="Редактировать">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            {% if p.file_path %}
+                            <form method="POST" class="m-0 d-none d-md-inline-block" onsubmit="return confirm('Удалить файл платежки?');" hx-boost="false">
+                                <input type="hidden" name="delete_payment_file" value="1">
+                                <input type="hidden" name="payment_id" value="{{ p.id }}">
+                                <button type="submit" class="btn btn-link text-warning p-0 btn-sm" title="Удалить файл"><i class="fas fa-file-excel"></i></button>
+                            </form>
+                            {% else %}
+                            <button type="button" class="btn btn-link text-success p-0 btn-sm d-none d-md-inline-block" onclick="document.getElementById('uploadFile_{{ p.id }}').click()" title="Прикрепить файл">
+                                <i class="fas fa-upload"></i>
+                            </button>
+                            <form method="POST" enctype="multipart/form-data" id="formUpload_{{ p.id }}" style="display:none;" hx-boost="false">
+                                <input type="hidden" name="upload_payment_file" value="1">
+                                <input type="hidden" name="payment_id" value="{{ p.id }}">
+                                <input type="file" name="payment_file" id="uploadFile_{{ p.id }}" onchange="document.getElementById('formUpload_{{ p.id }}').submit()">
+                            </form>
+                            {% endif %}
+                            <form method="POST" class="m-0 d-none d-md-inline-block" onsubmit="return confirm('Удалить эту оплату?');" hx-boost="false">
+                                <input type="hidden" name="delete_payment" value="1">
+                                <input type="hidden" name="payment_id" value="{{ p.id }}">
+                                <button type="submit" class="btn btn-link text-danger p-0 btn-sm" title="Удалить оплату"><i class="fas fa-trash"></i></button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </li>
+                    {% else %}
+                    <li class="list-group-item text-center text-muted">Нет платежей</li>
+                    {% endfor %}
+                </ul>
+                {% if order.status != 'canceled' %}
+                <button class="btn btn-outline-success btn-sm w-100 d-none d-md-block" type="button" data-bs-toggle="collapse" data-bs-target="#payForm">
+                    + Добавить оплату
+                </button>
+                <div class="collapse mt-2 d-none d-md-block" id="payForm">
+                    <form method="POST" class="border p-2 rounded bg-light" enctype="multipart/form-data" hx-boost="false">
+                        <input type="hidden" name="add_payment" value="1">
+                        <input type="date" name="date" class="form-control form-control-sm mb-1" required>
+                        <select name="payment_type" class="form-select form-select-sm mb-1" required>
+                            <option value="cashless">Безнал</option>
+                            <option value="cash">Нал</option>
+                            {% if current_user.role in ['admin', 'executive'] %}
+                            <option value="barter">Взаимозачет</option>
+                            {% endif %}
+                        </select>
+                        <input type="number" step="0.01" name="amount" class="form-control form-control-sm mb-1" placeholder="Сумма" required>
+                        <input type="text" name="comment" class="form-control form-control-sm mb-1" placeholder="Комментарий">
+                        <input type="file" name="payment_file" class="form-control form-control-sm mb-1" title="Прикрепить платежку (необязательно)">
+                        <button class="btn btn-success btn-sm w-100">Сохранить</button>
+                    </form>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% if order.status != 'canceled' %}
+        <form method="POST" onsubmit="return confirm('Отменить заказ?');" class="mt-3 d-none d-md-block">
+            <input type="hidden" name="cancel_order" value="1">
+            <button class="btn btn-outline-danger btn-sm w-100">❌ Отменить заказ</button>
+        </form>
+        {% elif current_user.role == 'admin' %}
+        <form method="POST" onsubmit="return confirm('Восстановить заказ?');" class="mt-3 d-none d-md-block">
+            <input type="hidden" name="restore_order" value="1">
+            <button class="btn btn-outline-success btn-sm w-100">♻️ Восстановить заказ</button>
+        </form>
+        {% endif %}
+        {% endif %} 
+    </div>
+
+    <div class="col-md-9">
+        <div class="card shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <span class="fw-bold">Состав заказа</span>
+                <div class="d-flex gap-2">
+                    {% if current_user.role != 'user2' %}
+                    <a href="{{ url_for('orders.export_order_history', order_id=order.id) }}" class="btn btn-outline-success btn-sm d-none d-md-inline-block">
+                        <i class="fas fa-file-excel"></i> История .xlsx
+                    </a>
+                    {% endif %}
+                    {% if order.status != 'canceled' and current_user.role != 'user2' %}
+                    <button class="btn btn-success btn-sm d-none d-md-inline-block" data-bs-toggle="modal" data-bs-target="#addItemModal">
+                        <i class="fas fa-plus"></i> Добавить позицию
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <form method="POST">
+                <input type="hidden" name="save_items" value="1">
+                <style>
+                    @media (max-width: 767.98px) {
+                        .table-order-items thead { display: none; }
+                        .table-order-items tbody { display: block; width: 100%; }
+                        .table-order-items tr {
+                            display: flex; flex-direction: column;
+                            margin-bottom: 1rem; border: 1px solid #dee2e6; border-radius: 0.5rem;
+                            background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                        }
+                        .table-order-items td {
+                            display: flex; justify-content: space-between; align-items: center;
+                            padding: 0.5rem 1rem !important; border: none !important; border-bottom: 1px solid #f8f9fa !important;
+                            width: 100%;
+                        }
+                        .table-order-items td::before {
+                            content: attr(data-label); font-weight: 600; color: #6c757d; font-size: 0.85rem;
+                        }
+                        .table-order-items .td-product {
+                            order: 1; display: block; background: #f8f9fa; 
+                            padding: 0.75rem 1rem !important; border-radius: 0.5rem 0.5rem 0 0;
+                            border-bottom: 1px solid #dee2e6 !important; font-weight: bold;
+                            text-align: left;
+                        }
+                        .table-order-items .td-product::before { content: none; }
+                        .table-order-items .td-truck { order: 2; }
+                        .table-order-items .td-truck::before { content: "Отгрузить"; }
+                        .table-order-items .td-field { order: 3; }
+                        .table-order-items .td-year { order: 4; }
+                        .table-order-items .td-price { order: 5; }
+                        .table-order-items .td-plan { order: 6; }
+                        .table-order-items .td-ost { order: 7; }
+                        .table-order-items .td-actions { order: 8; border-bottom: none !important; }
+                        .table-order-items .td-actions::before { content: "Действия"; }
+                        
+                        .table-order-items input, .table-order-items select {
+                            max-width: 150px; text-align: right;
+                        }
+                        /* Optional: hide truck or actions if empty on mobile to save space */
+                        .table-order-items .td-truck:empty { display: none; }
+                        .table-order-items .td-actions:empty { display: none; }
+                        
+                        .table-responsive-mobile { overflow-x: hidden !important; }
+                    }
+                </style>
+                <div class="table-responsive table-responsive-mobile">
+                    <table class="table table-sm table-hover mb-0 table-order-items" style="font-size: 13px;">
+                        <thead class="bg-light">
+                            <tr>
+                                <th class="text-center" style="width: 40px;"><i class="fas fa-truck text-muted"></i></th>
+                                <th>Товар</th>
+                                <th style="width: 180px;">Поле</th>
+                                <th style="width: 80px;">Год</th>
+                                {% if current_user.role != 'user2' %}
+                                <th style="width: 100px;">Цена</th>
+                                {% endif %}
+                                <th style="width: 70px;">План</th>
+                                <th class="text-center">Ост.</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in order.items %}
+                            <tr class="item-row" data-plant="{{ item.plant_id }}" data-size="{{ item.size_id }}" data-current-year="{{ item.year }}">
+                                <td class="align-middle text-center td-truck" data-label="Отгрузить">
+                                    {% if order.status != 'canceled' %}
+                                        {% if (item.quantity - item.shipped_quantity) > 0 %}
+                                        <button type="button" class="btn btn-success btn-sm" title="Отгрузить" onclick="showShipModal({{ item.id }}, {{ item.quantity - item.shipped_quantity }})">
+                                            <i class="fas fa-truck"></i>
+                                        </button>
+                                        {% endif %}
+                                    {% endif %}
+                                </td>
+                                <td class="align-middle td-product" data-label="Товар">
+                                    {{ item.plant.name }} <br> 
+                                    <span class="badge bg-secondary text-light mt-1">{{ item.size.name }}</span>
+                                    <input type="hidden" name="item_id[]" value="{{ item.id }}">
+                                </td>
+                                <td class="align-middle td-field" data-label="Поле">
+                                    {% if order.status != 'canceled' and current_user.role != 'user2' %}
+                                    <div class="d-none d-md-block">
+                                        <select name="field_id[]" class="form-select form-select-sm field-select select-search" onchange="updateRowBatchDetails(this)">
+                                            {% for f in fields %}
+                                            <option value="{{ f.id }}" {% if f.id == item.field_id %}selected{% endif %}>{{ f.name }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <div class="d-md-none text-end">{{ item.field.name }}</div>
+                                    {% else %}{{ item.field.name }}{% endif %}
+                                </td>
+                                <td class="align-middle td-year" data-label="Год">
+                                    {% if order.status != 'canceled' and current_user.role != 'user2' %}
+                                    <div class="d-none d-md-block">
+                                        <select name="year[]" class="form-select form-select-sm year-select" required>
+                                            <option value="{{ item.year }}" selected>{{ item.year }}</option>
+                                        </select>
+                                    </div>
+                                    <div class="d-md-none text-end">{{ item.year }}</div>
+                                    {% else %}{{ item.year }}{% endif %}
+                                </td>
+                                {% if current_user.role != 'user2' %}
+                                <td class="align-middle td-price" data-label="Цена">
+                                    {% if order.status != 'canceled' %}
+                                    <div class="d-none d-md-block">
+                                        <input type="number" step="0.01" name="price[]" value="{{ item.price }}" class="form-control form-control-sm text-end p-1">
+                                    </div>
+                                    <div class="d-md-none text-end">{{ item.price|money }}</div>
+                                    {% else %}{{ item.price|money }}{% endif %}
+                                </td>
+                                {% endif %}
+                                <td class="align-middle td-plan" data-label="План">
+                                    {% if order.status != 'canceled' and current_user.role != 'user2' %}
+                                    <div class="d-none d-md-block">
+                                        <input type="number" name="quantity[]" value="{{ item.quantity }}" class="form-control form-control-sm text-center p-1">
+                                    </div>
+                                    <div class="d-md-none text-end fw-bold">{{ item.quantity }}</div>
+                                    {% else %}{{ item.quantity }}{% endif %}
+                                </td>
+                                <td class="align-middle text-center fw-bold text-primary td-ost" data-label="Ост.">{{ item.quantity - item.shipped_quantity }}</td>
+                                <td class="align-middle text-center td-actions d-none d-md-table-cell" data-label="Удалить">
+                                    {% if order.status != 'canceled' %}
+                                        {% if item.shipped_quantity == 0 and current_user.role != 'user2' %}
+                                        <button type="button" class="btn btn-outline-danger btn-sm" title="Удалить" onclick="deleteItem({{ item.id }})">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                        {% endif %}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if order.status != 'canceled' and order.items and current_user.role != 'user2' %}
+                <div class="p-2 bg-light text-end border-top">
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-save me-1"></i> Сохранить изменения</button>
+                </div>
+                {% endif %}
+                </form>
+            </div>
+        </div>
+
+        <!-- НОВЫЙ БЛОК: ОТЧЕТ ОБ ОТГРУЗКЕ В ТЕЛЕГРАМ -->
+        {% if order.items and current_user.role != 'user2' %}
+        <div class="card mt-3 shadow-sm border-success">
+            <div class="card-header bg-success text-white fw-bold d-flex justify-content-between align-items-center py-2">
+                <span><i class="fab fa-telegram-plane me-1"></i> Отправить отчет об отгрузке</span>
+            </div>
+            <div class="card-body bg-light p-3">
+                <form method="POST" action="{{ url_for('orders.send_shipment_report', order_id=order.id) }}" enctype="multipart/form-data" hx-boost="false" onsubmit="showShipmentOverlay()">
+                    <input type="hidden" name="return_to" value="{{ return_to or '' }}">
+                    <div class="row">
+                        <div class="col-md-6 mb-2">
+                            <label class="form-label small fw-bold text-dark"><i class="fas fa-camera text-primary"></i> Фото с погрузки</label>
+                            
+                            <input type="file" name="photos" id="shipmentPhotosInput" class="d-none" multiple accept="image/*">
+                            
+                            <button type="button" class="btn btn-outline-primary w-100 py-2 mb-2 fw-bold" onclick="document.getElementById('shipmentPhotosInput').click()" style="border-style: dashed; border-width: 2px; border-radius: 8px; font-size: 13px;">
+                                <i class="fas fa-camera mb-1"></i><br>
+                                Добавить фото
+                            </button>
+                            
+                            <div id="shipmentPhotosPreview" class="d-flex flex-wrap gap-2 mb-2"></div>
+                        </div>
+                        <div class="col-md-6 mb-2">
+                            <label class="form-label small fw-bold text-dark"><i class="fas fa-comment text-warning"></i> Комментарий к отчету (необязательно)</label>
+                            <input type="text" name="comment" class="form-control form-control-sm" placeholder="Например: Машина уехала">
+                        </div>
+                    </div>
+                    <button type="submit" id="submitShipmentBtn" class="btn btn-success btn-sm w-100 fw-bold mt-2"><i class="fas fa-paper-plane"></i> Отправить отчет в группу (Orders)</button>
+                    <small class="text-muted d-block mt-1 text-center">Отчет будет содержать текущие данные по заказу (отгружено/план) и прикрепленные фото.</small>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal fade" id="shipModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <form id="shipForm" method="POST" action="{{ url_for('orders.order_ship', order_id=order.id) }}">
+          <input type="hidden" name="return_to" value="{{ return_to or '' }}">
+          <div class="modal-header bg-primary text-white py-2">
+            <h6 class="modal-title">Отгрузка</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" name="item_id" id="shipItemId">
+            <div class="mb-2">
+                <label>Количество</label>
+                <input type="number" name="quantity" id="shipQty" class="form-control" required min="1">
+                <small class="text-muted">Доступно: <span id="shipMax"></span></small>
+            </div>
+          </div>
+          <div class="modal-footer py-1">
+            <button type="submit" class="btn btn-primary btn-sm w-100">Провести</button>
+          </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% if current_user.role != 'user2' %}
+<div class="modal fade" id="addItemModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form method="POST">
+            <div class="modal-header bg-success text-white">
+              <h6 class="modal-title">Добавить позицию</h6>
+              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <input type="hidden" name="add_new_item" value="1">
+              <div class="mb-2">
+                  <label>Растение</label>
+                  <select name="plant" class="form-select form-select-sm select-search" required>
+                      <option value="" selected disabled>...</option>
+                      {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                  </select>
+              </div>
+              <div class="row">
+                  <div class="col-6 mb-2">
+                      <label>Размер</label>
+                      <select name="size" class="form-select form-select-sm select-search" required>
+                          <option value="" selected disabled>...</option>
+                          {% for s in sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                      </select>
+                  </div>
+                  <div class="col-6 mb-2">
+                      <label>Поле (Склад)</label>
+                      <select name="field" class="form-select form-select-sm select-search" required>
+                          <option value="" selected disabled>...</option>
+                          {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                      </select>
+                  </div>
+              </div>
+              <div class="mb-2">
+                  <label>Год (Партия)</label>
+                  <select name="year" id="modalYearSelect" class="form-select form-select-sm" required>
+                      <option disabled selected>Выберите параметры выше...</option>
+                  </select>
+              </div>
+              <div class="mb-2">
+                  <label>Количество</label>
+                  <input type="number" name="quantity" class="form-control" required min="1" value="1">
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="submit" class="btn btn-success">Добавить в заказ</button>
+            </div>
+        </form>
+      </div>
+    </div>
+  </div>
+<form id="deleteForm" method="POST" style="display:none;">
+    <input type="hidden" name="delete_item" value="1">
+    <input type="hidden" name="item_id" id="deleteItemId">
+</form>
+{% endif %}
+
+{% if current_user.role in ['admin', 'executive', 'user'] %}
+<div class="modal fade" id="editPaymentModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <form method="POST" hx-boost="false">
+          <div class="modal-header bg-warning text-dark py-2">
+            <h6 class="modal-title">Редактирование оплаты</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" name="edit_payment" value="1">
+            <input type="hidden" name="payment_id" id="editPaymentId">
+            <div class="mb-2">
+                <label>Дата</label>
+                <input type="date" name="date" id="editPaymentDate" class="form-control form-control-sm" required>
+            </div>
+            <div class="mb-2">
+                <label>Сумма</label>
+                <input type="number" step="0.01" name="amount" id="editPaymentAmount" class="form-control form-control-sm" required>
+            </div>
+            <div class="mb-2">
+                <label>Тип</label>
+                <select name="payment_type" id="editPaymentType" class="form-select form-select-sm" required>
+                    <option value="cashless">Безнал</option>
+                    <option value="cash">Нал</option>
+                    {% if current_user.role in ['admin', 'executive'] %}
+                    <option value="barter">Взаимозачет</option>
+                    {% endif %}
+                </select>
+            </div>
+            <div class="mb-2">
+                <label>Комментарий</label>
+                <input type="text" name="comment" id="editPaymentComment" class="form-control form-control-sm">
+            </div>
+          </div>
+          <div class="modal-footer py-1">
+            <button type="submit" class="btn btn-warning btn-sm w-100 fw-bold">Сохранить</button>
+          </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function showShipModal(itemId, maxQty) {
+        document.getElementById('shipItemId').value = itemId;
+        document.getElementById('shipQty').value = maxQty;
+        document.getElementById('shipQty').max = maxQty;
+        document.getElementById('shipMax').innerText = maxQty;
+        new bootstrap.Modal(document.getElementById('shipModal')).show();
+    }
+    
+    document.getElementById('shipForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        const btn = this.querySelector('button[type="submit"]');
+        const originalText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Проведение...';
+        
+        try {
+            const response = await fetch(this.action, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            });
+            const data = await response.json();
+            
+            if (data.status === 'ok') {
+                // Обновляем UI
+                const itemId = document.getElementById('shipItemId').value;
+                const row = document.querySelector(`.item-row input[name="item_id[]"][value="${itemId}"]`).closest('.item-row');
+                if (row) {
+                    const ostCell = row.querySelector('.td-ost');
+                    const btnShip = row.querySelector('.td-truck button');
+                    
+                    const newOst = data.plan - data.shipped;
+                    if (ostCell) ostCell.innerText = newOst;
+                    
+                    if (newOst <= 0 && btnShip) {
+                        btnShip.remove();
+                    } else if (btnShip) {
+                        btnShip.setAttribute('onclick', `showShipModal(${itemId}, ${newOst})`);
+                    }
+                }
+                bootstrap.Modal.getInstance(document.getElementById('shipModal')).hide();
+            } else {
+                alert(data.message || 'Ошибка при отгрузке');
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Ошибка сети при отгрузке');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    });
+
+    function deleteItem(itemId) {
+        if(confirm('Удалить эту позицию из заказа?')) {
+            document.getElementById('deleteItemId').value = itemId;
+            document.getElementById('deleteForm').submit();
+        }
+    }
+
+    $(document).on('select2:select', '#addItemModal select', function(e) {
+        updateNewItemModal();
+    });
+
+    $(document).on('select2:select', '.item-row .field-select', function(e) {
+        updateRowBatchDetails(this);
+    });
+
+    async function updateNewItemModal() {
+        const modal = $('#addItemModal');
+        const p = modal.find('[name="plant"]').val();
+        const s = modal.find('[name="size"]').val();
+        const f = modal.find('[name="field"]').val();
+        const yearSel = document.getElementById('modalYearSelect');
+        
+        if(p && s && f) {
+            try {
+                const res = await fetch(`/api/stock_info?plant=${p}&size=${s}&field=${f}`);
+                const data = await res.json();
+                
+                yearSel.innerHTML = '';
+                if (data.batches && data.batches.length > 0) {
+                    data.batches.forEach(b => {
+                        const opt = document.createElement('option');
+                        opt.value = b.year;
+                        opt.innerText = `${b.year} (Ост: ${b.free})`;
+                        yearSel.appendChild(opt);
+                    });
+                } else {
+                    yearSel.innerHTML = '<option disabled>Нет в наличии</option>';
+                }
+            } catch(e) { console.error(e); }
+        }
+    }
+
+    async function updateRowBatchDetails(fieldSelect) {
+        const row = fieldSelect.closest('tr');
+        const p = row.dataset.plant;
+        const s = row.dataset.size;
+        const f = $(fieldSelect).val();
+        const yearSel = row.querySelector('.year-select');
+        const currentYear = row.dataset.currentYear;
+
+        if(p && s && f) {
+             try {
+                const res = await fetch(`/api/stock_info?plant=${p}&size=${s}&field=${f}`);
+                const data = await res.json();
+                
+                yearSel.innerHTML = '';
+                let foundCurrent = false;
+
+                if (data.batches && data.batches.length > 0) {
+                    data.batches.forEach(b => {
+                        const opt = document.createElement('option');
+                        opt.value = b.year;
+                        opt.innerText = `${b.year} (Ост: ${b.free})`;
+                        if (b.year == currentYear) {
+                            opt.selected = true;
+                            foundCurrent = true;
+                        }
+                        yearSel.appendChild(opt);
+                    });
+                    
+                    if (!foundCurrent && data.batches.length > 0) {
+                         yearSel.value = data.batches[0].year;
+                    }
+                } else {
+                    yearSel.innerHTML = '<option disabled>Нет остатков</option>';
+                }
+            } catch(e) { console.error(e); }
+        }
+    }
+
+    {% if current_user.role in ['admin', 'executive', 'user'] %}
+    function showEditPaymentModal(id, date, amount, comment, payment_type) {
+        document.getElementById('editPaymentId').value = id;
+        document.getElementById('editPaymentDate').value = date;
+        document.getElementById('editPaymentAmount').value = amount;
+        document.getElementById('editPaymentComment').value = comment;
+        document.getElementById('editPaymentType').value = payment_type || 'cashless';
+        new bootstrap.Modal(document.getElementById('editPaymentModal')).show();
+    }
+    {% endif %}
+    // Автоматически добавляем hidden return_to ко всем POST формам, если он установлен
+    document.addEventListener('DOMContentLoaded', function() {
+        setupPhotoUploader('shipmentPhotosInput', 'shipmentPhotosPreview');
+        
+        const returnTo = "{{ return_to|e }}";
+        if (!returnTo) return;
+        document.querySelectorAll('form[method="post"]').forEach(form => {
+            if (!form.querySelector('input[name="return_to"]')) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'return_to';
+                input.value = returnTo;
+                form.appendChild(input);
+            }
+        });
+    });
+    document.addEventListener('htmx:afterSwap', function() {
+        setupPhotoUploader('shipmentPhotosInput', 'shipmentPhotosPreview');
+    });
+</script>
+
+<!-- Оверлей загрузки (Скрыт по умолчанию) -->
+<div id="shipmentLoadingOverlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; color: white; backdrop-filter: blur(3px);">
+    <i class="fas fa-spinner fa-spin fa-4x mb-3 text-success"></i>
+    <h5 class="fw-bold text-center px-4">Отправляем отчет и фото в Telegram...<br><small class="fw-normal mt-2 d-block text-white-50">Пожалуйста, подождите ⏳</small></h5>
+</div>
+
+<script>
+    function showShipmentOverlay() {
+        document.getElementById('shipmentLoadingOverlay').style.display = 'flex';
+        const btn = document.getElementById('submitShipmentBtn');
+        if(btn) {
+            // Используем setTimeout, чтобы браузер не отменил отправку формы из-за отключения кнопки
+            setTimeout(() => {
+                btn.disabled = true;
+                btn.classList.replace('btn-success', 'btn-secondary');
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i> Отправка... ⏳';
+            }, 50);
+        }
+    }
+
+    // Фикс для BFCache (Safari/iOS/MIUI) - если пользователь нажал "Назад", 
+    // нужно убрать оверлей и разблокировать кнопку
+    window.addEventListener('pageshow', function(event) {
+        if (event.persisted) {
+            document.getElementById('shipmentLoadingOverlay').style.display = 'none';
+            const btn = document.getElementById('submitShipmentBtn');
+            if(btn) {
+                btn.disabled = false;
+                btn.classList.replace('btn-secondary', 'btn-success');
+                btn.innerHTML = '<i class="fas fa-paper-plane"></i> Отправить отчет в группу (Orders)';
+            }
+        }
+    });
+</script>
+{% endblock %}

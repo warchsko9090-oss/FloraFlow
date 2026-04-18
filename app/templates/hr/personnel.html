@@ -1,0 +1,962 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- СТИЛИ -->
+<style>
+    /* ПК СТИЛИ (Оригинальные) */
+    .table-hr th { background: #E0F7FA; text-align: center; border: 1px solid #B2EBF2; vertical-align: middle; font-size: 11px; }
+    .table-hr td { vertical-align: middle; border: 1px solid #dee2e6; font-size: 12px; }
+    .is-salary { color: #d63384; font-weight: bold; }
+    .cell-day { cursor: pointer; text-align: center; width: 30px; font-size: 11px; }
+    .cell-day:hover { background-color: #e3f2fd; }
+    .day-filled { background-color: #e8f5e9; font-weight: bold; color: #2e7d32; }
+    .detail-row { font-size: 10px; color: #555; background-color: #fdfdfe; }
+    .detail-label { text-align: right; font-weight: bold; font-style: italic; color: #777; position: sticky; left: 0; z-index: 4; }
+    .toggle-btn { cursor: pointer; color: #0d6efd; margin-right: 5px; }
+
+    /* МОБИЛЬНЫЕ СТИЛИ */
+    .date-navigator { background: #fff; border-radius: 12px; padding: 10px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 5px rgba(0,0,0,0.05); border: 1px solid #e0e0e0; }
+    .date-display { text-align: center; line-height: 1.2; }
+    .date-day { font-size: 16px; font-weight: bold; color: #2E7D32; }
+    .emp-card { cursor: pointer; border: 1px solid #eee; padding: 10px; margin-bottom: 8px; border-radius: 8px; }
+    .hour-badge { display: inline-block; min-width: 30px; text-align: center; background: #f1f3f5; padding: 2px 6px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-left: 5px; }
+    .hour-filled { background: #E8F5E9; color: #2E7D32; border: 1px solid #C8E6C9; }
+
+    /* МОБИЛЬНЫЕ СТИЛИ ДЛЯ СВОДКИ */
+    .hr-mobile-card {
+        background: white; border: 1px solid #e0e0e0; border-radius: 12px;
+        margin-bottom: 12px; padding: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.03);
+    }
+    .hr-mobile-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #f0f0f0; }
+    .hr-stat-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+    .hr-label { color: #888; }
+    .hr-val { font-weight: 600; color: #333; }
+</style>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-users-cog"></i>
+            Кадры: {{ month_names[month] }} {{ year }}
+        </div>
+        <div class="page-subtitle">
+            Табель, сводная ведомость и настройки зарплатного фонда по сотрудникам.
+        </div>
+    </div>
+    
+    <div class="page-actions">
+        <div class="d-none d-md-block">
+            <a href="{{ url_for('hr.personnel', year=year, month=month, tab=active_tab, export='excel') }}" hx-boost="false" target="_blank" class="btn btn-success btn-sm"><i class="fas fa-file-excel"></i> Excel</a>
+        </div>
+        {% if current_user.role == 'admin' %}
+        <!-- Кнопки только для ПК (на телефоне места нет) -->
+        <div class="d-none d-md-block">
+            <button class="btn btn-danger btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#bulkPayModal"><i class="fas fa-sack-dollar"></i> Котловая ЗП</button>
+            <button class="btn btn-warning btn-sm" data-bs-toggle="modal" data-bs-target="#ratesModal"><i class="fas fa-coins"></i> Ставки</button>
+            <button class="btn btn-primary btn-sm" onclick="openEmpModal()"><i class="fas fa-user-plus"></i> Сотрудник</button>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Фильтры (ОБЩИЕ) -->
+<div class="filter-panel">
+    <form method="GET" class="d-flex gap-2 align-items-center w-100 justify-content-between">
+        <input type="hidden" name="tab" value="{{ active_tab }}">
+        <div class="d-flex gap-2">
+            <select name="month" class="form-select form-select-sm" style="width: 120px;" onchange="this.form.submit()">
+                {% for m_num, m_name in month_names.items() %}
+                <option value="{{ m_num }}" {% if m_num == month %}selected{% endif %}>{{ m_name }}</option>
+                {% endfor %}
+            </select>
+            <select name="year" class="form-select form-select-sm" style="width: 80px;" onchange="this.form.submit()">
+                {% for y in range(2023, 2030) %}
+                <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <!-- Кнопка обновления -->
+        <button class="btn btn-outline-primary btn-sm"><i class="fas fa-sync"></i></button>
+    </form>
+</div>
+
+<!-- ТАБЫ (Адаптивные) -->
+<ul class="nav nav-tabs mb-3 flex-nowrap text-nowrap overflow-auto" style="scrollbar-width: none; -ms-overflow-style: none;">
+  <li class="nav-item"><a class="nav-link {% if active_tab == 'summary' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='summary') }}">Сводная ведомость</a></li>
+  <li class="nav-item"><a class="nav-link {% if active_tab == 'timesheet' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='timesheet') }}">Табель (Календарь)</a></li>
+  {% if current_user.role == 'admin' %}
+  <li class="nav-item"><a class="nav-link {% if active_tab == 'settings' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='settings') }}">Настройки (ЗП)</a></li>
+  {% endif %}
+</ul>
+
+<!-- ========================================== -->
+<!--           ВКЛАДКА: СВОД                    -->
+<!-- ========================================== -->
+{% if active_tab == 'summary' %}
+<div class="d-none d-md-block">
+    <div class="table-responsive">
+        <table class="table table-sm table-hr table-hover bg-white">
+            <thead>
+                <tr>
+                    <th rowspan="2">Сотрудник / Роль</th>
+                    <th colspan="5">Отработано часов / Дней</th>
+                    <th rowspan="2" class="bg-warning bg-opacity-10">Итого<br>Заработано</th>
+                    <th colspan="3">Выплаты (из Расходов и Корр.)</th>
+                    <th rowspan="2" class="bg-danger bg-opacity-10">Долг (Остаток)</th>
+                    <th rowspan="2">Действия</th>
+                </tr>
+                <tr>
+                    <th>Обычный</th><th>Обыч.Пер.</th><th>Копка.</th><th>Копка.Пер.</th><th class="text-info" title="Оплачиваемые выходные (до 3-х в месяц по 10ч)">Опл.Вых</th>
+                    <th>Офиц.</th><th>Неофиц.</th><th>Прочее</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in data %}
+                <tr>
+                    <td>
+                        <span class="fw-bold {% if row.emp.is_salary %}is-salary{% endif %}">{{ row.emp.name }}</span>
+                        <br><span class="text-muted small">{{ roles[row.emp.role] }}</span>
+                    </td>
+                    <td class="text-center text-muted">{{ row.hours.norm }}</td>
+                    <td class="text-center text-muted">{{ row.hours.norm_over }}</td>
+                    <td class="text-center text-muted">{{ row.hours.spec }}</td>
+                    <td class="text-center text-muted">{{ row.hours.spec_over }}</td>
+                    <td class="text-center text-info fw-bold" title="{{ row.paid_day_offs }} дней по 10ч">
+                        {{ row.paid_day_offs }} дн.
+                        {% if row.paid_day_offs > 0 %}<br><small>({{ row.paid_day_offs * 10 }} ч)</small>{% endif %}
+                    </td>
+                    <td class="text-end bg-warning bg-opacity-10 fw-bold">
+                        {{ row.earned|money }}
+                        {% if row.emp.is_salary %}
+                            <br><small class="text-muted fw-normal" style="font-size: 9px;">(Оклад)</small>
+                        {% elif row.emp.role == 'mechanic' %}
+                            <br><small class="text-muted fw-normal" style="font-size: 9px;">({{ row.hours.worked_days }} дн. по ставке)</small>
+                        {% endif %}
+                    </td>
+                    <td class="text-end text-success">{{ row.paid_official|money }}</td>
+                    <td class="text-end text-success">{{ row.paid_unofficial|money }}</td>
+                    <td class="text-end text-muted">{{ row.other_adjust|money }}</td>
+                    <td class="text-end bg-danger bg-opacity-10 fw-bold {% if row.balance > 0 %}text-danger{% else %}text-success{% endif %}">
+                        {{ row.balance|money }}
+                    </td>
+                    <td class="text-center">
+                        {% if current_user.role not in ['user2', 'brigadier'] %}
+                        <button class="btn btn-success btn-xs me-1" title="Выплатить ЗП" onclick="openPayModal({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}', {{ row.balance }})"><i class="fas fa-wallet"></i></button>
+                        <button class="btn btn-outline-secondary btn-xs" onclick="openAdjModal({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}')"><i class="fas fa-sliders-h"></i></button>
+                        {% endif %}
+                        
+                        {% if current_user.role == 'admin' %}
+                        <button class="btn btn-link text-secondary btn-xs" onclick="editEmployee({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}', {{ 'true' if row.emp.is_salary else 'false' }}, {{ row.emp.fixed_salary }}, '{{ row.emp.role }}', {{ 'true' if row.emp.is_active else 'false' }})"><i class="fas fa-cog"></i></button>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Удалить сотрудника? Вся история часов и выплат будет удалена.');">
+                            <input type="hidden" name="action" value="delete_employee">
+                            <input type="hidden" name="employee_id" value="{{ row.emp.id }}">
+                            <button class="btn btn-link text-danger btn-xs"><i class="fas fa-trash"></i></button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ВКЛАДКА: СВОД (МОБИЛЬНЫЙ) -->
+<div class="d-md-none">
+    {% for row in data %}
+    <div class="hr-mobile-card">
+        <div class="hr-mobile-header">
+            <div>
+                <div class="fw-bold text-dark">{{ row.emp.name }}</div>
+                <div class="small text-muted">{{ roles[row.emp.role] }}</div>
+            </div>
+            <div class="d-flex align-items-center gap-1">
+                {% if current_user.role not in ['user2', 'brigadier'] %}
+                <button class="btn btn-success btn-sm rounded-circle" title="Выплатить ЗП" onclick="openPayModal({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}', {{ row.balance }})"><i class="fas fa-wallet"></i></button>
+                <button class="btn btn-outline-secondary btn-sm rounded-circle" onclick="openAdjModal({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}')"><i class="fas fa-sliders-h"></i></button>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="row g-2 mb-2">
+            <div class="col-6 bg-light p-2 rounded">
+                <div class="small text-muted">Часы (Обыч)</div>
+                <div class="fw-bold">{{ row.hours.norm }} <span class="text-danger small">({{ row.hours.norm_over }})</span></div>
+            </div>
+            <div class="col-6 bg-light p-2 rounded">
+                <div class="small text-muted">Часы (Спец)</div>
+                <div class="fw-bold text-primary">{{ row.hours.spec }} <span class="text-danger small">({{ row.hours.spec_over }})</span></div>
+            </div>
+        </div>
+        
+        {% if row.paid_day_offs > 0 %}
+        <div class="small text-end text-info fw-bold mb-2">
+            <i class="fas fa-umbrella-beach"></i> Оплач. выходные: {{ row.paid_day_offs }} дн. ({{ row.paid_day_offs * 10 }} ч)
+        </div>
+        {% endif %}
+
+        <div class="hr-stat-row mt-2 pt-2 border-top border-dashed">
+                <span class="hr-label">Заработано:{% if row.emp.is_salary %} <small class="text-muted">(Оклад)</small>{% elif row.emp.role == 'mechanic' %} <small class="text-muted">({{ row.hours.worked_days }} дн.)</small>{% endif %}</span>
+                <span class="hr-val">{{ row.earned|money }}</span>
+        </div>
+        <div class="hr-stat-row">
+            <span class="hr-label">Выплачено:</span>
+            <span class="hr-val text-success">{{ (row.paid_official + row.paid_unofficial)|money }}</span>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top">
+            <span class="fw-bold small text-uppercase">Остаток:</span>
+            <span class="fw-bold fs-6 {% if row.balance > 0 %}text-danger{% else %}text-success{% endif %}">{{ row.balance|money }}</span>
+        </div>
+    </div>
+    {% endfor %}
+    
+    <!-- Итого карточка -->
+    <div class="card bg-dark text-white p-3 shadow">
+        <div class="d-flex justify-content-between">
+            <span>Итого к выплате:</span>
+            <span class="fw-bold">{{ summary.balance|money }}</span>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- ВКЛАДКА: ТАБЕЛЬ (ПК - ИСХОДНЫЙ ВАРИАНТ) -->
+{% if active_tab == 'timesheet' %}
+<div class="d-none d-md-block">
+<div class="table-responsive">
+    <table class="table table-bordered table-sm bg-white" style="font-size: 11px;">
+        <thead>
+            <tr class="bg-light">
+                <th style="width: 180px; position: sticky; left: 0; background: #f8f9fa; z-index: 5;">Сотрудник</th>
+                {% for d in days_in_month %}
+                <th class="text-center p-0" style="min-width: 25px;">{{ d }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in timesheet_data %}
+            <tr>
+                <td style="position: sticky; left: 0; background: white; z-index: 5;" class="fw-bold text-truncate border-end">
+                    <i class="fas fa-plus-square toggle-btn" onclick="toggleTimesheetDetails({{ row.emp.id }}, this)"></i>
+                    {{ row.emp.name }}
+                </td>
+                {% for d in days_in_month %}
+                {% set day_data = row.days[d] %}
+                <td class="cell-day {% if day_data.total > 0 or day_data.is_day_off %}day-filled{% endif %}"
+                    id="cell_{{ row.emp.id }}_{{ d }}"
+                    onclick="openHoursModalPC({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}', {{ d }})">
+                    {% if day_data.is_day_off %}
+                        {% if day_data.is_paid %}
+                            <span class="text-success fw-bold" title="Оплачиваемый выходной (10ч)">В+</span>
+                        {% else %}
+                            <span class="text-muted fw-bold">В</span>
+                        {% endif %}
+                    {% else %}
+                        {{ day_data.total|int if day_data.total > 0 else '' }}
+                    {% endif %}
+                </td>
+                {% endfor %}
+            </tr>
+            <!-- Скрытые строки -->
+            <tr class="detail-row detail-{{ row.emp.id }}" style="display:none;"><td class="detail-label">Обычные</td>{% for d in days_in_month %}<td class="text-center">{{ row.days[d].obj.hours_norm|int if row.days[d].obj and row.days[d].obj.hours_norm > 0 else '' }}</td>{% endfor %}</tr>
+            <tr class="detail-row detail-{{ row.emp.id }}" style="display:none;"><td class="detail-label text-danger">Перер (О)</td>{% for d in days_in_month %}<td class="text-center text-danger">{{ row.days[d].obj.hours_norm_over|int if row.days[d].obj and row.days[d].obj.hours_norm_over > 0 else '' }}</td>{% endfor %}</tr>
+            <tr class="detail-row detail-{{ row.emp.id }}" style="display:none;"><td class="detail-label text-success">Спец</td>{% for d in days_in_month %}<td class="text-center text-success">{{ row.days[d].obj.hours_spec|int if row.days[d].obj and row.days[d].obj.hours_spec > 0 else '' }}</td>{% endfor %}</tr>
+            <tr class="detail-row detail-{{ row.emp.id }}" style="display:none;"><td class="detail-label text-danger">Перер (С)</td>{% for d in days_in_month %}<td class="text-center text-danger">{{ row.days[d].obj.hours_spec_over|int if row.days[d].obj and row.days[d].obj.hours_spec_over > 0 else '' }}</td>{% endfor %}</tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+</div>
+{% endif %}
+
+<!-- ВКЛАДКА: НАСТРОЙКИ (ПК) -->
+{% if active_tab == 'settings' %}
+<div class="d-none d-md-block">
+<div class="row">
+    <div class="col-md-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-warning bg-opacity-25 fw-bold">Привязка статей расходов</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="action" value="save_settings">
+                    <div class="mb-3">
+                        <label class="form-label">Статья "ЗП Официальная"</label>
+                        <select name="official_item_id" class="form-select">
+                            <option value="0">- Не выбрано -</option>
+                            {% for i in budget_items %}
+                            <option value="{{ i.id }}" {% if settings.off == i.id %}selected{% endif %}>{{ i.code }} {{ i.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Статья "ЗП Неофициальная"</label>
+                        <select name="unofficial_item_id" class="form-select">
+                            <option value="0">- Не выбрано -</option>
+                            {% for i in budget_items %}
+                            <option value="{{ i.id }}" {% if settings.unoff == i.id %}selected{% endif %}>{{ i.code }} {{ i.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button class="btn btn-primary">Сохранить настройки</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+</div>
+{% endif %}
+
+
+<!-- ========================================== -->
+<!--           ВИД ДЛЯ ТЕЛЕФОНА (CARDS)         -->
+<!-- ========================================== -->
+{% if active_tab == 'timesheet' %}
+<div class="d-md-none">
+    <!-- Мобильный навигатор даты -->
+    <div class="date-navigator">
+        <button class="btn btn-light btn-sm rounded-circle shadow-sm" onclick="changeDay(-1)"><i class="fas fa-chevron-left"></i></button>
+        <div class="date-display">
+            <div class="date-day" id="displayDay"></div>
+            <div class="small text-muted" id="displayMY">{{ month_names[month] }} {{ year }}</div>
+        </div>
+        <button class="btn btn-light btn-sm rounded-circle shadow-sm" onclick="changeDay(1)"><i class="fas fa-chevron-right"></i></button>
+    </div>
+
+    <!-- Мобильный список сотрудников -->
+    <div id="mobileEmployeeList"></div>
+
+    <!-- Кнопка "Сохранить" (Отправка отчета в ТГ за выбранный день) -->
+    <div class="mt-3 mb-5 px-1">
+        <form method="POST" id="sendReportForm" enctype="multipart/form-data" hx-boost="false">
+            <input type="hidden" name="action" value="send_daily_report">
+            <input type="hidden" name="date" id="reportDateInput">
+            
+            <div class="mb-3 bg-white p-3 rounded shadow-sm border">
+                <label class="form-label fw-bold text-dark"><i class="fas fa-camera text-primary"></i> Фотографии работ (можно несколько)</label>
+                
+                <input type="file" name="photos" id="hrPhotosInput" class="d-none" multiple accept="image/*">
+                
+                <button type="button" class="btn btn-outline-primary w-100 py-3 mb-2 fw-bold" onclick="document.getElementById('hrPhotosInput').click()" style="border-style: dashed; border-width: 2px; border-radius: 12px;">
+                    <i class="fas fa-camera fa-lg mb-1"></i><br>
+                    Сделать фото или выбрать
+                </button>
+                
+                <div id="hrPhotosPreview" class="d-flex flex-wrap gap-2 mb-3"></div>
+                
+                <label class="form-label fw-bold text-dark"><i class="fas fa-edit text-warning"></i> Отчет о проделанной работе</label>
+                <textarea name="daily_report_text" class="form-control form-control-sm" rows="3" placeholder="Что делали: пололи, стригли, грузили и т.д."></textarea>
+            </div>
+
+            <button type="button" id="submitReportBtn" class="btn btn-success w-100 py-3 fw-bold shadow-sm" onclick="submitDailyReport()" style="border-radius: 12px; font-size: 16px;">
+                <i class="fas fa-check-circle me-2"></i> Сохранить
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Оверлей загрузки (по умолчанию скрыт) -->
+<div id="loadingOverlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; color: white; backdrop-filter: blur(3px);">
+    <i class="fas fa-spinner fa-spin fa-4x mb-3 text-success"></i>
+    <h5 class="fw-bold text-center px-4">Отправляем отчет и фото в Telegram...<br><small class="fw-normal mt-2 d-block text-white-50">Пожалуйста, подождите ⏳</small></h5>
+</div>
+
+{% endif %}
+
+<!-- ========================================== -->
+<!--           МОДАЛЬНЫЕ ОКНА (MODALS)          -->
+<!-- ========================================== -->
+
+<!-- Ввод часов (АДАПТИВНОЕ) -->
+<div class="modal fade" id="hoursModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content">
+      <form id="hoursForm" method="POST">
+        <input type="hidden" name="action" value="add_hours">
+        <input type="hidden" name="employee_id" id="hEmpId">
+        <input type="hidden" name="date" id="hDateInput">
+        <div class="modal-header bg-success text-white py-2">
+            <h6 class="modal-title" id="hTitle">Ввод часов</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <p class="text-center fw-bold" id="hDateDisplay"></p>
+            <div class="row g-2">
+                <div class="col-6"><label class="small">Обыч.</label><input type="number" step="0.5" name="hours_norm" id="hNorm" class="form-control"></div>
+                <div class="col-6"><label class="small text-danger">О.Пер.</label><input type="number" step="0.5" name="hours_norm_over" id="hNormOver" class="form-control"></div>
+                <div class="col-6"><label class="small text-primary">Спец</label><input type="number" step="0.5" name="hours_spec" id="hSpec" class="form-control"></div>
+                <div class="col-6"><label class="small text-danger">С.Пер.</label><input type="number" step="0.5" name="hours_spec_over" id="hSpecOver" class="form-control"></div>
+            </div>
+            <div class="form-check mt-3 mb-1 border-top pt-3">
+                <input class="form-check-input" type="checkbox" id="hIsDayOff" name="is_day_off" onchange="toggleHoursInputs()">
+                <label class="form-check-label fw-bold text-success" for="hIsDayOff"><i class="fas fa-umbrella-beach me-1"></i>Выходной день (В)</label>
+            </div>
+            <p class="small text-muted mb-0" style="font-size: 10px;">*Если отметить выходной, введенные выше часы будут проигнорированы.</p>
+        </div>
+        <div class="modal-footer py-2">
+            <button type="submit" class="btn btn-success w-100">Сохранить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Карточка сотрудника -->
+{% if current_user.role == 'admin' %}
+<div class="modal fade" id="empModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST">
+        <input type="hidden" name="action" value="save_employee">
+        <input type="hidden" name="id" id="empId">
+        <div class="modal-header bg-primary text-white py-2">
+            <h6 class="modal-title">Карточка сотрудника</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <div class="mb-2">
+                <label>ФИО</label>
+                <input type="text" name="name" id="empName" class="form-control" required>
+            </div>
+            <div class="mb-2">
+                <label>Роль</label>
+                <select name="role" id="empRole" class="form-select">
+                    {% for k, v in roles.items() %}
+                    <option value="{{ k }}">{{ v }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" name="is_salary" id="empIsSalary">
+                <label class="form-check-label fw-bold text-primary">Окладник (Ставка в месяц)</label>
+            </div>
+            <div class="mb-2">
+                <label>Оклад (₽)</label>
+                <input type="number" name="fixed_salary" id="empSalary" class="form-control" value="0">
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="is_active" id="empActive" checked>
+                <label class="form-check-label">Активен (Показывать в табеле)</label>
+            </div>
+        </div>
+        <div class="modal-footer py-1">
+            <button class="btn btn-primary w-100">Сохранить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Ставки -->
+<div class="modal fade" id="ratesModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form method="POST">
+        <input type="hidden" name="action" value="save_rates">
+        <input type="hidden" name="year" value="{{ year }}">
+        <div class="modal-header bg-warning py-2">
+            <h6 class="modal-title text-dark"><i class="fas fa-coins me-1"></i> Ставки {{ year }}</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <div class="row">
+                {% for role_code, role_name in roles.items() %}
+                <div class="col-md-4">
+                    <h6 class="text-primary border-bottom pb-1">{{ role_name }}</h6>
+                    {% for k, label in rate_labels.items() %}
+                    <div class="mb-2 row">
+                        <label class="col-8 col-form-label col-form-label-sm">{{ label }}</label>
+                        <div class="col-4">
+                            <input type="number" step="0.1" name="rate_{{ role_code }}_{{ k }}" value="{{ rates_map.get(role_code, {}).get(k, 0) }}" class="form-control form-control-sm text-end border-warning">
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="modal-footer py-1">
+            <button class="btn btn-warning w-100 fw-bold shadow-sm">Обновить все ставки</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Котловая ЗП -->
+<div class="modal fade" id="bulkPayModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST">
+        <input type="hidden" name="action" value="bulk_pay_brigade">
+        <div class="modal-header bg-danger text-white py-2">
+            <h6 class="modal-title"><i class="fas fa-sack-dollar me-1"></i> Котловая выплата (за {{ month_names[month] }} {{ year }})</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <div class="alert alert-danger py-2 small border-danger">
+                Система сама погасит долги рабочим за <b>{{ month_names[month] }} {{ year }}</b>, а остаток запишет на бригадира. 
+            </div>
+            <div class="mb-3">
+                <label class="form-label fw-bold">Общая сумма перевода (₽)</label>
+                <input type="number" step="0.01" name="total_amount" class="form-control form-control-lg text-danger fw-bold" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Получатель остатка (Бригадир)</label>
+                <select name="brigadier_id" class="form-select select-search" required style="width: 100%;">
+                    <option value="">- Выберите сотрудника -</option>
+                    {% for emp in employees %}
+                        <option value="{{ emp.id }}">{{ emp.name }} ({{ roles.get(emp.role, emp.role) }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="row g-2 mb-3">
+                <div class="col-6">
+                    <label class="form-label small">Дата перевода</label>
+                    <input type="date" name="payment_date" class="form-control" value="{{ today_str }}" required>
+                </div>
+                <div class="col-6">
+                    <label class="form-label small">Тип оплаты</label>
+                    <select name="payment_type" class="form-select">
+                        <option value="cashless">Безнал</option>
+                        <option value="cash">Нал</option>
+                    </select>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label small">Статья расходов (для реестра)</label>
+                <select name="budget_item_id" class="form-select" required>
+                    <option value="">- Выберите статью -</option>
+                    {% for i in budget_items %}
+                    <option value="{{ i.id }}" {% if settings.off == i.id or settings.unoff == i.id %}selected{% endif %}>{{ i.code }} {{ i.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="modal-footer py-1">
+            <button class="btn btn-danger w-100 fw-bold shadow-sm">Распределить ЗП</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Корректировка -->
+<div class="modal fade" id="adjModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <form method="POST">
+        <input type="hidden" name="action" value="add_adjustment">
+        <input type="hidden" name="employee_id" id="aEmpId">
+        <div class="modal-header bg-secondary text-white py-2">
+            <h6 class="modal-title">Коррекция баланса</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <p id="aTitle" class="fw-bold mb-2"></p>
+            <div class="mb-2">
+                <label>Дата</label>
+                <input type="date" name="date" class="form-control form-control-sm" required value="{{ '%04d-%02d-%02d' % (year, month, 15) }}">
+            </div>
+            <div class="mb-2">
+                <label>Сумма</label>
+                <input type="number" step="0.01" name="amount" class="form-control form-control-sm" placeholder="+/-" required>
+            </div>
+            <div class="mb-2">
+                <label>Комментарий (Причина)</label>
+                <input type="text" name="comment" class="form-control form-control-sm">
+            </div>
+        </div>
+        <div class="modal-footer py-1">
+            <button class="btn btn-secondary w-100">Сохранить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка Индивидуальной Выплаты ЗП (Доступна админам и user2) -->
+<div class="modal fade" id="payIndividualModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <form method="POST">
+        <input type="hidden" name="action" value="pay_individual">
+        <input type="hidden" name="employee_id" id="payEmpId">
+        
+        <div class="modal-header bg-success text-white py-2">
+            <h6 class="modal-title"><i class="fas fa-wallet me-1"></i> Выплата ЗП</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body bg-light">
+            <div class="text-center mb-3">
+                <span class="fw-bold d-block fs-6" id="payEmpName"></span>
+                <span class="badge bg-secondary">за {{ month_names[month] }} {{ year }}</span>
+            </div>
+            
+            <div class="mb-3 p-2 bg-white rounded border text-center shadow-sm">
+                <small class="text-muted d-block lh-1 mb-1 text-uppercase">Остаток долга:</small>
+                <span class="fw-bold fs-5 text-danger" id="payEmpDebt">0.00</span>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label small fw-bold">Сумма к выдаче (₽)</label>
+                <input type="number" step="0.01" name="amount" id="payAmountInput" class="form-control form-control-lg text-success fw-bold text-center border-success" required>
+            </div>
+
+            <div class="row g-2 mb-3">
+                <div class="col-6">
+                    <label class="form-label small">Дата перевода</label>
+                    <input type="date" name="payment_date" class="form-control form-control-sm" value="{{ today_str }}" required>
+                </div>
+                <div class="col-6">
+                    <label class="form-label small">Тип оплаты</label>
+                    <select name="payment_type" class="form-select form-select-sm">
+                        <option value="cashless">Безнал</option>
+                        <option value="cash">Нал</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Умный выбор статьи -->
+            <div class="mb-2">
+                <label class="form-label small fw-bold text-primary">Тип начисления</label>
+                <div class="btn-group w-100 shadow-sm" role="group">
+                    <input type="radio" class="btn-check" name="salary_type" id="st_unoff" autocomplete="off" checked onchange="autoSelectBudgetItem('unoff')">
+                    <label class="btn btn-outline-primary btn-sm" for="st_unoff">Неофиц.</label>
+
+                    <input type="radio" class="btn-check" name="salary_type" id="st_off" autocomplete="off" onchange="autoSelectBudgetItem('off')">
+                    <label class="btn btn-outline-primary btn-sm" for="st_off">Официальная</label>
+                </div>
+            </div>
+
+            <div class="mb-1">
+                <label class="form-label small text-muted">Статья расходов (Можно изменить вручную)</label>
+                <select name="budget_item_id" id="payBudgetItem" class="form-select form-select-sm" required>
+                    <option value="">- Выберите статью -</option>
+                    {% for i in budget_items %}
+                    <option value="{{ i.id }}">{{ i.code }} {{ i.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+        </div>
+        <div class="modal-footer py-1">
+            <button class="btn btn-success w-100 fw-bold shadow-sm">Провести выплату</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // === JS ДЛЯ ПК (Таблица) ===
+    function toggleTimesheetDetails(empId, icon) {
+        document.querySelectorAll(`.detail-${empId}`).forEach(row => { row.style.display = (row.style.display === 'none') ? 'table-row' : 'none'; });
+        if (icon.classList.contains('fa-plus-square')) { icon.classList.remove('fa-plus-square'); icon.classList.add('fa-minus-square'); } else { icon.classList.remove('fa-minus-square'); icon.classList.add('fa-plus-square'); }
+    }
+    
+    // Единая функция открытия модалки часов (для ПК)
+    function openHoursModalPC(empId, name, day) {
+        const y = {{ year }}; const m = {{ month }};
+        const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        
+        // Берем актуальные данные из window.timesheetData
+        const key = empId + '_' + day;
+        const data = window.timesheetData[key] || { norm: 0, norm_over: 0, spec: 0, spec_over: 0, is_day_off: false, is_paid: false };
+        
+        openCommonModal(empId, name, dateStr, data.norm, data.norm_over, data.spec, data.spec_over, data.is_day_off);
+    }
+
+    // === JS ДЛЯ МОБИЛЬНОГО (Генерация списка) ===
+    // Используем window.* чтобы скрипт не ломался при "тихих" обновлениях страницы HTMX
+    window.hrEmployees =[
+        {% for e in employees %}
+        { id: {{ e.id }}, name: "{{ e.name|replace("'", "\\'") }}", role: "{{ e.role }}" },
+        {% endfor %}
+    ];
+
+    window.timesheetData = {};
+    {% for row in timesheet_data %}
+        {% for d, day_info in row.days.items() %}
+            {% if day_info.obj %}
+            window.timesheetData['{{ row.emp.id }}_{{ d }}'] = { 
+                norm: {{ day_info.obj.hours_norm or 0 }}, 
+                norm_over: {{ day_info.obj.hours_norm_over or 0 }}, 
+                spec: {{ day_info.obj.hours_spec or 0 }}, 
+                spec_over: {{ day_info.obj.hours_spec_over or 0 }},
+                is_day_off: {{ 'true' if day_info.is_day_off else 'false' }},
+                is_paid: {{ 'true' if day_info.is_paid else 'false' }}
+            };
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+    
+    function toggleHoursInputs() {
+        const isOff = document.getElementById('hIsDayOff').checked;
+        document.getElementById('hNorm').disabled = isOff;
+        document.getElementById('hNormOver').disabled = isOff;
+        document.getElementById('hSpec').disabled = isOff;
+        document.getElementById('hSpecOver').disabled = isOff;
+        if (isOff) {
+            document.getElementById('hNorm').value = '';
+            document.getElementById('hNormOver').value = '';
+            document.getElementById('hSpec').value = '';
+            document.getElementById('hSpecOver').value = '';
+        }
+    }
+
+    window.currentYear = {{ year }}; 
+    window.currentMonth = {{ month }};
+    
+    // Запоминаем день, чтобы при сохранении часов он не сбрасывался на "сегодня"
+    if (typeof window.selectedDay === 'undefined' || window.lastSavedMonth !== window.currentMonth) {
+        var t = new Date();
+        window.selectedDay = (t.getFullYear() === window.currentYear && (t.getMonth() + 1) === window.currentMonth) ? t.getDate() : 1;
+        window.lastSavedMonth = window.currentMonth;
+    }
+
+    function initMobileTimesheet() {
+        if (document.getElementById('mobileEmployeeList')) {
+            renderMobileDay();
+        }
+    }
+
+    // Запуск при любых вариантах загрузки
+    $(document).ready(function() {
+        initMobileTimesheet();
+        setupPhotoUploader('hrPhotosInput', 'hrPhotosPreview');
+    });
+    document.addEventListener('htmx:afterSwap', function() {
+        initMobileTimesheet();
+        setupPhotoUploader('hrPhotosInput', 'hrPhotosPreview');
+    });
+    initMobileTimesheet();
+
+    function changeDay(delta) {
+        var maxDays = new Date(window.currentYear, window.currentMonth, 0).getDate();
+        var newDay = window.selectedDay + delta;
+        if (newDay >= 1 && newDay <= maxDays) { 
+            window.selectedDay = newDay; 
+            renderMobileDay(); 
+        }
+    }
+
+    function renderMobileDay() {
+        var displayElem = document.getElementById('displayDay');
+        if (displayElem) displayElem.innerText = window.selectedDay + ' число';
+        
+        var container = document.getElementById('mobileEmployeeList');
+        if (!container) return;
+        
+        container.innerHTML = '';
+        
+        window.hrEmployees.forEach(function(emp) {
+            var key = emp.id + '_' + window.selectedDay;
+            var data = window.timesheetData[key] || { norm: 0, norm_over: 0, spec: 0, spec_over: 0, is_day_off: false, is_paid: false };
+            
+            // Считаем общую сумму всех часов
+            var total = (data.norm + data.norm_over + data.spec + data.spec_over) || 0;
+            
+            var card = document.createElement('div');
+            card.className = 'emp-card d-flex justify-content-between align-items-center bg-white';
+            card.onclick = function() {
+                var monthStr = String(window.currentMonth).padStart(2,'0');
+                var dayStr = String(window.selectedDay).padStart(2,'0');
+                var dateStr = window.currentYear + '-' + monthStr + '-' + dayStr;
+                openCommonModal(emp.id, emp.name, dateStr, data.norm, data.norm_over, data.spec, data.spec_over, data.is_day_off);
+            };
+            
+            var hoursDisplay = '';
+            if (data.is_day_off) {
+                if (data.is_paid) {
+                    hoursDisplay = '<span class="badge bg-info text-white rounded-pill px-3 py-2" style="font-size: 13px;">В+ (Оплачен)</span>';
+                } else {
+                    hoursDisplay = '<span class="badge bg-secondary text-white rounded-pill px-3 py-2" style="font-size: 13px;">В (Выходной)</span>';
+                }
+            } else if (total > 0) {
+                 hoursDisplay = '<span class="badge bg-success rounded-pill px-3 py-2" style="font-size: 13px;">' + total + ' ч.</span>';
+            } else { 
+                 hoursDisplay = '<span class="text-muted small fw-bold">0</span>'; 
+            }
+            
+            card.innerHTML = '<div><div class="fw-bold text-dark">' + emp.name + '</div></div><div>' + hoursDisplay + '</div>';
+            container.appendChild(card);
+        });
+    }
+
+    // Отправка отчета за выбранный день
+    function submitDailyReport() {
+        var monthStr = String(window.currentMonth).padStart(2, '0');
+        var dayStr = String(window.selectedDay).padStart(2, '0');
+        var dateStr = window.currentYear + '-' + monthStr + '-' + dayStr;
+        
+        document.getElementById('reportDateInput').value = dateStr;
+        
+        // --- ВИЗУАЛЬНАЯ БЛОКИРОВКА ---
+        // 1. Показываем темный экран поверх всего
+        const overlay = document.getElementById('loadingOverlay');
+        if (overlay) {
+            overlay.style.display = 'flex';
+        }
+        
+        // 2. Блокируем кнопку и меняем на ней текст (чтобы физически нельзя было нажать дважды)
+        const btn = document.getElementById('submitReportBtn');
+        if (btn) {
+            btn.disabled = true;
+            btn.classList.replace('btn-success', 'btn-secondary');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i> Отправка... ⏳';
+        }
+        
+        // 3. Отправляем форму
+        document.getElementById('sendReportForm').submit();
+    }
+
+    // === ОБЩАЯ ФУНКЦИЯ ОТКРЫТИЯ МОДАЛКИ (ЧАСЫ) ===
+    function openCommonModal(empId, name, dateStr, n, no, s, so, isDayOff) {
+        document.getElementById('hEmpId').value = empId;
+        document.getElementById('hDateInput').value = dateStr;
+        document.getElementById('hTitle').innerText = name;
+        document.getElementById('hDateDisplay').innerText = dateStr.split('-').reverse().join('.');
+        
+        document.getElementById('hNorm').value = n || '';
+        document.getElementById('hNormOver').value = no || '';
+        document.getElementById('hSpec').value = s || '';
+        document.getElementById('hSpecOver').value = so || '';
+        
+        document.getElementById('hIsDayOff').checked = isDayOff || false;
+        toggleHoursInputs(); // Сразу отключаем или включаем поля
+        
+        new bootstrap.Modal(document.getElementById('hoursModal')).show();
+    }
+    
+    // Перехват отправки формы часов (чтобы не сбрасывать выбранные фото)
+    document.getElementById('hoursForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        const btn = this.querySelector('button[type="submit"]');
+        const originalText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Сохранение...';
+        
+        try {
+            const response = await fetch(window.location.href, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            });
+            
+            if (response.ok) {
+                // Обновляем данные в window.timesheetData
+                const empId = document.getElementById('hEmpId').value;
+                const dateStr = document.getElementById('hDateInput').value;
+                const day = parseInt(dateStr.split('-')[2]);
+                const key = empId + '_' + day;
+                
+                const isDayOff = document.getElementById('hIsDayOff').checked;
+                const norm = parseFloat(document.getElementById('hNorm').value) || 0;
+                const normOver = parseFloat(document.getElementById('hNormOver').value) || 0;
+                const spec = parseFloat(document.getElementById('hSpec').value) || 0;
+                const specOver = parseFloat(document.getElementById('hSpecOver').value) || 0;
+                
+                window.timesheetData[key] = {
+                    norm: isDayOff ? 0 : norm,
+                    norm_over: isDayOff ? 0 : normOver,
+                    spec: isDayOff ? 0 : spec,
+                    spec_over: isDayOff ? 0 : specOver,
+                    is_day_off: isDayOff,
+                    is_paid: false // Упрощение, оплачиваемый выходной ставится отдельно
+                };
+                
+                // Перерисовываем мобильный вид
+                if (typeof renderMobileDay === 'function') {
+                    renderMobileDay();
+                }
+                
+                // Обновляем ячейку в ПК-таблице (если она есть)
+                const pcCell = document.getElementById('cell_' + empId + '_' + day);
+                if (pcCell) {
+                    if (isDayOff) {
+                        pcCell.innerHTML = '<span class="text-muted fw-bold">В</span>';
+                    } else {
+                        const total = norm + normOver + spec + specOver;
+                        pcCell.innerHTML = total > 0 ? total : '';
+                    }
+                }
+                
+                bootstrap.Modal.getInstance(document.getElementById('hoursModal')).hide();
+            } else {
+                alert('Ошибка при сохранении часов');
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Ошибка сети при сохранении часов');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    });
+
+    // Админские функции
+    {% if current_user.role == 'admin' %}
+    function openEmpModal() { 
+        document.getElementById('empId').value=''; 
+        document.getElementById('empName').value=''; 
+        document.getElementById('empSalary').value=0; 
+        new bootstrap.Modal(document.getElementById('empModal')).show(); 
+    }
+    
+    function editEmployee(id, name, isSal, sal, role, active) { 
+        document.getElementById('empId').value=id; 
+        document.getElementById('empName').value=name; 
+        document.getElementById('empRole').value=role; 
+        document.getElementById('empIsSalary').checked=isSal; 
+        document.getElementById('empSalary').value=sal; 
+        document.getElementById('empActive').checked=active; 
+        new bootstrap.Modal(document.getElementById('empModal')).show(); 
+    }
+    {% endif %}
+    
+    function openAdjModal(id, name) { 
+        document.getElementById('aEmpId').value=id; 
+        document.getElementById('aTitle').innerText=name; 
+        new bootstrap.Modal(document.getElementById('adjModal')).show(); 
+    }
+
+    // --- ИНДИВИДУАЛЬНАЯ ВЫПЛАТА ЗП ---
+    // Получаем ID статей из настроек в JS
+    const globalOffItem = {{ settings.off | default(0) }};
+    const globalUnoffItem = {{ settings.unoff | default(0) }};
+
+    function openPayModal(empId, empName, debt) {
+        document.getElementById('payEmpId').value = empId;
+        document.getElementById('payEmpName').innerText = empName;
+        
+        // Форматируем долг для красоты
+        const debtFormatted = new Intl.NumberFormat('ru-RU').format(debt) + ' ₽';
+        document.getElementById('payEmpDebt').innerText = debtFormatted;
+        
+        // По умолчанию подставляем весь долг (если он больше 0), иначе оставляем пустым
+        document.getElementById('payAmountInput').value = debt > 0 ? debt : '';
+        
+        // По умолчанию выбираем Неофициальную
+        document.getElementById('st_unoff').checked = true;
+        autoSelectBudgetItem('unoff');
+        
+        new bootstrap.Modal(document.getElementById('payIndividualModal')).show();
+    }
+
+    function autoSelectBudgetItem(type) {
+        const select = document.getElementById('payBudgetItem');
+        if (type === 'off' && globalOffItem > 0) {
+            select.value = globalOffItem;
+        } else if (type === 'unoff' && globalUnoffItem > 0) {
+            select.value = globalUnoffItem;
+        }
+    }
+</script>
+{% endblock %}

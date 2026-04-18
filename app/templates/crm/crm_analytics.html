@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-chart-line text-success"></i>
+            Аналитика по клиенту
+        </div>
+        <div class="page-subtitle">
+            Глубокий разбор выручки, ассортимента и динамики по выбранному контрагенту.
+        </div>
+    </div>
+</div>
+
+<!-- Фильтры -->
+<div class="filter-panel">
+    <form method="GET" class="row g-2 align-items-end">
+        <div class="col-md-4">
+            <label class="form-label fw-bold small text-muted text-uppercase">Клиент</label>
+            <select name="client_id" class="form-select select-search" required>
+                <option value="" disabled {% if not filters.client_id %}selected{% endif %}>Выберите...</option>
+                {% for c in clients %}
+                <option value="{{ c.id }}" {% if c.id == filters.client_id %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label fw-bold small text-muted text-uppercase">Начало</label>
+            <select name="year_start" class="form-select">
+                {% for y in years_range %}
+                <option value="{{ y }}" {% if y == filters.year_start %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label fw-bold small text-muted text-uppercase">Конец</label>
+            <select name="year_end" class="form-select">
+                {% for y in years_range %}
+                <option value="{{ y }}" {% if y == filters.year_end %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-primary w-100"><i class="fas fa-search"></i> Анализ</button>
+        </div>
+    </form>
+</div>
+
+{% if filters.client_id %}
+
+<!-- 1. Сводные карточки (ВЕРХУШКА) -->
+<div class="row g-3 mb-4 kpi-row">
+    <div class="col-md-3">
+        <div class="card kpi-card border-start border-4 border-success h-100">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase">Итого отгружено</h6>
+                <h3 class="fw-bold text-dark mb-0">{{ stats.total_sum|money }}</h3>
+                <small class="text-success fw-bold">{{ stats.total_qty }} шт.</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card kpi-card border-start border-4 border-primary h-100">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase">Средний чек</h6>
+                <h3 class="fw-bold text-dark mb-0">{{ stats.avg_check|money }}</h3>
+                <small class="text-primary">за отгрузку</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card kpi-card border-start border-4 border-warning h-100">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase">Топ позиция</h6>
+                <div class="text-truncate fw-bold text-dark" title="{{ stats.top_item.name }}">{{ stats.top_item.name }}</div>
+                <div class="d-flex justify-content-between align-items-center mt-1">
+                    <span class="badge bg-secondary">{{ stats.top_item.size }}</span>
+                    <span class="fw-bold small">{{ stats.top_item.sum|money }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card kpi-card bg-light h-100">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase mb-2">Статусы (от суммы)</h6>
+                <div class="d-flex justify-content-between small mb-1"><span>Отгружено:</span> <span class="fw-bold text-success">{{ "%.0f"|format(stats.status_funnel.shipped_pct) }}%</span></div>
+                <div class="d-flex justify-content-between small mb-1"><span>В резерве:</span> <span class="fw-bold text-primary">{{ "%.0f"|format(stats.status_funnel.reserved_pct) }}%</span></div>
+                <div class="d-flex justify-content-between small"><span>Отменено:</span> <span class="fw-bold text-danger">{{ "%.0f"|format(stats.status_funnel.canceled_pct) }}%</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 2. Таблица (СЕРЕДИНА) -->
+<div class="card section-card mb-4">
+    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+        <span>Ассортиментная матрица</span>
+        <span class="badge bg-light text-dark border">Развернуть по клику</span>
+    </div>
+    <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+        <table class="table table-hover mb-0 align-middle" style="font-size: 13px;">
+            <thead class="table-light sticky-top">
+                <tr>
+                    <th style="width: 50%;">Растение / Размер</th>
+                    <th class="text-end">Кол-во (шт)</th>
+                    <th class="text-end">Сумма (₽)</th>
+                    <th class="text-end">% от выручки</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in stats.plants_breakdown %}
+                {% set outer_index = loop.index %}
+                <tr class="table-light fw-bold" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#collapse{{ outer_index }}">
+                    <td><i class="fas fa-chevron-right me-2 text-muted small"></i>{{ item.name }}</td>
+                    <td class="text-end">{{ item.qty }}</td>
+                    <td class="text-end text-primary">{{ item.sum|money }}</td>
+                    <td class="text-end small text-muted">{% if stats.total_sum > 0 %}{{ "%.1f"|format(item.sum / stats.total_sum * 100) }}%{% else %}0%{% endif %}</td>
+                </tr>
+                {% for size in item.sizes_list %}
+                <tr class="collapse" id="collapse{{ outer_index }}">
+                    <td class="ps-5 text-muted small border-start border-3 border-success">{{ size.name }}</td>
+                    <td class="text-end small">{{ size.qty }}</td>
+                    <td class="text-end small">{{ size.sum|money }}</td>
+                    <td class="text-end small text-muted">-</td>
+                </tr>
+                {% endfor %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 3. Комбо-график (НИЗ) -->
+<div class="card section-card mb-4">
+    <div class="card-header bg-white fw-bold d-flex align-items-center justify-content-between">
+        <span><i class="fas fa-chart-area me-2 text-success"></i> Динамика работы</span>
+        <div class="small text-muted">
+            <span class="me-2"><i class="fas fa-square text-success"></i> Весна</span>
+            <span><i class="fas fa-square text-warning"></i> Осень</span>
+        </div>
+    </div>
+    <div class="card-body">
+        <div style="height: 350px;">
+            <canvas id="comboChart"></canvas>
+        </div>
+        <div class="text-center mt-2 text-muted small fst-italic">
+            Нажмите на легенду графика, чтобы скрыть/показать линии.
+        </div>
+    </div>
+</div>
+
+<script>
+    const ctx = document.getElementById('comboChart').getContext('2d');
+    const labels = {{ stats.charts.labels|tojson }};
+    const barColors = {{ stats.charts.colors|tojson }};
+
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Выручка (₽)',
+                    data: {{ stats.charts.sum|tojson }},
+                    backgroundColor: barColors,
+                    borderColor: '#ccc',
+                    borderWidth: 1,
+                    order: 3,
+                    yAxisID: 'y'
+                },
+                {
+                    label: 'Средний чек (₽)',
+                    data: {{ stats.charts.avg|tojson }},
+                    type: 'line',
+                    borderColor: '#FF9800', /* Оранжевый */
+                    backgroundColor: '#FF9800',
+                    borderWidth: 2,
+                    tension: 0.1,
+                    pointRadius: 6,
+                    pointHoverRadius: 8,
+                    order: 2,
+                    yAxisID: 'y'
+                },
+                {
+                    label: 'Кол-во (шт)',
+                    data: {{ stats.charts.qty|tojson }},
+                    type: 'line',
+                    borderColor: '#0277BD', /* Синий */
+                    backgroundColor: '#0277BD',
+                    borderWidth: 2,
+                    borderDash: [5, 5],
+                    tension: 0.1,
+                    pointRadius: 6,
+                    pointHoverRadius: 8,
+                    order: 1,
+                    yAxisID: 'y1'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
+            scales: {
+                y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    beginAtZero: true,
+                    title: { display: true, text: 'Рубли' }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    beginAtZero: true,
+                    grid: { drawOnChartArea: false },
+                    title: { display: true, text: 'Штуки' }
+                }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            if (label) label += ': ';
+                            if (context.parsed.y !== null) {
+                                // Форматирование денег
+                                if(context.datasetIndex !== 2) { 
+                                    label += new Intl.NumberFormat('ru-RU').format(context.parsed.y) + ' ₽';
+                                } else {
+                                    label += context.parsed.y + ' шт.';
+                                }
+                            }
+                            return label;
+                        }
+                    }
+                }
+            }
+        }
+    });
+</script>
+
+{% else %}
+<div class="alert alert-info text-center py-5">
+    <i class="fas fa-search fa-3x mb-3 text-muted"></i>
+    <h5>Выберите клиента для анализа</h5>
+    <p class="text-muted">Укажите клиента и период, чтобы увидеть статистику продаж.</p>
+</div>
+{% endif %}
+
+{% endblock %}

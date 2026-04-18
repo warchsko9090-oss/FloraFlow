@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-chart-line text-success"></i>
+            Аналитика производства (выкопка)
+        </div>
+        <div class="page-subtitle">
+            Сопоставление количества вырытых растений и отработанных человеко-часов по дням.
+        </div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm"><i class="fas fa-arrow-left"></i> В меню</a>
+    </div>
+</div>
+
+<div class="filter-panel">
+    <form method="GET" class="row g-2 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label fw-bold small text-muted text-uppercase">С</label>
+            <input type="date" name="from" class="form-control" value="{{ start_date }}">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label fw-bold small text-muted text-uppercase">По</label>
+            <input type="date" name="to" class="form-control" value="{{ end_date }}">
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-primary w-100"><i class="fas fa-filter me-1"></i> Применить</button>
+        </div>
+        <div class="col-md-4">
+            <div class="small text-muted">
+                График сравнивает: <b>работавшие сотрудники</b> (часы > 1) и <b>сколько растений вырыто</b>.
+                Дополнительно можно показывать/скрывать разрез по видам растений.
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- Карточки сводки -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-primary">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase">Рабочих дней</h6>
+                <h3 class="fw-bold mb-0">{{ summary.days }}</h3>
+                <small class="text-muted">на графике (табель или выкопка)</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-success">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase">Работали</h6>
+                <h3 class="fw-bold mb-0">{{ summary.total_workers }}</h3>
+                <small class="text-muted">человек-дней</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-warning">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase">Выкопано</h6>
+                <h3 class="fw-bold mb-0">{{ summary.total_dug }}</h3>
+                <small class="text-muted">растений</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-info">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase">Средний/день</h6>
+                <h3 class="fw-bold mb-0">{{ summary.avg_dug_per_day }}</h3>
+                <small class="text-muted">растений за {{ summary.days_with_digging }} дн. с выкопкой</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- График -->
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+        <span><i class="fas fa-chart-area me-2 text-success"></i> КПД по дням</span>
+        <div class="small text-muted">Нажмите на легенду сверху, чтобы показать/скрыть линии</div>
+    </div>
+    <div class="card-body">
+        <div style="height: 380px;">
+            <canvas id="prodChart"></canvas>
+        </div>
+        <div class="text-center mt-2 text-muted small fst-italic">
+            Легенда: зеленая линия — сотрудники, синяя — вырытые растения, остальные — разбивка по видам.
+        </div>
+    </div>
+</div>
+
+<!-- Таблица по видам растений -->
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-white fw-bold">Топ видов растений</div>
+    <div class="table-responsive" style="max-height: 360px; overflow-y: auto;">
+        <table class="table table-sm table-hover align-middle mb-0" style="font-size: 13px;">
+            <thead class="table-light">
+                <tr>
+                    <th>Растение</th>
+                    <th class="text-end">Всего выкопано</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in plant_totals %}
+                <tr>
+                    <td>{{ item.plant }}</td>
+                    <td class="text-end fw-bold">{{ item.total }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script type="application/json" id="digging-analytics-data">{{ chart_data|tojson }}</script>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    function mountDiggingChart() {
+        var cfgEl = document.getElementById('digging-analytics-data');
+        var canvas = document.getElementById('prodChart');
+        if (!cfgEl || !canvas || typeof Chart === 'undefined') return;
+        var cfg;
+        try {
+            cfg = JSON.parse(cfgEl.textContent);
+        } catch (e) {
+            return;
+        }
+        var labels = cfg.labels;
+        var workers = cfg.workers;
+        var dug = cfg.dug;
+        var plantSeries = cfg.plantSeries || [];
+        var existing = Chart.getChart(canvas);
+        if (existing) existing.destroy();
+        var ctx = canvas.getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Выкопано (шт)',
+                        data: dug,
+                        backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1,
+                        yAxisID: 'y1',
+                        order: 2
+                    },
+                    {
+                        label: 'Работали (чел.)',
+                        data: workers,
+                        type: 'line',
+                        borderColor: 'rgba(40, 167, 69, 1)',
+                        backgroundColor: 'rgba(40, 167, 69, 0.3)',
+                        borderWidth: 2,
+                        tension: 0.2,
+                        pointRadius: 4,
+                        yAxisID: 'y',
+                        order: 1
+                    }
+                ].concat(plantSeries)
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            boxWidth: 12,
+                            padding: 12
+                        }
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false
+                    }
+                },
+                scales: {
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        title: {
+                            display: true,
+                            text: 'Сотрудников'
+                        },
+                        beginAtZero: true
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        title: {
+                            display: true,
+                            text: 'Выкопано (шт)'
+                        },
+                        grid: {
+                            drawOnChartArea: false
+                        },
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', mountDiggingChart);
+    } else {
+        mountDiggingChart();
+    }
+    document.body.addEventListener('htmx:afterSwap', mountDiggingChart);
+})();
+</script>
+{% endblock %}

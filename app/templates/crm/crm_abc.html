@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    /* Принудительно белый цвет для заголовков таблицы */
+    .table-dark th { color: #ffffff !important; font-weight: 600; text-transform: uppercase; font-size: 11px; padding: 10px; }
+    /* Стиль для под-таблицы */
+    .sub-row { background-color: #f8f9fa; }
+    .sub-table th { background-color: #e9ecef; color: #495057; font-size: 10px; }
+    .sub-table td { font-size: 11px; padding: 4px 8px; border-bottom: 1px solid #dee2e6; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4><i class="fas fa-sort-amount-down text-primary"></i> ABC/XYZ Анализ ассортимента</h4>
+</div>
+
+<!-- Фильтр -->
+<div class="card p-3 mb-4 bg-light shadow-sm border-0">
+    <form method="GET" class="d-flex align-items-center gap-2">
+        <label class="fw-bold">Период:</label>
+        <select name="year_start" class="form-select form-select-sm" style="width:100px">
+            {% for y in years %}<option value="{{ y }}" {% if y == filters.start %}selected{% endif %}>{{ y }}</option>{% endfor %}
+        </select>
+        <span>-</span>
+        <select name="year_end" class="form-select form-select-sm" style="width:100px">
+            {% for y in years %}<option value="{{ y }}" {% if y == filters.end %}selected{% endif %}>{{ y }}</option>{% endfor %}
+        </select>
+        <button class="btn btn-primary btn-sm ms-2">Расчет</button>
+    </form>
+</div>
+
+<!-- Расшифровка -->
+<div class="alert alert-info shadow-sm py-2" role="alert">
+    <div class="row small align-items-center">
+        <div class="col-md-1 text-center"><i class="fas fa-info-circle fa-2x"></i></div>
+        <div class="col-md-5 border-end">
+            <strong>Выручка (ABC):</strong>
+            <span class="badge bg-success">A</span> 0-80% (Лидеры) | 
+            <span class="badge bg-warning text-dark">B</span> 80-95% (Средние) | 
+            <span class="badge bg-secondary">C</span> 95-100% (Аутсайдеры)
+        </div>
+        <div class="col-md-6">
+            <strong>Стабильность (XYZ):</strong>
+            <span class="badge bg-success">X</span> >8 мес. | 
+            <span class="badge bg-warning text-dark">Y</span> 4-8 мес. | 
+            <span class="badge bg-secondary">Z</span> <4 мес.
+        </div>
+    </div>
+</div>
+
+<!-- Таблица -->
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0 align-middle text-center" style="font-size: 13px;">
+            <thead class="table-dark">
+                <tr>
+                    <th class="text-start">Растение / <span class="text-muted" style="font-weight: normal; text-transform: none;">Размер</span></th>
+                    <th class="text-end">Выручка (₽)</th>
+                    <th class="text-end">Доля (%)</th>
+                    <th class="text-end">Накоп. доля</th>
+                    <th>ABC</th>
+                    <th>Мес.</th>
+                    <th>XYZ</th>
+                    <th>Матрица</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in data %}
+                {% set outer_index = loop.index %}
+                <!-- Главная строка (Растение) -->
+                <tr style="cursor: pointer; background-color: #fff;" data-bs-toggle="collapse" data-bs-target="#abc_row_{{ outer_index }}">
+                    <td class="text-start fw-bold">
+                        <i class="fas fa-chevron-right me-2 text-muted small"></i>{{ row.name }}
+                    </td>
+                    <td class="text-end fw-bold">{{ row.total_revenue|money_int }}</td>
+                    <td class="text-end">-</td>
+                    <td class="text-end text-muted">{{ "%.1f"|format(row.share_accum) }}%</td>
+                    <td><span class="badge {% if row.abc=='A' %}bg-success{% elif row.abc=='B' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ row.abc }}</span></td>
+                    <td>{{ row.months_max }}</td>
+                    <td><span class="badge {% if row.xyz=='X' %}bg-success{% elif row.xyz=='Y' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ row.xyz }}</span></td>
+                    <td class="fw-bold {{ 'text-success' if row.abc=='A' and row.xyz=='X' else 'text-muted' }}">{{ row.matrix }}</td>
+                </tr>
+                
+                <!-- Детализация (Размеры) -->
+                <tr class="collapse sub-row" id="abc_row_{{ outer_index }}">
+                    <td colspan="8" class="p-0">
+                        <table class="table sub-table mb-0">
+                            <tbody>
+                                {% for item in row.variants %} <!-- ИСПРАВЛЕНО -->
+                                <tr>
+                                    <td class="text-start ps-5 border-start border-3 border-success" style="width: 25%;">{{ item.size_name }}</td>
+                                    <td class="text-end" style="width: 15%;">{{ item.revenue|money_int }}</td>
+                                    <td class="text-end text-muted small" style="width: 10%;">
+                                        {% if row.total_revenue > 0 %}
+                                        {{ "%.1f"|format(item.revenue / row.total_revenue * 100) }}%
+                                        {% endif %}
+                                    </td>
+                                    <td style="width: 10%;"></td> <!-- Накоп внутри растения не считаем, лишнее -->
+                                    <td style="width: 8%;"><span class="badge bg-light text-dark border">{{ item.abc }}</span></td>
+                                    <td style="width: 8%;">{{ item.months }}</td>
+                                    <td style="width: 8%;"><span class="badge bg-light text-dark border">{{ item.xyz }}</span></td>
+                                    <td class="fw-bold small">{{ item.matrix }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
