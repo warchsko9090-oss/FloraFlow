@@ -704,6 +704,14 @@ class TgTask(db.Model):
     raw_text = db.Column(db.Text, nullable=False) # Оригинальное сообщение
     title = db.Column(db.String(200)) # Суть задачи
     details = db.Column(db.Text) # Детали, извлеченные AI
-    assignee_role = db.Column(db.String(50)) # Кому: 'user' (менеджер), 'brigadier' (бригадир)
+    
+    assignee_role = db.Column(db.String(50)) # Роль (если задача на отдел)
+    assignee_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True) # Конкретный исполнитель
+    deadline = db.Column(db.Date, nullable=True) # Дедлайн
+    
+    action_type = db.Column(db.String(50)) # 'create_order', 'digging', 'info'
+    action_payload = db.Column(db.Text) # JSON с параметрами
     status = db.Column(db.String(20), default='new') # new, done
     sender_name = db.Column(db.String(100)) # Имя руководителя в ТГ
+
+    assignee = db.relationship('User', foreign_keys=[assignee_id])

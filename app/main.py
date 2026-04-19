@@ -72,6 +72,7 @@ def index():
                 'date_str': d.date.strftime('%d.%m.%Y'),
                 'raw_date': today
             }
+            # Черновики считаем срочными
             add_to_group(card, today, is_forced_urgent=True)
 
     # 3. Выкопка (Задачи)
@@ -114,26 +115,41 @@ def index():
                     }
                     add_to_group(card, p.end_date, is_forced_urgent=(days_left<=7))
 
-    # 5. НОВОЕ: Задачи из Telegram бота
-    # Менеджеру показываем задачи для 'user', Бригадиру - для 'brigadier', Админу - все.
+    # 5. ЗАДАЧИ ИЗ TELEGRAM (Умные)
+    from sqlalchemy import or_, and_
+    
     target_roles = [current_user.role]
+    
+    # Запрос: Показываем задачи, где я указан ЛИЧНО (assignee_id == my_id)
+    # ИЛИ (никому лично не назначено И моя роль подходит)
+    # ИЛИ (я Админ и вижу всё)
     if current_user.role == 'admin':
-        target_roles = ['user', 'brigadier', 'admin']
+        query = TgTask.query.filter(TgTask.status == 'new')
+    else:
+        query = TgTask.query.filter(
+            TgTask.status == 'new',
+            or_(
+                TgTask.assignee_id == current_user.id,
+                and_(TgTask.assignee_id.is_(None), TgTask.assignee_role.in_(target_roles))
+            )
+        )
         
-    tg_tasks = TgTask.query.filter(TgTask.status == 'new', TgTask.assignee_role.in_(target_roles)).all()
+    tg_tasks = query.all()
+    
     for t in tg_tasks:
+        d = t.deadline or today
         card = {
             'id': f'tgtask_{t.id}',
             'type': 'tg_task',
             'title': t.title,
             'details': t.details,
             'task_id': t.id,
-            'date_str': t.created_at.strftime('%d.%m %H:%M'),
-            'raw_date': today
+            'assignee_name': t.assignee.username if t.assignee else None,
+            'date_str': d.strftime('%d.%m.%Y'),
+            'raw_date': d
         }
-        # Задачи из чата считаем "На сегодня" по умолчанию, поместим в группу info (сделаем через color)
-        groups['today']['cards'].append(card)
-        groups['today']['cards'][-1]['color'] = 'info' # Меняем цвет карточки на синий
+        add_to_group(card, d)
+        groups['today']['cards'][-1]['color'] = 'info' if card in groups['today']['cards'] else 'info'
 
     # Сортировка внутри папок по дате и удаление пустых папок
     for g in groups.values():
@@ -182,7 +198,7 @@ def complete_tg_task():
         db.session.commit()
         return f"""
         <div class="card border-0 shadow-sm mb-3 bg-primary bg-opacity-10 text-center py-3 fade-me-in">
-            <h6 class="text-primary m-0"><i class="fas fa-check-double"></i> Задача из чата выполнена!</h6>
+            <h6 class="text-primary m-0"><i class="fas fa-check-double"></i> Задача выполнена!</h6>
         </div>
         """
     return "Ошибка", 400
@@ -199,86 +215,38 @@ def telegram_webhook():
     """
     data = request.json
     if not data or 'message' not in data:
-        return jsonify({'status': 'ok'}) # Игнорируем технические сообщения
+        return jsonify({'status': 'ok'}) 
         
     msg = data['message']
     text = msg.get('text', '')
     
-    # Защита: реагируем только если бот упомянут (настрой свое имя бота ниже!)
-    # Или если это личное сообщение боту
     is_private = msg.get('chat', {}).get('type') == 'private'
     
     if is_private or text.startswith('@FloraFlow') or 'заказ' in text.lower() or 'копать' in text.lower():
         
         sender = msg.get('from', {}).get('first_name', 'Руководитель')
         
-        # Импортируем наш новый Агент с инструментами
         try:
             from app.ai_tools_agent import process_telegram_message_with_ai
             
-            # Запускаем цепочку мыслей ИИ
-            # Он сам сходит в базу, поищет клиента, остатки и создаст запись в TgTask
             result_msg = process_telegram_message_with_ai(text, sender)
             print(f"AI Result: {result_msg}")
             
         except Exception as e:
             print(f"Ошибка AI Webhook (Tools): {e}")
-            # Запасной вариант (Fallback)
             new_task = TgTask(raw_text=text, title="Сообщение из чата (Сбой)", details=text, assignee_role='user', sender_name=sender)
             db.session.add(new_task)
             db.session.commit()
 
     return jsonify({'status': 'ok'})
 
-@bp.route('/api/feed/dismiss/<card_id>', methods=['POST'])
-def dismiss_card(card_id):
-    return ""
-
-@bp.route('/api/feed/complete_task', methods=['POST'])
-@login_required
-def complete_task():
-    task_id = request.form.get('task_id')
-    fact_qty = int(request.form.get('fact_qty', 0))
-    
-    task = DiggingTask.query.get(task_id)
-    if task and task.status == 'pending' and fact_qty > 0:
-        # 1. Записываем факт выкопки в журнал
-        log = DiggingLog(
-            date=msk_today(),
-            order_item_id=task.order_item_id,
-            plant_id=task.item.plant_id,
-            size_id=task.item.size_id,
-            field_id=task.item.field_id,
-            year=task.item.year,
-            user_id=current_user.id,
-            quantity=fact_qty,
-            status='pending' 
-        )
-        db.session.add(log)
-        
-        # 2. Закрываем задание
-        task.status = 'done'
-        
-        # 3. Пересчитываем статус заказа
-        task.item.order.refresh_status_by_dug()
-        
-        db.session.commit()
-        
-        return f"""
-        <div class="card border-0 shadow-sm mb-3 bg-success bg-opacity-10 text-center py-3 fade-me-in">
-            <h5 class="text-success m-0"><i class="fas fa-check-circle"></i> Принято {fact_qty} шт!</h5>
-        </div>
-        """
-    return "Ошибка ввода", 400
-
-# ВАЖНО: <path:filename> позволяет читать файлы из папок (например photo/plant_1/1.jpg)
 @bp.route('/uploads/<path:filename>')
 def serve_uploaded_file(filename):
     try:
         response = send_from_directory(
             current_app.config['UPLOAD_FOLDER'],
             filename,
-            max_age=60 * 60 * 24 * 30,  # 30 days browser cache for media
+            max_age=60 * 60 * 24 * 30,
         )
         response.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
         return response
@@ -291,26 +259,21 @@ def backup_db():
     if current_user.role != 'admin': 
         return redirect(url_for('main.index'))
     
-    # Путь к БД берем из конфига
     db_path = current_app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
     return send_file(db_path, as_attachment=True, download_name="backup.db")
 
 @bp.route('/sw.js')
 def service_worker():
-    # Отдаем файл sw.js из папки static, но с правильным типом данных
     response = send_file('static/sw.js', mimetype='application/javascript')
-    # Запрещаем кэшировать сам файл скрипта, чтобы обновления логики применялись сразу
     response.headers['Cache-Control'] = 'no-cache'
     return response
 
 @bp.route('/manifest.json')
 def manifest():
-    # PWA манифест
     return send_file('static/manifest.json', mimetype='application/json')
 
 @bp.route('/static/icon-192.png')
 def app_icon():
-    # Иконка PWA
     try:
         return send_file('static/icon-192.png')
     except (OSError, FileNotFoundError):
@@ -325,11 +288,9 @@ def guide():
 def offline():
     return render_template('offline.html')
 
-# --- API ДЛЯ ПРОГРЕВА КЭША (Новое) ---
 @bp.route('/api/cache-manifest')
 @login_required
 def cache_manifest():
-    """Возвращает версию БД и список URL для кэширования"""
     last_log = ActionLog.query.order_by(ActionLog.id.desc()).first()
     last_log_id = last_log.id if last_log else 0
     data_version = f"u{current_user.id}_v{last_log_id}"

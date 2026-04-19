@@ -96,9 +96,17 @@
                                         <div class="small text-info text-uppercase fw-bold">
                                             <i class="fab fa-telegram fs-6 me-1"></i> Из рабочего чата
                                         </div>
-                                        <span class="badge bg-light text-dark border">{{ card.date_str }}</span>
+                                        {% if card.assignee_name %}
+                                        <span class="badge bg-info text-white"><i class="fas fa-user-circle me-1"></i> {{ card.assignee_name }}</span>
+                                        {% else %}
+                                        <span class="badge bg-light text-dark border"><i class="fas fa-users me-1"></i> Отдел</span>
+                                        {% endif %}
                                     </div>
-                                    <h5 class="fw-bold text-dark mb-2">{{ card.title }}</h5>
+                                    
+                                    <div class="d-flex justify-content-between align-items-start mt-2 mb-2">
+                                        <h5 class="fw-bold text-dark mb-0">{{ card.title }}</h5>
+                                        <span class="badge bg-light text-dark border ms-2 whitespace-nowrap"><i class="fas fa-calendar-check me-1 text-danger"></i> {{ card.date_str }}</span>
+                                    </div>
                                     
                                     <div class="bg-light p-2 rounded small text-dark mb-3 border fst-italic">
                                         "{{ card.details }}"
