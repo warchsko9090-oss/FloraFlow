@@ -117,20 +117,25 @@ def index():
 
     # 5. ЗАДАЧИ ИЗ TELEGRAM (Умные)
     from sqlalchemy import or_, and_
+    import json
     
     target_roles = [current_user.role]
+    if current_user.role == 'user2':
+        target_roles.append('brigadier')
     
-    # Запрос: Показываем задачи, где я указан ЛИЧНО (assignee_id == my_id)
-    # ИЛИ (никому лично не назначено И моя роль подходит)
-    # ИЛИ (я Админ и вижу всё)
     if current_user.role == 'admin':
         query = TgTask.query.filter(TgTask.status == 'new')
     else:
+        # Показываем задачу, если:
+        # 1. Назначена лично
+        # 2. Или совпадает роль
+        # 3. Или роль = None (Сбой бота, показываем всем, чтобы не потерялась!)
         query = TgTask.query.filter(
             TgTask.status == 'new',
             or_(
                 TgTask.assignee_id == current_user.id,
-                and_(TgTask.assignee_id.is_(None), TgTask.assignee_role.in_(target_roles))
+                TgTask.assignee_role.in_(target_roles),
+                TgTask.assignee_role.is_(None)
             )
         )
         
@@ -138,18 +143,30 @@ def index():
     
     for t in tg_tasks:
         d = t.deadline or today
+        
+        # Пытаемся достать ID заказа из Payload
+        payload_order_id = None
+        if t.action_payload:
+            try:
+                p_data = json.loads(t.action_payload)
+                payload_order_id = p_data.get('order_id')
+            except:
+                pass
+
         card = {
             'id': f'tgtask_{t.id}',
             'type': 'tg_task',
             'title': t.title,
             'details': t.details,
             'task_id': t.id,
+            'action_type': t.action_type,
+            'payload_order_id': payload_order_id,
             'assignee_name': t.assignee.username if t.assignee else None,
             'date_str': d.strftime('%d.%m.%Y'),
-            'raw_date': d
+            'raw_date': d,
+            'color': 'info'
         }
         add_to_group(card, d)
-        groups['today']['cards'][-1]['color'] = 'info' if card in groups['today']['cards'] else 'info'
 
     # Сортировка внутри папок по дате и удаление пустых папок
     for g in groups.values():
@@ -227,7 +244,8 @@ def telegram_webhook():
         sender = msg.get('from', {}).get('first_name', 'Руководитель')
         
         try:
-            from app.ai_tools_agent import process_telegram_message_with_ai
+            # Убрали 'app.', так как файл лежит в корневой папке
+            from ai_tools_agent import process_telegram_message_with_ai
             
             result_msg = process_telegram_message_with_ai(text, sender)
             print(f"AI Result: {result_msg}")

@@ -115,8 +115,28 @@
                                     <form hx-post="/api/feed/complete_tg_task" hx-target="#card-{{ card.id }}" hx-swap="outerHTML">
                                         <input type="hidden" name="task_id" value="{{ card.task_id }}">
                                         <div class="d-flex gap-2">
-                                            <a href="{{ url_for('orders.order_create') }}" class="btn btn-outline-primary btn-sm fw-bold flex-grow-1">Создать заказ</a>
-                                            <button type="submit" class="btn btn-success btn-sm fw-bold"><i class="fas fa-check"></i> Сделано</button>
+                                            
+                                            {% if card.action_type == 'create_order' %}
+                                                <a href="{{ url_for('orders.order_create') }}" data-hx-boost="false" class="btn btn-outline-primary btn-sm fw-bold flex-grow-1">Новый заказ</a>
+                                            
+                                            {% elif card.action_type == 'payment' %}
+                                                <a href="{{ url_for('finance.expenses', tab='invoices') }}" data-hx-boost="false" class="btn btn-outline-primary btn-sm fw-bold flex-grow-1">Счета и оплаты</a>
+                                            
+                                            {% elif card.action_type == 'shipment' %}
+                                                {% if card.payload_order_id %}
+                                                    <a href="{{ url_for('orders.order_detail', order_id=card.payload_order_id) }}" data-hx-boost="false" class="btn btn-outline-primary btn-sm fw-bold flex-grow-1">В заказ #{{ card.payload_order_id }}</a>
+                                                {% else %}
+                                                    <a href="{{ url_for('orders.orders_list') }}" data-hx-boost="false" class="btn btn-outline-primary btn-sm fw-bold flex-grow-1">Все заказы</a>
+                                                {% endif %}
+                                            
+                                            {% elif card.action_type == 'income' %}
+                                                <a href="{{ url_for('stock.documents') }}" data-hx-boost="false" class="btn btn-outline-primary btn-sm fw-bold flex-grow-1">Журнал склада</a>
+                                            
+                                            {% elif card.action_type == 'digging' %}
+                                                <a href="{{ url_for('digging.mobile_index') }}" data-hx-boost="false" class="btn btn-outline-primary btn-sm fw-bold flex-grow-1">Ввод выкопки</a>
+                                            {% endif %}
+                                            
+                                            <button type="submit" class="btn btn-success btn-sm fw-bold w-100"><i class="fas fa-check"></i> Сделано</button>
                                         </div>
                                     </form>
                                 
