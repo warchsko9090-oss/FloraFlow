@@ -1,140 +1,214 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+    /* Макет страницы */
+    .planner-layout { display: flex; gap: 20px; height: calc(100vh - 120px); align-items: stretch; }
+    
+    /* Левая колонка (Заказы) */
+    .planner-sidebar { 
+        width: 320px; flex-shrink: 0; background: #f8f9fa; border: 1px solid #e5e7eb; 
+        border-radius: 12px; display: flex; flex-direction: column; height: 100%;
+    }
+    .sidebar-header { padding: 15px; border-bottom: 2px dashed #cbd5e1; background: #fff; border-radius: 12px 12px 0 0; }
+    .sidebar-content { padding: 15px; overflow-y: auto; flex-grow: 1; }
+    
+    .order-card { 
+        background: white; border-radius: 8px; padding: 12px; margin-bottom: 12px; 
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; cursor: grab;
+    }
+    .order-card:active { cursor: grabbing; transform: scale(0.98); border-color: #10b981; }
+    
+    /* Правая колонка (Календарь) */
+    .planner-main { flex-grow: 1; display: flex; flex-direction: column; height: 100%; min-width: 0; }
+    
+    /* Сетка календаря */
+    .calendar-grid { 
+        display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); 
+        background: #e5e7eb; border: 1px solid #e5e7eb; gap: 1px; border-radius: 0 0 12px 12px; overflow: hidden;
+    }
+    .cal-day-name { background: #f1f5f9; text-align: center; font-weight: bold; padding: 10px; font-size: 12px; color: #475569; text-transform: uppercase; }
+    
+    .cal-cell { 
+        background: #fff; min-height: 100px; padding: 8px; cursor: pointer; transition: 0.2s; 
+        display: flex; flex-direction: column;
+    }
+    .cal-cell:hover { background: #f8fafc; }
+    
+    /* Зона куда кидаем */
+    .cal-cell.drag-over { background-color: #ecfdf5; box-shadow: inset 0 0 0 2px #10b981; }
+    
+    /* Оформление внутри ячейки */
+    .cal-date { font-weight: bold; color: #334155; margin-bottom: 5px; font-size: 14px; }
+    .cal-date.today { color: #fff; background: #10b981; padding: 2px 8px; border-radius: 12px; display: inline-block; }
+    .cal-cell.muted .cal-date { color: #94a3b8; }
+    
+    .task-indicator { 
+        background: #E8F5E9; border: 1px solid #C8E6C9; color: #1B5E20; 
+        border-radius: 6px; padding: 4px 6px; font-size: 11px; font-weight: bold; margin-top: auto; 
+    }
+    
+    /* Адаптив для мобилок */
+    @media (max-width: 992px) {
+        .planner-layout { flex-direction: column; height: auto; }
+        .planner-sidebar { width: 100%; height: 300px; }
+        .planner-main { height: auto; }
+        .cal-cell { min-height: 80px; }
+    }
+</style>
+
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h4 class="fw-bold text-success"><i class="fas fa-calendar-alt me-2"></i>Диспетчерская выкопки</h4>
+    <h4 class="fw-bold text-success"><i class="fas fa-calendar-alt me-2"></i>План выкопки</h4>
     <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">В меню</a>
 </div>
 
-<div class="row">
-    <!-- ЛЕВАЯ КОЛОНКА: Что нужно распределить -->
-    <div class="col-md-7 mb-3">
-        <div class="card shadow-sm border-0">
-            <div class="card-header bg-white fw-bold">
-                <i class="fas fa-list text-primary me-2"></i> Ждут распределения (Остатки заказов)
+<div class="planner-layout">
+    
+    <!-- САЙДБАР: Заказы для перетаскивания -->
+    <div class="planner-sidebar">
+        <div class="sidebar-header">
+            <h6 class="fw-bold text-primary m-0"><i class="fas fa-inbox me-2"></i>Ждут плана</h6>
+            <div class="small text-muted mt-1">Зажмите и перетащите заказ на нужный день в календаре</div>
+        </div>
+        <div class="sidebar-content" id="unplanned-orders">
+            {% for o in orders_to_plan %}
+            <div class="order-card" draggable="true" ondragstart="drag(event)" data-order-id="{{ o.id }}">
+                <div class="d-flex justify-content-between align-items-start mb-1">
+                    <span class="fw-bold text-primary fs-6">Заказ #{{ o.id }}</span>
+                    <span class="badge bg-danger rounded-pill">{{ o.left_to_plan }} шт</span>
+                </div>
+                <div class="text-dark fw-bold small">{{ o.client.name }}</div>
+                <div class="text-muted mt-2" style="font-size: 10px;"><i class="fas fa-hand-pointer"></i> Перетащить на дату</div>
             </div>
-            <div class="table-responsive" style="max-height: 600px;">
-                <table class="table table-hover table-sm align-middle mb-0" style="font-size: 13px;">
-                    <thead class="bg-light">
-                        <tr>
-                            <th>Заказ / Клиент</th>
-                            <th>Растение</th>
-                            <th class="text-center">Остаток</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for row in items_to_plan %}
-                        <tr>
-                            <td>
-                                <a href="{{ url_for('orders.order_detail', order_id=row.item.order.id) }}" class="fw-bold text-decoration-none">#{{ row.item.order.id }}</a><br>
-                                <small class="text-muted">{{ row.item.order.client.name }}</small>
-                            </td>
-                            <td>
-                                <b>{{ row.item.plant.name }}</b><br>
-                                <span class="badge bg-light text-dark border">{{ row.item.size.name }} | Поле {{ row.item.field.name }}</span>
-                            </td>
-                            <td class="text-center text-danger fw-bold fs-6">
-                                {{ row.left_to_plan }}
-                            </td>
-                            <td class="text-end pe-2">
-                                <button class="btn btn-sm btn-success" onclick="openPlanModal('{{ row.item.id }}', '{{ row.item.plant.name }} ({{ row.item.size.name }})', '{{ row.left_to_plan }}')">
-                                    В план
-                                </button>
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr><td colspan="4" class="text-center text-muted py-4">Все объемы распределены!</td></tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+            {% else %}
+            <div class="text-center text-muted py-5">
+                <i class="fas fa-check-circle fa-3x text-success mb-3 opacity-50"></i><br>
+                <h5>Всё распределено!</h5>
+                <p class="small">У всех заказов есть даты.</p>
             </div>
+            {% endfor %}
         </div>
     </div>
 
-    <!-- ПРАВАЯ КОЛОНКА: Выданные задания -->
-    <div class="col-md-5">
-        <div class="card shadow-sm border-0 bg-light">
-            <div class="card-header bg-white fw-bold">
-                <i class="fas fa-tasks text-warning me-2"></i> Выданные задания (В ленте)
+    <!-- ОСНОВНАЯ ЗОНА: Календарь -->
+    <div class="planner-main">
+        <!-- Шапка календаря (Навигация по месяцам) -->
+        <div class="card shadow-sm border-0 mb-3">
+            <div class="card-body py-2 px-3 d-flex justify-content-between align-items-center">
+                <a href="{{ url_for('digging.digging_planning', month=prev_month, year=prev_year) }}" class="btn btn-sm btn-outline-secondary rounded-circle"><i class="fas fa-chevron-left"></i></a>
+                <h5 class="fw-bold text-dark m-0 text-uppercase">{{ month_name }} {{ current_year }}</h5>
+                <a href="{{ url_for('digging.digging_planning', month=next_month, year=next_year) }}" class="btn btn-sm btn-outline-secondary rounded-circle"><i class="fas fa-chevron-right"></i></a>
             </div>
-            <div class="card-body p-2" style="max-height: 600px; overflow-y: auto;">
-                {% for task in pending_tasks %}
-                <div class="card mb-2 border-0 shadow-sm border-start border-4 {% if task.planned_date < today %}border-danger{% elif task.planned_date == today %}border-success{% else %}border-secondary{% endif %}">
-                    <div class="card-body p-2">
-                        <div class="d-flex justify-content-between mb-1">
-                            <span class="badge {% if task.planned_date < today %}bg-danger{% elif task.planned_date == today %}bg-success{% else %}bg-secondary{% endif %}">
-                                {{ task.planned_date.strftime('%d.%m.%Y') }}
-                                {% if task.planned_date < today %} (Просрочено!){% endif %}
-                                {% if task.planned_date == today %} (СЕГОДНЯ){% endif %}
-                            </span>
-                            <form method="POST" onsubmit="return confirm('Отменить задание? Объем вернется в нераспределенные.');">
-                                <input type="hidden" name="action" value="delete_task">
-                                <input type="hidden" name="task_id" value="{{ task.id }}">
-                                <button class="btn btn-link text-danger p-0 m-0"><i class="fas fa-times"></i></button>
-                            </form>
+        </div>
+
+        <!-- Сама сетка -->
+        <div class="card shadow-sm border-0 flex-grow-1">
+            <!-- Дни недели -->
+            <div class="calendar-grid" style="border-radius: 12px 12px 0 0; border-bottom: none;">
+                <div class="cal-day-name">Пн</div>
+                <div class="cal-day-name">Вт</div>
+                <div class="cal-day-name">Ср</div>
+                <div class="cal-day-name">Чт</div>
+                <div class="cal-day-name">Пт</div>
+                <div class="cal-day-name text-danger">Сб</div>
+                <div class="cal-day-name text-danger">Вс</div>
+            </div>
+            <!-- Ячейки с числами -->
+            <div class="calendar-grid border-top-0">
+                {% for week in calendar_grid %}
+                    {% for day in week %}
+                    <div class="cal-cell {% if not day.is_current_month %}muted{% endif %}" 
+                         ondrop="drop(event, '{{ day.date_str }}')" 
+                         ondragover="allowDrop(event)" 
+                         ondragleave="leaveDrop(event)"
+                         onclick="openDayDetails('{{ day.date_str }}')">
+                        
+                        <div class="cal-date {% if day.is_today %}today{% endif %}">{{ day.day }}</div>
+                        
+                        <!-- Индикатор если есть задачи -->
+                        {% if day.tasks_count > 0 %}
+                        <div class="task-indicator">
+                            <div><i class="fas fa-clipboard-list"></i> {{ day.tasks_count }} задан.</div>
+                            <div class="mt-1"><i class="fas fa-tree"></i> {{ day.total_plants }} шт</div>
                         </div>
-                        <div class="fw-bold">{{ task.item.plant.name }}</div>
-                        <div class="small text-muted mb-2">Заказ #{{ task.item.order_id }} ({{ task.item.order.client.name }})</div>
-                        <div class="d-flex justify-content-between align-items-center bg-light p-1 rounded border">
-                            <span class="small fw-bold text-muted text-uppercase">План:</span>
-                            <span class="fs-5 fw-bold text-dark">{{ task.planned_qty }} шт.</span>
-                        </div>
-                        {% if task.comment %}
-                        <div class="mt-2 small text-muted fst-italic"><i class="fas fa-comment-dots"></i> {{ task.comment }}</div>
                         {% endif %}
                     </div>
-                </div>
-                {% else %}
-                <div class="text-center text-muted py-4">Активных заданий нет</div>
+                    {% endfor %}
                 {% endfor %}
             </div>
         </div>
     </div>
 </div>
 
-<!-- Модалка планирования -->
-<div class="modal fade" id="planModal" tabindex="-1">
-    <div class="modal-dialog modal-sm modal-dialog-centered">
-        <div class="modal-content">
-            <form method="POST">
-                <input type="hidden" name="action" value="create_task">
-                <input type="hidden" name="order_item_id" id="planItemId">
-                <div class="modal-header bg-success text-white py-2">
-                    <h6 class="modal-title">Назначить выкопку</h6>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="fw-bold mb-3 text-center" id="planPlantName"></div>
-                    <div class="mb-3">
-                        <label class="small text-muted fw-bold">Дата выполнения</label>
-                        <input type="date" name="planned_date" class="form-control" value="{{ today.strftime('%Y-%m-%d') }}" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="small text-muted fw-bold">Сколько штук копать?</label>
-                        <input type="number" name="qty" id="planQty" class="form-control fw-bold text-center fs-5 text-success border-success" min="1" required>
-                        <div class="form-text text-center text-danger">Можно распределить: <span id="planMaxLabel"></span> шт.</div>
-                    </div>
-                    <div class="mb-2">
-                        <label class="small text-muted">Указание бригадиру</label>
-                        <input type="text" name="comment" class="form-control form-control-sm" placeholder="Например: 'Копать покрупнее'">
-                    </div>
-                </div>
-                <div class="modal-footer p-1">
-                    <button type="submit" class="btn btn-success w-100 fw-bold">В план</button>
-                </div>
-            </form>
+<!-- УНИВЕРСАЛЬНАЯ МОДАЛКА (Используется и для Создания, и для Просмотра дня) -->
+<div class="modal fade" id="universalModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-light py-2">
+                <button type="button" class="btn-close ms-auto" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4" id="modalBody">
+                <div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-success"></i></div>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
-    function openPlanModal(itemId, plantName, maxQty) {
-        document.getElementById('planItemId').value = itemId;
-        document.getElementById('planPlantName').innerText = plantName;
-        document.getElementById('planQty').value = maxQty;
-        document.getElementById('planQty').max = maxQty;
-        document.getElementById('planMaxLabel').innerText = maxQty;
-        new bootstrap.Modal(document.getElementById('planModal')).show();
+    const modalElement = document.getElementById('universalModal');
+    const modalBody = document.getElementById('modalBody');
+    let myModal;
+
+    document.addEventListener("DOMContentLoaded", function() {
+        myModal = new bootstrap.Modal(modalElement);
+    });
+
+    // --- Магия HTML5 Drag and Drop ---
+    function drag(ev) {
+        ev.dataTransfer.setData("order_id", ev.currentTarget.dataset.orderId);
+        ev.currentTarget.style.opacity = '0.4';
     }
+
+    function allowDrop(ev) {
+        ev.preventDefault();
+        // Находим именно саму ячейку, а не элементы внутри неё
+        const cell = ev.target.closest('.cal-cell');
+        if(cell) cell.classList.add('drag-over');
+    }
+    
+    function leaveDrop(ev) {
+        const cell = ev.target.closest('.cal-cell');
+        if(cell) cell.classList.remove('drag-over');
+    }
+
+    // Событие БРОСКА заказа в ячейку
+    function drop(ev, dateStr) {
+        ev.preventDefault();
+        ev.stopPropagation(); // Важно, чтобы не сработал onclick ячейки!
+        
+        document.querySelectorAll('.cal-cell').forEach(el => el.classList.remove('drag-over'));
+        document.querySelectorAll('.order-card').forEach(el => el.style.opacity = '1');
+        
+        const orderId = ev.dataTransfer.getData("order_id");
+        if (!orderId) return;
+
+        modalBody.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-success"></i> Загрузка...</div>';
+        myModal.show();
+
+        // Запрашиваем форму создания через HTMX
+        htmx.ajax('GET', `/api/digging/order_plan_form/${orderId}/${dateStr}`, {target: '#modalBody'});
+    }
+    
+    // Событие КЛИКА по ячейке
+    function openDayDetails(dateStr) {
+        modalBody.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-primary"></i> Загрузка плана...</div>';
+        myModal.show();
+
+        // Запрашиваем детализацию дня через HTMX
+        htmx.ajax('GET', `/api/digging/day_details/${dateStr}`, {target: '#modalBody'});
+    }
+
+    document.addEventListener('dragend', function(ev) {
+        if(ev.target.classList) ev.target.style.opacity = '1';
+    });
 </script>
 {% endblock %}

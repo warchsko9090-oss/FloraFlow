@@ -44,20 +44,31 @@
                 </div>
                 {% endif %}
 
-                <!-- Форма ввода факта (Отправляется без перезагрузки через HTMX) -->
+                {% if card.type == 'task' %}
+                <!-- Форма ввода факта ТОЛЬКО для заданий выкопки -->
                 <form hx-post="/api/feed/complete_task" hx-target="#card-{{ card.id }}" hx-swap="outerHTML">
                     <input type="hidden" name="task_id" value="{{ card.task_id }}">
                     <label class="small fw-bold text-success text-uppercase mb-1">План: {{ card.qty }} шт. Сколько выкопали по факту?</label>
                     <div class="input-group input-group-lg shadow-sm">
-                        <!-- В поле по умолчанию стоит план. Бригадир может изменить цифру -->
                         <input type="number" name="fact_qty" class="form-control fw-bold text-center text-success border-success" 
                                value="{{ card.qty }}" min="1" required inputmode="numeric">
                         <button type="submit" class="btn btn-success fw-bold px-3">ГОТОВО</button>
                     </div>
                 </form>
+                {% else %}
+                <!-- Кнопки для обычных уведомлений (Патенты, Счета, Черновики) -->
+                <div class="d-flex gap-2 mt-3 pt-3 border-top">
+                    <a href="{{ card.url }}" class="btn btn-sm btn-primary fw-bold flex-grow-1 text-decoration-none">Открыть карточку</a>
+                    <button class="btn btn-sm btn-outline-secondary" hx-post="/api/feed/dismiss/{{ card.id }}" hx-target="#card-{{ card.id }}" hx-swap="outerHTML swap:0.3s" title="Скрыть">
+                        <i class="fas fa-check"></i>
+                    </button>
+                </div>
+                {% endif %}
             </div>
             
         </div>
         {% endfor %}
     </div>
 </div>
+
+{% endblock %}

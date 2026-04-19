@@ -3,9 +3,8 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 from sqlalchemy import func, inspect, text, or_
 from sqlalchemy.exc import OperationalError
-from app.models import db, Order, OrderItem, DiggingLog, Client, Plant, Size, Field, TimeLog, ActionLog
-from app.utils import msk_now, log_action
-
+from app.models import db, Order, OrderItem, DiggingLog, Client, Plant, Size, Field, TimeLog, ActionLog, DiggingTask
+from app.utils import msk_now, msk_today, log_action
 import requests # <--- ДОБАВИЛИ ИМПОРТ
 import os       # <--- ДОБАВЛЯЕМ ДЛЯ РАБОТЫ С СЕКРЕТАМИ
 
@@ -619,6 +618,14 @@ def analytics():
 
 from app.models import DiggingTask # Убедись, что импортировал новую модель в начале файла
 
+from datetime import timedelta # Убедись, что это импортировано
+
+import calendar
+from datetime import timedelta
+from sqlalchemy import func
+from app.models import DiggingTask, Order, OrderItem
+from app.utils import msk_today, MONTH_NAMES
+
 @bp.route('/digging/planning', methods=['GET', 'POST'])
 @login_required
 def digging_planning():
@@ -628,56 +635,192 @@ def digging_planning():
     if request.method == 'POST':
         action = request.form.get('action')
         
-        if action == 'create_task':
-            item_id = int(request.form.get('order_item_id'))
-            qty = int(request.form.get('qty'))
+        # Перетаскивание заказа на календарь
+        if action == 'create_order_tasks':
+            item_ids = request.form.getlist('item_id[]')
+            qtys = request.form.getlist('qty[]')
             date_str = request.form.get('planned_date')
             comment = request.form.get('comment')
             
-            task = DiggingTask(
-                order_item_id=item_id,
-                planned_date=datetime.strptime(date_str, '%Y-%m-%d').date(),
-                planned_qty=qty,
-                comment=comment,
-                created_by_user_id=current_user.id
-            )
-            db.session.add(task)
-            db.session.commit()
-            flash('Задание успешно отправлено бригадиру!')
-            log_action(f"Создал задание на выкопку ({qty} шт) на {date_str}")
+            target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            added_count = 0
+            
+            for i_id, q_str in zip(item_ids, qtys):
+                q = int(q_str) if q_str.isdigit() else 0
+                if q > 0:
+                    task = DiggingTask(
+                        order_item_id=int(i_id),
+                        planned_date=target_date,
+                        planned_qty=q,
+                        comment=comment,
+                        created_by_user_id=current_user.id
+                    )
+                    db.session.add(task)
+                    added_count += 1
+            
+            if added_count > 0:
+                db.session.commit()
+                flash(f'Задания на {target_date.strftime("%d.%m.%Y")} успешно добавлены!', 'success')
             
         elif action == 'delete_task':
             task = DiggingTask.query.get(request.form.get('task_id'))
             if task:
                 db.session.delete(task)
                 db.session.commit()
-                flash('Задание отменено')
+                flash('Задание отменено, объем вернулся в заказ.', 'info')
                 
         return redirect(url_for('digging.digging_planning'))
 
-    # Ищем позиции, которые еще не выкопаны до конца
-    # Статусы: reserved или in_progress
-    active_orders = Order.query.filter(Order.status.in_(['reserved', 'in_progress']), Order.is_deleted == False).all()
+    # 1. СОБИРАЕМ ЗАКАЗЫ ДЛЯ ЛЕВОЙ КОЛОНКИ (Ждут распределения)
+    active_orders = Order.query.filter(Order.status.in_(['reserved', 'in_progress']), Order.is_deleted == False).order_by(Order.date).all()
+    orders_to_plan = []
     
-    items_to_plan = []
     for o in active_orders:
+        left_for_order = 0
         for i in o.items:
-            # Сколько уже запланировано, но еще не выполнено
             planned_qty = sum(t.planned_qty for t in i.digging_tasks if t.status == 'pending')
-            # Сколько осталось распределить
             left_to_plan = i.quantity - i.dug_total - planned_qty
-            
             if left_to_plan > 0:
-                items_to_plan.append({
-                    'item': i,
-                    'left_to_plan': left_to_plan,
-                    'planned_pending': planned_qty
-                })
+                left_for_order += left_to_plan
+        
+        if left_for_order > 0:
+            o.left_to_plan = left_for_order # Временный атрибут для шаблона
+            orders_to_plan.append(o)
 
-    # Текущие активные задания
-    pending_tasks = DiggingTask.query.filter_by(status='pending').order_by(DiggingTask.planned_date).all()
+    # 2. ГЕНЕРИРУЕМ СЕТКУ КАЛЕНДАРЯ
+    today = msk_today()
+    # Получаем месяц и год из URL (если нет - берем текущие)
+    year = request.args.get('year', type=int, default=today.year)
+    month = request.args.get('month', type=int, default=today.month)
+
+    cal = calendar.Calendar(firstweekday=0) # Понедельник первый
+    month_days = cal.monthdatescalendar(year, month) # Список недель
+
+    # Достаем все задачи за этот период (от начала первой недели до конца последней)
+    start_date = month_days[0][0]
+    end_date = month_days[-1][-1]
+    
+    tasks = DiggingTask.query.filter(
+        DiggingTask.planned_date >= start_date,
+        DiggingTask.planned_date <= end_date,
+        DiggingTask.status == 'pending'
+    ).all()
+
+    # Собираем матрицу: список недель, внутри список дней (словари)
+    calendar_grid = []
+    for week in month_days:
+        week_data = []
+        for d in week:
+            day_tasks = [t for t in tasks if t.planned_date == d]
+            week_data.append({
+                'date_obj': d,
+                'date_str': d.strftime('%Y-%m-%d'),
+                'day': d.day,
+                'is_current_month': d.month == month,
+                'is_today': d == today,
+                'tasks_count': len(day_tasks),
+                'total_plants': sum(t.planned_qty for t in day_tasks)
+            })
+        calendar_grid.append(week_data)
+
+    # Вычисляем предыдущий и следующий месяц для кнопок навигации
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year = year if month < 12 else year + 1
 
     return render_template('digging/planning.html', 
-                           items_to_plan=items_to_plan, 
-                           pending_tasks=pending_tasks, 
-                           today=msk_today())
+                           orders_to_plan=orders_to_plan, 
+                           calendar_grid=calendar_grid,
+                           current_year=year,
+                           month_name=MONTH_NAMES.get(month, ''),
+                           prev_month=prev_month, prev_year=prev_year,
+                           next_month=next_month, next_year=next_year)
+
+# API: Форма ПРИ ПЕРЕТАСКИВАНИИ заказа на календарь
+@bp.route('/api/digging/order_plan_form/<int:order_id>/<date_str>')
+@login_required
+def get_order_plan_form(order_id, date_str):
+    order = Order.query.get_or_404(order_id)
+    items_html = ""
+    
+    for i in order.items:
+        planned_qty = sum(t.planned_qty for t in i.digging_tasks if t.status == 'pending')
+        left_to_plan = i.quantity - i.dug_total - planned_qty
+        
+        if left_to_plan > 0:
+            items_html += f"""
+            <div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded bg-light">
+                <div style="line-height: 1.2;">
+                    <input type="hidden" name="item_id[]" value="{i.id}">
+                    <strong class="text-dark">{i.plant.name}</strong><br>
+                    <small class="text-muted">{i.size.name} | Поле {i.field.name}</small>
+                </div>
+                <div style="width: 100px;">
+                    <label class="small text-muted text-center w-100 mb-0">Осталось: {left_to_plan}</label>
+                    <input type="number" name="qty[]" class="form-control form-control-sm text-center fw-bold border-success text-success" value="{left_to_plan}" min="0" max="{left_to_plan}">
+                </div>
+            </div>
+            """
+            
+    if not items_html:
+        return "<div class='alert alert-success'>Весь объем по этому заказу уже распределен!</div>"
+        
+    date_formatted = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+    
+    form_html = f"""
+    <form method="POST" action="/digging/planning">
+        <input type="hidden" name="action" value="create_order_tasks">
+        <input type="hidden" name="planned_date" value="{date_str}">
+        <div class="mb-3 text-center">
+            <h5 class="fw-bold text-primary mb-1">Заказ #{order.id} ({order.client.name})</h5>
+            <span class="badge bg-success fs-6">Назначаем выкопку на: {date_formatted}</span>
+        </div>
+        <div class="mb-3" style="max-height: 300px; overflow-y: auto;">
+            {items_html}
+        </div>
+        <div class="mb-3">
+            <input type="text" name="comment" class="form-control" placeholder="Комментарий бригадиру (напр: копать первыми)...">
+        </div>
+        <button type="submit" class="btn btn-success w-100 fw-bold py-2"><i class="fas fa-save me-2"></i> Сохранить в план</button>
+    </form>
+    """
+    return form_html
+
+# API: Детализация при КЛИКЕ на ячейку календаря
+@bp.route('/api/digging/day_details/<date_str>')
+@login_required
+def get_day_details(date_str):
+    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    tasks = DiggingTask.query.filter_by(planned_date=target_date, status='pending').all()
+    
+    date_formatted = target_date.strftime("%d.%m.%Y")
+    
+    if not tasks:
+        return f"<div class='text-center p-4 text-muted'><h5>{date_formatted}</h5>На этот день заданий нет. Перетащите сюда заказ.</div>"
+        
+    tasks_html = f"<div class='mb-3 text-center'><h5 class='fw-bold text-dark'>План на {date_formatted}</h5></div>"
+    
+    for t in tasks:
+        tasks_html += f"""
+        <div class="card mb-2 border-start border-4 border-success shadow-sm">
+            <div class="card-body p-2 d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="fw-bold small text-primary">Заказ #{t.item.order_id} ({t.item.order.client.name})</div>
+                    <div class="fw-bold text-dark">{t.item.plant.name} <span class="badge bg-light text-dark border ms-1">{t.item.size.name}</span></div>
+                    <div class="text-muted small">Поле {t.item.field.name}</div>
+                    {f'<div class="text-muted small mt-1 fst-italic"><i class="fas fa-comment-dots"></i> {t.comment}</div>' if t.comment else ''}
+                </div>
+                <div class="text-end">
+                    <h5 class="fw-bold text-success mb-1">{t.planned_qty} шт</h5>
+                    <form method="POST" action="/digging/planning" onsubmit="return confirm('Снять это задание? Объем вернется обратно.');">
+                        <input type="hidden" name="action" value="delete_task">
+                        <input type="hidden" name="task_id" value="{t.id}">
+                        <button type="submit" class="btn btn-outline-danger btn-sm px-2 py-0"><i class="fas fa-trash"></i></button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        """
+        
+    return tasks_html
