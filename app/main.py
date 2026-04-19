@@ -7,7 +7,7 @@ bp = Blueprint('main', __name__)
 
 from datetime import timedelta
 from sqlalchemy import func
-from app.models import db, Order, PaymentInvoice, Document, PatentPeriod, OrderItem
+from app.models import db, Order, PaymentInvoice, Document, PatentPeriod, OrderItem, DiggingTask, DiggingLog
 from app.utils import msk_today
 
 @bp.route('/')
@@ -22,7 +22,6 @@ def index():
     # 1. КАРТОЧКИ ДЛЯ РУКОВОДИТЕЛЯ И АДМИНА
     # ==========================================
     if current_user.role in ['admin', 'executive']:
-        # Счета на оплату (горят сроки)
         invoices = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid').all()
         for inv in invoices:
             remaining = inv.amount - sum(e.amount for e in inv.expenses)
@@ -42,7 +41,6 @@ def index():
     # 2. КАРТОЧКИ ДЛЯ МЕНЕДЖЕРА И АДМИНА
     # ==========================================
     if current_user.role in ['admin', 'user']:
-        # Новые черновики с сайта (Публичная витрина)
         drafts = Document.query.filter_by(doc_type='client_draft').all()
         for d in drafts:
             feed_cards.append({
@@ -56,29 +54,29 @@ def index():
             })
 
     # ==========================================
-    # 3. КАРТОЧКИ ДЛЯ БРИГАДИРА И АДМИНА
+    # 3. КАРТОЧКИ ДЛЯ БРИГАДИРА И АДМИНА (НОВЫЕ ЗАДАНИЯ)
     # ==========================================
     if current_user.role in ['admin', 'brigadier']:
-        # Заказы, которые нужно выкопать
-        orders_to_dig = Order.query.filter(Order.status.in_(['reserved', 'in_progress'])).all()
-        for o in orders_to_dig:
-            total_qty = sum(i.quantity for i in o.items)
-            total_dug = sum(i.dug_total for i in o.items)
-            if total_dug < total_qty:
-                feed_cards.append({
-                    'id': f'dig_{o.id}',
-                    'type': 'digging',
-                    'title': f'Выкопка: {o.client.name}',
-                    'text': f'Заказ #{o.id}. Выкопано {total_dug} из {total_qty} шт.',
-                    'is_urgent': False,
-                    'url': url_for('digging.mobile_order', order_id=o.id)
-                })
+        # Ищем задания на сегодня и просроченные
+        tasks = DiggingTask.query.filter(DiggingTask.status == 'pending', DiggingTask.planned_date <= today).all()
+        for t in tasks:
+            is_urgent = t.planned_date < today
+            feed_cards.append({
+                'id': f'task_{t.id}',
+                'type': 'task',
+                'title': f'Выкопка: {t.item.order.client.name}',
+                'text': f'{t.item.plant.name} ({t.item.size.name} | Поле {t.item.field.name}). Заказ #{t.item.order_id}',
+                'qty': t.planned_qty,
+                'comment': t.comment,
+                'is_urgent': is_urgent,
+                'date_str': 'ПРОСРОЧЕНО' if is_urgent else 'СЕГОДНЯ',
+                'task_id': t.id
+            })
 
     # ==========================================
     # 4. КАРТОЧКИ ДЛЯ КАДРОВ (HR)
     # ==========================================
     if current_user.role in ['admin', 'user2', 'executive']:
-        # Истекающие патенты
         patents = PatentPeriod.query.filter_by(is_current=True, status='active').all()
         for p in patents:
             if p.end_date:
@@ -93,17 +91,49 @@ def index():
                         'url': url_for('hr.foreign_employee_card', employee_id=p.employee.id)
                     })
 
-    # Сортируем: сначала срочные
     feed_cards.sort(key=lambda x: (not x.get('is_urgent', False), x['title']))
-
     return render_template('feed.html', feed_cards=feed_cards)
 
-# Добавим API для HTMX, чтобы можно было "смахивать" прочитанные карточки
 @bp.route('/api/feed/dismiss/<card_id>', methods=['POST'])
 def dismiss_card(card_id):
-    # Здесь мы пока просто возвращаем пустоту, чтобы карточка исчезла с экрана.
-    # В будущем тут можно писать логику "Отметить прочитанным" в БД.
     return ""
+
+@bp.route('/api/feed/complete_task', methods=['POST'])
+@login_required
+def complete_task():
+    task_id = request.form.get('task_id')
+    fact_qty = int(request.form.get('fact_qty', 0))
+    
+    task = DiggingTask.query.get(task_id)
+    if task and task.status == 'pending' and fact_qty > 0:
+        # 1. Записываем факт выкопки в журнал
+        log = DiggingLog(
+            date=msk_today(),
+            order_item_id=task.order_item_id,
+            plant_id=task.item.plant_id,
+            size_id=task.item.size_id,
+            field_id=task.item.field_id,
+            year=task.item.year,
+            user_id=current_user.id,
+            quantity=fact_qty,
+            status='pending' 
+        )
+        db.session.add(log)
+        
+        # 2. Закрываем задание
+        task.status = 'done'
+        
+        # 3. Пересчитываем статус заказа
+        task.item.order.refresh_status_by_dug()
+        
+        db.session.commit()
+        
+        return f"""
+        <div class="card border-0 shadow-sm mb-3 bg-success bg-opacity-10 text-center py-3 fade-me-in">
+            <h5 class="text-success m-0"><i class="fas fa-check-circle"></i> Принято {fact_qty} шт!</h5>
+        </div>
+        """
+    return "Ошибка ввода", 400
 
 # ВАЖНО: <path:filename> позволяет читать файлы из папок (например photo/plant_1/1.jpg)
 @bp.route('/uploads/<path:filename>')
