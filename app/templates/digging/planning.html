@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="fw-bold text-success"><i class="fas fa-calendar-alt me-2"></i>Диспетчерская выкопки</h4>
+    <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">В меню</a>
+</div>
+
+<div class="row">
+    <!-- ЛЕВАЯ КОЛОНКА: Что нужно распределить -->
+    <div class="col-md-7 mb-3">
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-white fw-bold">
+                <i class="fas fa-list text-primary me-2"></i> Ждут распределения (Остатки заказов)
+            </div>
+            <div class="table-responsive" style="max-height: 600px;">
+                <table class="table table-hover table-sm align-middle mb-0" style="font-size: 13px;">
+                    <thead class="bg-light">
+                        <tr>
+                            <th>Заказ / Клиент</th>
+                            <th>Растение</th>
+                            <th class="text-center">Остаток</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in items_to_plan %}
+                        <tr>
+                            <td>
+                                <a href="{{ url_for('orders.order_detail', order_id=row.item.order.id) }}" class="fw-bold text-decoration-none">#{{ row.item.order.id }}</a><br>
+                                <small class="text-muted">{{ row.item.order.client.name }}</small>
+                            </td>
+                            <td>
+                                <b>{{ row.item.plant.name }}</b><br>
+                                <span class="badge bg-light text-dark border">{{ row.item.size.name }} | Поле {{ row.item.field.name }}</span>
+                            </td>
+                            <td class="text-center text-danger fw-bold fs-6">
+                                {{ row.left_to_plan }}
+                            </td>
+                            <td class="text-end pe-2">
+                                <button class="btn btn-sm btn-success" onclick="openPlanModal('{{ row.item.id }}', '{{ row.item.plant.name }} ({{ row.item.size.name }})', '{{ row.left_to_plan }}')">
+                                    В план
+                                </button>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-4">Все объемы распределены!</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ПРАВАЯ КОЛОНКА: Выданные задания -->
+    <div class="col-md-5">
+        <div class="card shadow-sm border-0 bg-light">
+            <div class="card-header bg-white fw-bold">
+                <i class="fas fa-tasks text-warning me-2"></i> Выданные задания (В ленте)
+            </div>
+            <div class="card-body p-2" style="max-height: 600px; overflow-y: auto;">
+                {% for task in pending_tasks %}
+                <div class="card mb-2 border-0 shadow-sm border-start border-4 {% if task.planned_date < today %}border-danger{% elif task.planned_date == today %}border-success{% else %}border-secondary{% endif %}">
+                    <div class="card-body p-2">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="badge {% if task.planned_date < today %}bg-danger{% elif task.planned_date == today %}bg-success{% else %}bg-secondary{% endif %}">
+                                {{ task.planned_date.strftime('%d.%m.%Y') }}
+                                {% if task.planned_date < today %} (Просрочено!){% endif %}
+                                {% if task.planned_date == today %} (СЕГОДНЯ){% endif %}
+                            </span>
+                            <form method="POST" onsubmit="return confirm('Отменить задание? Объем вернется в нераспределенные.');">
+                                <input type="hidden" name="action" value="delete_task">
+                                <input type="hidden" name="task_id" value="{{ task.id }}">
+                                <button class="btn btn-link text-danger p-0 m-0"><i class="fas fa-times"></i></button>
+                            </form>
+                        </div>
+                        <div class="fw-bold">{{ task.item.plant.name }}</div>
+                        <div class="small text-muted mb-2">Заказ #{{ task.item.order_id }} ({{ task.item.order.client.name }})</div>
+                        <div class="d-flex justify-content-between align-items-center bg-light p-1 rounded border">
+                            <span class="small fw-bold text-muted text-uppercase">План:</span>
+                            <span class="fs-5 fw-bold text-dark">{{ task.planned_qty }} шт.</span>
+                        </div>
+                        {% if task.comment %}
+                        <div class="mt-2 small text-muted fst-italic"><i class="fas fa-comment-dots"></i> {{ task.comment }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-4">Активных заданий нет</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модалка планирования -->
+<div class="modal fade" id="planModal" tabindex="-1">
+    <div class="modal-dialog modal-sm modal-dialog-centered">
+        <div class="modal-content">
+            <form method="POST">
+                <input type="hidden" name="action" value="create_task">
+                <input type="hidden" name="order_item_id" id="planItemId">
+                <div class="modal-header bg-success text-white py-2">
+                    <h6 class="modal-title">Назначить выкопку</h6>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="fw-bold mb-3 text-center" id="planPlantName"></div>
+                    <div class="mb-3">
+                        <label class="small text-muted fw-bold">Дата выполнения</label>
+                        <input type="date" name="planned_date" class="form-control" value="{{ today.strftime('%Y-%m-%d') }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="small text-muted fw-bold">Сколько штук копать?</label>
+                        <input type="number" name="qty" id="planQty" class="form-control fw-bold text-center fs-5 text-success border-success" min="1" required>
+                        <div class="form-text text-center text-danger">Можно распределить: <span id="planMaxLabel"></span> шт.</div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="small text-muted">Указание бригадиру</label>
+                        <input type="text" name="comment" class="form-control form-control-sm" placeholder="Например: 'Копать покрупнее'">
+                    </div>
+                </div>
+                <div class="modal-footer p-1">
+                    <button type="submit" class="btn btn-success w-100 fw-bold">В план</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    function openPlanModal(itemId, plantName, maxQty) {
+        document.getElementById('planItemId').value = itemId;
+        document.getElementById('planPlantName').innerText = plantName;
+        document.getElementById('planQty').value = maxQty;
+        document.getElementById('planQty').max = maxQty;
+        document.getElementById('planMaxLabel').innerText = maxQty;
+        new bootstrap.Modal(document.getElementById('planModal')).show();
+    }
+</script>
+{% endblock %}

@@ -5,23 +5,105 @@ from app.models import Order, ActionLog
 
 bp = Blueprint('main', __name__)
 
+from datetime import timedelta
+from sqlalchemy import func
+from app.models import db, Order, PaymentInvoice, Document, PatentPeriod, OrderItem
+from app.utils import msk_today
+
 @bp.route('/')
 def index():
-    # Если пользователь вошел
-    if current_user.is_authenticated: 
-        # Руководителя отправляем сразу в Счета (новая объединенная вкладка)
-        if current_user.role == 'executive':
-            return redirect(url_for('finance.expenses', tab='invoices'))
+    if not current_user.is_authenticated:
+        return redirect(url_for('auth.login'))
         
-        # Бригадиру/Кадровику сразу на Кадры (часы - вкладка Табель)
-        if current_user.role in ['brigadier', 'user2']:
-            return redirect(url_for('hr.personnel', tab='timesheet'))
+    today = msk_today()
+    feed_cards = []
 
-        # Всех остальных - в Заказы
-        return redirect(url_for('orders.orders_list'))
-        
-    # Если нет -> на страницу входа
-    return redirect(url_for('auth.login'))
+    # ==========================================
+    # 1. КАРТОЧКИ ДЛЯ РУКОВОДИТЕЛЯ И АДМИНА
+    # ==========================================
+    if current_user.role in ['admin', 'executive']:
+        # Счета на оплату (горят сроки)
+        invoices = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid').all()
+        for inv in invoices:
+            remaining = inv.amount - sum(e.amount for e in inv.expenses)
+            if remaining > 0:
+                is_urgent = inv.priority == 'high' or (inv.due_date and (inv.due_date - today).days <= 3)
+                feed_cards.append({
+                    'id': f'inv_{inv.id}',
+                    'type': 'invoice',
+                    'title': 'Счет на оплату',
+                    'text': f'{inv.item.name if inv.item else "Без статьи"}: {inv.original_name}',
+                    'amount': remaining,
+                    'is_urgent': is_urgent,
+                    'url': url_for('finance.expenses', invoice_id=inv.id)
+                })
+
+    # ==========================================
+    # 2. КАРТОЧКИ ДЛЯ МЕНЕДЖЕРА И АДМИНА
+    # ==========================================
+    if current_user.role in ['admin', 'user']:
+        # Новые черновики с сайта (Публичная витрина)
+        drafts = Document.query.filter_by(doc_type='client_draft').all()
+        for d in drafts:
+            feed_cards.append({
+                'id': f'draft_{d.id}',
+                'type': 'draft',
+                'title': 'Новая заявка с сайта',
+                'text': f'Требует подтверждения менеджером.',
+                'date': d.date.strftime('%d.%m.%Y'),
+                'is_urgent': True,
+                'url': url_for('orders.client_draft_detail', doc_id=d.id)
+            })
+
+    # ==========================================
+    # 3. КАРТОЧКИ ДЛЯ БРИГАДИРА И АДМИНА
+    # ==========================================
+    if current_user.role in ['admin', 'brigadier']:
+        # Заказы, которые нужно выкопать
+        orders_to_dig = Order.query.filter(Order.status.in_(['reserved', 'in_progress'])).all()
+        for o in orders_to_dig:
+            total_qty = sum(i.quantity for i in o.items)
+            total_dug = sum(i.dug_total for i in o.items)
+            if total_dug < total_qty:
+                feed_cards.append({
+                    'id': f'dig_{o.id}',
+                    'type': 'digging',
+                    'title': f'Выкопка: {o.client.name}',
+                    'text': f'Заказ #{o.id}. Выкопано {total_dug} из {total_qty} шт.',
+                    'is_urgent': False,
+                    'url': url_for('digging.mobile_order', order_id=o.id)
+                })
+
+    # ==========================================
+    # 4. КАРТОЧКИ ДЛЯ КАДРОВ (HR)
+    # ==========================================
+    if current_user.role in ['admin', 'user2', 'executive']:
+        # Истекающие патенты
+        patents = PatentPeriod.query.filter_by(is_current=True, status='active').all()
+        for p in patents:
+            if p.end_date:
+                days_left = (p.end_date - today).days
+                if days_left <= 14:
+                    feed_cards.append({
+                        'id': f'pat_{p.id}',
+                        'type': 'patent',
+                        'title': 'Истекает патент',
+                        'text': f'{p.employee.name} (осталось {days_left} дн.)',
+                        'is_urgent': days_left <= 7,
+                        'url': url_for('hr.foreign_employee_card', employee_id=p.employee.id)
+                    })
+
+    # Сортируем: сначала срочные
+    feed_cards.sort(key=lambda x: (not x.get('is_urgent', False), x['title']))
+
+    return render_template('feed.html', feed_cards=feed_cards)
+
+# Добавим API для HTMX, чтобы можно было "смахивать" прочитанные карточки
+@bp.route('/api/feed/dismiss/<card_id>', methods=['POST'])
+def dismiss_card(card_id):
+    # Здесь мы пока просто возвращаем пустоту, чтобы карточка исчезла с экрана.
+    # В будущем тут можно писать логику "Отметить прочитанным" в БД.
+    return ""
 
 # ВАЖНО: <path:filename> позволяет читать файлы из папок (например photo/plant_1/1.jpg)
 @bp.route('/uploads/<path:filename>')

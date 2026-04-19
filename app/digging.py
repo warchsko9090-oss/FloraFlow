@@ -616,3 +616,68 @@ def analytics():
                            start_date=start_date,
                            end_date=end_date,
                            summary=summary)
+
+from app.models import DiggingTask # Убедись, что импортировал новую модель в начале файла
+
+@bp.route('/digging/planning', methods=['GET', 'POST'])
+@login_required
+def digging_planning():
+    if current_user.role not in ['admin', 'user', 'executive']:
+        return redirect(url_for('main.index'))
+
+    if request.method == 'POST':
+        action = request.form.get('action')
+        
+        if action == 'create_task':
+            item_id = int(request.form.get('order_item_id'))
+            qty = int(request.form.get('qty'))
+            date_str = request.form.get('planned_date')
+            comment = request.form.get('comment')
+            
+            task = DiggingTask(
+                order_item_id=item_id,
+                planned_date=datetime.strptime(date_str, '%Y-%m-%d').date(),
+                planned_qty=qty,
+                comment=comment,
+                created_by_user_id=current_user.id
+            )
+            db.session.add(task)
+            db.session.commit()
+            flash('Задание успешно отправлено бригадиру!')
+            log_action(f"Создал задание на выкопку ({qty} шт) на {date_str}")
+            
+        elif action == 'delete_task':
+            task = DiggingTask.query.get(request.form.get('task_id'))
+            if task:
+                db.session.delete(task)
+                db.session.commit()
+                flash('Задание отменено')
+                
+        return redirect(url_for('digging.digging_planning'))
+
+    # Ищем позиции, которые еще не выкопаны до конца
+    # Статусы: reserved или in_progress
+    active_orders = Order.query.filter(Order.status.in_(['reserved', 'in_progress']), Order.is_deleted == False).all()
+    
+    items_to_plan = []
+    for o in active_orders:
+        for i in o.items:
+            # Сколько уже запланировано, но еще не выполнено
+            planned_qty = sum(t.planned_qty for t in i.digging_tasks if t.status == 'pending')
+            # Сколько осталось распределить
+            left_to_plan = i.quantity - i.dug_total - planned_qty
+            
+            if left_to_plan > 0:
+                items_to_plan.append({
+                    'item': i,
+                    'left_to_plan': left_to_plan,
+                    'planned_pending': planned_qty
+                })
+
+    # Текущие активные задания
+    pending_tasks = DiggingTask.query.filter_by(status='pending').order_by(DiggingTask.planned_date).all()
+
+    return render_template('digging/planning.html', 
+                           items_to_plan=items_to_plan, 
+                           pending_tasks=pending_tasks, 
+                           today=msk_today())

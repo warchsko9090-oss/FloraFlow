@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    .feed-container { max-width: 600px; margin: 0 auto; padding-bottom: 80px; }
+    .feed-card {
+        background: #fff; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        border: none; margin-bottom: 16px; overflow: hidden;
+    }
+</style>
+
+<div class="feed-container">
+    <div class="d-flex justify-content-between align-items-center mb-4 px-2">
+        <div>
+            <h4 class="fw-bold mb-0 text-dark">Мои задачи</h4>
+            <span class="text-muted small">{{ current_user.username }}</span>
+        </div>
+        {% if feed_cards %}
+        <span class="badge bg-success rounded-pill fs-6">{{ feed_cards|length }}</span>
+        {% endif %}
+    </div>
+
+    {% if not feed_cards %}
+    <div class="text-center p-5 text-muted">
+        <i class="fas fa-coffee fa-4x text-success mb-3 opacity-50"></i>
+        <h4 class="fw-bold text-dark">На сегодня всё!</h4>
+        <p>План выполнен. Задач нет.</p>
+    </div>
+    {% endif %}
+
+    <div id="feed-list">
+        {% for card in feed_cards %}
+        <div class="feed-card border-start border-4 {% if card.is_urgent %}border-danger{% else %}border-success{% endif %}" id="card-{{ card.id }}">
+            
+            <div class="p-3">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <h6 class="fw-bold mb-0 text-dark">{{ card.title }}</h6>
+                    <span class="badge {% if card.is_urgent %}bg-danger{% else %}bg-success{% endif %}">{{ card.date_str }}</span>
+                </div>
+                <p class="text-muted small mb-2">{{ card.text }}</p>
+                
+                {% if card.comment %}
+                <div class="bg-light p-2 rounded small text-dark fst-italic mb-3 border">
+                    <i class="fas fa-comment-dots text-warning me-1"></i> {{ card.comment }}
+                </div>
+                {% endif %}
+
+                <!-- Форма ввода факта (Отправляется без перезагрузки через HTMX) -->
+                <form hx-post="/api/feed/complete_task" hx-target="#card-{{ card.id }}" hx-swap="outerHTML">
+                    <input type="hidden" name="task_id" value="{{ card.task_id }}">
+                    <label class="small fw-bold text-success text-uppercase mb-1">План: {{ card.qty }} шт. Сколько выкопали по факту?</label>
+                    <div class="input-group input-group-lg shadow-sm">
+                        <!-- В поле по умолчанию стоит план. Бригадир может изменить цифру -->
+                        <input type="number" name="fact_qty" class="form-control fw-bold text-center text-success border-success" 
+                               value="{{ card.qty }}" min="1" required inputmode="numeric">
+                        <button type="submit" class="btn btn-success fw-bold px-3">ГОТОВО</button>
+                    </div>
+                </form>
+            </div>
+            
+        </div>
+        {% endfor %}
+    </div>
+</div>

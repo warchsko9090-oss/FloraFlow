@@ -677,9 +677,22 @@ class ProjectBudget(db.Model):
     
     project_rel = db.relationship('Project', backref=db.backref('budget_items', cascade="all, delete-orphan"))
 
-# --- БЕЗОПАСНОСТЬ ---
 class BlockedIP(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     ip_address = db.Column(db.String(50), unique=True, nullable=False)
     failed_attempts = db.Column(db.Integer, default=0)
     locked_at = db.Column(db.DateTime, nullable=True)
+
+# --- НОВОЕ: ЗАДАНИЯ НА ВЫКОПКУ (Для ленты) ---
+class DiggingTask(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    order_item_id = db.Column(db.Integer, db.ForeignKey('order_item.id'), nullable=False)
+    planned_date = db.Column(db.Date, nullable=False)
+    planned_qty = db.Column(db.Integer, nullable=False)
+    comment = db.Column(db.String(500))
+    status = db.Column(db.String(20), default='pending') # pending, done
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+
+    item = db.relationship('OrderItem', backref=db.backref('digging_tasks', lazy=True))
+    created_by = db.relationship('User')

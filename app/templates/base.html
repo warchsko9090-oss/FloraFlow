@@ -333,6 +333,8 @@
             <li class="nav-item dropdown">
                 <a class="nav-link dropdown-toggle" href="#" id="dropProd" role="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="fas fa-seedling me-1"></i> Производство</a>
                 <ul class="dropdown-menu shadow border-0" aria-labelledby="dropProd">
+                    <li><a class="dropdown-item fw-bold" href="{{ url_for('digging.digging_planning') }}"><i class="fas fa-calendar-check me-2 text-primary"></i> Диспетчерская (План)</a></li>
+                    <li><hr class="dropdown-divider"></li>
                     <li><a class="dropdown-item" href="{{ url_for('digging.mobile_index') }}"><i class="fas fa-trowel me-2 text-warning"></i> Ввод выкопки</a></li>
                     <li><a class="dropdown-item" href="{{ url_for('digging.analytics') }}"><i class="fas fa-chart-line me-2 text-info"></i> Аналитика выкопки</a></li>
                     {% if current_user.role != 'user2' %}
