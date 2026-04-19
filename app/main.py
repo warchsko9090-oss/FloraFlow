@@ -1,98 +1,234 @@
 import os
-from flask import Blueprint, redirect, url_for, send_file, send_from_directory, current_app, render_template, jsonify
+import json
+from flask import Blueprint, redirect, url_for, send_file, send_from_directory, current_app, render_template, jsonify, request
 from flask_login import current_user, login_required
-from app.models import Order, ActionLog
-
-bp = Blueprint('main', __name__)
-
 from datetime import timedelta
 from sqlalchemy import func
-from app.models import db, Order, PaymentInvoice, Document, PatentPeriod, OrderItem, DiggingTask, DiggingLog
-from app.utils import msk_today
+from app.models import db, Order, PaymentInvoice, Document, PatentPeriod, OrderItem, DiggingTask, DiggingLog, ActionLog, TgTask
+from app.utils import msk_today, msk_now
+
+bp = Blueprint('main', __name__)
 
 @bp.route('/')
 def index():
     if not current_user.is_authenticated:
         return redirect(url_for('auth.login'))
-        
-    today = msk_today()
-    feed_cards = []
 
-    # ==========================================
-    # 1. КАРТОЧКИ ДЛЯ РУКОВОДИТЕЛЯ И АДМИНА
-    # ==========================================
+    today = msk_today()
+    
+    # Структура папок для дашборда
+    groups = {
+        'overdue': {'id': 'overdue', 'label': '🔥 Срочно / Просрочено', 'color': 'danger', 'icon': 'fa-exclamation-circle', 'cards': [], 'is_open': True, 'order': 1},
+        'today': {'id': 'today', 'label': '✅ План на сегодня', 'color': 'success', 'icon': 'fa-calendar-day', 'cards': [], 'is_open': True, 'order': 2},
+        'tomorrow': {'id': 'tomorrow', 'label': '➡️ В планах на завтра', 'color': 'primary', 'icon': 'fa-arrow-right', 'cards': [], 'is_open': False, 'order': 3},
+        'future': {'id': 'future', 'label': '⏳ Предстоящие задачи', 'color': 'secondary', 'icon': 'fa-calendar-alt', 'cards': [], 'is_open': False, 'order': 4}
+    }
+
+    def add_to_group(card, target_date, is_forced_urgent=False):
+        if is_forced_urgent:
+            groups['overdue']['cards'].append(card)
+            return
+        
+        diff = (target_date - today).days
+        if diff < 0:
+            groups['overdue']['cards'].append(card)
+        elif diff == 0:
+            groups['today']['cards'].append(card)
+        elif diff == 1:
+            groups['tomorrow']['cards'].append(card)
+        else:
+            groups['future']['cards'].append(card)
+
+    # 1. Счета на оплату
     if current_user.role in ['admin', 'executive']:
         invoices = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid').all()
         for inv in invoices:
             remaining = inv.amount - sum(e.amount for e in inv.expenses)
             if remaining > 0:
-                is_urgent = inv.priority == 'high' or (inv.due_date and (inv.due_date - today).days <= 3)
-                feed_cards.append({
+                d = inv.due_date or today
+                is_urgent = inv.priority == 'high' or (d - today).days <= 3
+                card = {
                     'id': f'inv_{inv.id}',
                     'type': 'invoice',
                     'title': 'Счет на оплату',
                     'text': f'{inv.item.name if inv.item else "Без статьи"}: {inv.original_name}',
                     'amount': remaining,
-                    'is_urgent': is_urgent,
-                    'url': url_for('finance.expenses', invoice_id=inv.id)
-                })
+                    'url': url_for('finance.expenses', invoice_id=inv.id),
+                    'date_str': d.strftime('%d.%m.%Y'),
+                    'raw_date': d
+                }
+                add_to_group(card, d, is_forced_urgent=is_urgent)
 
-    # ==========================================
-    # 2. КАРТОЧКИ ДЛЯ МЕНЕДЖЕРА И АДМИНА
-    # ==========================================
+    # 2. Черновики с сайта
     if current_user.role in ['admin', 'user']:
         drafts = Document.query.filter_by(doc_type='client_draft').all()
         for d in drafts:
-            feed_cards.append({
+            card = {
                 'id': f'draft_{d.id}',
                 'type': 'draft',
                 'title': 'Новая заявка с сайта',
-                'text': f'Требует подтверждения менеджером.',
-                'date': d.date.strftime('%d.%m.%Y'),
-                'is_urgent': True,
-                'url': url_for('orders.client_draft_detail', doc_id=d.id)
-            })
+                'text': 'Требует подтверждения менеджером.',
+                'url': url_for('orders.client_draft_detail', doc_id=d.id),
+                'date_str': d.date.strftime('%d.%m.%Y'),
+                'raw_date': today
+            }
+            add_to_group(card, today, is_forced_urgent=True)
 
-    # ==========================================
-    # 3. КАРТОЧКИ ДЛЯ БРИГАДИРА И АДМИНА (НОВЫЕ ЗАДАНИЯ)
-    # ==========================================
-    if current_user.role in ['admin', 'brigadier']:
-        # Ищем задания на сегодня и просроченные
-        tasks = DiggingTask.query.filter(DiggingTask.status == 'pending', DiggingTask.planned_date <= today).all()
+    # 3. Выкопка (Задачи)
+    if current_user.role in ['admin', 'brigadier', 'user2']:
+        tasks = DiggingTask.query.filter(DiggingTask.status == 'pending').all()
         for t in tasks:
-            is_urgent = t.planned_date < today
-            feed_cards.append({
-                'id': f'task_{t.id}',
-                'type': 'task',
-                'title': f'Выкопка: {t.item.order.client.name}',
-                'text': f'{t.item.plant.name} ({t.item.size.name} | Поле {t.item.field.name}). Заказ #{t.item.order_id}',
-                'qty': t.planned_qty,
-                'comment': t.comment,
-                'is_urgent': is_urgent,
-                'date_str': 'ПРОСРОЧЕНО' if is_urgent else 'СЕГОДНЯ',
-                'task_id': t.id
-            })
+            if t.item and t.item.order and not t.item.order.is_deleted:
+                d = t.planned_date
+                card = {
+                    'id': f'task_{t.id}',
+                    'type': 'task',
+                    'order_id': t.item.order_id,
+                    'client_name': t.item.order.client.name,
+                    'plant_name': t.item.plant.name,
+                    'size_name': t.item.size.name,
+                    'field_name': t.item.field.name,
+                    'qty': t.planned_qty,
+                    'comment': t.comment,
+                    'task_id': t.id,
+                    'date_str': d.strftime('%d.%m.%Y'),
+                    'raw_date': d
+                }
+                add_to_group(card, d)
 
-    # ==========================================
-    # 4. КАРТОЧКИ ДЛЯ КАДРОВ (HR)
-    # ==========================================
+    # 4. Патенты HR
     if current_user.role in ['admin', 'user2', 'executive']:
         patents = PatentPeriod.query.filter_by(is_current=True, status='active').all()
         for p in patents:
             if p.end_date:
                 days_left = (p.end_date - today).days
                 if days_left <= 14:
-                    feed_cards.append({
+                    card = {
                         'id': f'pat_{p.id}',
                         'type': 'patent',
                         'title': 'Истекает патент',
                         'text': f'{p.employee.name} (осталось {days_left} дн.)',
-                        'is_urgent': days_left <= 7,
-                        'url': url_for('hr.foreign_employee_card', employee_id=p.employee.id)
-                    })
+                        'url': url_for('hr.foreign_employee_card', employee_id=p.employee.id),
+                        'date_str': p.end_date.strftime('%d.%m.%Y'),
+                        'raw_date': p.end_date
+                    }
+                    add_to_group(card, p.end_date, is_forced_urgent=(days_left<=7))
 
-    feed_cards.sort(key=lambda x: (not x.get('is_urgent', False), x['title']))
-    return render_template('feed.html', feed_cards=feed_cards)
+    # 5. НОВОЕ: Задачи из Telegram бота
+    # Менеджеру показываем задачи для 'user', Бригадиру - для 'brigadier', Админу - все.
+    target_roles = [current_user.role]
+    if current_user.role == 'admin':
+        target_roles = ['user', 'brigadier', 'admin']
+        
+    tg_tasks = TgTask.query.filter(TgTask.status == 'new', TgTask.assignee_role.in_(target_roles)).all()
+    for t in tg_tasks:
+        card = {
+            'id': f'tgtask_{t.id}',
+            'type': 'tg_task',
+            'title': t.title,
+            'details': t.details,
+            'task_id': t.id,
+            'date_str': t.created_at.strftime('%d.%m %H:%M'),
+            'raw_date': today
+        }
+        # Задачи из чата считаем "На сегодня" по умолчанию, поместим в группу info (сделаем через color)
+        groups['today']['cards'].append(card)
+        groups['today']['cards'][-1]['color'] = 'info' # Меняем цвет карточки на синий
+
+    # Сортировка внутри папок по дате и удаление пустых папок
+    for g in groups.values():
+        g['cards'].sort(key=lambda x: x.get('raw_date', today))
+        
+    feed_groups = [g for g in sorted(groups.values(), key=lambda x: x['order']) if g['cards']]
+    
+    return render_template('feed.html', feed_groups=feed_groups)
+
+@bp.route('/api/feed/dismiss/<card_id>', methods=['POST'])
+def dismiss_card(card_id):
+    return ""
+
+@bp.route('/api/feed/complete_task', methods=['POST'])
+@login_required
+def complete_task():
+    task_id = request.form.get('task_id')
+    fact_qty = int(request.form.get('fact_qty', 0))
+    
+    task = DiggingTask.query.get(task_id)
+    if task and task.status == 'pending' and fact_qty > 0:
+        log = DiggingLog(
+            date=msk_today(), order_item_id=task.order_item_id, plant_id=task.item.plant_id,
+            size_id=task.item.size_id, field_id=task.item.field_id, year=task.item.year,
+            user_id=current_user.id, quantity=fact_qty, status='pending' 
+        )
+        db.session.add(log)
+        task.status = 'done'
+        task.item.order.refresh_status_by_dug()
+        db.session.commit()
+        
+        return f"""
+        <div class="card border-0 shadow-sm mb-3 bg-success bg-opacity-10 text-center py-3 fade-me-in">
+            <h5 class="text-success m-0"><i class="fas fa-check-circle"></i> Принято {fact_qty} шт!</h5>
+        </div>
+        """
+    return "Ошибка ввода", 400
+
+@bp.route('/api/feed/complete_tg_task', methods=['POST'])
+@login_required
+def complete_tg_task():
+    task_id = request.form.get('task_id')
+    task = TgTask.query.get(task_id)
+    if task and task.status == 'new':
+        task.status = 'done'
+        db.session.commit()
+        return f"""
+        <div class="card border-0 shadow-sm mb-3 bg-primary bg-opacity-10 text-center py-3 fade-me-in">
+            <h6 class="text-primary m-0"><i class="fas fa-check-double"></i> Задача из чата выполнена!</h6>
+        </div>
+        """
+    return "Ошибка", 400
+
+# ========================================================
+# WEBHOOK ТЕЛЕГРАМ БОТА ДЛЯ ПОСТАНОВКИ ЗАДАЧ ОТ РУКОВОДИТЕЛЯ
+# ========================================================
+@bp.route('/api/telegram/webhook', methods=['POST'])
+def telegram_webhook():
+    """
+    Сюда Telegram присылает сообщения. 
+    Мы ловим те, где есть упоминание бота (например @FloraFlow)
+    и отправляем в УМНЫЙ AI АГЕНТ (с инструментами) для глубокого разбора.
+    """
+    data = request.json
+    if not data or 'message' not in data:
+        return jsonify({'status': 'ok'}) # Игнорируем технические сообщения
+        
+    msg = data['message']
+    text = msg.get('text', '')
+    
+    # Защита: реагируем только если бот упомянут (настрой свое имя бота ниже!)
+    # Или если это личное сообщение боту
+    is_private = msg.get('chat', {}).get('type') == 'private'
+    
+    if is_private or text.startswith('@FloraFlow') or 'заказ' in text.lower() or 'копать' in text.lower():
+        
+        sender = msg.get('from', {}).get('first_name', 'Руководитель')
+        
+        # Импортируем наш новый Агент с инструментами
+        try:
+            from app.ai_tools_agent import process_telegram_message_with_ai
+            
+            # Запускаем цепочку мыслей ИИ
+            # Он сам сходит в базу, поищет клиента, остатки и создаст запись в TgTask
+            result_msg = process_telegram_message_with_ai(text, sender)
+            print(f"AI Result: {result_msg}")
+            
+        except Exception as e:
+            print(f"Ошибка AI Webhook (Tools): {e}")
+            # Запасной вариант (Fallback)
+            new_task = TgTask(raw_text=text, title="Сообщение из чата (Сбой)", details=text, assignee_role='user', sender_name=sender)
+            db.session.add(new_task)
+            db.session.commit()
+
+    return jsonify({'status': 'ok'})
 
 @bp.route('/api/feed/dismiss/<card_id>', methods=['POST'])
 def dismiss_card(card_id):

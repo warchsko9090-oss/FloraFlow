@@ -769,7 +769,7 @@ def get_order_plan_form(order_id, date_str):
     date_formatted = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
     
     form_html = f"""
-    <form method="POST" action="/digging/planning">
+    <form method="POST" action="/digging/planning" hx-boost="false">
         <input type="hidden" name="action" value="create_order_tasks">
         <input type="hidden" name="planned_date" value="{date_str}">
         <div class="mb-3 text-center">
@@ -803,22 +803,35 @@ def get_day_details(date_str):
     
     for t in tasks:
         tasks_html += f"""
-        <div class="card mb-2 border-start border-4 border-success shadow-sm">
-            <div class="card-body p-2 d-flex justify-content-between align-items-center">
-                <div>
-                    <div class="fw-bold small text-primary">Заказ #{t.item.order_id} ({t.item.order.client.name})</div>
-                    <div class="fw-bold text-dark">{t.item.plant.name} <span class="badge bg-light text-dark border ms-1">{t.item.size.name}</span></div>
-                    <div class="text-muted small">Поле {t.item.field.name}</div>
-                    {f'<div class="text-muted small mt-1 fst-italic"><i class="fas fa-comment-dots"></i> {t.comment}</div>' if t.comment else ''}
-                </div>
-                <div class="text-end">
-                    <h5 class="fw-bold text-success mb-1">{t.planned_qty} шт</h5>
-                    <form method="POST" action="/digging/planning" onsubmit="return confirm('Снять это задание? Объем вернется обратно.');">
+        <div class="card mb-3 border-0 shadow-sm border-start border-4 border-success">
+            <div class="card-body p-3">
+                <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                    <div class="small text-muted text-uppercase fw-bold">
+                        Заказ #{t.item.order_id} <span class="mx-1">&bull;</span> {t.item.order.client.name}
+                    </div>
+                    <form method="POST" action="/digging/planning" onsubmit="return confirm('Снять это задание? Объем вернется обратно.');" hx-boost="false" class="m-0">
                         <input type="hidden" name="action" value="delete_task">
                         <input type="hidden" name="task_id" value="{t.id}">
-                        <button type="submit" class="btn btn-outline-danger btn-sm px-2 py-0"><i class="fas fa-trash"></i></button>
+                        <button type="submit" class="btn btn-link text-danger p-0 m-0" title="Удалить"><i class="fas fa-trash-alt"></i></button>
                     </form>
                 </div>
+                
+                <div class="d-flex justify-content-between align-items-start mt-2">
+                    <div>
+                        <div class="fw-bold text-dark lh-1 mb-2" style="font-size: 1.15rem;">
+                            {t.item.plant.name} <span class="badge bg-light text-dark border ms-1" style="font-size: 0.9rem; vertical-align: middle;">{t.item.size.name}</span>
+                        </div>
+                        <div class="badge bg-secondary px-2 py-1 shadow-sm fw-normal">
+                            <i class="fas fa-map-marker-alt opacity-75 me-1"></i>Поле {t.item.field.name}
+                        </div>
+                    </div>
+                    <div class="text-end">
+                        <div class="small text-muted text-uppercase fw-bold mb-1">План:</div>
+                        <h4 class="fw-bold text-success mb-0">{t.planned_qty} <span class="fs-6 text-muted fw-normal">шт</span></h4>
+                    </div>
+                </div>
+                
+                {f'<div class="mt-3 bg-warning bg-opacity-10 border border-warning p-2 rounded small text-dark"><i class="fas fa-comment-dots text-warning me-1"></i> {t.comment}</div>' if t.comment else ''}
             </div>
         </div>
         """

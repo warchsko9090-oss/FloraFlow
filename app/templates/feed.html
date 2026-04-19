@@ -1,74 +1,145 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-    .feed-container { max-width: 600px; margin: 0 auto; padding-bottom: 80px; }
-    .feed-card {
-        background: #fff; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-        border: none; margin-bottom: 16px; overflow: hidden;
+    .feed-container { max-width: 650px; margin: 0 auto; padding-bottom: 80px; }
+    
+    .task-card {
+        background: #fff; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.03);
+        border: 1px solid #f1f5f9; margin-bottom: 12px; overflow: hidden;
+        border-left: 4px solid #10b981; /* Зеленый по умолчанию */
     }
+    .task-card.danger { border-left-color: #ef4444; }
+    .task-card.primary { border-left-color: #3b82f6; }
+    .task-card.secondary { border-left-color: #64748b; }
+    .task-card.info { border-left-color: #0ea5e9; } /* Для Telegram задач */
+    
+    .accordion-button:not(.collapsed) { box-shadow: none; }
+    .accordion-button:focus { box-shadow: none; border-color: transparent; }
 </style>
 
 <div class="feed-container">
     <div class="d-flex justify-content-between align-items-center mb-4 px-2">
         <div>
-            <h4 class="fw-bold mb-0 text-dark">Мои задачи</h4>
-            <span class="text-muted small">{{ current_user.username }}</span>
+            <h4 class="fw-bold mb-0 text-dark">Мой дашборд</h4>
+            <span class="text-muted small">Добро пожаловать, {{ current_user.username }}</span>
         </div>
-        {% if feed_cards %}
-        <span class="badge bg-success rounded-pill fs-6">{{ feed_cards|length }}</span>
-        {% endif %}
     </div>
 
-    {% if not feed_cards %}
+    {% if not feed_groups %}
     <div class="text-center p-5 text-muted">
         <i class="fas fa-coffee fa-4x text-success mb-3 opacity-50"></i>
         <h4 class="fw-bold text-dark">На сегодня всё!</h4>
-        <p>План выполнен. Задач нет.</p>
+        <p>План выполнен. Срочных задач нет.</p>
     </div>
     {% endif %}
 
-    <div id="feed-list">
-        {% for card in feed_cards %}
-        <div class="feed-card border-start border-4 {% if card.is_urgent %}border-danger{% else %}border-success{% endif %}" id="card-{{ card.id }}">
+    <!-- Добавлен id="feedAccordion" для родителя -->
+    <div class="accordion" id="feedAccordion">
+        {% for group in feed_groups %}
+        <div class="accordion-item border-0 mb-3 bg-transparent">
             
-            <div class="p-3">
-                <div class="d-flex justify-content-between align-items-start mb-2">
-                    <h6 class="fw-bold mb-0 text-dark">{{ card.title }}</h6>
-                    <span class="badge {% if card.is_urgent %}bg-danger{% else %}bg-success{% endif %}">{{ card.date_str }}</span>
-                </div>
-                <p class="text-muted small mb-2">{{ card.text }}</p>
-                
-                {% if card.comment %}
-                <div class="bg-light p-2 rounded small text-dark fst-italic mb-3 border">
-                    <i class="fas fa-comment-dots text-warning me-1"></i> {{ card.comment }}
-                </div>
-                {% endif %}
+            <h2 class="accordion-header mb-2" style="border-radius: 12px; overflow: hidden;">
+                <!-- Кнопка аккордеона -->
+                <button class="accordion-button {% if not group.is_open %}collapsed{% endif %} bg-{{ group.color }} bg-opacity-10 fw-bold text-{{ group.color }} shadow-sm border-0" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ group.id }}">
+                    <i class="fas {{ group.icon }} me-2"></i> {{ group.label }}
+                    <span class="badge bg-{{ group.color }} ms-auto rounded-pill px-2 py-1">{{ group.cards|length }}</span>
+                </button>
+            </h2>
+            
+            <!-- СХЛОПЫВАНИЕ: Добавлен data-bs-parent="#feedAccordion" -->
+            <div id="collapse{{ group.id }}" class="accordion-collapse collapse {% if group.is_open %}show{% endif %}" data-bs-parent="#feedAccordion">
+                <div class="accordion-body p-0 pt-2 pb-1">
+                    
+                    {% for card in group.cards %}
+                        <div class="task-card {{ group.color }}" id="card-{{ card.id }}">
+                            <div class="p-3">
+                                
+                                {% if card.type == 'task' %}
+                                    <!-- КАРТОЧКА: ВЫКОПКА -->
+                                    <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                                        <div class="small text-muted text-uppercase fw-bold">
+                                            Заказ #{{ card.order_id }} <span class="mx-1">&bull;</span> {{ card.client_name }}
+                                        </div>
+                                        <span class="badge bg-light text-dark border">{{ card.date_str }}</span>
+                                    </div>
+                                    
+                                    <div class="d-flex justify-content-between align-items-start mt-2 mb-3">
+                                        <div>
+                                            <div class="fw-bold text-dark lh-1 mb-2" style="font-size: 1.15rem;">
+                                                {{ card.plant_name }} <span class="badge bg-light text-dark border ms-1" style="font-size: 0.85rem; vertical-align: middle;">{{ card.size_name }}</span>
+                                            </div>
+                                            <div class="badge bg-secondary px-2 py-1 shadow-sm fw-normal">
+                                                <i class="fas fa-map-marker-alt opacity-75 me-1"></i> Поле {{ card.field_name }}
+                                            </div>
+                                        </div>
+                                    </div>
 
-                {% if card.type == 'task' %}
-                <!-- Форма ввода факта ТОЛЬКО для заданий выкопки -->
-                <form hx-post="/api/feed/complete_task" hx-target="#card-{{ card.id }}" hx-swap="outerHTML">
-                    <input type="hidden" name="task_id" value="{{ card.task_id }}">
-                    <label class="small fw-bold text-success text-uppercase mb-1">План: {{ card.qty }} шт. Сколько выкопали по факту?</label>
-                    <div class="input-group input-group-lg shadow-sm">
-                        <input type="number" name="fact_qty" class="form-control fw-bold text-center text-success border-success" 
-                               value="{{ card.qty }}" min="1" required inputmode="numeric">
-                        <button type="submit" class="btn btn-success fw-bold px-3">ГОТОВО</button>
-                    </div>
-                </form>
-                {% else %}
-                <!-- Кнопки для обычных уведомлений (Патенты, Счета, Черновики) -->
-                <div class="d-flex gap-2 mt-3 pt-3 border-top">
-                    <a href="{{ card.url }}" class="btn btn-sm btn-primary fw-bold flex-grow-1 text-decoration-none">Открыть карточку</a>
-                    <button class="btn btn-sm btn-outline-secondary" hx-post="/api/feed/dismiss/{{ card.id }}" hx-target="#card-{{ card.id }}" hx-swap="outerHTML swap:0.3s" title="Скрыть">
-                        <i class="fas fa-check"></i>
-                    </button>
+                                    {% if card.comment %}
+                                    <div class="bg-warning bg-opacity-10 border border-warning p-2 rounded small text-dark mb-3">
+                                        <i class="fas fa-comment-dots text-warning me-1"></i> {{ card.comment }}
+                                    </div>
+                                    {% endif %}
+
+                                    <form hx-post="/api/feed/complete_task" hx-target="#card-{{ card.id }}" hx-swap="outerHTML">
+                                        <input type="hidden" name="task_id" value="{{ card.task_id }}">
+                                        <label class="small fw-bold text-success text-uppercase mb-1">План: {{ card.qty }} шт. Факт:</label>
+                                        <div class="input-group input-group-lg shadow-sm">
+                                            <input type="number" name="fact_qty" class="form-control fw-bold text-center text-success border-success" 
+                                                   value="{{ card.qty }}" min="1" required inputmode="numeric">
+                                            <button type="submit" class="btn btn-success fw-bold px-3">ГОТОВО</button>
+                                        </div>
+                                    </form>
+
+                                {% elif card.type == 'tg_task' %}
+                                    <!-- КАРТОЧКА: ЗАДАЧА ИЗ TELEGRAM -->
+                                    <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                                        <div class="small text-info text-uppercase fw-bold">
+                                            <i class="fab fa-telegram fs-6 me-1"></i> Из рабочего чата
+                                        </div>
+                                        <span class="badge bg-light text-dark border">{{ card.date_str }}</span>
+                                    </div>
+                                    <h5 class="fw-bold text-dark mb-2">{{ card.title }}</h5>
+                                    
+                                    <div class="bg-light p-2 rounded small text-dark mb-3 border fst-italic">
+                                        "{{ card.details }}"
+                                    </div>
+                                    
+                                    <form hx-post="/api/feed/complete_tg_task" hx-target="#card-{{ card.id }}" hx-swap="outerHTML">
+                                        <input type="hidden" name="task_id" value="{{ card.task_id }}">
+                                        <div class="d-flex gap-2">
+                                            <a href="{{ url_for('orders.order_create') }}" class="btn btn-outline-primary btn-sm fw-bold flex-grow-1">Создать заказ</a>
+                                            <button type="submit" class="btn btn-success btn-sm fw-bold"><i class="fas fa-check"></i> Сделано</button>
+                                        </div>
+                                    </form>
+                                
+                                {% else %}
+                                    <!-- СТАНДАРТНАЯ КАРТОЧКА (Счета, Патенты, Черновики) -->
+                                    <div class="d-flex justify-content-between align-items-start mb-2">
+                                        <h6 class="fw-bold mb-0 text-dark">{{ card.title }}</h6>
+                                        <span class="badge bg-light text-dark border">{{ card.date_str }}</span>
+                                    </div>
+                                    <p class="text-muted small mb-2">{{ card.text }}</p>
+                                    
+                                    {% if card.amount %}
+                                    <h5 class="text-danger fw-bold mb-3">{{ card.amount|money_int }}</h5>
+                                    {% endif %}
+
+                                    <div class="d-flex gap-2 mt-3 pt-3 border-top">
+                                        <a href="{{ card.url }}" class="btn btn-sm btn-primary fw-bold flex-grow-1 text-decoration-none text-center">Открыть карточку</a>
+                                        <button class="btn btn-sm btn-outline-secondary" hx-post="/api/feed/dismiss/{{ card.id }}" hx-target="#card-{{ card.id }}" hx-swap="outerHTML swap:0.3s" title="Скрыть задачу">
+                                            <i class="fas fa-check"></i>
+                                        </button>
+                                    </div>
+                                {% endif %}
+                                
+                            </div>
+                        </div>
+                    {% endfor %}
+                    
                 </div>
-                {% endif %}
             </div>
-            
         </div>
         {% endfor %}
     </div>
 </div>
-
 {% endblock %}

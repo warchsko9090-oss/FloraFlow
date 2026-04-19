@@ -696,3 +696,14 @@ class DiggingTask(db.Model):
 
     item = db.relationship('OrderItem', backref=db.backref('digging_tasks', lazy=True))
     created_by = db.relationship('User')
+
+# --- ЗАДАЧИ ИЗ TELEGRAM (AI ПАРСИНГ) ---
+class TgTask(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    raw_text = db.Column(db.Text, nullable=False) # Оригинальное сообщение
+    title = db.Column(db.String(200)) # Суть задачи
+    details = db.Column(db.Text) # Детали, извлеченные AI
+    assignee_role = db.Column(db.String(50)) # Кому: 'user' (менеджер), 'brigadier' (бригадир)
+    status = db.Column(db.String(20), default='new') # new, done
+    sender_name = db.Column(db.String(100)) # Имя руководителя в ТГ
