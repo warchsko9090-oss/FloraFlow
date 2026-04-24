@@ -16,6 +16,7 @@ from app.models import (
 )
 from app.utils import log_action, get_or_create_stock, msk_now, natural_key, apply_excel_styles
 from app.services import calculate_cost_data
+from app.stock_helpers import get_reserved_map
 
 bp = Blueprint('stock', __name__)
 
@@ -716,17 +717,22 @@ def api_field_recount_items():
 
     plants_map = {p.id: p.name for p in Plant.query.all()}
     sizes_map = {s.id: s.name for s in Size.query.all()}
+    rmap = get_reserved_map()
     items = []
     for (pid, sid, yr), fact_qty in fact_map.items():
         if fact_qty <= 0:
             continue
+        reserved = int(rmap.get((pid, sid, field_id, yr), 0) or 0)
+        free = max(0, int(fact_qty) - reserved)
         items.append({
             'plant_id': pid,
             'plant_name': plants_map.get(pid, '-'),
             'size_id': sid,
             'size_name': sizes_map.get(sid, '-'),
             'year': yr,
-            'current_qty': int(fact_qty)
+            'current_qty': int(fact_qty),
+            'reserved': reserved,
+            'free': free,
         })
     items.sort(key=lambda x: (natural_key(x['plant_name']), natural_key(x['size_name']), x['year'] or 0))
     return jsonify({'items': items})
@@ -774,6 +780,15 @@ def documents():
                 if not fact_map:
                     flash('Нет данных для пересчета')
                     return redirect(url_for('stock.documents', active_tab='regrading'))
+
+                # Валидация: фактическое кол-во не должно быть меньше зарезервированного
+                rmap = get_reserved_map()
+                for (pid, sid, yr), fact_qty in fact_map.items():
+                    reserved = int(rmap.get((pid, sid, field_id, yr), 0) or 0)
+                    if int(fact_qty) < reserved:
+                        pl = Plant.query.get(pid); sz = Size.query.get(sid)
+                        name = (pl.name if pl else '') + ((' · ' + sz.name) if sz else '')
+                        raise ValueError(f'Пересчёт {fact_qty} шт по позиции «{name}» меньше резерва {reserved} шт')
 
                 field_obj = Field.query.get(field_id)
                 doc_comment = f'Пересчет по полю: {field_obj.name if field_obj else field_id}'
@@ -852,7 +867,10 @@ def documents():
                 doc.order_id = ghost_order.id
             db.session.add(doc)
             db.session.flush()
-            
+
+            # Карта резервов нужна только для операций, ограниченных свободным остатком
+            rmap_local = get_reserved_map() if dt == 'writeoff' else {}
+
             for i in range(len(p_ids)):
                 try: qty = int(q_ids[i])
                 except: continue
@@ -868,7 +886,14 @@ def documents():
                 
                 elif dt == 'writeoff':
                     sid = int(s_ids[i]); ff = int(f_from[i])
-                    get_or_create_stock(pid, sid, ff, year).quantity -= qty
+                    stock = get_or_create_stock(pid, sid, ff, year)
+                    reserved = int(rmap_local.get((pid, sid, ff, year), 0) or 0)
+                    free = max(0, int(stock.quantity or 0) - reserved)
+                    if qty > free:
+                        pl = Plant.query.get(pid); sz = Size.query.get(sid)
+                        name = (pl.name if pl else '') + ((' · ' + sz.name) if sz else '')
+                        raise ValueError(f'Списание {qty} шт по позиции «{name}» превышает свободный остаток {free} шт (резерв: {reserved})')
+                    stock.quantity -= qty
                     db.session.add(DocumentRow(document_id=doc.id, plant_id=pid, size_id=sid, field_from_id=ff, year=year, quantity=qty))
                 
                 elif dt == 'move':
@@ -1032,20 +1057,23 @@ def documents():
         'field_id': f_field,
     }
 
-    return render_template('stock/documents.html', 
-                           plants=Plant.query.all(), 
-                           sizes=Size.query.all(), 
-                           fields=Field.query.all(), 
+    resp = make_response(render_template('stock/documents.html',
+                           plants=Plant.query.all(),
+                           sizes=sorted(Size.query.all(), key=natural_key),
+                           fields=sorted(Field.query.all(), key=natural_key),
                            clients=Client.query.all(),
-                           shipments=shipments, 
-                           ghost_orders=ghost_orders, 
+                           shipments=shipments,
+                           ghost_orders=ghost_orders,
                            stock_json=json.dumps(stock_data),
                            drafts_data=drafts_data,
                            recount_cards=recount_cards,
                            current_year=msk_now().year,
                            filters=filters,
                            active_tab=active_tab,
-                           current_url=request.url)
+                           current_url=request.url))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
 
 @bp.route('/order/create_ghost', methods=['GET', 'POST'])
 @login_required
@@ -1517,9 +1545,12 @@ def recalc_stock_balances():
 @bp.route('/logs')
 @login_required
 def logs():
-    return render_template('stock/logs.html', 
-                           logs=ActionLog.query.order_by(ActionLog.date.desc()).limit(500).all(), 
-                           documents=Document.query.order_by(Document.date.desc()).limit(500).all())
+    resp = make_response(render_template('stock/logs.html',
+                           logs=ActionLog.query.order_by(ActionLog.date.desc()).limit(500).all(),
+                           documents=Document.query.order_by(Document.date.desc()).limit(500).all()))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
 
 @bp.route('/changelog', methods=['GET', 'POST'])
 @login_required
@@ -1708,8 +1739,8 @@ def api_inventory_get_sizes():
 @login_required
 def inventory_mobile():
     plants = Plant.query.order_by(Plant.name).all()
-    fields = Field.query.order_by(Field.name).all()
-    sizes = Size.query.all()
+    fields = sorted(Field.query.all(), key=natural_key)
+    sizes = sorted(Size.query.all(), key=natural_key)
     return render_template('stock/inventory_mobile.html', plants=plants, fields=fields, sizes=sizes, current_year=msk_now().year)
 
 @bp.route('/api/inventory/save', methods=['POST'])

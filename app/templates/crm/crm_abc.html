@@ -15,7 +15,7 @@
 
 <!-- Фильтр -->
 <div class="card p-3 mb-4 bg-light shadow-sm border-0">
-    <form method="GET" class="d-flex align-items-center gap-2">
+    <form method="GET" class="d-flex align-items-center gap-2" hx-boost="false">
         <label class="fw-bold">Период:</label>
         <select name="year_start" class="form-select form-select-sm" style="width:100px">
             {% for y in years %}<option value="{{ y }}" {% if y == filters.start %}selected{% endif %}>{{ y }}</option>{% endfor %}

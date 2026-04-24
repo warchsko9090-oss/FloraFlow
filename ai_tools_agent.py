@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from groq import Groq
 from app.models import db, Client, Plant, StockBalance, TgTask, User
 from sqlalchemy import func
@@ -9,24 +9,58 @@ from app.utils import msk_today
 client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 
 def tool_find_user(username):
-    """Инструмент для поиска ID сотрудника системы по его имени/логину из чата"""
-    if not username: return json.dumps({"error": "Имя не указано"})
+    """Инструмент для поиска ID сотрудника системы по его имени/логину из чата.
+
+    Поддерживаем:
+      • прямой username из Telegram (warchesko, Kirill_8988, AlekseiPitomnik, ...);
+      • русские имена и падежи (Алексей / Алексею / Алексея / Алексеем);
+      • латиницу с опечатками (Alex / Alexey / Aleksey);
+      • фамилии (Овчинников, Одоев и т.п.).
+    """
+    if not username:
+        return json.dumps({"error": "Имя не указано"})
     clean_name = username.replace('@', '').strip().lower()
-    
-    # СЛОВАРЬ СИНОНИМОВ (Telegram имена -> Системные логины в БД)
+
+    # Канонические логины в БД (User.username). Дальше ищем LIKE по этому значению.
+    CANON_ALEKSEI = "aleksei"
+    CANON_BEHRUZ = "behruz"
+    CANON_KIRILL = "kirill"
+    CANON_ADMIN = "warchesko"  # В — admin
+
+    # Словарь синонимов (в нижнем регистре). Добавляй смело — это самый надёжный рычаг.
     user_aliases = {
-        "behruz": "behruz", "бехруз": "behruz", "бехруз одоев": "behruz",
-        "алексей": "aleksei", "алексей питомник одоев": "aleksei", "aleksei": "aleksei",
-        "kirill_8988": "kirill", "к": "kirill", "кирилл": "kirill", "овчинников": "kirill"
+        # --- Бехруз (бригадир, user2) ---
+        "behruz": CANON_BEHRUZ, "бехруз": CANON_BEHRUZ,
+        "бехруза": CANON_BEHRUZ, "бехрузу": CANON_BEHRUZ, "бехрузом": CANON_BEHRUZ,
+        "бехруз одоев": CANON_BEHRUZ, "одоев": CANON_BEHRUZ, "одоева": CANON_BEHRUZ,
+        "бригадир": CANON_BEHRUZ,
+
+        # --- Алексей (менеджер, user) ---
+        "алексей": CANON_ALEKSEI, "алексея": CANON_ALEKSEI, "алексею": CANON_ALEKSEI,
+        "алексеем": CANON_ALEKSEI, "алёша": CANON_ALEKSEI, "леша": CANON_ALEKSEI,
+        "алексей питомник одоев": CANON_ALEKSEI, "питомник": CANON_ALEKSEI,
+        "алексей питомник": CANON_ALEKSEI,
+        "aleksei": CANON_ALEKSEI, "aleksey": CANON_ALEKSEI, "alexey": CANON_ALEKSEI,
+        "alex": CANON_ALEKSEI, "alexei": CANON_ALEKSEI,
+        "aleksei_pitomnik": CANON_ALEKSEI, "alekseipitomnik": CANON_ALEKSEI,
+
+        # --- Кирилл Овчинников (руководитель, admin) ---
+        "kirill_8988": CANON_KIRILL, "kirill": CANON_KIRILL,
+        "к": CANON_KIRILL, "кирилл": CANON_KIRILL, "кирилла": CANON_KIRILL,
+        "кириллу": CANON_KIRILL, "кириллом": CANON_KIRILL,
+        "овчинников": CANON_KIRILL, "овчинникова": CANON_KIRILL, "овчинникову": CANON_KIRILL,
+
+        # --- В / Вовчик / Vasiliy (admin, @warchesko) ---
+        "warchesko": CANON_ADMIN, "warchevsky": CANON_ADMIN,
+        "в": CANON_ADMIN, "админ": CANON_ADMIN, "руководитель": CANON_ADMIN,
     }
-    
-    # Ищем сначала по словарю, если нет - берем как есть
+
     target_username = user_aliases.get(clean_name, clean_name)
-    
+
     user = User.query.filter(func.lower(User.username).like(f"%{target_username}%")).first()
     if user:
         return json.dumps({
-            "user_id": user.id, 
+            "user_id": user.id,
             "username": user.username,
             "role": user.role,
             "status": "found"
@@ -56,10 +90,21 @@ def tool_check_stock(plant_name):
     return json.dumps({"status": "success", "stock": results})
 
 def tool_create_dashboard_task(role, action_type, title, details, payload, assignee_id=None, deadline=None):
-    """Инструмент для сохранения задачи в Дашборд"""
+    """Инструмент для сохранения задачи в Дашборд.
+
+    Дефолт дедлайна: если AI не смог вычислить срок — ставим «завтра».
+    Это часть политики «тянущихся» задач: у карточки ВСЕГДА есть дата,
+    чтобы она сначала висела в «Сегодня»/«Завтра», а после — в «Просрочено».
+    """
     try:
-        dead_date = datetime.strptime(deadline, '%Y-%m-%d').date() if deadline else None
-        
+        if deadline:
+            try:
+                dead_date = datetime.strptime(deadline, '%Y-%m-%d').date()
+            except Exception:
+                dead_date = msk_today() + timedelta(days=1)
+        else:
+            dead_date = msk_today() + timedelta(days=1)
+
         # ЗАЩИТА: Проверяем, существует ли юзер с таким ID, который выдал ИИ
         if assignee_id:
             user_exists = User.query.get(assignee_id)
@@ -74,7 +119,8 @@ def tool_create_dashboard_task(role, action_type, title, details, payload, assig
             assignee_id=assignee_id,
             deadline=dead_date,
             action_type=action_type,
-            action_payload=json.dumps(payload, ensure_ascii=False) if payload else "{}"
+            action_payload=json.dumps(payload, ensure_ascii=False) if payload else "{}",
+            source='tg',
         )
         db.session.add(new_task)
         db.session.commit()
@@ -175,7 +221,8 @@ def process_telegram_message_with_ai(raw_text, sender_name):
          Если число БОЛЬШЕ или РАВНО текущему ({current_day}) -> этот же месяц.
          Если число МЕНЬШЕ текущего ({current_day}) -> следующий месяц. 
          Пример: Сегодня 19.04. Если просят "до 25" -> 2026-04-25. Если просят "до 10" -> 2026-05-10.
-       - Если дата не указана вообще -> deadline=null.
+       - Если срок не указан ИЛИ его нельзя надёжно вычислить — СТАВЬ ЗАВТРАШНИЙ ДЕНЬ
+         (относительно {today_str}). Поле deadline ОБЯЗАТЕЛЬНО: null не возвращай.
 
     4. СОЗДАНИЕ: Вызывай 'create_dashboard_task'. Передай вычисленный deadline, role, action_type и assignee_id.
     """
@@ -220,12 +267,32 @@ def process_telegram_message_with_ai(raw_text, sender_name):
                 db.session.commit()
             return "Task created"
         else:
-            db.session.add(TgTask(raw_text=raw_text, title="Указание из чата", details=response_message.content, assignee_role=None, sender_name=sender_name, action_type="info"))
+            # AI не счёл сообщение задачей — сохраняем как «инфо» с дедлайном
+            # «завтра», чтобы карточка жила на ленте по тем же правилам, что все.
+            db.session.add(TgTask(
+                raw_text=raw_text,
+                title="Указание из чата",
+                details=response_message.content,
+                assignee_role=None,
+                sender_name=sender_name,
+                action_type="info",
+                deadline=msk_today() + timedelta(days=1),
+                source='tg',
+            ))
             db.session.commit()
             return "Info saved"
     except Exception as e:
         print(f"AI Tool Error: {e}")
         db.session.rollback() # ВАЖНО: Сбрасываем все ошибки БД перед созданием ручной задачи
-        db.session.add(TgTask(raw_text=raw_text, title="Сообщение из чата (Разобрать вручную)", details=raw_text, assignee_role=None, sender_name=sender_name, action_type="info"))
+        db.session.add(TgTask(
+            raw_text=raw_text,
+            title="Сообщение из чата (Разобрать вручную)",
+            details=raw_text,
+            assignee_role=None,
+            sender_name=sender_name,
+            action_type="info",
+            deadline=msk_today() + timedelta(days=1),
+            source='fallback',
+        ))
         db.session.commit()
         return "Fallback saved"

@@ -1,28 +1,23 @@
 from app import create_app
-from app.models import db
 
 app = create_app()
 
-# Попытка импорта скрипта обучения.
-# Если файл train_ai.py не создан - сайт все равно запустится, просто не обучится.
+# AI-обучение — опциональный модуль; если файла train_ai.py нет, сайт стартует без него.
 try:
     from train_ai import seed_knowledge
-    HAS_TRAINING_SCRIPT = True
-except ImportError:
-    HAS_TRAINING_SCRIPT = False
-    print("ВНИМАНИЕ: Файл train_ai.py не найден. Авто-обучение пропущено.")
+    _HAS_TRAINING_SCRIPT = True
+except Exception as _e:
+    _HAS_TRAINING_SCRIPT = False
+    app.logger.info(f'train_ai.py не подключен ({_e}) — авто-обучение пропущено.')
 
-if __name__ == '__main__' or True: # Для Gunicorn
+if _HAS_TRAINING_SCRIPT:
     with app.app_context():
-        # Создаем новые таблицы (для Диспетчерской)
-        db.create_all()
-        
-        # ВКЛЮЧАЕМ ОБУЧЕНИЕ для загрузки новых примеров
-        if HAS_TRAINING_SCRIPT:
-            try:
-                seed_knowledge()
-            except Exception as e:
-                print(f"Ошибка при запуске обучения: {e}")
+        try:
+            seed_knowledge()
+        except Exception as e:
+            app.logger.warning(f'Ошибка при запуске обучения: {e}')
+
 
 if __name__ == '__main__':
+    # Локальный запуск (python run.py). В проде работает gunicorn -c gunicorn.conf.py run:app.
     app.run(host='0.0.0.0', port=5000, debug=True)

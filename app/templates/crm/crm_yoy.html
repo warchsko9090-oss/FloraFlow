@@ -7,7 +7,7 @@
 </div>
 
 <div class="card p-3 mb-4 bg-light shadow-sm border-0" style="z-index: 100;">
-    <form method="GET" class="d-flex align-items-center gap-2 flex-wrap">
+    <form method="GET" class="d-flex align-items-center gap-2 flex-wrap" hx-boost="false">
         <div class="dropdown">
             <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Клиенты {% if selected_clients %}({{ selected_clients|length }}){% endif %}</button>
             <div class="dropdown-menu p-2 shadow" style="max-height: 300px; overflow-y: auto;">

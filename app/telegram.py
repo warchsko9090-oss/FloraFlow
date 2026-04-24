@@ -16,6 +16,10 @@ CHAT_ROUTES = {
     "orders": ["TG_CHAT_ID_ORDERS", "TG_CHAT_ID"],
     "digging": ["TG_CHAT_ID_HR", "TG_CHAT_ID"],
     "patents": ["TG_CHAT_ID_PATENTS", "TG_CHAT_ID_HR", "TG_CHAT_ID"],
+    # «Расходы Жемчужниково» — чат, по которому ходит монитор из app/expense_chat.py.
+    # В этот чат бот тоже иногда пишет (например, подтверждения админа), поэтому
+    # маршрут нужен и на исходящую сторону.
+    "expenses": ["TG_CHAT_ID_EXPENSES", "TG_CHAT_ID"],
 }
 
 
@@ -73,6 +77,35 @@ def send_photo(photo_path, caption="", chat_type="hr"):
     except Exception as exc:
         return False, str(exc)
     return True, "ok"
+
+def set_reaction(chat_id, message_id, emoji='✅'):
+    """Ставит реакцию бота на конкретное сообщение через Bot API
+    `setMessageReaction` (добавлено в Bot API 7.0, февраль 2024).
+
+    `chat_id` — строка или число, реальный id чата из апдейта (без резолва
+    через CHAT_ROUTES: реакция всегда ставится туда же, где сообщение).
+    `message_id` — int, id сообщения, на которое вешаем эмодзи.
+
+    Возвращает (True, 'ok') или (False, err). Не кидает исключений —
+    нам нельзя ронять основной поток ingest-а сообщений.
+    """
+    bot_token = _get_bot_token()
+    if not bot_token or not chat_id or not message_id:
+        return False, "TG creds/ids not configured"
+    url = f"https://api.telegram.org/bot{bot_token}/setMessageReaction"
+    try:
+        r = requests.post(url, json={
+            'chat_id': chat_id,
+            'message_id': int(message_id),
+            'reaction': [{'type': 'emoji', 'emoji': emoji}],
+            'is_big': False,
+        }, timeout=8)
+        if not r.ok:
+            return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+    return True, "ok"
+
 
 def send_photo_album(photo_paths, chat_type="hr"):
     """

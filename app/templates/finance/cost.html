@@ -30,7 +30,7 @@
         <div class="dropdown">
             <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside"><i class="fas fa-filter text-muted"></i> Фильтр</button>
             <div class="dropdown-menu dropdown-check-list shadow border-0">
-                <form method="GET" id="filterForm">
+                <form method="GET" id="filterForm" hx-boost="false">
                     <input type="hidden" name="tab" value="summary">
                 <div class="px-2 mb-2">
                     <label class="form-label small mb-1">Период</label>
@@ -216,7 +216,7 @@
         </div>
     </div>
 
-    <form method="GET" class="card p-2 mb-3 border-0 shadow-sm d-flex flex-row align-items-center flex-wrap gap-2">
+    <form method="GET" class="card p-2 mb-3 border-0 shadow-sm d-flex flex-row align-items-center flex-wrap gap-2" hx-boost="false">
         <input type="hidden" name="tab" value="impact">
         
         <div class="d-flex align-items-center gap-2 bg-light px-2 py-1 rounded">

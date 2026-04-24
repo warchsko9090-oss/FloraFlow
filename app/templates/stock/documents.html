@@ -6,14 +6,690 @@
     .nav-tabs .nav-link.active { color: #198754 !important; font-weight: bold; background-color: #fff; border-color: #dee2e6 #dee2e6 #fff; }
     .nav-tabs .nav-link:hover { border-color: #e9ecef #e9ecef #dee2e6; color: #1b5e20 !important; }
     .row-remove-btn { color: #dc3545; cursor: pointer; }
+
+    /* ==============================================================
+       ДВИЖОК БЕСКОНЕЧНОЙ КАРТЫ (Figma / Map style) — для Drag & Drop режима
+       ============================================================== */
+    /* Раньше здесь был «хак» с отрицательным margin-left: calc(-.5 * (100vw - 100%)),
+       чтобы карта растягивалась во всю ширину под горизонтальное меню. С новым
+       layout (app-shell + sidebar) эта формула загоняет карту под левое меню —
+       часть (100vw - 100%) равна ширине sidebar. Оставляем нейтральные отступы. */
+    #mapView.fullwidth { margin: 0; padding: 0; }
+    /* Высота под новую шапку v3 (56px) + padding контента. Использую dvh для
+       корректной работы на iOS Safari (без прыгающего URL-bar). 100vh оставляю
+       как fallback для старых браузеров. */
+    .map-layout {
+        display: flex; gap: 12px;
+        height: calc(100vh - 120px);
+        height: calc(100dvh - 120px);
+        min-height: 560px;
+    }
+    /* Каталог растений слева карты. Ширина адаптивная: при свёрнутом общем
+       сайдбаре приложения (app-shell.sidebar-collapsed) места на контент
+       больше, значит каталогу можно дать побольше. min/max не даём ему
+       схлопнуться в нечитаемую колонку при узких экранах. */
+    .map-sidebar {
+        width: clamp(200px, 22vw, 260px);
+        flex-shrink: 0;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        display: flex; flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    /* Когда основной сайдбар приложения свернут — у карты больше места,
+       поэтому каталог растений растягиваем до комфортных 280-320px. */
+    .app-shell.sidebar-collapsed .map-sidebar {
+        width: clamp(220px, 20vw, 320px);
+    }
+    .map-sidebar-header { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; background: #f8fafc; }
+    .map-sidebar-body { overflow-y: auto; padding: 6px; flex-grow: 1; }
+
+    /* Двухуровневый каталог: растение + аккордеон чипов */
+    .catalog-plant {
+        padding: 7px 10px; font-weight: 700; color: #065f46; cursor: pointer;
+        border-radius: 8px; background: #ecfdf5; margin-bottom: 3px; user-select: none;
+        display: flex; align-items: center; justify-content: space-between; gap: 6px;
+        transition: 0.15s;
+    }
+    .catalog-plant:hover { background: #d1fae5; }
+    .catalog-plant.active { background: #10b981; color: #fff; }
+    .catalog-plant .chev { font-size: 10px; opacity: .6; transition: transform .2s; }
+    .catalog-plant.active .chev { transform: rotate(90deg); opacity: 1; }
+    .catalog-sizes { display: none; flex-wrap: wrap; gap: 4px; margin: 0 4px 8px 10px; padding: 4px 0; }
+    .catalog-plant.active + .catalog-sizes { display: flex; }
+    .size-chip {
+        font-size: 11px; padding: 4px 9px; border-radius: 100px; background: #fff;
+        border: 1px solid #a7f3d0; cursor: grab; color: #047857; font-weight: 600;
+        user-select: none; transition: 0.15s;
+    }
+    .size-chip:hover { border-color: #059669; background: #f0fdf4; transform: translateY(-1px); }
+    .size-chip:active { cursor: grabbing; }
+
+    .map-main { flex-grow: 1; position: relative; min-width: 0; }
+    .map-container {
+        width: 100%; height: 100%; min-height: 520px;
+        background-color: #f8fafc;
+        background-image: radial-gradient(#cbd5e1 1.5px, transparent 1.5px);
+        background-size: 30px 30px;
+        background-position: 0 0;
+        overflow: hidden;
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
+        position: relative;
+        cursor: grab;
+        box-shadow: inset 0 0 20px rgba(0,0,0,0.02);
+        touch-action: none;
+    }
+    .map-container:active { cursor: grabbing; }
+    .map-container.rotating { cursor: alias; }
+    .pan-zoom-layer {
+        position: absolute; top: 50%; left: 50%;
+        /* transform-origin ОБЯЗАТЕЛЬНО 50% 50% — формула zoom-to-cursor в JS
+           (panX = x − (x − panX) * factor) выведена для масштабирования вокруг
+           центра слоя. Если оставить 0 0, scale идёт вокруг top-left слоя и
+           карта при zoom'е «утягивается» в верхний-левый угол. */
+        transform-origin: 50% 50%;
+        will-change: transform;
+    }
+    /* Канвас карты: фиксированный «холст» с aspect-ratio от фото (или 16:9 по умолчанию).
+       Поля позиционируются абсолютно в % от канваса — это даёт свободную расстановку
+       и совместимость с любым размером фона. rotateX/rotateZ оставляем для режима 3D. */
+    .isometric-grid {
+        position: relative;
+        width: var(--canvas-w, 1600px);
+        aspect-ratio: var(--canvas-ratio, 16/9);
+        transform: rotateX(60deg) rotateZ(-45deg);
+        transform-style: preserve-3d;
+        transition: transform 0s;
+        background-color: #f8fafc;
+        border-radius: 20px;
+        box-shadow: 0 0 0 1px rgba(0,0,0,.04);
+    }
+    .isometric-grid.flat { transform: none !important; }
+    /* Фоновое фото карты живёт ВНУТРИ канваса, чтобы при pan/zoom оно двигалось
+       вместе с полями — это позволяет точно привязывать каждое поле к конкретной
+       точке спутникового снимка. Поля рендерятся поверх фона (z-index: 0 vs auto).
+       Фон делаем c запасом 50% в каждую сторону (150%×150%), чтобы пользователь мог
+       отодвигать/масштабировать его без появления серых углов. Лишнее обрезает
+       overflow:hidden у .map-container. */
+    .isometric-grid > .map-bg {
+        position: absolute;
+        top: -25%; left: -25%;
+        width: 150%; height: 150%;
+        object-fit: var(--bg-fit, cover);
+        object-position: center;
+        opacity: var(--bg-opacity, 1);
+        transform:
+            translate(var(--bg-ox, 0%), var(--bg-oy, 0%))
+            scale(var(--bg-scale, 1))
+            rotate(var(--bg-rot, 0deg));
+        transform-origin: 50% 50%;
+        user-select: none; -webkit-user-drag: none;
+        pointer-events: none;  /* по умолчанию клики уходят на канвас/поля */
+        transition: opacity .15s;
+        z-index: 0;
+    }
+    /* Когда фон есть — отключаем серую точечную подложку у контейнера. */
+    .map-container.has-bg { background-image: none; background-color: #0b1220; }
+    /* Сам канвас без фона делается прозрачным, чтобы в пустых зонах (без полей)
+       был виден фон. Обратите внимание: overflow у канваса НЕ скрываем — фон сделан
+       в 150% размера канваса, так он частично заполняет и «серую» область вокруг.
+       Лишнее обрежется у .map-container (у него overflow:hidden). */
+    .map-container.has-bg .isometric-grid {
+        background-color: transparent;
+        box-shadow: 0 0 0 1px rgba(255,255,255,.08);
+    }
+    /* В режиме редактирования разрешаем таскать сам фон мышью.
+       Если включён замок (bg-locked) — pointer-events: none сохраняется, drag не работает. */
+    .map-container.editor-mode:not(.bg-locked) .isometric-grid > .map-bg.bg-draggable { pointer-events: auto; cursor: grab; }
+    .map-container.editor-mode:not(.bg-locked) .isometric-grid > .map-bg.bg-dragging  { cursor: grabbing; }
+
+    /* Кнопка-замочек в заголовке секции «Фоновое фото». */
+    .bg-lock-btn {
+        background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 100px;
+        padding: 3px 10px; font-size: 11px; font-weight: 700; color: #475569;
+        display: inline-flex; align-items: center; cursor: pointer; line-height: 1;
+        transition: all .15s;
+    }
+    .bg-lock-btn:hover { border-color: #64748b; color: #0f172a; }
+    .bg-lock-btn.active {
+        background: #f59e0b; color: #fff; border-color: #d97706;
+        box-shadow: 0 2px 6px rgba(245,158,11,.35);
+    }
+    /* Когда фон закреплён — визуально блокируем его блок настроек. */
+    .map-container.bg-locked + * #mapBgTransformBox,
+    #mapBgTransformBox.locked {
+        opacity: .55; pointer-events: none; filter: grayscale(.2);
+    }
+    /* Индикатор «замок» поверх канваса — подсказка админу. */
+    .map-container.editor-mode.bg-locked::after {
+        content: '\f023  Фон закреплён';
+        font-family: 'Font Awesome 6 Free', 'FontAwesome', sans-serif;
+        font-weight: 900;
+        position: absolute; top: 60px; left: 15px; z-index: 25;
+        background: rgba(245,158,11,.95); color: #fff;
+        padding: 4px 10px; border-radius: 100px;
+        font-size: 11px; letter-spacing: .3px;
+        box-shadow: 0 4px 10px rgba(0,0,0,.15);
+        pointer-events: none;
+    }
+    .iso-field {
+        position: absolute;
+        left: var(--fx, 0%); top: var(--fy, 0%);
+        width: var(--fw, 10%); height: var(--fh, 12%);
+        background: var(--fcolor, linear-gradient(135deg, #86efac, #4ade80));
+        border-radius: 10px; cursor: pointer;
+        transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                    box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                    outline 0.15s;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(255,255,255,.25);
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        clip-path: var(--fclip, none);
+        -webkit-clip-path: var(--fclip, none);
+        user-select: none;
+        /* Строго обрезаем всё, что вылезает за границы поля — иначе длинные подписи
+           наезжают на соседей. Если поле имеет custom shape (clip-path), он и так
+           обрежет, но overflow работает для прямоугольников без clip-path. */
+        overflow: hidden;
+    }
+    .iso-field:hover {
+        filter: brightness(1.05);
+        box-shadow: 0 10px 22px rgba(0,0,0,0.28), inset 0 0 0 1px rgba(255,255,255,.3);
+    }
+    .isometric-grid.flat .iso-field { box-shadow: 0 6px 14px rgba(0,0,0,0.12); }
+    .isometric-grid.flat .iso-field:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(0,0,0,0.18); }
+    .iso-field.drop-target {
+        outline: 3px dashed #0ea5e9;
+        background: linear-gradient(135deg, #7dd3fc, #38bdf8);
+    }
+    .iso-field.drop-reject {
+        outline: 3px dashed #ef4444;
+        background: linear-gradient(135deg, #fca5a5, #f87171);
+    }
+    @keyframes pulseGlow { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 20px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+    .iso-field.pulse-target { animation: pulseGlow 1.5s infinite; background: linear-gradient(135deg, #34d399, #10b981); }
+
+    /* Контент поля. Важно: counter-scale применяется только при zoom-out
+       (label-scale > 1), при приближении текст не раздувается, а остаётся
+       базового размера — иначе он перекроет всё поле. См. updateTransform(). */
+    .iso-content {
+        transform:
+            rotateZ(calc(-1 * var(--rz, -45deg)))
+            rotateX(calc(-1 * var(--rx, 60deg)))
+            scale(var(--label-scale, 1));
+        transform-origin: 50% 50%;
+        pointer-events: none;
+        width: 100%; height: 100%;
+        /* DEFAULT (layout-stack): вертикально по центру — номер / итого / состав.
+           Это читаемо и на узких, и на широких полях — как было изначально. */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        padding: 6px 10px;
+        overflow: hidden;
+        text-align: center;
+    }
+    .isometric-grid.flat .iso-content { transform: scale(var(--label-scale, 1)); }
+
+    /* ================================================================
+       ТИПОГРАФИКА ПОЛЯ
+       Размеры — в em от --field-font (JS ставит его в зависимости от ширины
+       поля в % канваса). Благодаря этому на маленьких полях текст автоматически
+       становится мельче и не вылезает за края, а на больших — крупнее и виднее.
+       ================================================================ */
+    .iso-field { --field-font: 14px; font-size: var(--field-font); }
+    /* Номер поля: крупно, жирно, с обводкой — чтобы читалось на любой подложке. */
+    .iso-title {
+        font-weight: 900;
+        font-size: 1.7em;        /* ≈ 24 px при базе 14 */
+        color: #fff;
+        letter-spacing: .2px;
+        line-height: 1.05;
+        max-width: 100%;
+        -webkit-text-stroke: 1.3px rgba(0,0,0,.88);
+        paint-order: stroke fill;
+        text-shadow: 0 2px 6px rgba(0,0,0,0.55), 0 0 2px rgba(0,0,0,.9);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        word-break: break-word;
+        hyphens: auto;
+    }
+    /* Бейдж с общим количеством. */
+    .field-total-badge {
+        display: inline-flex; align-items: center; gap: 4px;
+        font-size: 1em;
+        font-weight: 900;
+        background: rgba(15,23,42,0.82);
+        color: #fff;
+        padding: 2px 10px;
+        border-radius: 100px;
+        line-height: 1.15;
+        white-space: nowrap;
+        max-width: 100%;
+        overflow: hidden; text-overflow: ellipsis;
+        box-shadow: 0 2px 6px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.18);
+    }
+    .field-total-badge::before {
+        content: '';
+        width: 6px; height: 6px; border-radius: 50%;
+        background: #34d399; box-shadow: 0 0 0 2px rgba(52,211,153,.25);
+    }
+    /* Список топ-растений поля. */
+    .field-top-list {
+        font-size: 0.78em;
+        line-height: 1.18;
+        font-weight: 700;
+        color: #fff;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+        -webkit-text-stroke: .4px rgba(0,0,0,.55);
+        paint-order: stroke fill;
+        min-width: 0;
+        max-width: 100%;
+        max-height: 60%;
+        overflow: hidden;
+        display: flex; flex-direction: column; gap: 1px;
+    }
+    .field-top-list .row-plant {
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        max-width: 100%;
+    }
+
+    /* ================================================================
+       РАСКЛАДКА КАРТОЧКИ (layout-*)
+       Админ выбирает в редакторе карты, как содержимое раскладывается
+       внутри поля. По умолчанию (и если не указано) — layout-stack.
+       ================================================================ */
+    /* layout-row: номер слева | итого по центру | состав справа.
+       minmax(0, 1fr) для правой колонки — чтобы ellipsis работал и
+       состав не выталкивал границы поля. Подходит для широких, невысоких полей. */
+    .iso-field.layout-row > .iso-content {
+        display: grid;
+        grid-template-columns: auto auto minmax(0, 1fr);
+        align-items: center;
+        column-gap: 10px;
+        padding: 6px 12px;
+        text-align: left;
+    }
+    .iso-field.layout-row .iso-title {
+        font-size: 2em;
+        -webkit-line-clamp: 1;
+        white-space: nowrap;
+        justify-self: start;
+        padding-left: 2px;
+    }
+    .iso-field.layout-row .field-total-badge { justify-self: center; }
+    .iso-field.layout-row .field-top-list {
+        text-align: left;
+        justify-self: stretch;
+        max-height: 100%;
+    }
+
+    /* layout-compact: номер + итого в одну строку, состав — под ними. */
+    .iso-field.layout-compact > .iso-content {
+        display: grid;
+        grid-template-columns: auto auto;
+        grid-template-rows: auto minmax(0, 1fr);
+        align-items: center;
+        justify-content: center;
+        column-gap: 10px;
+        row-gap: 2px;
+        padding: 6px 10px;
+        text-align: center;
+    }
+    .iso-field.layout-compact .iso-title {
+        font-size: 1.9em;
+        -webkit-line-clamp: 1;
+        white-space: nowrap;
+    }
+    .iso-field.layout-compact .field-top-list {
+        grid-column: 1 / -1;
+        text-align: center;
+        align-items: center;
+    }
+
+    /* layout-number-only: только крупный номер поля по центру. */
+    .iso-field.layout-number-only .field-total-badge,
+    .iso-field.layout-number-only .field-top-list { display: none; }
+    .iso-field.layout-number-only .iso-title {
+        font-size: 2.4em;
+        -webkit-line-clamp: 1;
+    }
+
+    /* Адаптивные плотности — выставляются JS через класс на .iso-field.
+       Мелкие поля: только крупное название, всё остальное скрыто. */
+    .iso-field.density-tiny .field-top-list,
+    .iso-field.density-tiny .field-total-badge { display: none; }
+    .iso-field.density-tiny { --field-font: 10px; }
+    .iso-field.density-tiny .iso-title { -webkit-line-clamp: 1; font-size: 1.8em; }
+
+    .iso-field.density-small .field-top-list { display: none; }
+    .iso-field.density-small { --field-font: 12px; }
+    .iso-field.density-small .iso-title { -webkit-line-clamp: 1; font-size: 1.7em; }
+
+    .iso-field.density-medium { --field-font: 13px; }
+    .iso-field.density-medium .field-top-list { font-size: 0.72em; }
+    .iso-field.density-medium .iso-title { font-size: 1.5em; }
+
+    .iso-field.density-large  { --field-font: 15px; }
+    .iso-field.density-xlarge { --field-font: 17px; }
+    .iso-field.density-xlarge .iso-title { font-size: 1.7em; }
+    .iso-field.density-xlarge .field-top-list { font-size: 0.82em; }
+
+    /* «Ультра-далеко» (zoom < 15%): показываем только номер поля и общее кол-во,
+       всё остальное убираем. Шрифт делаем максимально крупным, чтобы название
+       читалось даже с отдалённой «птичьей» точки. Контр-скейл в JS в этом режиме
+       делает текст ещё больше. */
+    /* В ультра-далёком режиме (zoom < 15%) показываем только номер по центру
+       и общее кол-во — чтобы читалось с «птичьей» точки даже на крошечном поле. */
+    .map-container.zoom-ultra-far .iso-field .field-top-list { display: none; }
+    .map-container.zoom-ultra-far .iso-field { --field-font: 24px; }
+    .map-container.zoom-ultra-far .iso-field .iso-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+    }
+    .map-container.zoom-ultra-far .iso-field .iso-title {
+        font-size: 1.9em;
+        -webkit-line-clamp: 1;
+        line-height: 1;
+        -webkit-text-stroke: 2px rgba(0,0,0,.92);
+        text-shadow: 0 3px 10px rgba(0,0,0,.7), 0 0 3px rgba(0,0,0,1);
+    }
+    .map-container.zoom-ultra-far .iso-field .field-total-badge {
+        font-size: 1.05em;
+        padding: 3px 12px;
+        font-weight: 900;
+    }
+    .map-container.zoom-ultra-far .iso-field.density-tiny .iso-title,
+    .map-container.zoom-ultra-far .iso-field.density-small .iso-title { display: -webkit-box; }
+    .map-container.zoom-ultra-far .iso-field.density-tiny .field-total-badge,
+    .map-container.zoom-ultra-far .iso-field.density-small .field-total-badge { display: inline-flex; }
+
+    /* ============================================================
+       Индикация просроченного пересчёта (>4 мес или никогда).
+       Сделано максимально ЗАМЕТНО, чтобы такие поля кричали о себе
+       на фоне обычных зелёных:
+         • толстая двойная красная рамка (inner + outer);
+         • красноватый overlay поверх цвета поля (::before);
+         • пульсирующее свечение (staleGlow);
+         • бейдж с «!» в правом верхнем углу (::after).
+       ============================================================ */
+    .iso-field.recount-stale {
+        outline: 4px solid #dc2626;
+        outline-offset: -4px;
+        box-shadow:
+            inset 0 0 0 2px rgba(255,255,255,.35),     /* белый внутренний разделитель */
+            inset 0 0 24px rgba(220,38,38,.35),         /* красный внутренний глау */
+            0 0 0 3px rgba(220,38,38,.45),              /* вторая внешняя рамка */
+            0 10px 28px rgba(220,38,38,.45);            /* мягкая тень-свечение */
+        animation: staleGlow 2.4s ease-in-out infinite;
+    }
+    /* Красная «вуаль» поверх фонового цвета поля — теперь видно, что это аварийное. */
+    .iso-field.recount-stale::before {
+        content: '';
+        position: absolute; inset: 0;
+        background: linear-gradient(135deg, rgba(220,38,38,.32), rgba(185,28,28,.12));
+        pointer-events: none;
+        z-index: 1;
+    }
+    /* Контент поля поднимаем над ::before, чтобы текст не терялся. */
+    .iso-field.recount-stale .iso-content { position: relative; z-index: 2; }
+    /* Бейдж-предупреждение в углу поля. На крошечных полях скрываем. */
+    .iso-field.recount-stale::after {
+        content: '\f071';                               /* fa-triangle-exclamation */
+        font-family: 'Font Awesome 6 Free', 'FontAwesome', sans-serif;
+        font-weight: 900;
+        position: absolute;
+        top: 6px; right: 6px;
+        min-width: 24px; height: 24px; padding: 0 4px;
+        border-radius: 100px;
+        background: #dc2626; color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 12px; line-height: 1;
+        box-shadow: 0 3px 8px rgba(220,38,38,.6), 0 0 0 2px #fff;
+        z-index: 3;
+        pointer-events: none;
+    }
+    .iso-field.recount-stale.density-tiny::after { display: none; }
+    /* Для «грядок» тон чуть темнее. */
+    .iso-field.recount-stale.bed { outline-color: #991b1b; }
+    .iso-field.recount-stale:hover {
+        box-shadow:
+            inset 0 0 0 2px rgba(255,255,255,.4),
+            inset 0 0 30px rgba(220,38,38,.45),
+            0 0 0 4px rgba(220,38,38,.55),
+            0 14px 34px rgba(220,38,38,.55);
+    }
+    @keyframes staleGlow {
+        0%, 100% {
+            box-shadow:
+                inset 0 0 0 2px rgba(255,255,255,.35),
+                inset 0 0 24px rgba(220,38,38,.35),
+                0 0 0 3px rgba(220,38,38,.45),
+                0 10px 28px rgba(220,38,38,.45);
+        }
+        50% {
+            box-shadow:
+                inset 0 0 0 2px rgba(255,255,255,.45),
+                inset 0 0 32px rgba(220,38,38,.55),
+                0 0 0 5px rgba(220,38,38,.65),
+                0 14px 34px rgba(220,38,38,.7);
+        }
+    }
+    /* В ультра-далёком режиме анимация ни к чему (много полей сразу — утомляет),
+       но толстая рамка всё равно делает поле заметным. */
+    .map-container.zoom-ultra-far .iso-field.recount-stale { animation: none; }
+    /* Приоритет индикатора drop выше */
+    .iso-field.recount-stale.drop-target,
+    .iso-field.recount-stale.drop-reject,
+    .iso-field.recount-stale.pulse-target { outline: 3px dashed; }
+    .field-stale-badge {
+        position: absolute; top: 6px; right: 6px;
+        width: 22px; height: 22px; border-radius: 50%;
+        background: #ef4444; color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 11px; box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+        z-index: 3; pointer-events: auto;
+    }
+    .map-legend {
+        position: absolute; bottom: 14px; left: 14px; z-index: 20;
+        background: rgba(255,255,255,0.95); color: #111827;
+        padding: 6px 12px; border-radius: 100px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        font-size: 12px; font-weight: 600;
+        display: inline-flex; align-items: center; gap: 8px;
+        pointer-events: auto; user-select: none;
+    }
+    .map-legend .legend-dot {
+        width: 12px; height: 12px; border-radius: 3px; display: inline-block;
+    }
+    .map-legend .legend-stale { background: transparent; border: 3px solid #ef4444; }
+    .map-legend .legend-text { color: #374151; }
+    @media (max-width: 768px) {
+        .map-legend { font-size: 10.5px; padding: 4px 10px; max-width: 70%; }
+    }
+
+    .iso-field.bed {
+        background: linear-gradient(135deg, #fcd34d, #fbbf24);
+        box-shadow: -2px 2px 0 #d97706, -4px 4px 0 #d97706, -6px 6px 0 #d97706, -8px 8px 0 #b45309, -15px 15px 20px rgba(0,0,0,0.15);
+    }
+    .iso-field.bed:hover { box-shadow: -2px 2px 0 #d97706, -4px 4px 0 #d97706, -6px 6px 0 #d97706, -8px 8px 0 #d97706, -10px 10px 0 #b45309, -12px 12px 0 #b45309, -25px 25px 30px rgba(0,0,0,0.2); }
+
+    .map-status-banner {
+        position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+        background: #111827; color: white; padding: 10px 20px; border-radius: 30px;
+        font-weight: bold; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        z-index: 20; display: none; align-items: center; gap: 10px; transition: 0.3s;
+    }
+    .map-toolbar {
+        position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%);
+        background: rgba(255,255,255,0.95); backdrop-filter: blur(10px);
+        padding: 6px; border-radius: 100px; box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        display: flex; gap: 6px; z-index: 10; border: 1px solid #e2e8f0;
+        flex-wrap: wrap; justify-content: center;
+    }
+    .map-toolbar .mode-btn { border-radius: 100px; font-weight: 700; font-size: 12px; padding: 6px 14px; }
+    .map-toolbar .mode-btn.active { transform: scale(1.05); box-shadow: 0 4px 10px rgba(0,0,0,0.12); }
+    .map-controls {
+        position: absolute; bottom: 15px; right: 15px;
+        background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        display: flex; flex-direction: column; overflow: hidden; z-index: 10;
+    }
+    .map-controls button {
+        border: none; background: white; padding: 8px; width: 36px; height: 36px;
+        color: #475569; transition: 0.2s; border-bottom: 1px solid #f1f5f9;
+    }
+    .map-controls button:last-child { border-bottom: none; }
+    .map-controls button:hover { background: #f8fafc; color: #10b981; }
+    /* Индикатор текущего зума в виде «кнопки-бейджа» (клик = fit). */
+    .map-controls button.zoom-indicator {
+        height: auto; padding: 4px 2px; font-size: 11px; font-weight: 800;
+        color: #0f172a; background: #f8fafc;
+    }
+    .map-controls button.zoom-indicator:hover { background: #dcfce7; }
+
+    .offcanvas-custom { max-width: 420px; border-top-left-radius: 20px; border-bottom-left-radius: 20px; border: none; box-shadow: -10px 0 30px rgba(0,0,0,0.1); }
+    .plant-card-hover { transition: 0.2s; cursor: pointer; border: 2px solid transparent; }
+    .plant-card-hover:hover { border-color: #10b981; transform: scale(1.02); background: #f0fdf4; }
+    .plant-card-hover.draggable-pos { cursor: grab; }
+    .plant-card-hover.draggable-pos:active { cursor: grabbing; }
+
+    @media (max-width: 992px) {
+        .map-layout { flex-direction: column; height: auto; }
+        .map-sidebar { width: 100%; max-height: 200px; }
+        /* ВАЖНО: dvh/svh для iOS — без них при показе/скрытии нижней панели
+           Safari карта «дёргается» или обрезается. vh оставляем как fallback. */
+        .map-main { min-height: 420px; height: 60vh; height: 60dvh; }
+        /* НЕ ставим width: 100% для .isometric-grid — родительский .pan-zoom-layer
+           это position: absolute без width, и при width:100% grid схлопывается в 0
+           (iOS/Android Chrome). Ширина берётся из --canvas-w (по умолчанию 1600px),
+           а mapEngine.fit() автоматически уменьшает scale, чтобы карта поместилась. */
+        .isometric-grid.flat { transform: none; }
+        .iso-content { transform: none; }
+        .map-toolbar { border-radius: 16px; padding: 8px; bottom: 10px; width: 90%; }
+        .map-status-banner { width: 90%; font-size: 12px; text-align: center; }
+    }
+
+    /* Fallback для старых браузеров, где aspect-ratio не поддерживается
+       (iOS Safari < 15.4, Android WebView < 88): задаём явную высоту канваса,
+       иначе он схлопывается в 0 и карта невидима. */
+    @supports not (aspect-ratio: 1) {
+        .isometric-grid {
+            height: calc(var(--canvas-w, 1600px) * 9 / 16);
+            min-height: 520px;
+        }
+    }
+
+    /* ================= РЕЖИМ РЕДАКТИРОВАНИЯ КАРТЫ (admin) ================= */
+    .map-edit-toggle {
+        position: absolute; top: 15px; right: 15px; z-index: 25;
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 100px;
+        padding: 6px 14px; font-weight: 700; font-size: 12px; color: #475569;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1); cursor: pointer;
+        display: inline-flex; align-items: center; gap: 6px;
+    }
+    .map-edit-toggle:hover { color: #10b981; border-color: #10b981; }
+    .map-edit-toggle.active { background: #f59e0b; color: #fff; border-color: #f59e0b; }
+
+    /* Когда включён редактор — карта перестаёт реагировать на обычные dnd/клики,
+       а появляется сетка и хэндлы у полей. */
+    .map-container.editor-mode { cursor: default; }
+    .map-container.editor-mode .isometric-grid::before {
+        content: '';
+        position: absolute; inset: 0;
+        background-image:
+          linear-gradient(rgba(59,130,246,.18) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(59,130,246,.18) 1px, transparent 1px);
+        background-size: 5% 5%;
+        pointer-events: none; z-index: 0;
+    }
+    .map-container.editor-mode .iso-field {
+        cursor: move;
+        outline: 2px solid rgba(59,130,246,.6);
+        outline-offset: -2px;
+    }
+    .map-container.editor-mode .iso-field.selected {
+        outline: 3px solid #f59e0b !important;
+        box-shadow: 0 0 0 4px rgba(245,158,11,.25), 0 10px 24px rgba(0,0,0,.2) !important;
+        z-index: 50;
+    }
+    .map-container.editor-mode .iso-field.dragging { opacity: .85; }
+    .field-handle {
+        position: absolute; width: 14px; height: 14px; border-radius: 50%;
+        background: #f59e0b; border: 2px solid #fff;
+        box-shadow: 0 2px 6px rgba(0,0,0,.25);
+        z-index: 10;
+        display: none;
+    }
+    .map-container.editor-mode .iso-field.selected .field-handle { display: block; }
+    .field-handle.handle-se { right: -9px; bottom: -9px; cursor: nwse-resize; }
+    .field-handle.handle-ne { right: -9px; top: -9px; cursor: nesw-resize; }
+    .field-handle.handle-sw { left: -9px; bottom: -9px; cursor: nesw-resize; }
+    .field-handle.handle-nw { left: -9px; top: -9px; cursor: nwse-resize; }
+
+    .map-editor-panel {
+        position: absolute; top: 60px; right: 15px; z-index: 25;
+        width: 260px; max-height: calc(100% - 100px); overflow-y: auto;
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.12);
+        padding: 12px; font-size: 13px;
+        display: none;
+    }
+    .map-editor-panel.open { display: block; }
+    .map-editor-panel h6 { font-size: 12px; text-transform: uppercase;
+        letter-spacing: .5px; color: #64748b; margin-bottom: 8px; font-weight: 800; }
+    .map-editor-panel .shape-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+    }
+    .map-editor-panel .shape-btn {
+        aspect-ratio: 1/1; background: #f1f5f9; border: 1px solid #e2e8f0;
+        border-radius: 8px; display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: .15s; padding: 6px;
+    }
+    .map-editor-panel .shape-btn:hover { background: #e0e7ff; border-color: #6366f1; }
+    .map-editor-panel .shape-btn svg { width: 100%; height: 100%; fill: #475569; }
+    .map-editor-panel .shape-btn.active { background: #f59e0b; border-color: #d97706; }
+    .map-editor-panel .shape-btn.active svg { fill: #fff; }
+    .editor-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .editor-row label { flex-shrink: 0; font-weight: 600; color: #475569; font-size: 11px; text-transform: uppercase; }
+    .editor-save-bar {
+        position: absolute; top: 15px; left: 50%; transform: translateX(-50%); z-index: 25;
+        background: #111827; color: #fff; border-radius: 100px;
+        padding: 6px 12px 6px 18px; display: none; align-items: center; gap: 10px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.2);
+    }
+    .map-container.editor-mode .editor-save-bar { display: inline-flex; }
+    .editor-save-bar .btn { border-radius: 100px; font-weight: 700; font-size: 12px; }
+    .editor-hint {
+        font-size: 11px; color: #64748b; line-height: 1.3;
+        padding: 6px 8px; background: #f8fafc; border-radius: 8px; margin-bottom: 10px;
+    }
 </style>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
     <h4 class="mb-0 text-success fw-bold"><i class="fas fa-file-invoice me-2"></i>Журнал документов</h4>
-    <button class="btn btn-outline-secondary btn-sm no-print" type="button" data-bs-toggle="collapse" data-bs-target="#filterCollapse" aria-expanded="false" aria-controls="filterCollapse">
-        <i class="fas fa-filter me-1"></i> Фильтры поиска
-    </button>
+    <div class="d-flex gap-2 align-items-center">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Режим работы">
+            <input type="radio" class="btn-check" name="docView" id="viewClassic" autocomplete="off" checked>
+            <label class="btn btn-outline-success" for="viewClassic"><i class="fas fa-list me-1"></i>Классический</label>
+            <input type="radio" class="btn-check" name="docView" id="viewMap" autocomplete="off">
+            <label class="btn btn-outline-success" for="viewMap"><i class="fas fa-map-marked-alt me-1"></i>Карта (Drag &amp; Drop)</label>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm no-print" id="filterToggleBtn" type="button" data-bs-toggle="collapse" data-bs-target="#filterCollapse" aria-expanded="false" aria-controls="filterCollapse">
+            <i class="fas fa-filter me-1"></i> Фильтры поиска
+        </button>
+    </div>
 </div>
+
+<div id="classicView">
 
 <!-- ПАНЕЛЬ ФИЛЬТРОВ -->
 <div class="collapse {% if filters.start or filters.end or filters.client_id or filters.doc_type or filters.plant_id or filters.size_id or filters.field_id %}show{% endif %}" id="filterCollapse">
@@ -406,19 +1082,21 @@
           </div>
 
           <div class="table-responsive">
-              <table class="table table-sm table-bordered" id="fieldRecountTable">
+              <table class="table table-sm table-bordered align-middle" id="fieldRecountTable">
                   <thead class="table-light">
                       <tr>
                           <th>Наименование</th>
                           <th>Размер</th>
                           <th>Год партии</th>
-                          <th class="text-center">Остаток сейчас</th>
+                          <th class="text-center" style="font-size:14px;">Всего</th>
+                          <th class="text-center text-warning" style="font-size:13px;">Резерв</th>
+                          <th class="text-center text-success" style="font-size:13px;">Свободно</th>
                           <th class="text-center">Факт после пересчета</th>
                       </tr>
                   </thead>
                   <tbody id="fieldRecountBody">
                       <tr>
-                          <td colspan="5" class="text-center text-muted py-3">Выберите поле, чтобы загрузить остатки</td>
+                          <td colspan="7" class="text-center text-muted py-3">Выберите поле, чтобы загрузить остатки</td>
                       </tr>
                   </tbody>
               </table>
@@ -758,6 +1436,265 @@
 </script>
 {% endif %}
 
+</div> <!-- /#classicView -->
+
+<!-- ==============================================================
+     РЕЖИМ: КАРТА (Drag & Drop)
+     ============================================================== -->
+<div id="mapView" hidden>
+    <div class="map-layout">
+        <!-- Боковая панель-каталог -->
+        <aside class="map-sidebar">
+            <div class="map-sidebar-header d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="fw-bold text-success small"><i class="fas fa-seedling me-1"></i>Каталог</div>
+                    <div class="small text-muted" style="font-size:10px;">Тащите карточки на поле</div>
+                </div>
+                <span class="badge bg-success" id="catalogCount">0</span>
+            </div>
+            <div class="p-2 border-bottom">
+                <input type="text" class="form-control form-control-sm" id="catalogSearch" placeholder="🔍 Поиск...">
+            </div>
+            <div class="map-sidebar-body" id="plantCatalogSidebar">
+                <div class="text-center text-muted small py-3"><i class="fas fa-spinner fa-spin"></i> Загрузка...</div>
+            </div>
+        </aside>
+
+        <!-- Сама карта -->
+        <main class="map-main">
+            <div class="map-container" id="nurseryMapContainer">
+                <div class="map-status-banner" id="mapStatusBanner">
+                    <i class="fas fa-info-circle text-warning"></i>
+                    <span id="mapStatusText">Выберите операцию внизу</span>
+                    <button class="btn btn-sm btn-dark ms-2" onclick="cancelMapOperation()"><i class="fas fa-times"></i> Отмена</button>
+                </div>
+
+                <!-- Панель выбора операции -->
+                <div class="map-toolbar" id="mapToolbar">
+                    <button type="button" class="btn btn-sm btn-outline-success mode-btn" data-mode="income" onclick="setMapMode('income')">
+                        <i class="fas fa-arrow-down me-1"></i>Поступление
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-primary mode-btn active" data-mode="move" onclick="setMapMode('move')">
+                        <i class="fas fa-exchange-alt me-1"></i>Перемещение
+                    </button>
+                    {% if current_user.role == 'admin' %}
+                    <button type="button" class="btn btn-sm btn-outline-danger mode-btn" data-mode="writeoff" onclick="setMapMode('writeoff')">
+                        <i class="fas fa-trash-alt me-1"></i>Списание
+                    </button>
+                    {% endif %}
+                    {% if current_user.role != 'user2' %}
+                    <button type="button" class="btn btn-sm btn-outline-warning mode-btn" data-mode="recount" onclick="setMapMode('recount')">
+                        <i class="fas fa-clipboard-check me-1"></i>Пересчёт
+                    </button>
+                    {% endif %}
+                </div>
+
+                <div class="map-controls" id="mapControls">
+                    <button type="button" title="Приблизить (клавиша +)" onclick="mapEngine.zoomIn()"><i class="fas fa-plus"></i></button>
+                    <button type="button" class="zoom-indicator" id="zoomIndicatorBtn" title="Текущий масштаб — клик для вида по размеру" onclick="mapEngine.fit()"><span id="zoomIndicator">100%</span></button>
+                    <button type="button" title="По размеру" onclick="mapEngine.fit()"><i class="fas fa-expand"></i></button>
+                    <button type="button" title="Центрировать / вид по умолчанию" onclick="mapEngine.reset()"><i class="fas fa-crosshairs"></i></button>
+                    <button type="button" title="Отдалить (клавиша −)" onclick="mapEngine.zoomOut()"><i class="fas fa-minus"></i></button>
+                    <button type="button" id="btnToggle2D" title="Переключить 2D / 3D" onclick="mapEngine.toggle2D()"><span id="btnToggle2DLabel">2D</span></button>
+                    <button type="button" title="ЛКМ — двигать, ПКМ — вращать, колёсико — зум к курсору, двойной клик — приблизить к точке, клавиши + / − / 0"><i class="fas fa-question-circle"></i></button>
+                </div>
+
+                <div class="map-legend" id="mapLegend" title="Подсказка по цветовой индикации">
+                    <span class="legend-dot legend-stale"></span>
+                    <span class="legend-text">Нужен пересчет поля</span>
+                </div>
+
+                {% if current_user.role == 'admin' %}
+                <button type="button" class="map-edit-toggle" id="mapEditToggle" title="Редактировать внешний вид карты (фон, позиции, формы полей)">
+                    <i class="fas fa-pen-ruler"></i> Редактировать карту
+                </button>
+
+                <div class="editor-save-bar" id="editorSaveBar">
+                    <span class="small" id="editorStatusText"><i class="fas fa-info-circle me-1"></i>Режим редактора</span>
+                    <button type="button" class="btn btn-light btn-sm" id="editorCancelBtn"><i class="fas fa-times me-1"></i>Отмена</button>
+                    <button type="button" class="btn btn-success btn-sm" id="editorSaveBtn"><i class="fas fa-save me-1"></i>Сохранить</button>
+                </div>
+
+                <div class="map-editor-panel" id="mapEditorPanel">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <h6 class="mb-0"><i class="fas fa-image me-1"></i>Фоновое фото</h6>
+                        <button type="button" id="bgLockToggle" class="bg-lock-btn" title="Закрепить фон — при перетаскивании полей он не сдвинется">
+                            <i class="fas fa-lock-open"></i><span class="ms-1">Фон</span>
+                        </button>
+                    </div>
+                    <div class="editor-hint">Рекомендуется 1920×1080 px (FullHD), JPG/WebP, до 2 МБ. Соотношение сторон карты подстроится под фото.</div>
+                    <div class="d-flex gap-2 mb-2">
+                        <label class="btn btn-sm btn-outline-primary flex-grow-1 m-0" style="cursor:pointer;">
+                            <i class="fas fa-upload me-1"></i>Загрузить
+                            <input type="file" id="mapBgInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+                        </label>
+                        <button type="button" class="btn btn-sm btn-outline-danger" id="mapBgClearBtn" title="Убрать фон"><i class="fas fa-eraser"></i></button>
+                    </div>
+
+                    <div id="mapBgTransformBox" style="display:none;">
+                        <div class="editor-row" style="flex-wrap:wrap;gap:4px;">
+                            <label style="width:100%;">Вписать</label>
+                            <div class="btn-group btn-group-sm w-100" role="group" id="bgFitGroup">
+                                <input type="radio" class="btn-check" name="bgFit" id="bgFitContain" value="contain" autocomplete="off">
+                                <label class="btn btn-outline-secondary" for="bgFitContain" title="Целиком, без обрезки">Вписать</label>
+                                <input type="radio" class="btn-check" name="bgFit" id="bgFitCover" value="cover" autocomplete="off">
+                                <label class="btn btn-outline-secondary" for="bgFitCover" title="Заполнить, обрезая лишнее">Заполнить</label>
+                                <input type="radio" class="btn-check" name="bgFit" id="bgFitStretch" value="stretch" autocomplete="off">
+                                <label class="btn btn-outline-secondary" for="bgFitStretch" title="Растянуть на весь канвас">Растянуть</label>
+                            </div>
+                        </div>
+
+                        <div class="editor-row">
+                            <label style="width:70px;">Масштаб</label>
+                            <input type="range" id="bgScale" class="form-range" min="0.2" max="3" step="0.01" value="1">
+                            <span class="small text-muted" id="bgScaleLbl" style="width:38px;text-align:right;">100%</span>
+                        </div>
+                        <div class="editor-row">
+                            <label style="width:70px;">Поворот</label>
+                            <input type="range" id="bgRotation" class="form-range" min="-180" max="180" step="1" value="0">
+                            <span class="small text-muted" id="bgRotationLbl" style="width:38px;text-align:right;">0°</span>
+                        </div>
+                        <div class="editor-row">
+                            <label style="width:70px;">X</label>
+                            <input type="range" id="bgOffsetX" class="form-range" min="-100" max="100" step="0.5" value="0">
+                            <span class="small text-muted" id="bgOffsetXLbl" style="width:38px;text-align:right;">0%</span>
+                        </div>
+                        <div class="editor-row">
+                            <label style="width:70px;">Y</label>
+                            <input type="range" id="bgOffsetY" class="form-range" min="-100" max="100" step="0.5" value="0">
+                            <span class="small text-muted" id="bgOffsetYLbl" style="width:38px;text-align:right;">0%</span>
+                        </div>
+                        <div class="editor-row">
+                            <label style="width:70px;">Прозр.</label>
+                            <input type="range" id="bgOpacity" class="form-range" min="0.1" max="1" step="0.01" value="1">
+                            <span class="small text-muted" id="bgOpacityLbl" style="width:38px;text-align:right;">100%</span>
+                        </div>
+                        <div class="d-flex gap-2 mb-2">
+                            <button type="button" class="btn btn-sm btn-outline-secondary flex-grow-1" id="bgTransformReset"><i class="fas fa-undo me-1"></i>Сброс</button>
+                        </div>
+                        <div class="editor-hint" style="margin-bottom:0;">Можно также тащить фон мышью прямо на карте (если не нажали на поле).</div>
+                    </div>
+
+                    <h6 class="mt-3"><i class="fas fa-expand me-1"></i>Рабочая зона</h6>
+                    <div class="editor-hint">Размер канваса, по которому расставляются поля. Расширьте, если полей много или они далеко друг от друга.</div>
+                    <div class="editor-row">
+                        <label style="width:70px;">Ширина</label>
+                        <input type="range" id="canvasWidth" class="form-range" min="800" max="5000" step="100" value="1600">
+                        <span class="small text-muted" id="canvasWidthLbl" style="width:52px;text-align:right;">1600</span>
+                    </div>
+                    <div class="editor-row" style="flex-wrap:wrap;gap:4px;">
+                        <label style="width:100%;">Пропорции</label>
+                        <select id="canvasAspect" class="form-select form-select-sm">
+                            <option value="auto">Как у фото</option>
+                            <option value="16/9">16 : 9 — широкий экран</option>
+                            <option value="21/9">21 : 9 — ультра-широкий</option>
+                            <option value="3/1">3 : 1 — очень длинный</option>
+                            <option value="2/1">2 : 1 — длинный</option>
+                            <option value="4/3">4 : 3</option>
+                            <option value="1/1">1 : 1 — квадрат</option>
+                        </select>
+                    </div>
+
+                    <h6 class="mt-3"><i class="fas fa-shapes me-1"></i>Форма поля</h6>
+                    <div class="editor-hint" id="editorFieldHint">Выберите поле, чтобы изменить его форму.</div>
+                    <div class="shape-grid mb-2" id="shapePresets">
+                        <!-- Пресеты форм — заполняются JS -->
+                    </div>
+
+                    <h6 class="mt-3"><i class="fas fa-palette me-1"></i>Цвет</h6>
+                    <div class="editor-row">
+                        <input type="color" id="fieldColorInput" value="#4ade80" class="form-control form-control-color" style="width:44px;height:32px;padding:2px;">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="fieldColorReset" title="По умолчанию">Сброс</button>
+                    </div>
+
+                    <h6 class="mt-3"><i class="fas fa-th-large me-1"></i>Карточка поля</h6>
+                    <div class="editor-hint" id="fieldLayoutHint">Как расположить номер, итого и состав внутри поля.</div>
+                    <div class="editor-row" style="flex-wrap:wrap;gap:4px;">
+                        <select id="fieldLayoutSelect" class="form-select form-select-sm">
+                            <option value="stack">Стопкой (по центру) — по умолчанию</option>
+                            <option value="row">В строку: № | итого | состав</option>
+                            <option value="compact">Компакт: № + итого, состав снизу</option>
+                            <option value="number-only">Только номер (крупно)</option>
+                        </select>
+                    </div>
+
+                    <h6 class="mt-3"><i class="fas fa-arrows-up-down-left-right me-1"></i>Подсказка</h6>
+                    <div class="editor-hint">
+                        • Перетащите поле мышью<br>
+                        • Уголки — изменение размера<br>
+                        • Клик по пустому месту — снять выделение
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="pan-zoom-layer" id="panZoomLayer">
+                    <div class="isometric-grid" id="isoGrid">
+                        <!-- Поля рендерятся JS из /api/visual_stock/map_config -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<!-- ==============================================================
+     БОКОВАЯ ПАНЕЛЬ (ВЫБОР РАСТЕНИЯ С ПОЛЯ) — для Перемещения/Списания/Пересчёта
+     ============================================================== -->
+<div class="offcanvas offcanvas-end offcanvas-custom" tabindex="-1" id="sourceFieldPanel">
+    <div class="offcanvas-header bg-success text-white">
+        <h5 class="offcanvas-title fw-bold"><i class="fas fa-box-open me-2"></i><span id="sourceFieldTitle">Поле</span></h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body bg-light" id="sourceFieldBody">
+        <div class="alert alert-info py-2 small mb-3" id="sourceFieldHint">Выберите позицию...</div>
+        <div id="sourceFieldLoader" class="text-center py-5" style="display: none;">
+            <i class="fas fa-spinner fa-spin fa-3x text-success opacity-50"></i>
+        </div>
+        <div id="sourceFieldItems" class="d-flex flex-column gap-2"></div>
+        <div id="recountFooter" class="mt-3" style="display:none;">
+            <button id="recountSaveBtn" class="btn btn-warning fw-bold w-100 shadow-sm" onclick="confirmRecount()"><i class="fas fa-save me-2"></i>Сохранить карточку пересчёта</button>
+        </div>
+    </div>
+</div>
+
+<!-- ==============================================================
+     МОДАЛЬНОЕ ОКНО ВВОДА КОЛИЧЕСТВА (унифицировано для всех операций)
+     ============================================================== -->
+<div class="modal fade" id="qtyModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg" style="border-radius: 20px;">
+            <div class="modal-header text-white border-0 py-3" id="qtyModalHeader" style="border-top-left-radius: 20px; border-top-right-radius: 20px; background: #0d6efd;">
+                <h5 class="modal-title fw-bold m-0 w-100 text-center"><i class="fas fa-truck-moving me-2" id="qtyModalIcon"></i><span id="qtyModalTitle">Операция</span></h5>
+            </div>
+            <div class="modal-body text-center p-4">
+                <div class="fw-bold text-dark fs-5 mb-1" id="modalPlantName">—</div>
+                <div class="badge bg-light text-dark border mb-3" id="modalPlantSizeYear">—</div>
+
+                <div class="d-flex justify-content-center align-items-center mb-3 gap-2 text-muted small fw-bold" id="modalDirection">
+                    <span id="modalFieldFromName"></span>
+                    <i class="fas fa-arrow-right text-primary"></i>
+                    <span id="modalFieldToName"></span>
+                </div>
+
+                <!-- Год партии (только для Поступления) -->
+                <div id="yearInputWrap" class="mb-3" style="display:none;">
+                    <label class="text-muted small fw-bold text-uppercase mb-1">Год партии</label>
+                    <input type="number" id="modalYearInput" class="form-control form-control-sm text-center" value="{{ current_year }}" min="2000" max="2100">
+                </div>
+
+                <label class="text-muted small fw-bold text-uppercase mb-2" id="qtyLabel">Количество</label>
+                <input type="number" id="qtyInput" class="form-control form-control-lg text-center fw-bold border-primary shadow-sm mb-1" style="font-size: 30px; height: 70px; border-width: 2px;" value="1" min="1">
+                <div class="small text-muted mb-4" id="qtyHint"><span id="qtyHintLabel">Максимум</span>: <b id="modalMaxQty" class="text-dark">—</b> шт.</div>
+
+                <div class="d-flex gap-2">
+                    <button class="btn btn-light border fw-bold w-50" onclick="cancelMapOperation()">Отмена</button>
+                    <button class="btn btn-primary fw-bold shadow w-50" id="qtyConfirmBtn" onclick="confirmQty()">ГОТОВО</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -858,23 +1795,71 @@
                 const res = await fetch(`/api/stock_info?plant=${p}&size=${s}&field=${f}`);
                 const data = await res.json();
                 yearSel.innerHTML = '';
+                const freeByYear = {};
                 if(data.batches && data.batches.length > 0) {
                     data.batches.forEach(b => {
                         const opt = document.createElement('option');
                         opt.value = b.year;
                         opt.innerText = `${b.year} (Доступно: ${b.free})`;
+                        opt.dataset.free = b.free;
                         yearSel.appendChild(opt);
+                        freeByYear[b.year] = b.free;
                     });
                 } else {
                     yearSel.innerHTML = '<option disabled>Нет остатков</option>';
                 }
-                // Обновляем UI Select2, если он применен к году
+                yearSel.dataset.freeMap = JSON.stringify(freeByYear);
                 if ($(yearSel).hasClass('select2-hidden-accessible')) {
                     $(yearSel).trigger('change'); 
                 }
+                applyWriteoffMax(row);
             } catch (e) { console.error(e); }
         }
     }
+
+    // Для списания: ограничиваем поле "Кол-во" свободным остатком выбранного года
+    function applyWriteoffMax(row) {
+        if (!row) return;
+        const isWriteoffRow = row.closest('#writeoffTable');
+        if (!isWriteoffRow) return;
+        const yearSel = row.querySelector('.year-select');
+        const qtyInp  = row.querySelector('input[name="quantity[]"]');
+        if (!yearSel || !qtyInp) return;
+        let free = null;
+        try {
+            const map = JSON.parse(yearSel.dataset.freeMap || '{}');
+            free = map[yearSel.value];
+        } catch (e) {}
+        if (free != null) {
+            qtyInp.max = free;
+            qtyInp.title = `Свободный остаток: ${free} шт`;
+            if (parseInt(qtyInp.value) > free) qtyInp.value = free;
+            const warn = row.querySelector('.wo-free-warn');
+            if (!warn) {
+                const hint = document.createElement('div');
+                hint.className = 'small text-muted wo-free-warn';
+                hint.style.fontSize = '10px';
+                hint.textContent = `Свободно: ${free}`;
+                qtyInp.parentElement.appendChild(hint);
+            } else {
+                warn.textContent = `Свободно: ${free}`;
+            }
+        }
+    }
+    window.applyWriteoffMax = applyWriteoffMax;
+
+    $(document).on('change select2:select', '#writeoffTable .year-select', function() {
+        applyWriteoffMax(this.closest('tr'));
+    });
+    $(document).on('input', '#writeoffTable input[name="quantity[]"]', function() {
+        const mx = parseInt(this.max);
+        const v = parseInt(this.value);
+        if (!isNaN(mx) && !isNaN(v) && v > mx) {
+            this.value = mx;
+            this.classList.add('is-invalid');
+            setTimeout(() => this.classList.remove('is-invalid'), 900);
+        }
+    });
     
     $(document).on('select2:select', '.plant-select, .size-select, .field-select', function(e) {
         updateBatchSelect(this);
@@ -909,41 +1894,74 @@
     async function loadFieldRecountItems(fieldId) {
         const tbody = document.getElementById('fieldRecountBody');
         if (!tbody) return;
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Загрузка...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">Загрузка...</td></tr>';
         try {
             const res = await fetch(`/api/field_recount/items?field_id=${fieldId}`);
             const data = await res.json();
             tbody.innerHTML = '';
             if (!data.items || data.items.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">По этому полю нет остатков</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">По этому полю нет остатков</td></tr>';
                 return;
             }
 
             data.items.forEach(item => {
+                const reserved = item.reserved || 0;
+                const free = item.free != null ? item.free : Math.max(0, item.current_qty - reserved);
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>
-                        ${item.plant_name}
+                        <span class="fw-bold">${item.plant_name}</span>
                         <input type="hidden" name="recount_plant_id[]" value="${item.plant_id}">
                     </td>
                     <td>
                         ${item.size_name}
                         <input type="hidden" name="recount_size_id[]" value="${item.size_id}">
                     </td>
-                    <td>
+                    <td class="text-center">
                         ${item.year}
                         <input type="hidden" name="recount_year[]" value="${item.year}">
                     </td>
-                    <td class="text-center fw-bold">${item.current_qty}</td>
+                    <td class="text-center fw-bolder text-dark" style="font-size:18px;">${item.current_qty}</td>
+                    <td class="text-center fw-bold text-warning" style="font-size:15px;">${reserved}</td>
+                    <td class="text-center fw-bold text-success" style="font-size:15px;">${free}</td>
                     <td>
-                        <input type="number" name="recount_fact_qty[]" class="form-control form-control-sm text-center" min="0" value="${item.current_qty}" required>
+                        <input type="number" name="recount_fact_qty[]" class="form-control form-control-sm text-center fw-bold"
+                               style="font-size:16px;"
+                               min="${reserved}" value="${item.current_qty}"
+                               data-reserved="${reserved}" data-orig="${item.current_qty}"
+                               required oninput="validateClassicRecountInput(this)">
+                        <div class="small text-danger mt-1" style="display:none; font-size:11px;">< резерва (${reserved})</div>
                     </td>
                 `;
                 tbody.appendChild(row);
             });
+            validateClassicRecountForm();
         } catch (e) {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-3">Ошибка загрузки остатков</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-3">Ошибка загрузки остатков</td></tr>';
         }
+    }
+
+    function validateClassicRecountInput(inp) {
+        const reserved = parseInt(inp.dataset.reserved || '0');
+        const val = parseInt(inp.value);
+        const warn = inp.parentElement && inp.parentElement.querySelector('.text-danger');
+        const isBad = !isNaN(val) && val < reserved;
+        inp.classList.toggle('is-invalid', isBad);
+        if (warn) warn.style.display = isBad ? '' : 'none';
+        validateClassicRecountForm();
+    }
+    window.validateClassicRecountInput = validateClassicRecountInput;
+
+    function validateClassicRecountForm() {
+        const tbody = document.getElementById('fieldRecountBody');
+        if (!tbody) return true;
+        const bad = tbody.querySelectorAll('input.is-invalid').length > 0;
+        const form = tbody.closest('form');
+        if (form) {
+            const btn = form.querySelector('button[type="submit"]');
+            if (btn) btn.disabled = bad;
+        }
+        return !bad;
     }
 
     function initDocumentsPage() {
@@ -1018,6 +2036,1857 @@
     });
 </script>
 
+<!-- ==========================================================
+     ПЕРЕКЛЮЧАТЕЛЬ «КЛАССИЧЕСКИЙ / КАРТА» + ДВИЖОК КАРТЫ + DND
+     ========================================================== -->
+<script>
+(function(){
+    'use strict';
 
+    const IS_ADMIN = {{ 'true' if current_user.role == 'admin' else 'false' }};
+    const IS_USER2 = {{ 'true' if current_user.role == 'user2' else 'false' }};
+    const CURRENT_YEAR = {{ current_year }};
+
+    // ---------- Переключатель видов ----------
+    const classicView = document.getElementById('classicView');
+    const mapView     = document.getElementById('mapView');
+    const rClassic    = document.getElementById('viewClassic');
+    const rMap        = document.getElementById('viewMap');
+    const filterBtn   = document.getElementById('filterToggleBtn');
+
+    function applyView(v) {
+        if (v === 'map') {
+            classicView.hidden = true;
+            mapView.hidden = false;
+            mapView.classList.add('fullwidth');
+            if (filterBtn) filterBtn.style.display = 'none';
+            rMap.checked = true;
+            // Сначала грузим конфиг карты (поля + фон), потом fit/summary.
+            ensureMapRendered().then(() => {
+                if (window.mapEngine) { mapEngine.fit(); mapEngine.applyModeFromStorage(); }
+                if (typeof refreshFieldsSummary === 'function') refreshFieldsSummary();
+            });
+            loadPlantCatalog();
+        } else {
+            mapView.hidden = true;
+            mapView.classList.remove('fullwidth');
+            classicView.hidden = false;
+            if (filterBtn) filterBtn.style.display = '';
+            rClassic.checked = true;
+        }
+        localStorage.setItem('docsView', v);
+    }
+    rClassic.addEventListener('change', () => rClassic.checked && applyView('classic'));
+    rMap.addEventListener('change',     () => rMap.checked && applyView('map'));
+
+    const saved = localStorage.getItem('docsView') === 'map' ? 'map' : 'classic';
+    // ВАЖНО: applyView() зовёт loadPlantCatalog()/ensureMapRendered(), которые внутри
+    // читают let-переменные (catalogLoaded, _mapRenderedOnce, _mapConfig), объявленные
+    // НИЖЕ в этом же IIFE. Синхронный вызов здесь → TDZ внутри async-функций →
+    // rejected Promise и «молчаливый» отказ от fetch'ей (каталог и карта пустые).
+    // Откладываем настоящий вызов на микротаск, а радио сразу ставим в нужный
+    // стейт, чтобы не было визуального мигания.
+    if (saved === 'map') { rMap.checked = true; } else { rClassic.checked = true; }
+    Promise.resolve().then(() => applyView(saved));
+
+    // ---------- ДВИЖОК КАРТЫ (pan + zoom, без вращения, Яндекс-style) ----------
+    const container = document.getElementById('nurseryMapContainer');
+    const layer     = document.getElementById('panZoomLayer');
+    const grid      = document.getElementById('isoGrid');
+
+    const DEFAULT_ROT_X = 20;
+    const DEFAULT_ROT_Z = -45;
+    const mapEngine = {
+        scale: 0.55, panX: 0, panY: 0,
+        rotX: DEFAULT_ROT_X, rotZ: DEFAULT_ROT_Z,
+        mode2D: false,
+        minScale: 0.15, maxScale: 3.0,
+        _pointers: new Map(),
+        _pinchStart: null,
+        _rotating: false,
+
+        init() {
+            if (!container || !layer) return;
+            container.addEventListener('pointerdown', e => this.onDown(e));
+            container.addEventListener('pointermove', e => this.onMove(e));
+            container.addEventListener('pointerup',     e => this.onUp(e));
+            container.addEventListener('pointercancel', e => this.onUp(e));
+            container.addEventListener('pointerleave',  e => this.onUp(e));
+            container.addEventListener('contextmenu', e => { if (!e.target.closest('.map-toolbar') && !e.target.closest('.map-controls')) e.preventDefault(); });
+            container.addEventListener('wheel', e => {
+                if (e.target.closest('.map-toolbar') || e.target.closest('.map-controls')) return;
+                e.preventDefault();
+                // Нормализуем колёсико/тачпад: приводим deltaY к «пикселям», чтобы
+                // на мышке (deltaMode=0) и на тачпаде (обычно deltaMode=1 = строки)
+                // чувствительность была одинаковой. Используем экспоненциальную
+                // кривую — scale * exp(-dy * k). Это даёт стабильное ощущение:
+                // «2 щелчка колеса = +N% зума», одинаково и при 50%, и при 300%.
+                let dy = e.deltaY;
+                if (e.deltaMode === 1) dy *= 16;        // строки → px
+                else if (e.deltaMode === 2) dy *= 100;  // страницы → px
+                const k = 0.0012;
+                // Ctrl+колесо (жест pinch-to-zoom на тачпадах) — чуть агрессивнее.
+                const factor = Math.exp(-dy * k * (e.ctrlKey ? 2 : 1));
+                // applyZoom ожидает delta: newScale = scale * (1 + delta)
+                this.applyZoom(factor - 1, e.clientX, e.clientY);
+            }, { passive: false });
+            container.addEventListener('dblclick', e => {
+                if (e.target.closest('.iso-field') || e.target.closest('.map-toolbar') || e.target.closest('.map-controls')) return;
+                // Двойной клик = «приблизить к курсору». Ещё один удобный способ.
+                this.applyZoom(0.6, e.clientX, e.clientY);
+            });
+            this.applyModeFromStorage();
+            this.fit();
+            window.addEventListener('resize', () => this.updateTransform());
+        },
+
+        applyModeFromStorage() {
+            this.mode2D = localStorage.getItem('mapMode2D') === '1';
+            try {
+                const saved = JSON.parse(localStorage.getItem('mapRot') || 'null');
+                if (saved && typeof saved.rotX === 'number' && typeof saved.rotZ === 'number') {
+                    this.rotX = Math.max(10, Math.min(85, saved.rotX));
+                    this.rotZ = saved.rotZ;
+                }
+            } catch (e) { /* keep defaults */ }
+            this.updateGridTransform();
+            const lbl = document.getElementById('btnToggle2DLabel');
+            if (lbl) lbl.textContent = this.mode2D ? '3D' : '2D';
+        },
+
+        saveRot() {
+            try { localStorage.setItem('mapRot', JSON.stringify({ rotX: this.rotX, rotZ: this.rotZ })); } catch (e) {}
+        },
+
+        toggle2D() {
+            this.mode2D = !this.mode2D;
+            localStorage.setItem('mapMode2D', this.mode2D ? '1' : '0');
+            this.updateGridTransform();
+            const lbl = document.getElementById('btnToggle2DLabel');
+            if (lbl) lbl.textContent = this.mode2D ? '3D' : '2D';
+        },
+
+        // Порог «движение — это уже drag, а не клик». Классические ОС'и используют
+        // 3-5 px. При превышении стартуем pan карты и блокируем последующий click.
+        _DRAG_THRESHOLD: 5,
+
+        onDown(e) {
+            // UI-оверлеи поверх карты — им нужно самим получать click.
+            if (e.target.closest('.map-toolbar') ||
+                e.target.closest('.map-controls') ||
+                e.target.closest('.map-status-banner') ||
+                e.target.closest('.map-legend') ||
+                e.target.closest('.map-edit-toggle') ||
+                e.target.closest('.editor-save-bar') ||
+                e.target.closest('.map-editor-panel')) return;
+            // Drag подложки фона и drag поля в editor-mode — отдельные обработчики.
+            const onField = !!e.target.closest('.iso-field');
+            const onEditorBg = container.classList.contains('editor-mode')
+                && !container.classList.contains('bg-locked')
+                && (e.target instanceof HTMLImageElement)
+                && e.target.classList.contains('map-bg');
+            if (onEditorBg) return;
+            // В editor-mode drag полей обслуживает собственный код — движок не лезет.
+            if (onField && container.classList.contains('editor-mode')) return;
+
+            const isRight = (e.button === 2) || e.altKey;
+            // === «Click vs drag» по порогу движения ===
+            // НЕ делаем setPointerCapture сразу. Если мышка в пределах _DRAG_THRESHOLD
+            // пикселей отпустится — браузер сформирует click на таргете (поле откроет
+            // боковую карточку).  Если дальше — в onMove поставим capture и начнём pan.
+            // Это даёт удобный UX: короткое нажатие на поле = клик, долгое/с движением = pan.
+            this._pointers.set(e.pointerId, {
+                x: e.clientX, y: e.clientY,
+                startX: e.clientX, startY: e.clientY,
+                button: e.button, alt: e.altKey,
+                captured: false,        // ещё не перешли в pan-режим
+                movedPastThreshold: false,
+                onField,                // начали на поле?
+            });
+            // Правый клик вращает — это «драг-ориентированное» действие, capture'им сразу.
+            if (isRight && !this.mode2D) {
+                this._rotating = true;
+                container.classList.add('rotating');
+                try { container.setPointerCapture(e.pointerId); } catch (err) {}
+                const p = this._pointers.get(e.pointerId);
+                if (p) p.captured = true;
+            }
+            if (this._pointers.size === 2) {
+                const [a, b] = Array.from(this._pointers.values());
+                this._pinchStart = { dist: Math.hypot(a.x - b.x, a.y - b.y), scale: this.scale, cx: (a.x+b.x)/2, cy: (a.y+b.y)/2, panX: this.panX, panY: this.panY };
+                // Пинч — тоже «драг», capture'им все pointer'ы.
+                this._pointers.forEach((p, id) => {
+                    if (!p.captured) { try { container.setPointerCapture(id); } catch (err) {} p.captured = true; }
+                });
+            }
+        },
+        onMove(e) {
+            if (!this._pointers.has(e.pointerId)) return;
+            const prev = this._pointers.get(e.pointerId);
+            const totalDx = e.clientX - prev.startX;
+            const totalDy = e.clientY - prev.startY;
+            // Ещё не начали pan? Проверим, не пересекли ли порог.
+            if (!prev.captured && !prev.movedPastThreshold) {
+                if (Math.hypot(totalDx, totalDy) < this._DRAG_THRESHOLD) {
+                    // Обновим «текущую» позицию, но pan ещё не стартуем.
+                    this._pointers.set(e.pointerId, { ...prev, x: e.clientX, y: e.clientY });
+                    return;
+                }
+                // Порог пройден → переходим в pan. Захватываем pointer, чтобы последующие
+                // move'ы и up'ы пришли сюда, даже если курсор ушёл с исходного элемента.
+                try { container.setPointerCapture(e.pointerId); } catch (err) {}
+                prev.captured = true;
+                prev.movedPastThreshold = true;
+                // На всякий случай: в editor-mode (если всё-таки сюда пришло) — не таскаем.
+            }
+            this._pointers.set(e.pointerId, { ...prev, x: e.clientX, y: e.clientY });
+            if (this._pointers.size === 1) {
+                const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+                if (this._rotating) {
+                    this.rotX = Math.max(10, Math.min(85, this.rotX + dy * 0.3));
+                    this.rotZ = this.rotZ + dx * 0.3;
+                    this.updateGridTransform();
+                    this.saveRot();
+                } else {
+                    this.panX += dx;
+                    this.panY += dy;
+                    this.updateTransform();
+                }
+            } else if (this._pointers.size === 2 && this._pinchStart) {
+                const [a, b] = Array.from(this._pointers.values());
+                const dist = Math.hypot(a.x - b.x, a.y - b.y);
+                const target = this._pinchStart.scale * (dist / this._pinchStart.dist);
+                const clamped = Math.max(this.minScale, Math.min(this.maxScale, target));
+                const factor = clamped / this.scale;
+                const rect = container.getBoundingClientRect();
+                const x = this._pinchStart.cx - rect.left - rect.width / 2;
+                const y = this._pinchStart.cy - rect.top  - rect.height / 2;
+                this.panX = x - (x - this.panX) * factor;
+                this.panY = y - (y - this.panY) * factor;
+                this.scale = clamped;
+                this.updateTransform();
+            }
+        },
+        onUp(e) {
+            const p = this._pointers.get(e.pointerId);
+            if (p && p.captured && container.hasPointerCapture(e.pointerId)) {
+                container.releasePointerCapture(e.pointerId);
+            }
+            // Если pan действительно начался на поле — подавляем предстоящий click,
+            // чтобы он не открыл боковую карточку сразу после перетаскивания.
+            if (p && p.onField && p.movedPastThreshold) {
+                const suppressClick = (ev) => {
+                    ev.stopPropagation();
+                    ev.preventDefault();
+                    container.removeEventListener('click', suppressClick, true);
+                };
+                container.addEventListener('click', suppressClick, true);
+                // На случай, если click не придёт (разные браузеры) — снимем listener позже.
+                setTimeout(() => container.removeEventListener('click', suppressClick, true), 350);
+            }
+            this._pointers.delete(e.pointerId);
+            if (this._pointers.size === 0) { this._rotating = false; container.classList.remove('rotating'); }
+            if (this._pointers.size < 2) this._pinchStart = null;
+        },
+
+        applyZoom(delta, cx, cy) {
+            const newScale = Math.max(this.minScale, Math.min(this.maxScale, this.scale * (1 + delta)));
+            if (newScale === this.scale) return;
+            const rect = container.getBoundingClientRect();
+            if (cx === undefined) { cx = rect.left + rect.width/2; cy = rect.top + rect.height/2; }
+            const x = cx - rect.left - rect.width / 2;
+            const y = cy - rect.top  - rect.height / 2;
+            const factor = newScale / this.scale;
+            this.panX = x - (x - this.panX) * factor;
+            this.panY = y - (y - this.panY) * factor;
+            this.scale = newScale;
+            this.updateTransform();
+        },
+        // Шаг 50% за клик — заметный и предсказуемый.  Симметрично:
+        // «+» увеличивает в 1.5×, «−» уменьшает в 1/1.5× (≈ -0.333).
+        zoomIn()  { this.applyZoom( 0.5); },
+        zoomOut() { this.applyZoom(-1 / 3); },
+        reset()   { this.scale = 0.55; this.panX = 0; this.panY = 0; this.rotX = DEFAULT_ROT_X; this.rotZ = DEFAULT_ROT_Z; try { localStorage.removeItem('mapRot'); } catch(e){} this.updateGridTransform(); this.updateTransform(); },
+        fit() {
+            if (!grid || !container) return;
+            const prev = layer.style.transform;
+            layer.style.transform = 'translate(-50%, -50%) scale(1)';
+            const gridRect = grid.getBoundingClientRect();
+            const ctrRect  = container.getBoundingClientRect();
+            layer.style.transform = prev;
+            if (!gridRect.width || !gridRect.height) { this.reset(); return; }
+            const pad = 80;
+            const sx = (ctrRect.width  - pad) / gridRect.width;
+            const sy = (ctrRect.height - pad) / gridRect.height;
+            this.scale = Math.max(this.minScale, Math.min(this.maxScale, Math.min(sx, sy)));
+            this.panX = 0; this.panY = 0;
+            this.updateTransform();
+        },
+        updateGridTransform() {
+            if (!grid) return;
+            if (this.mode2D) {
+                grid.classList.add('flat');
+                grid.style.setProperty('--rx', '0deg');
+                grid.style.setProperty('--rz', '0deg');
+                grid.style.transform = 'none';
+            } else {
+                grid.classList.remove('flat');
+                grid.style.setProperty('--rx', this.rotX + 'deg');
+                grid.style.setProperty('--rz', this.rotZ + 'deg');
+                grid.style.transform = `rotateX(${this.rotX}deg) rotateZ(${this.rotZ}deg)`;
+            }
+        },
+        updateTransform() {
+            if (!layer || !container) return;
+            layer.style.transform = `translate(calc(-50% + ${this.panX}px), calc(-50% + ${this.panY}px)) scale(${this.scale})`;
+            container.style.backgroundPosition = `${this.panX}px ${this.panY}px`;
+            // Режим «ультра-далеко» — при scale < 15% показываем только название
+            // и общее кол-во, максимально крупным шрифтом (см. CSS .zoom-ultra-far).
+            const ultraFar = this.scale < 0.15;
+            container.classList.toggle('zoom-ultra-far', ultraFar);
+            // Counter-scale для подписей: только при zoom-out (когда scale<1).
+            // При приближении (scale>1) текст остаётся базового размера — иначе
+            // он раздувается и перекрывает соседние поля. В «ультра» режиме
+            // разрешаем увеличивать сильнее (до 2.8×) — только название + число,
+            // всё равно ничего не перекрывается.
+            const labelScale = this.scale < 1
+                ? Math.min(ultraFar ? 2.8 : 1.8, 1 / this.scale)
+                : 1;
+            container.style.setProperty('--label-scale', labelScale);
+            // Индикатор текущего зума — удобно видеть, «где мы».
+            const ind = document.getElementById('zoomIndicator');
+            if (ind) ind.textContent = Math.round(this.scale * 100) + '%';
+            // Пересчёт классов плотности подписей (мелкое поле → меньше текста).
+            if (typeof window.updateFieldDensities === 'function') {
+                // debounce через rAF — несколько pan-ов/wheel'ов за кадр скооперируются.
+                if (!this._densityRaf) this._densityRaf = requestAnimationFrame(() => {
+                    this._densityRaf = null;
+                    try { window.updateFieldDensities(); } catch (e) { /* нет полей ещё */ }
+                });
+            }
+        }
+    };
+    window.mapEngine = mapEngine;
+    mapEngine.init();
+
+    // Клавиатурные хоткеи для зума.  Работают только когда курсор над картой и
+    // фокус не в инпуте — чтобы не конфликтовали с набором в фильтрах/формах.
+    (function addZoomHotkeys() {
+        const ctr = document.getElementById('nurseryMapContainer');
+        if (!ctr) return;
+        let hover = false;
+        ctr.addEventListener('pointerenter', () => { hover = true; });
+        ctr.addEventListener('pointerleave', () => { hover = false; });
+        window.addEventListener('keydown', (ev) => {
+            if (!hover) return;
+            const t = ev.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+            // Плюс (с/без Shift, на основном и NumPad) → приблизить,
+            // минус → отдалить, ноль → вписать по размеру.
+            if (ev.key === '+' || ev.key === '=') { ev.preventDefault(); window.mapEngine.zoomIn(); }
+            else if (ev.key === '-' || ev.key === '_') { ev.preventDefault(); window.mapEngine.zoomOut(); }
+            else if (ev.key === '0') { ev.preventDefault(); window.mapEngine.fit(); }
+        });
+    })();
+
+    // ---------- СВОДКА ПО ПОЛЯМ (названия растений, кол-ва) ----------
+    async function refreshFieldsSummary() {
+        try {
+            const res = await fetch('/api/visual_stock/fields_summary', { cache: 'no-store' });
+            const d = await res.json();
+            if (d.status !== 'ok') return;
+            const map = d.fields || {};
+            document.querySelectorAll('.iso-field').forEach(f => {
+                const fid = f.dataset.fieldId;
+                const info = map[fid];
+                const content = f.querySelector('.iso-content');
+                // Сбрасываем индикацию пересчёта независимо от наличия контента
+                f.classList.remove('recount-stale');
+                const oldBadge = f.querySelector('.field-stale-badge');
+                if (oldBadge) oldBadge.remove();
+
+                if (content) {
+                    content.querySelectorAll('.field-total-badge, .field-top-list').forEach(n => n.remove());
+                    if (info && info.total) {
+                        const badge = document.createElement('div');
+                        badge.className = 'field-total-badge';
+                        badge.textContent = info.total.toLocaleString('ru-RU') + ' шт';
+                        content.appendChild(badge);
+                        if (info.top && info.top.length) {
+                            const ul = document.createElement('div');
+                            ul.className = 'field-top-list';
+                            info.top.forEach(r => {
+                                const line = document.createElement('div');
+                                line.className = 'row-plant';
+                                line.textContent = `${r.plant}${r.size ? ' · ' + r.size : ''} — ${r.qty}`;
+                                ul.appendChild(line);
+                            });
+                            content.appendChild(ul);
+                        }
+                    }
+                }
+
+                if (info && info.recount_overdue) {
+                    f.classList.add('recount-stale');
+                    const title = info.last_recount_date
+                        ? `Последний пересчёт: ${info.last_recount_date.split('-').reverse().join('.')} (более 4 мес назад)`
+                        : 'Пересчёт по полю ни разу не проводился';
+                    f.setAttribute('data-recount-title', title);
+                    const warn = document.createElement('div');
+                    warn.className = 'field-stale-badge';
+                    warn.title = title;
+                    warn.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
+                    f.appendChild(warn);
+                } else {
+                    f.removeAttribute('data-recount-title');
+                }
+            });
+        } catch (e) { /* ignore */ }
+    }
+    window.refreshFieldsSummary = refreshFieldsSummary;
+
+    // ---------- РЕЖИМЫ КАРТЫ ----------
+    // mapMode: idle | move_source | move_dest | income_drop | writeoff_pick | recount_pick
+    let mapMode = 'idle';
+    let activeOp = 'move'; // income | move | writeoff | recount
+    let opData = {};
+    let recountFieldId = null;
+
+    const sourcePanelEl = document.getElementById('sourceFieldPanel');
+    const qtyModalEl    = document.getElementById('qtyModal');
+    const sourcePanel   = new bootstrap.Offcanvas(sourcePanelEl);
+    const qtyModal      = new bootstrap.Modal(qtyModalEl);
+
+    function setBanner(text, show) {
+        const banner = document.getElementById('mapStatusBanner');
+        document.getElementById('mapStatusText').innerText = text || '';
+        banner.style.display = show ? 'flex' : 'none';
+    }
+
+    window.cancelMapOperation = function() {
+        mapMode = 'idle';
+        opData = {};
+        recountFieldId = null;
+        setBanner('', false);
+        sourcePanel.hide();
+        qtyModal.hide();
+        document.querySelectorAll('.iso-field').forEach(f => f.classList.remove('pulse-target', 'drop-target', 'drop-reject'));
+        setMapMode(activeOp, true); // re-highlight according to active op
+    };
+
+    window.setMapMode = function(op, silent) {
+        activeOp = op;
+        document.querySelectorAll('#mapToolbar .mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === op));
+        document.querySelectorAll('.iso-field').forEach(f => f.classList.remove('pulse-target', 'drop-target', 'drop-reject'));
+        mapMode = 'idle';
+        opData = {};
+        if (silent) return;
+        const hints = {
+            income:   'Режим Поступление: перетащите карточку растения из каталога слева на нужное поле',
+            move:     'Режим Перемещение: кликните поле-источник ИЛИ перетащите позицию между полями',
+            writeoff: 'Режим Списание: кликните поле, с которого будем списывать',
+            recount:  'Режим Пересчёт: кликните поле и отредактируйте количества',
+        };
+        setBanner(hints[op] || '', true);
+        if (op === 'move') {
+            mapMode = 'move_source';
+            document.querySelectorAll('.iso-field').forEach(f => f.classList.add('pulse-target'));
+        }
+    };
+    setMapMode('move', true);
+
+    // ---------- КАТАЛОГ (боковая панель) ----------
+    let catalogLoaded = false;
+    let catalogPlants = [], catalogSizes = [];
+
+    async function loadPlantCatalog() {
+        if (catalogLoaded) return;
+        const el = document.getElementById('plantCatalogSidebar');
+        if (el) el.innerHTML = '<div class="text-muted small py-2 px-2"><i class="fas fa-spinner fa-spin me-1"></i>Загружаем справочник...</div>';
+        try {
+            const res = await fetch('/api/visual_stock/plants_catalog', { credentials: 'same-origin', cache: 'no-store' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const ct = res.headers.get('content-type') || '';
+            if (!ct.includes('application/json')) throw new Error('Ответ не JSON (возможно, сессия истекла)');
+            const d = await res.json();
+            if (d.status !== 'ok') throw new Error('status=' + d.status);
+            catalogPlants = d.plants || [];
+            catalogSizes  = d.sizes  || [];
+            catalogLoaded = true;
+            renderCatalog('');
+        } catch (e) {
+            if (el) el.innerHTML = `<div class="alert alert-danger small m-2">Ошибка загрузки каталога: ${e.message || e}</div>`;
+        }
+    }
+
+    function buildSizeChip(p, s) {
+        const chip = document.createElement('div');
+        chip.className = 'size-chip';
+        chip.draggable = true;
+        chip.textContent = s.name;
+        chip.title = `${p.name} · ${s.name} — перетащите на поле для поступления`;
+        chip.dataset.plantId = p.id;
+        chip.dataset.sizeId = s.id;
+        chip.addEventListener('dragstart', ev => {
+            if (activeOp !== 'income') { ev.preventDefault(); return; }
+            ev.dataTransfer.setData('application/x-plant-card', JSON.stringify({
+                plant_id: p.id, plant_name: p.name, size_id: s.id, size_name: s.name
+            }));
+            ev.dataTransfer.effectAllowed = 'copy';
+        });
+        return chip;
+    }
+
+    function renderCatalog(q) {
+        const el = document.getElementById('plantCatalogSidebar');
+        if (!el) return;
+        el.innerHTML = '';
+        const query = (q || '').trim().toLowerCase();
+        const plants = catalogPlants.filter(p => !query || p.name.toLowerCase().includes(query));
+        if (plants.length === 0) {
+            el.innerHTML = '<div class="text-muted small py-3 px-2 text-center">Ничего не найдено</div>';
+            const cnt = document.getElementById('catalogCount');
+            if (cnt) cnt.innerText = 0;
+            return;
+        }
+        const frag = document.createDocumentFragment();
+        plants.forEach(p => {
+            const row = document.createElement('div');
+            row.className = 'catalog-plant';
+            row.dataset.plantId = p.id;
+            row.innerHTML = `<span class="truncate">${p.name}</span><span class="chev">▶</span>`;
+            const sizes = document.createElement('div');
+            sizes.className = 'catalog-sizes';
+            row.addEventListener('click', () => {
+                const wasActive = row.classList.contains('active');
+                el.querySelectorAll('.catalog-plant.active').forEach(n => n.classList.remove('active'));
+                if (wasActive) return;
+                row.classList.add('active');
+                if (sizes.dataset.built !== '1') {
+                    const fr = document.createDocumentFragment();
+                    catalogSizes.forEach(s => fr.appendChild(buildSizeChip(p, s)));
+                    sizes.appendChild(fr);
+                    sizes.dataset.built = '1';
+                }
+            });
+            frag.appendChild(row);
+            frag.appendChild(sizes);
+        });
+        el.appendChild(frag);
+        const cnt = document.getElementById('catalogCount');
+        if (cnt) cnt.innerText = plants.length;
+    }
+
+    const catalogSearch = document.getElementById('catalogSearch');
+    if (catalogSearch) catalogSearch.addEventListener('input', e => renderCatalog(e.target.value));
+
+    // ---------- DRAG & DROP на поля ----------
+    // Храним активный источник в глобальной переменной, т.к. Chrome запрещает getData() до drop
+    let __activePosDrag = null;
+
+    // Поля рендерятся динамически (renderMapFields), поэтому DnD и клик вешаем
+    // через attachFieldInteraction после каждого создания DOM-элемента.
+    function attachFieldInteraction(f) {
+        if (!f || f.dataset._wired === '1') return;
+        f.dataset._wired = '1';
+        const fieldId   = f.dataset.fieldId;
+        const fieldName = f.dataset.fieldName || '';
+
+        // Клик — только если мы НЕ в режиме редактора.
+        f.addEventListener('click', () => {
+            if (document.getElementById('nurseryMapContainer')?.classList.contains('editor-mode')) return;
+            if (typeof window.onFieldClick === 'function') window.onFieldClick(fieldId, fieldName);
+        });
+
+        f.addEventListener('dragover', ev => {
+            if (container.classList.contains('editor-mode')) return;
+            const types = Array.from(ev.dataTransfer.types || []);
+            const isIncome  = types.includes('application/x-plant-card') && activeOp === 'income';
+            const isMove    = types.includes('application/x-plant-pos')  && activeOp === 'move';
+            if (!isIncome && !isMove) return;
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = isIncome ? 'copy' : 'move';
+            if (isMove && __activePosDrag && String(__activePosDrag.field_from) === String(f.dataset.fieldId)) {
+                f.classList.add('drop-reject');
+                return;
+            }
+            f.classList.add('drop-target');
+        });
+        f.addEventListener('dragleave', () => f.classList.remove('drop-target', 'drop-reject'));
+        f.addEventListener('drop', ev => {
+            if (container.classList.contains('editor-mode')) return;
+            ev.preventDefault();
+            f.classList.remove('drop-target', 'drop-reject');
+            const types = Array.from(ev.dataTransfer.types || []);
+            const isIncome = types.includes('application/x-plant-card');
+            const isMove   = types.includes('application/x-plant-pos');
+            const raw = isIncome
+                ? ev.dataTransfer.getData('application/x-plant-card')
+                : (isMove ? ev.dataTransfer.getData('application/x-plant-pos') : '');
+            if (!raw) return;
+            let payload;
+            try { payload = JSON.parse(raw); } catch (e) { return; }
+
+            if (isIncome) {
+                // drop из каталога — ПОСТУПЛЕНИЕ
+                if (activeOp !== 'income') return;
+                opData = {
+                    kind: 'income',
+                    plant_id: payload.plant_id, plant_name: payload.plant_name,
+                    size_id: payload.size_id, size_name: payload.size_name,
+                    field_to: fieldId, field_to_name: fieldName,
+                };
+                openQtyModal({
+                    title: 'Поступление',
+                    headerColor: '#16a34a',
+                    icon: 'fa-arrow-down',
+                    plantName: payload.plant_name,
+                    sizeYear: payload.size_name,
+                    from: '—', to: fieldName,
+                    showYear: true,
+                    maxQty: null,
+                });
+            } else {
+                // drop с поля — ПЕРЕМЕЩЕНИЕ
+                if (activeOp !== 'move') return;
+                if (String(payload.field_from) === String(fieldId)) {
+                    alert('Нельзя переместить на то же поле');
+                    return;
+                }
+                opData = {
+                    kind: 'move',
+                    plant_id: payload.plant_id, plant_name: payload.plant_name,
+                    size_id: payload.size_id, size_name: payload.size_name,
+                    year: payload.year, qtyMax: payload.qty,
+                    field_from: payload.field_from, field_from_name: payload.field_from_name,
+                    field_to: fieldId, field_to_name: fieldName,
+                };
+                openQtyModal({
+                    title: 'Перемещение', headerColor: '#0d6efd', icon: 'fa-truck-moving',
+                    plantName: payload.plant_name,
+                    sizeYear: `${payload.size_name} | ${payload.year} г.`,
+                    from: payload.field_from_name, to: fieldName,
+                    showYear: false,
+                    maxQty: payload.qty,
+                });
+            }
+        });
+    }
+    window.__attachFieldInteraction = attachFieldInteraction;
+
+    // ---------- КЛИК ПО ПОЛЮ ----------
+    window.onFieldClick = async function(fieldId, fieldName) {
+        // если активен drag — игнорим
+        if (activeOp === 'income')   return; // income — только DnD
+        if (activeOp === 'move')     return onFieldClickMove(fieldId, fieldName);
+        if (activeOp === 'writeoff') return onFieldClickWriteoff(fieldId, fieldName);
+        if (activeOp === 'recount')  return onFieldClickRecount(fieldId, fieldName);
+    };
+
+    async function onFieldClickMove(fieldId, fieldName) {
+        if (mapMode === 'move_dest') {
+            if (String(fieldId) === String(opData.field_from)) { alert('Нельзя переместить на то же поле'); return; }
+            opData.field_to = fieldId; opData.field_to_name = fieldName;
+            document.querySelectorAll('.iso-field').forEach(f => f.classList.remove('pulse-target'));
+            openQtyModal({
+                title: 'Перемещение', headerColor: '#0d6efd', icon: 'fa-truck-moving',
+                plantName: opData.plant_name,
+                sizeYear: `${opData.size_name} | ${opData.year} г.`,
+                from: opData.field_from_name, to: fieldName,
+                showYear: false, maxQty: opData.qtyMax,
+            });
+            return;
+        }
+        mapMode = 'move_source';
+        opData = { kind: 'move', field_from: fieldId, field_from_name: fieldName };
+        await openFieldPanel(fieldId, fieldName, {
+            hint: 'Выберите позицию, которую хотите переместить (можно перетащить):',
+            draggable: true,
+            onSelect: (item) => {
+                opData.plant_id = item.plant_id; opData.plant_name = item.plant_name;
+                opData.size_id = item.size_id;   opData.size_name  = item.size_name;
+                opData.year = item.year;         opData.qtyMax = item.qty;
+                sourcePanel.hide();
+                mapMode = 'move_dest';
+                setBanner(`Куда перенести ${item.plant_name}?`, true);
+                document.querySelectorAll('.iso-field').forEach(f => f.classList.add('pulse-target'));
+                const srcEl = document.getElementById(`field-${fieldId}`);
+                if (srcEl) srcEl.classList.remove('pulse-target');
+            }
+        });
+    }
+
+    async function onFieldClickWriteoff(fieldId, fieldName) {
+        if (!IS_ADMIN) { alert('Только для администратора'); return; }
+        opData = { kind: 'writeoff', field_from: fieldId, field_from_name: fieldName };
+        await openFieldPanel(fieldId, fieldName, {
+            hint: 'Выберите позицию для списания (показан свободный остаток):',
+            badgeVariant: 'danger',
+            actionIcon: 'fa-trash-alt',
+            showFree: true,
+            onSelect: (item) => {
+                const free = item.free != null ? item.free : item.qty;
+                if (free <= 0) { alert(`По этой позиции нет свободного остатка (резерв: ${item.reserved || 0})`); return; }
+                opData.plant_id = item.plant_id; opData.plant_name = item.plant_name;
+                opData.size_id  = item.size_id;  opData.size_name  = item.size_name;
+                opData.year = item.year;         opData.qtyMax = free;
+                opData.reserved = item.reserved || 0; opData.total = item.qty;
+                sourcePanel.hide();
+                openQtyModal({
+                    title: 'Списание', headerColor: '#dc3545', icon: 'fa-trash-alt',
+                    plantName: item.plant_name,
+                    sizeYear: `${item.size_name} | ${item.year} г. · Всего ${item.qty} · Резерв ${item.reserved || 0}`,
+                    from: fieldName, to: '—', showDirection: false,
+                    showYear: false, maxQty: free, maxLabel: 'Свободно',
+                });
+            }
+        });
+    }
+
+    async function onFieldClickRecount(fieldId, fieldName) {
+        if (IS_USER2) { alert('Только для менеджера/админа'); return; }
+        recountFieldId = fieldId;
+        await openFieldPanel(fieldId, fieldName, {
+            hint: 'Отредактируйте фактические количества и нажмите «Сохранить»:',
+            recountMode: true,
+        });
+    }
+
+    async function openFieldPanel(fieldId, fieldName, opts) {
+        const titleEl  = document.getElementById('sourceFieldTitle');
+        const loader   = document.getElementById('sourceFieldLoader');
+        const hint     = document.getElementById('sourceFieldHint');
+        const itemsEl  = document.getElementById('sourceFieldItems');
+        const footer   = document.getElementById('recountFooter');
+        titleEl.innerText = fieldName;
+        hint.innerText = opts.hint || '';
+        loader.style.display = 'block';
+        itemsEl.innerHTML = '';
+        footer.style.display = 'none';
+        sourcePanel.show();
+
+        try {
+            const res = await fetch(`/api/visual_stock/field/${fieldId}`);
+            const data = await res.json();
+            loader.style.display = 'none';
+            if (!data.items || data.items.length === 0) {
+                itemsEl.innerHTML = '<div class="alert alert-warning text-center">На этом поле нет остатков.</div>';
+                return;
+            }
+
+            if (opts.recountMode) {
+                const tbl = document.createElement('div');
+                tbl.className = 'd-flex flex-column gap-2';
+                data.items.forEach(item => {
+                    const reserved = item.reserved || 0;
+                    const free = item.free != null ? item.free : Math.max(0, item.qty - reserved);
+                    const row = document.createElement('div');
+                    row.className = 'card bg-white border-warning p-2';
+                    row.innerHTML = `
+                        <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                            <div>
+                                <div class="fw-bold text-dark" style="font-size:14px;">${item.plant_name}</div>
+                                <div class="small text-muted">${item.size_name} · ${item.year} г.</div>
+                                <div class="d-flex gap-3 mt-2 align-items-end">
+                                    <div>
+                                        <div class="small text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.5px;">Всего</div>
+                                        <div class="fs-4 fw-bolder text-dark" style="line-height:1;">${item.qty}</div>
+                                    </div>
+                                    <div>
+                                        <div class="small text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.5px;">Резерв</div>
+                                        <div class="fw-bold text-warning" style="font-size:18px; line-height:1;">${reserved}</div>
+                                    </div>
+                                    <div>
+                                        <div class="small text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.5px;">Свободно</div>
+                                        <div class="fw-bold text-success" style="font-size:18px; line-height:1;">${free}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="text-end">
+                                <div class="small text-muted mb-1" style="font-size:10px;">Факт</div>
+                                <input type="number" class="form-control form-control-sm recount-input text-center"
+                                       style="width: 100px; border-color:#f59e0b; font-size:16px; font-weight:700;"
+                                       min="${reserved}" value="${item.qty}"
+                                       data-plant-id="${item.plant_id}"
+                                       data-size-id="${item.size_id}"
+                                       data-year="${item.year}"
+                                       data-orig="${item.qty}"
+                                       data-reserved="${reserved}">
+                                <div class="small text-danger recount-warn" style="display:none; font-size:10px;">< резерва!</div>
+                            </div>
+                        </div>`;
+                    tbl.appendChild(row);
+                });
+                itemsEl.appendChild(tbl);
+
+                itemsEl.querySelectorAll('.recount-input').forEach(inp => {
+                    inp.addEventListener('input', () => validateRecountInputs());
+                });
+                validateRecountInputs();
+
+                footer.style.display = 'block';
+                return;
+            }
+
+            data.items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'card bg-white border-0 shadow-sm plant-card-hover p-3' + (opts.draggable ? ' draggable-pos' : '');
+                if (opts.draggable) {
+                    div.draggable = true;
+                    div.addEventListener('dragstart', ev => {
+                        const pos = {
+                            plant_id: item.plant_id, plant_name: item.plant_name,
+                            size_id: item.size_id, size_name: item.size_name,
+                            year: item.year, qty: item.qty,
+                            field_from: fieldId, field_from_name: fieldName,
+                        };
+                        ev.dataTransfer.setData('application/x-plant-pos', JSON.stringify(pos));
+                        ev.dataTransfer.effectAllowed = 'move';
+                        __activePosDrag = pos;
+                    });
+                    div.addEventListener('dragend', () => { __activePosDrag = null; });
+                }
+                const badgeClass = opts.badgeVariant === 'danger' ? 'bg-danger' : 'bg-success';
+                const actIcon = opts.actionIcon ? `<i class="fas ${opts.actionIcon} text-muted ms-2"></i>` : '';
+                const reserved = item.reserved || 0;
+                const free = item.free != null ? item.free : Math.max(0, item.qty - reserved);
+                const freeInfo = opts.showFree
+                    ? `<div class="small mt-1">
+                           <span class="text-muted">Всего:</span> <b>${item.qty}</b>
+                           · <span class="text-muted">Резерв:</span> <b class="text-warning">${reserved}</b>
+                           · <span class="text-muted">Свободно:</span> <b class="text-success">${free}</b>
+                       </div>` : '';
+                div.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="fw-bold text-dark">${item.plant_name}</div>
+                            <div class="small text-muted">${item.size_name} <span class="badge bg-light text-dark border ms-1">${item.year} г.</span></div>
+                            ${freeInfo}
+                        </div>
+                        <div>
+                            <span class="badge ${badgeClass} rounded-pill px-3 py-2 fs-6 shadow-sm">${item.qty} шт</span>
+                            ${actIcon}
+                        </div>
+                    </div>`;
+                div.addEventListener('click', () => opts.onSelect && opts.onSelect(item));
+                itemsEl.appendChild(div);
+            });
+        } catch (e) {
+            loader.style.display = 'none';
+            itemsEl.innerHTML = '<div class="alert alert-danger text-center">Ошибка загрузки.</div>';
+        }
+    }
+
+    function validateRecountInputs() {
+        let anyInvalid = false;
+        document.querySelectorAll('.recount-input').forEach(inp => {
+            const reserved = parseInt(inp.dataset.reserved || '0');
+            const val = parseInt(inp.value);
+            const warn = inp.parentElement && inp.parentElement.querySelector('.recount-warn');
+            if (!isNaN(val) && val < reserved) {
+                inp.classList.add('is-invalid');
+                inp.style.borderColor = '#dc3545';
+                if (warn) warn.style.display = '';
+                anyInvalid = true;
+            } else {
+                inp.classList.remove('is-invalid');
+                inp.style.borderColor = '#f59e0b';
+                if (warn) warn.style.display = 'none';
+            }
+        });
+        const btn = document.getElementById('recountSaveBtn');
+        if (btn) {
+            btn.disabled = anyInvalid;
+            btn.classList.toggle('btn-secondary', anyInvalid);
+            btn.classList.toggle('btn-warning', !anyInvalid);
+        }
+        return !anyInvalid;
+    }
+    window.validateRecountInputs = validateRecountInputs;
+
+    function openQtyModal(opts) {
+        document.getElementById('qtyModalTitle').innerText = opts.title;
+        document.getElementById('qtyModalIcon').className = `fas ${opts.icon} me-2`;
+        document.getElementById('qtyModalHeader').style.background = opts.headerColor;
+        document.getElementById('modalPlantName').innerText = opts.plantName || '';
+        document.getElementById('modalPlantSizeYear').innerText = opts.sizeYear || '';
+        document.getElementById('modalFieldFromName').innerText = opts.from || '';
+        document.getElementById('modalFieldToName').innerText = opts.to || '';
+        document.getElementById('modalDirection').style.display = (opts.showDirection === false) ? 'none' : 'flex';
+        document.getElementById('yearInputWrap').style.display = opts.showYear ? 'block' : 'none';
+        if (opts.showYear) {
+            const yi = document.getElementById('modalYearInput');
+            yi.value = CURRENT_YEAR;
+        }
+        const input = document.getElementById('qtyInput');
+        input.value = 1;
+        const lbl = document.getElementById('qtyHintLabel');
+        if (lbl) lbl.textContent = opts.maxLabel || 'Максимум';
+        if (opts.maxQty != null) {
+            input.max = opts.maxQty;
+            document.getElementById('modalMaxQty').innerText = opts.maxQty;
+            document.getElementById('qtyHint').style.display = '';
+        } else {
+            input.removeAttribute('max');
+            document.getElementById('qtyHint').style.display = 'none';
+        }
+        qtyModal.show();
+        setTimeout(() => input.focus(), 300);
+    }
+
+    document.getElementById('qtyInput').addEventListener('input', function() {
+        let val = parseInt(this.value) || 0;
+        if (this.max && val > parseInt(this.max)) this.value = this.max;
+        if (val < 0) this.value = 0;
+    });
+
+    // ---------- Подтверждение операции ----------
+    window.confirmQty = async function() {
+        const qty = parseInt(document.getElementById('qtyInput').value);
+        if (!qty || qty <= 0) { alert('Укажите корректное количество!'); return; }
+
+        let url = '', payload = {};
+        if (opData.kind === 'move') {
+            url = '/api/visual_stock/move';
+            payload = {
+                plant_id: opData.plant_id, size_id: opData.size_id, year: opData.year,
+                field_from: opData.field_from, field_to: opData.field_to, qty,
+            };
+        } else if (opData.kind === 'income') {
+            const year = parseInt(document.getElementById('modalYearInput').value) || CURRENT_YEAR;
+            url = '/api/visual_stock/income';
+            payload = {
+                plant_id: opData.plant_id, size_id: opData.size_id,
+                year, field_to: opData.field_to, qty,
+            };
+        } else if (opData.kind === 'writeoff') {
+            url = '/api/visual_stock/writeoff';
+            payload = {
+                plant_id: opData.plant_id, size_id: opData.size_id, year: opData.year,
+                field_from: opData.field_from, qty,
+            };
+        } else { return; }
+
+        try {
+            const btn = document.getElementById('qtyConfirmBtn');
+            btn.disabled = true; btn.innerText = '...';
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const result = await res.json();
+            btn.disabled = false; btn.innerText = 'ГОТОВО';
+            if (result.status !== 'ok') { alert('Ошибка: ' + (result.message || '')); return; }
+            const fid = opData.field_to || opData.field_from;
+            const el = document.getElementById(`field-${fid}`);
+            if (el) { el.style.background = 'linear-gradient(135deg, #10b981, #059669)'; setTimeout(() => { el.style.background = ''; }, 500); }
+            cancelMapOperation();
+            refreshFieldsSummary();
+        } catch (e) {
+            alert('Ошибка сети.');
+        }
+    };
+
+    window.confirmRecount = async function() {
+        if (!recountFieldId) return;
+        if (!validateRecountInputs()) {
+            alert('Есть позиции, где фактическое количество меньше зарезервированного. Исправьте выделенные красным значения.');
+            return;
+        }
+        const rows = [];
+        document.querySelectorAll('.recount-input').forEach(inp => {
+            const fact = parseInt(inp.value);
+            const orig = parseInt(inp.dataset.orig);
+            if (isNaN(fact) || fact < 0) return;
+            if (fact === orig) return;
+            rows.push({
+                plant_id: parseInt(inp.dataset.plantId),
+                size_id:  parseInt(inp.dataset.sizeId),
+                year:     parseInt(inp.dataset.year),
+                fact_qty: fact,
+            });
+        });
+        if (rows.length === 0) { alert('Нет изменений'); return; }
+        try {
+            const res = await fetch('/api/visual_stock/field_recount', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ field_id: parseInt(recountFieldId), rows }),
+            });
+            const result = await res.json();
+            if (result.status !== 'ok') { alert('Ошибка: ' + (result.message || '')); return; }
+            alert(`Карточка пересчёта сохранена (изменено строк: ${result.changed || 0})`);
+            cancelMapOperation();
+            refreshFieldsSummary();
+        } catch (e) { alert('Ошибка сети.'); }
+    };
+
+    // ==========================================================================
+    // ============== РЕНДЕР КАРТЫ ИЗ /api/visual_stock/map_config ===============
+    // ==========================================================================
+    // Поля и фон тянутся с бэка и рисуются абсолютно-позиционированными блоками
+    // внутри #isoGrid. У каждого поля — CSS-переменные --fx/--fy/--fw/--fh/--fclip/--fcolor.
+    // Для полей без координат вычисляем позицию в авто-сетке (6 колонок).
+
+    const DEFAULT_CANVAS_RATIO = 16 / 9;
+    const DEFAULT_FIELD_W = 13;  // проценты от канваса
+    const DEFAULT_FIELD_H = 16;
+
+    let _mapConfig = null;    // последний загруженный конфиг: {settings, fields}
+    let _mapRenderedOnce = false;
+
+    function polygonToClipPath(points) {
+        if (!Array.isArray(points) || points.length < 3) return 'none';
+        return 'polygon(' + points.map(p => `${p[0]}% ${p[1]}%`).join(', ') + ')';
+    }
+
+    // Применяет параметры трансформации фона к конкретному <img class="map-bg">.
+    // Также используется из редактора во время перетаскивания и из слайдеров.
+    // fit='stretch' маппится на object-fit:fill, остальные — 1:1 к object-fit.
+    function applyBackgroundTransformToEl(bg, s) {
+        if (!bg || !s) return;
+        const fit = (s.bg_fit === 'contain' || s.bg_fit === 'stretch' || s.bg_fit === 'custom') ? s.bg_fit : 'cover';
+        const cssFit = (fit === 'stretch') ? 'fill'
+                     : (fit === 'custom')  ? 'none'
+                     : fit;
+        bg.style.setProperty('--bg-fit', cssFit);
+        bg.style.setProperty('--bg-ox', (s.bg_offset_x ?? 0) + '%');
+        bg.style.setProperty('--bg-oy', (s.bg_offset_y ?? 0) + '%');
+        bg.style.setProperty('--bg-scale', (s.bg_scale ?? 1));
+        bg.style.setProperty('--bg-rot', (s.bg_rotation ?? 0) + 'deg');
+        bg.style.setProperty('--bg-opacity', (s.bg_opacity ?? 1));
+    }
+
+    function autoGridPosition(index, total) {
+        // 6 колонок, строка высотой 18%, первая строка с y=6%. Координаты — левый верхний угол.
+        const cols = 6;
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        const cellW = 100 / cols;  // 16.6%
+        const padX = 1.5;
+        const x = col * cellW + padX;
+        const y = 4 + row * 20;
+        return { x, y, w: cellW - padX * 2, h: 16 };
+    }
+
+    function renderMapFields(cfg) {
+        const grid = document.getElementById('isoGrid');
+        if (!grid) return;
+
+        // Размер и соотношение сторон рабочей зоны (канваса).
+        // canvas_aspect='auto' → берём от фото (или 16:9 если фото нет).
+        const s = cfg.settings || {};
+        const asp = (s.canvas_aspect || 'auto');
+        let ratio = '16/9';
+        if (asp === 'auto') {
+            if (s.bg_width && s.bg_height) ratio = `${s.bg_width}/${s.bg_height}`;
+        } else {
+            ratio = asp; // уже в формате "W/H"
+        }
+        grid.style.setProperty('--canvas-ratio', ratio);
+        const cw = Math.max(600, Math.min(6000, parseInt(s.canvas_width, 10) || 1600));
+        grid.style.setProperty('--canvas-w', cw + 'px');
+
+        // Если установлен фон — 3D-наклон карты не имеет смысла (фото становится перекошенным).
+        // Прячем кнопку 3D и принудительно переходим в плоский режим.
+        const btn3D = document.getElementById('btnToggle2D');
+        const mapContainer = document.getElementById('nurseryMapContainer');
+        if (s.background_url) {
+            if (btn3D) btn3D.style.display = 'none';
+            if (window.mapEngine && !mapEngine.mode2D) mapEngine.toggle2D();
+            mapContainer?.classList.add('has-bg');
+        } else {
+            if (btn3D) btn3D.style.display = '';
+            mapContainer?.classList.remove('has-bg');
+        }
+
+        // Удаляем возможный старый фон из .map-container (остатки от прошлой архитектуры).
+        mapContainer?.querySelectorAll(':scope > .map-bg').forEach(el => el.remove());
+
+        grid.innerHTML = '';
+
+        // Фон — первый слой ВНУТРИ канваса. Тогда при pan/zoom движка фон едет вместе
+        // с полями, и каждое поле можно точно «пришпилить» к конкретной точке снимка.
+        // Поверх фона рисуются поля.
+        if (s.background_url) {
+            const bg = document.createElement('img');
+            bg.className = 'map-bg';
+            bg.id = 'mapBgImage';
+            bg.alt = '';
+            bg.draggable = false;
+            bg.src = s.background_url;
+            applyBackgroundTransformToEl(bg, s);
+            grid.appendChild(bg);
+        }
+
+        const fields = (cfg.fields || []).slice();
+
+        // Сортируем: те у кого есть map_z — по z, остальные — по имени (как пришло).
+        fields.sort((a, b) => {
+            const za = (a.z != null) ? a.z : 0;
+            const zb = (b.z != null) ? b.z : 0;
+            return za - zb;
+        });
+
+        fields.forEach((f, idx) => {
+            const hasCoords = f.x != null && f.y != null && f.w != null && f.h != null;
+            const pos = hasCoords ? { x: f.x, y: f.y, w: f.w, h: f.h } : autoGridPosition(idx, fields.length);
+
+            const div = document.createElement('div');
+            const isBed = /грядк/i.test(f.name || '');
+            // Layout задаётся админом в редакторе. Если не задан — 'stack' (default).
+            const layout = (f.layout && ['auto','stack','row','compact','number-only'].includes(f.layout))
+                ? f.layout : 'stack';
+            div.className = 'iso-field layout-' + layout + (isBed ? ' bed' : '');
+            div.id = 'field-' + f.id;
+            div.dataset.fieldId = f.id;
+            div.dataset.fieldName = f.name || '';
+            div.dataset.layout = layout;
+            div.style.setProperty('--fx', pos.x + '%');
+            div.style.setProperty('--fy', pos.y + '%');
+            div.style.setProperty('--fw', pos.w + '%');
+            div.style.setProperty('--fh', pos.h + '%');
+            if (f.shape) {
+                div.style.setProperty('--fclip', polygonToClipPath(f.shape));
+            }
+            if (f.color) {
+                div.style.setProperty('--fcolor', f.color);
+            }
+
+            const inner = document.createElement('div');
+            inner.className = 'iso-content';
+            inner.innerHTML = `<div class="iso-title">${(f.name || '').replace(/</g,'&lt;')}</div>`;
+            div.appendChild(inner);
+
+            // Ресайз-хендлы (видны только в режиме редактирования через CSS).
+            ['nw','ne','sw','se'].forEach(corner => {
+                const h = document.createElement('div');
+                h.className = 'field-handle handle-' + corner;
+                h.dataset.corner = corner;
+                div.appendChild(h);
+            });
+
+            grid.appendChild(div);
+            if (typeof window.__attachFieldInteraction === 'function') {
+                window.__attachFieldInteraction(div);
+            }
+        });
+
+        // Сразу проставим адаптивные классы плотности (крупное/среднее/мелкое поле).
+        try { updateFieldDensities(); } catch (e) { /* нет grid ещё — не страшно */ }
+    }
+
+    // Проставляет класс density-* каждому полю в зависимости от его видимого размера
+    // (ширина_% × canvas_w × текущий_scale). Пересчитывается при zoom/pan и после
+    // рендера. Это то, что убирает «наезжание» подписей: на мелких полях скрываем
+    // топ-лист / бейдж и уменьшаем шрифт, на крупных — увеличиваем.
+    function updateFieldDensities() {
+        const grid = document.getElementById('isoGrid');
+        if (!grid) return;
+        const gridW = grid.getBoundingClientRect().width; // уже с учётом scale движка
+        if (!gridW) return;
+        const fields = grid.querySelectorAll('.iso-field');
+        fields.forEach(f => {
+            // --fw хранится в процентах. Используем getComputedStyle: width — в px
+            // уже после учёта родительских трансформаций мы не получим, поэтому
+            // считаем через стиль inline.
+            const pctRaw = (f.style.getPropertyValue('--fw') || '').trim();
+            const pct = parseFloat(pctRaw) || 10;
+            const visiblePx = (gridW * pct) / 100;  // видимая ширина поля в пикселях экрана
+            let cls = 'density-medium';
+            if      (visiblePx < 55)  cls = 'density-tiny';
+            else if (visiblePx < 95)  cls = 'density-small';
+            else if (visiblePx < 170) cls = 'density-medium';
+            else if (visiblePx < 280) cls = 'density-large';
+            else                       cls = 'density-xlarge';
+            if (f._dens !== cls) {
+                f.classList.remove('density-tiny', 'density-small', 'density-medium', 'density-large', 'density-xlarge');
+                f.classList.add(cls);
+                f._dens = cls;
+            }
+        });
+    }
+    window.updateFieldDensities = updateFieldDensities;
+
+    async function ensureMapRendered(force) {
+        try {
+            if (_mapRenderedOnce && !force) return _mapConfig;
+        } catch (e) {
+            // Защита от TDZ, если ensureMapRendered вызвали слишком рано.
+            console.warn('ensureMapRendered: раннее обращение, повторю позже', e);
+            return null;
+        }
+        try {
+            const res = await fetch('/api/visual_stock/map_config', { cache: 'no-store' });
+            const data = await res.json();
+            if (data.status !== 'ok') throw new Error(data.message || 'map_config');
+            _mapConfig = data;
+            renderMapFields(data);
+            _mapRenderedOnce = true;
+            if (typeof window.setMapMode === 'function' && typeof activeOp !== 'undefined') {
+                try { setMapMode(activeOp, true); } catch (e) { /* activeOp may be in TDZ */ }
+            }
+        } catch (e) {
+            console.error('Не удалось загрузить карту:', e);
+            const grid = document.getElementById('isoGrid');
+            if (grid) grid.innerHTML = `<div style="padding:40px;text-align:center;color:#b91c1c;">
+                <i class="fas fa-exclamation-triangle"></i> Карта не загрузилась: ${e.message || e}</div>`;
+        }
+        return _mapConfig;
+    }
+    window.ensureMapRendered = ensureMapRendered;
+
+    // ==========================================================================
+    // ============== РЕДАКТОР КАРТЫ (только для админа) ========================
+    // ==========================================================================
+    const SHAPE_PRESETS = [
+        { id: 'rect',     label: 'Прямоугольник', points: [[0,0],[100,0],[100,100],[0,100]] },
+        { id: 'rhombus',  label: 'Ромб',          points: [[50,0],[100,50],[50,100],[0,50]] },
+        { id: 'hex',      label: 'Шестиугольник', points: [[25,0],[75,0],[100,50],[75,100],[25,100],[0,50]] },
+        { id: 'pent',     label: 'Пятиугольник',  points: [[50,0],[100,38],[82,100],[18,100],[0,38]] },
+        { id: 'trap',     label: 'Трапеция',      points: [[15,0],[85,0],[100,100],[0,100]] },
+        { id: 'octa',     label: 'Восьмиугольник',points: [[30,0],[70,0],[100,30],[100,70],[70,100],[30,100],[0,70],[0,30]] },
+        { id: 'circle',   label: 'Круг',          points: (()=>{ const pts=[]; for(let i=0;i<24;i++){ const a=i/24*Math.PI*2; pts.push([50+50*Math.cos(a), 50+50*Math.sin(a)]); } return pts.map(p=>[+p[0].toFixed(2), +p[1].toFixed(2)]); })() },
+        { id: 'leaf',     label: 'Лист',          points: [[50,0],[85,15],[100,50],[85,85],[50,100],[15,85],[0,50],[15,15]] },
+        { id: 'tri',      label: 'Треугольник',   points: [[50,0],[100,100],[0,100]] },
+    ];
+
+    const IS_ADMIN_LOCAL = IS_ADMIN;
+
+    if (IS_ADMIN_LOCAL) {
+        const editToggle    = document.getElementById('mapEditToggle');
+        const editorPanel   = document.getElementById('mapEditorPanel');
+        const editorSaveBar = document.getElementById('editorSaveBar');
+        const cancelBtn     = document.getElementById('editorCancelBtn');
+        const saveBtn       = document.getElementById('editorSaveBtn');
+        const shapeGrid     = document.getElementById('shapePresets');
+        const fieldColorInp = document.getElementById('fieldColorInput');
+        const fieldColorRst = document.getElementById('fieldColorReset');
+        const fieldLayoutSel= document.getElementById('fieldLayoutSelect');
+        const bgInput       = document.getElementById('mapBgInput');
+        const bgClearBtn    = document.getElementById('mapBgClearBtn');
+        const editorHint    = document.getElementById('editorFieldHint');
+        // ----- Элементы редактора фона -----
+        const bgTransformBox= document.getElementById('mapBgTransformBox');
+        const bgFitRadios   = document.querySelectorAll('input[name="bgFit"]');
+        const bgScaleInp    = document.getElementById('bgScale');
+        const bgScaleLbl    = document.getElementById('bgScaleLbl');
+        const bgRotationInp = document.getElementById('bgRotation');
+        const bgRotationLbl = document.getElementById('bgRotationLbl');
+        const bgOffsetXInp  = document.getElementById('bgOffsetX');
+        const bgOffsetXLbl  = document.getElementById('bgOffsetXLbl');
+        const bgOffsetYInp  = document.getElementById('bgOffsetY');
+        const bgOffsetYLbl  = document.getElementById('bgOffsetYLbl');
+        const bgOpacityInp  = document.getElementById('bgOpacity');
+        const bgOpacityLbl  = document.getElementById('bgOpacityLbl');
+        const bgTransformReset = document.getElementById('bgTransformReset');
+        // ----- Элементы редактора размера рабочей зоны -----
+        const canvasWidthInp  = document.getElementById('canvasWidth');
+        const canvasWidthLbl  = document.getElementById('canvasWidthLbl');
+        const canvasAspectSel = document.getElementById('canvasAspect');
+        // ----- Замочек фона -----
+        const bgLockBtn       = document.getElementById('bgLockToggle');
+        // По умолчанию фон закреплён — чтобы админ не сбил его случайно при работе с полями.
+        let bgLocked = (localStorage.getItem('mapBgLocked') !== '0');
+
+        // Рисуем превью-иконки пресетов в виде мини-SVG полигонов.
+        SHAPE_PRESETS.forEach(preset => {
+            const btn = document.createElement('div');
+            btn.className = 'shape-btn';
+            btn.dataset.shape = preset.id;
+            btn.title = preset.label;
+            btn.innerHTML = `<svg viewBox="0 0 100 100"><polygon points="${preset.points.map(p=>p.join(',')).join(' ')}" /></svg>`;
+            btn.addEventListener('click', () => applyShapeToSelected(preset));
+            shapeGrid.appendChild(btn);
+        });
+
+        let selectedField = null;
+        let draftState = new Map(); // fieldId -> {x,y,w,h,shape,color}
+        let dirty = false;
+
+        function getFieldState(id) {
+            if (!draftState.has(id)) {
+                const f = (_mapConfig?.fields || []).find(x => String(x.id) === String(id));
+                draftState.set(id, {
+                    x: f?.x, y: f?.y, w: f?.w, h: f?.h,
+                    shape: f?.shape || null,
+                    color: f?.color || null,
+                    layout: f?.layout || null,
+                });
+            }
+            return draftState.get(id);
+        }
+
+        function markDirty() { dirty = true; }
+
+        function setSelectedField(el) {
+            if (selectedField) selectedField.classList.remove('selected');
+            selectedField = el;
+            if (el) {
+                el.classList.add('selected');
+                editorHint.textContent = `Поле: ${el.dataset.fieldName}`;
+                const state = getFieldState(el.dataset.fieldId);
+                if (state.color) fieldColorInp.value = /^#/.test(state.color) ? state.color : '#4ade80';
+                else fieldColorInp.value = '#4ade80';
+                highlightActiveShape(state.shape);
+                // Подтягиваем текущую раскладку карточки (default = stack).
+                if (fieldLayoutSel) fieldLayoutSel.value = state.layout || 'stack';
+            } else {
+                editorHint.textContent = 'Выберите поле, чтобы изменить его форму.';
+                highlightActiveShape(null);
+                if (fieldLayoutSel) fieldLayoutSel.value = 'stack';
+            }
+        }
+
+        function highlightActiveShape(shape) {
+            shapeGrid.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('active'));
+            if (!shape) return;
+            // Эвристика: ищем пресет с совпадающим числом вершин как подсказку (не гарантирует точность).
+            const match = SHAPE_PRESETS.find(p => p.points.length === shape.length);
+            if (match) shapeGrid.querySelector(`.shape-btn[data-shape="${match.id}"]`)?.classList.add('active');
+        }
+
+        function applyShapeToSelected(preset) {
+            if (!selectedField) { alert('Сначала выберите поле (кликните по нему)'); return; }
+            const state = getFieldState(selectedField.dataset.fieldId);
+            state.shape = preset.points.map(p => [p[0], p[1]]);
+            selectedField.style.setProperty('--fclip', polygonToClipPath(state.shape));
+            highlightActiveShape(state.shape);
+            markDirty();
+        }
+
+        fieldColorInp.addEventListener('input', () => {
+            if (!selectedField) return;
+            const state = getFieldState(selectedField.dataset.fieldId);
+            state.color = fieldColorInp.value;
+            selectedField.style.setProperty('--fcolor', fieldColorInp.value);
+            markDirty();
+        });
+        fieldColorRst.addEventListener('click', () => {
+            if (!selectedField) return;
+            const state = getFieldState(selectedField.dataset.fieldId);
+            state.color = null;
+            selectedField.style.removeProperty('--fcolor');
+            markDirty();
+        });
+
+        // Раскладка карточки поля: переключаем класс layout-* в реальном времени,
+        // плюс сохраняем выбор в draftState. Реальное сохранение — общей кнопкой
+        // «Сохранить» (см. saveBtn → POST /api/visual_stock/map_layout).
+        if (fieldLayoutSel) {
+            fieldLayoutSel.addEventListener('change', () => {
+                if (!selectedField) return;
+                const state = getFieldState(selectedField.dataset.fieldId);
+                const val = fieldLayoutSel.value || 'stack';
+                state.layout = val;
+                // Заменяем предыдущий layout-* класс.
+                ['layout-auto','layout-stack','layout-row','layout-compact','layout-number-only']
+                    .forEach(c => selectedField.classList.remove(c));
+                selectedField.classList.add('layout-' + val);
+                selectedField.dataset.layout = val;
+                markDirty();
+            });
+        }
+
+        // ---- Drag / Resize полей ----
+        // Работаем в процентах от канваса. Это устойчиво к ресайзу окна и к pan/zoom.
+        let drag = null; // {type: 'move'|'resize', corner, el, startX, startY, origX, origY, origW, origH, rectW, rectH}
+
+        function pctFromPointer(ev, gridRect) {
+            return {
+                x: ((ev.clientX - gridRect.left) / gridRect.width) * 100,
+                y: ((ev.clientY - gridRect.top)  / gridRect.height) * 100,
+            };
+        }
+
+        function onPointerDownField(ev) {
+            if (!container.classList.contains('editor-mode')) return;
+            const f = ev.target.closest('.iso-field');
+            if (!f) {
+                setSelectedField(null);
+                return;
+            }
+            ev.preventDefault();
+            ev.stopPropagation();
+            setSelectedField(f);
+
+            const handle = ev.target.closest('.field-handle');
+            const grid = document.getElementById('isoGrid');
+            const gridRect = grid.getBoundingClientRect();
+            const state = getFieldState(f.dataset.fieldId);
+            const start = pctFromPointer(ev, gridRect);
+
+            drag = {
+                type: handle ? 'resize' : 'move',
+                corner: handle ? handle.dataset.corner : null,
+                el: f,
+                startX: start.x, startY: start.y,
+                origX: state.x ?? 0,
+                origY: state.y ?? 0,
+                origW: state.w ?? DEFAULT_FIELD_W,
+                origH: state.h ?? DEFAULT_FIELD_H,
+                gridRect,
+            };
+            f.classList.add('dragging');
+            f.setPointerCapture?.(ev.pointerId);
+        }
+
+        function onPointerMoveField(ev) {
+            if (!drag) return;
+            const p = pctFromPointer(ev, drag.gridRect);
+            const dx = p.x - drag.startX;
+            const dy = p.y - drag.startY;
+            const state = getFieldState(drag.el.dataset.fieldId);
+
+            // Рабочая зона расширена: поля могут немного вылезать за края канваса
+            // (удобно, если поле частично за кадром спутникового снимка).
+            const FMIN = -20, FMAX = 200;
+            if (drag.type === 'move') {
+                const w = state.w ?? DEFAULT_FIELD_W;
+                const h = state.h ?? DEFAULT_FIELD_H;
+                state.x = Math.max(FMIN, Math.min(FMAX - w, drag.origX + dx));
+                state.y = Math.max(FMIN, Math.min(FMAX - h, drag.origY + dy));
+            } else {
+                let x = drag.origX, y = drag.origY, w = drag.origW, h = drag.origH;
+                if (drag.corner.includes('e')) w = Math.max(0.5, drag.origW + dx);
+                if (drag.corner.includes('s')) h = Math.max(0.5, drag.origH + dy);
+                if (drag.corner.includes('w')) { w = Math.max(0.5, drag.origW - dx); x = drag.origX + dx; }
+                if (drag.corner.includes('n')) { h = Math.max(0.5, drag.origH - dy); y = drag.origY + dy; }
+                if (x < FMIN) { w += (x - FMIN); x = FMIN; }
+                if (y < FMIN) { h += (y - FMIN); y = FMIN; }
+                if (x + w > FMAX) w = FMAX - x;
+                if (y + h > FMAX) h = FMAX - y;
+                state.x = x; state.y = y; state.w = w; state.h = h;
+            }
+            drag.el.style.setProperty('--fx', state.x + '%');
+            drag.el.style.setProperty('--fy', state.y + '%');
+            drag.el.style.setProperty('--fw', state.w + '%');
+            drag.el.style.setProperty('--fh', state.h + '%');
+            markDirty();
+        }
+
+        function onPointerUpField(ev) {
+            if (!drag) return;
+            drag.el.classList.remove('dragging');
+            drag.el.releasePointerCapture?.(ev.pointerId);
+            drag = null;
+        }
+
+        const gridEl = document.getElementById('isoGrid');
+        gridEl.addEventListener('pointerdown', onPointerDownField);
+        window.addEventListener('pointermove', onPointerMoveField);
+        window.addEventListener('pointerup', onPointerUpField);
+
+        // ---- Вкл/выкл редактора ----
+        function enterEditor() {
+            container.classList.add('editor-mode');
+            editorPanel.classList.add('open');
+            editToggle.classList.add('active');
+            // В редакторе отключаем 3D, иначе сложно попасть по полю.
+            if (window.mapEngine && !mapEngine.mode2D) {
+                mapEngine._wasMode3D = true;
+                mapEngine.toggle2D();
+            }
+            draftState = new Map();
+            dirty = false;
+            setSelectedField(null);
+            cancelMapOperation();  // сбрасываем активные income/move операции
+            syncBgTransformUI();   // показываем слайдеры фона (если есть фон) и значения
+            syncCanvasUI();        // подтягиваем в UI размер рабочей зоны
+            applyBgLockState();    // применяем состояние замочка (по умолчанию — закрыт)
+        }
+        function exitEditor(saved) {
+            container.classList.remove('editor-mode');
+            editorPanel.classList.remove('open');
+            editToggle.classList.remove('active');
+            setSelectedField(null);
+            // Возвращаем прежний режим 3D, если он был
+            if (window.mapEngine && mapEngine._wasMode3D) {
+                mapEngine._wasMode3D = false;
+                mapEngine.toggle2D();
+            }
+            if (!saved && dirty) {
+                // откат — перерисовываем из последнего _mapConfig
+                renderMapFields(_mapConfig);
+            }
+            dirty = false;
+            draftState = new Map();
+            // Убираем класс bg-draggable, чтобы фон не ловил клики в обычном режиме.
+            const bgEl = document.getElementById('mapBgImage');
+            if (bgEl) bgEl.classList.remove('bg-draggable', 'bg-dragging');
+            // Замок — чисто «редакторский» флаг, его визуальный индикатор вне редактора не нужен.
+            container.classList.remove('bg-locked');
+        }
+
+        editToggle.addEventListener('click', () => {
+            if (container.classList.contains('editor-mode')) {
+                if (dirty && !confirm('Отменить несохранённые изменения?')) return;
+                exitEditor(false);
+            } else {
+                enterEditor();
+            }
+        });
+        cancelBtn.addEventListener('click', () => {
+            if (dirty && !confirm('Отменить несохранённые изменения?')) return;
+            exitEditor(false);
+        });
+        saveBtn.addEventListener('click', async () => {
+            if (!dirty) { exitEditor(true); return; }
+            const payload = { fields: [] };
+            draftState.forEach((state, id) => {
+                payload.fields.push({
+                    id: parseInt(id),
+                    x: state.x, y: state.y, w: state.w, h: state.h,
+                    shape: state.shape, color: state.color,
+                    layout: state.layout || null,
+                });
+            });
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Сохраняю...';
+            try {
+                const res = await fetch('/api/visual_stock/map_layout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const d = await res.json();
+                if (d.status !== 'ok') throw new Error(d.message || 'save error');
+                // обновляем локальный снимок конфига, чтобы перезагрузка не ломала разметку
+                payload.fields.forEach(upd => {
+                    const f = (_mapConfig?.fields || []).find(x => String(x.id) === String(upd.id));
+                    if (f) Object.assign(f, upd);
+                });
+                exitEditor(true);
+                refreshFieldsSummary();
+            } catch (e) {
+                alert('Не удалось сохранить: ' + (e.message || e));
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = '<i class="fas fa-save me-1"></i>Сохранить';
+            }
+        });
+
+        // ---- Загрузка / очистка фона ----
+        bgInput.addEventListener('change', async () => {
+            const file = bgInput.files?.[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            editorHint.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Загружаю фото…';
+            try {
+                const res = await fetch('/api/visual_stock/map_background', { method: 'POST', body: fd });
+                const d = await res.json();
+                if (d.status !== 'ok') throw new Error(d.message || 'upload error');
+                _mapConfig.settings = d.settings;
+                renderMapFields(_mapConfig);
+                // После перерендера селект сбивается — возвращаем выделение, если можем.
+                editorHint.textContent = 'Фон обновлён. Можно двигать поля.';
+                setSelectedField(null);
+                syncBgTransformUI();
+            } catch (e) {
+                alert('Не удалось загрузить фото: ' + (e.message || e));
+                editorHint.textContent = 'Выберите поле, чтобы изменить его форму.';
+            } finally {
+                bgInput.value = '';
+            }
+        });
+        bgClearBtn.addEventListener('click', async () => {
+            if (!confirm('Убрать фоновое фото?')) return;
+            try {
+                const res = await fetch('/api/visual_stock/map_background/clear', { method: 'POST' });
+                const d = await res.json();
+                if (d.status !== 'ok') throw new Error(d.message || 'clear error');
+                _mapConfig.settings = d.settings;
+                renderMapFields(_mapConfig);
+                setSelectedField(null);
+                syncBgTransformUI();
+            } catch (e) {
+                alert('Не удалось очистить фон: ' + (e.message || e));
+            }
+        });
+
+        // =====================================================================
+        // =============== ТРАНСФОРМАЦИЯ ФОНОВОГО ФОТО (слайдеры + drag) ========
+        // =====================================================================
+        // Дебаунс сохранения: не хотим слать POST на каждое движение слайдера.
+        let bgSaveTimer = null;
+        function scheduleBgSave() {
+            if (bgSaveTimer) clearTimeout(bgSaveTimer);
+            bgSaveTimer = setTimeout(saveBgTransform, 250);
+        }
+        async function saveBgTransform() {
+            bgSaveTimer = null;
+            const s = _mapConfig?.settings || {};
+            const payload = {
+                fit: s.bg_fit || 'contain',
+                offset_x: s.bg_offset_x ?? 0,
+                offset_y: s.bg_offset_y ?? 0,
+                scale: s.bg_scale ?? 1,
+                rotation: s.bg_rotation ?? 0,
+                opacity: s.bg_opacity ?? 1,
+            };
+            try {
+                const res = await fetch('/api/visual_stock/map_background/transform', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const d = await res.json();
+                if (d.status !== 'ok') throw new Error(d.message || 'bg transform save');
+                // Сохраняем ответ, чтобы локальный снимок был в синке с сервером.
+                _mapConfig.settings = d.settings;
+            } catch (e) {
+                console.error('Не удалось сохранить параметры фона:', e);
+            }
+        }
+
+        // Применяет _mapConfig.settings к <img.map-bg> и синхронизирует значения в UI.
+        // Также управляет видимостью блока слайдеров (нет фона → скрыть).
+        function syncBgTransformUI() {
+            const s = _mapConfig?.settings || {};
+            const bgEl = document.getElementById('mapBgImage');
+            const hasBg = !!s.background_url;
+
+            if (bgTransformBox) bgTransformBox.style.display = hasBg ? 'block' : 'none';
+
+            if (bgEl) {
+                applyBackgroundTransformToEl(bgEl, s);
+                bgEl.classList.toggle('bg-draggable', container.classList.contains('editor-mode'));
+            }
+            applyBgLockState();
+            if (!hasBg) return;
+
+            // UI-контролы
+            const fit = ['contain','cover','stretch'].includes(s.bg_fit) ? s.bg_fit : 'cover';
+            bgFitRadios.forEach(r => { r.checked = (r.value === fit); });
+            const scale = +(s.bg_scale ?? 1);
+            const rot   = +(s.bg_rotation ?? 0);
+            const ox    = +(s.bg_offset_x ?? 0);
+            const oy    = +(s.bg_offset_y ?? 0);
+            const op    = +(s.bg_opacity ?? 1);
+            bgScaleInp.value    = scale;     bgScaleLbl.textContent    = Math.round(scale * 100) + '%';
+            bgRotationInp.value = rot;       bgRotationLbl.textContent = Math.round(rot) + '°';
+            bgOffsetXInp.value  = ox;        bgOffsetXLbl.textContent  = ox.toFixed(0) + '%';
+            bgOffsetYInp.value  = oy;        bgOffsetYLbl.textContent  = oy.toFixed(0) + '%';
+            bgOpacityInp.value  = op;        bgOpacityLbl.textContent  = Math.round(op * 100) + '%';
+        }
+
+        // Применяет текущее состояние замочка (bgLocked) к UI:
+        //  - класс bg-locked на контейнере (влияет на pointer-events фона через CSS);
+        //  - кнопка замочка меняет иконку/активный вид;
+        //  - блок слайдеров фона визуально гасится и не принимает ввод (класс .locked);
+        //  - блокируем сами input'ы, чтобы даже с клавиатуры случайно не сбить.
+        function applyBgLockState() {
+            container.classList.toggle('bg-locked', bgLocked);
+            if (bgLockBtn) {
+                bgLockBtn.classList.toggle('active', bgLocked);
+                bgLockBtn.title = bgLocked
+                    ? 'Фон закреплён. Нажмите, чтобы разблокировать.'
+                    : 'Фон разблокирован. Нажмите, чтобы закрепить.';
+                const icon = bgLockBtn.querySelector('i');
+                if (icon) icon.className = bgLocked ? 'fas fa-lock' : 'fas fa-lock-open';
+            }
+            if (bgTransformBox) bgTransformBox.classList.toggle('locked', bgLocked);
+            // Явно блокируем контролы фона.
+            [bgScaleInp, bgRotationInp, bgOffsetXInp, bgOffsetYInp, bgOpacityInp,
+             bgTransformReset, ...bgFitRadios].forEach(el => { if (el) el.disabled = bgLocked; });
+        }
+        function toggleBgLock() {
+            bgLocked = !bgLocked;
+            try { localStorage.setItem('mapBgLocked', bgLocked ? '1' : '0'); } catch (e) {}
+            applyBgLockState();
+        }
+        if (bgLockBtn) bgLockBtn.addEventListener('click', toggleBgLock);
+        // «Пробел» как быстрый toggle — удобно во время работы, не отвлекаясь от мыши.
+        // Работает, только когда мы в редакторе и фокус не в инпуте.
+        window.addEventListener('keydown', (ev) => {
+            if (!container.classList.contains('editor-mode')) return;
+            if (ev.code !== 'Space') return;
+            const t = ev.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+            ev.preventDefault();
+            toggleBgLock();
+        });
+
+        // Локальное применение без POST: двигаем <img> и обновляем labels.
+        function applyBgLocalAndLabel() {
+            const bgEl = document.getElementById('mapBgImage');
+            if (!_mapConfig?.settings || !bgEl) return;
+            applyBackgroundTransformToEl(bgEl, _mapConfig.settings);
+            const s = _mapConfig.settings;
+            bgScaleLbl.textContent    = Math.round((+s.bg_scale    ?? 1) * 100) + '%';
+            bgRotationLbl.textContent = Math.round(+s.bg_rotation  ?? 0) + '°';
+            bgOffsetXLbl.textContent  = (+s.bg_offset_x ?? 0).toFixed(0) + '%';
+            bgOffsetYLbl.textContent  = (+s.bg_offset_y ?? 0).toFixed(0) + '%';
+            bgOpacityLbl.textContent  = Math.round((+s.bg_opacity  ?? 1) * 100) + '%';
+        }
+
+        bgFitRadios.forEach(r => r.addEventListener('change', () => {
+            if (!_mapConfig?.settings) return;
+            _mapConfig.settings.bg_fit = r.value;
+            applyBgLocalAndLabel();
+            scheduleBgSave();
+        }));
+        bgScaleInp.addEventListener('input', () => {
+            if (!_mapConfig?.settings) return;
+            _mapConfig.settings.bg_scale = parseFloat(bgScaleInp.value);
+            applyBgLocalAndLabel();
+            scheduleBgSave();
+        });
+        bgRotationInp.addEventListener('input', () => {
+            if (!_mapConfig?.settings) return;
+            _mapConfig.settings.bg_rotation = parseFloat(bgRotationInp.value);
+            applyBgLocalAndLabel();
+            scheduleBgSave();
+        });
+        bgOffsetXInp.addEventListener('input', () => {
+            if (!_mapConfig?.settings) return;
+            _mapConfig.settings.bg_offset_x = parseFloat(bgOffsetXInp.value);
+            applyBgLocalAndLabel();
+            scheduleBgSave();
+        });
+        bgOffsetYInp.addEventListener('input', () => {
+            if (!_mapConfig?.settings) return;
+            _mapConfig.settings.bg_offset_y = parseFloat(bgOffsetYInp.value);
+            applyBgLocalAndLabel();
+            scheduleBgSave();
+        });
+        bgOpacityInp.addEventListener('input', () => {
+            if (!_mapConfig?.settings) return;
+            _mapConfig.settings.bg_opacity = parseFloat(bgOpacityInp.value);
+            applyBgLocalAndLabel();
+            scheduleBgSave();
+        });
+        bgTransformReset.addEventListener('click', () => {
+            if (!_mapConfig?.settings) return;
+            Object.assign(_mapConfig.settings, {
+                bg_fit: 'cover', bg_scale: 1, bg_rotation: 0,
+                bg_offset_x: 0, bg_offset_y: 0, bg_opacity: 1,
+            });
+            syncBgTransformUI();
+            scheduleBgSave();
+        });
+
+        // =====================================================================
+        // =============== РАЗМЕР РАБОЧЕЙ ЗОНЫ (canvas_width / aspect) ==========
+        // =====================================================================
+        // Меняем размер канваса «на лету», пересчитывая CSS-переменные. Поля в %
+        // автоматически подстроятся — физические координаты не меняются.
+        let canvasSaveTimer = null;
+        function scheduleCanvasSave() {
+            if (canvasSaveTimer) clearTimeout(canvasSaveTimer);
+            canvasSaveTimer = setTimeout(saveCanvas, 250);
+        }
+        async function saveCanvas() {
+            canvasSaveTimer = null;
+            const s = _mapConfig?.settings || {};
+            try {
+                const res = await fetch('/api/visual_stock/map_canvas', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        width: s.canvas_width || 1600,
+                        aspect: s.canvas_aspect || 'auto',
+                    }),
+                });
+                const d = await res.json();
+                if (d.status !== 'ok') throw new Error(d.message || 'canvas save');
+                _mapConfig.settings = d.settings;
+            } catch (e) {
+                console.error('Не удалось сохранить размер канваса:', e);
+            }
+        }
+        function applyCanvasLocal() {
+            const grid = document.getElementById('isoGrid');
+            if (!grid || !_mapConfig?.settings) return;
+            const s = _mapConfig.settings;
+            const cw = Math.max(600, Math.min(6000, parseInt(s.canvas_width, 10) || 1600));
+            grid.style.setProperty('--canvas-w', cw + 'px');
+            // Пропорции
+            let ratio = '16/9';
+            if ((s.canvas_aspect || 'auto') === 'auto') {
+                if (s.bg_width && s.bg_height) ratio = `${s.bg_width}/${s.bg_height}`;
+            } else {
+                ratio = s.canvas_aspect;
+            }
+            grid.style.setProperty('--canvas-ratio', ratio);
+            // Обновляем подпись слайдера.
+            canvasWidthLbl.textContent = cw;
+            // После изменения размеров — перерисовать pan/zoom, чтобы карта не уехала.
+            if (window.mapEngine) window.mapEngine.fit?.();
+        }
+        function syncCanvasUI() {
+            const s = _mapConfig?.settings || {};
+            canvasWidthInp.value = s.canvas_width || 1600;
+            canvasWidthLbl.textContent = s.canvas_width || 1600;
+            canvasAspectSel.value = s.canvas_aspect || 'auto';
+        }
+        canvasWidthInp.addEventListener('input', () => {
+            if (!_mapConfig?.settings) return;
+            _mapConfig.settings.canvas_width = parseInt(canvasWidthInp.value, 10);
+            applyCanvasLocal();
+            scheduleCanvasSave();
+        });
+        canvasAspectSel.addEventListener('change', () => {
+            if (!_mapConfig?.settings) return;
+            _mapConfig.settings.canvas_aspect = canvasAspectSel.value;
+            applyCanvasLocal();
+            scheduleCanvasSave();
+        });
+
+        // ------ Drag фона мышью в режиме редактора ------
+        // Фон теперь живёт внутри канваса и едет вместе с полями при pan/zoom.
+        // Значит, чтобы «под мышкой» фон смещался ровно на столько же пикселей, на
+        // сколько переместилась мышь, мы считаем проценты относительно РАЗМЕРА <img>
+        // (а он 150% канваса). Получаем: pctImg = (dx / (grid.width * 1.5)) * 100.
+        // grid.getBoundingClientRect() уже учитывает текущий scale движка pan/zoom —
+        // значит drag ощущается одинаково естественно при любом зуме.
+        const BG_OVERSIZE = 1.5; // должно совпадать с CSS width:150%
+        let bgDrag = null;
+        container.addEventListener('pointerdown', (ev) => {
+            if (!container.classList.contains('editor-mode')) return;
+            if (bgLocked) return;  // замок закрыт — никаких движений фона
+            if (!_mapConfig?.settings?.background_url) return;
+            if (ev.button !== 0) return;
+            // Нас интересуют клики только по самой подложке (<img.map-bg>).
+            if (!(ev.target instanceof HTMLImageElement) || !ev.target.classList.contains('map-bg')) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            const gridEl = document.getElementById('isoGrid');
+            const rect = gridEl.getBoundingClientRect();
+            const bgEl = ev.target;
+            bgDrag = {
+                startX: ev.clientX, startY: ev.clientY,
+                origOx: +(_mapConfig.settings.bg_offset_x ?? 0),
+                origOy: +(_mapConfig.settings.bg_offset_y ?? 0),
+                rect,
+            };
+            bgEl.classList.add('bg-dragging');
+            bgEl.setPointerCapture?.(ev.pointerId);
+        });
+        window.addEventListener('pointermove', (ev) => {
+            if (!bgDrag) return;
+            const dxPct = ((ev.clientX - bgDrag.startX) / (bgDrag.rect.width  * BG_OVERSIZE)) * 100;
+            const dyPct = ((ev.clientY - bgDrag.startY) / (bgDrag.rect.height * BG_OVERSIZE)) * 100;
+            const s = _mapConfig.settings;
+            s.bg_offset_x = Math.max(-200, Math.min(200, bgDrag.origOx + dxPct));
+            s.bg_offset_y = Math.max(-200, Math.min(200, bgDrag.origOy + dyPct));
+            bgOffsetXInp.value = s.bg_offset_x;
+            bgOffsetYInp.value = s.bg_offset_y;
+            applyBgLocalAndLabel();
+        });
+        window.addEventListener('pointerup', (ev) => {
+            if (!bgDrag) return;
+            const bgEl = document.getElementById('mapBgImage');
+            if (bgEl) {
+                bgEl.classList.remove('bg-dragging');
+                bgEl.releasePointerCapture?.(ev.pointerId);
+            }
+            bgDrag = null;
+            scheduleBgSave();
+        });
+    }
+})();
+</script>
 
 {% endblock %}

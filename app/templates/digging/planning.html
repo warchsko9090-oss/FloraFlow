@@ -1,58 +1,437 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-    /* Макет страницы */
-    .planner-layout { display: flex; gap: 20px; height: calc(100vh - 120px); align-items: stretch; }
-    
-    /* Левая колонка (Заказы) */
-    .planner-sidebar { 
-        width: 320px; flex-shrink: 0; background: #f8f9fa; border: 1px solid #e5e7eb; 
-        border-radius: 12px; display: flex; flex-direction: column; height: 100%;
+    /* ============================================================
+       Макет страницы
+       ============================================================ */
+    .planner-layout {
+        display: flex;
+        gap: 20px;
+        height: calc(100vh - 120px);
+        align-items: stretch;
     }
-    .sidebar-header { padding: 15px; border-bottom: 2px dashed #cbd5e1; background: #fff; border-radius: 12px 12px 0 0; }
-    .sidebar-content { padding: 15px; overflow-y: auto; flex-grow: 1; }
-    
-    .order-card { 
-        background: white; border-radius: 8px; padding: 12px; margin-bottom: 12px; 
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; cursor: grab;
+
+    /* -------- Левая колонка (Заказы) ---------------------------- */
+    .planner-sidebar {
+        width: 360px;
+        flex-shrink: 0;
+        background: #f8f9fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
     }
-    .order-card:active { cursor: grabbing; transform: scale(0.98); border-color: #10b981; }
-    
-    /* Правая колонка (Календарь) */
-    .planner-main { flex-grow: 1; display: flex; flex-direction: column; height: 100%; min-width: 0; }
-    
-    /* Сетка календаря */
-    .calendar-grid { 
-        display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); 
-        background: #e5e7eb; border: 1px solid #e5e7eb; gap: 1px; border-radius: 0 0 12px 12px; overflow: hidden;
+    .sidebar-header {
+        padding: 15px;
+        border-bottom: 2px dashed #cbd5e1;
+        background: #fff;
+        border-radius: 12px 12px 0 0;
     }
-    .cal-day-name { background: #f1f5f9; text-align: center; font-weight: bold; padding: 10px; font-size: 12px; color: #475569; text-transform: uppercase; }
-    
-    .cal-cell { 
-        background: #fff; min-height: 100px; padding: 8px; cursor: pointer; transition: 0.2s; 
-        display: flex; flex-direction: column;
+    .sidebar-content {
+        padding: 12px;
+        overflow-y: auto;
+        flex-grow: 1;
     }
-    .cal-cell:hover { background: #f8fafc; }
-    
-    /* Зона куда кидаем */
-    .cal-cell.drag-over { background-color: #ecfdf5; box-shadow: inset 0 0 0 2px #10b981; }
-    
-    /* Оформление внутри ячейки */
-    .cal-date { font-weight: bold; color: #334155; margin-bottom: 5px; font-size: 14px; }
-    .cal-date.today { color: #fff; background: #10b981; padding: 2px 8px; border-radius: 12px; display: inline-block; }
-    .cal-cell.muted .cal-date { color: #94a3b8; }
-    
-    .task-indicator { 
-        background: #E8F5E9; border: 1px solid #C8E6C9; color: #1B5E20; 
-        border-radius: 6px; padding: 4px 6px; font-size: 11px; font-weight: bold; margin-top: auto; 
+
+    /* Карточка заказа: хедер всегда виден + сворачиваемое тело со списком */
+    .order-card {
+        background: #fff;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e5e7eb;
+        overflow: hidden;
+        transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
     }
-    
+    .order-card.drag-source {
+        opacity: 0.45;
+        border-color: #10b981;
+    }
+    .order-card__head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        cursor: grab;
+        user-select: none;
+    }
+    .order-card__head:active {
+        cursor: grabbing;
+    }
+    .order-card__head:hover {
+        background: #f0fdf4;
+    }
+    .order-card__id {
+        font-weight: 700;
+        color: #0f766e;
+        font-size: 13px;
+        white-space: nowrap;
+    }
+    .order-card__client {
+        font-weight: 700;
+        color: #1f2937;
+        flex-grow: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+    }
+    .order-card__badge {
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: #fff;
+        font-weight: 700;
+        padding: 3px 9px;
+        border-radius: 999px;
+        font-size: 11px;
+        white-space: nowrap;
+        box-shadow: 0 1px 2px rgba(16, 185, 129, 0.4);
+    }
+    .order-card__toggle {
+        background: transparent;
+        border: none;
+        color: #64748b;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        transition: background 0.15s, transform 0.2s;
+    }
+    .order-card__toggle:hover {
+        background: #e2e8f0;
+        color: #0f172a;
+    }
+    .order-card.open .order-card__toggle {
+        transform: rotate(180deg);
+    }
+
+    /* Список позиций — раскрывается плавно */
+    .order-card__body {
+        display: none;
+        padding: 0 10px 10px 10px;
+        background: #fafafa;
+        border-top: 1px dashed #e2e8f0;
+    }
+    .order-card.open .order-card__body {
+        display: block;
+    }
+    .order-items {
+        max-height: 220px;
+        overflow-y: auto;
+        padding-top: 8px;
+        margin: 0;
+        list-style: none;
+    }
+    .order-items li {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 4px 8px;
+        padding: 6px 8px;
+        border-bottom: 1px dotted #e5e7eb;
+        font-size: 12px;
+        line-height: 1.25;
+    }
+    .order-items li:last-child {
+        border-bottom: none;
+    }
+    .order-items .plant {
+        color: #111827;
+        font-weight: 600;
+    }
+    .order-items .meta {
+        color: #64748b;
+        font-size: 11px;
+    }
+    .order-items .qty {
+        grid-row: 1 / 3;
+        align-self: center;
+        background: #fef3c7;
+        color: #92400e;
+        font-weight: 700;
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .order-hint {
+        font-size: 10px;
+        color: #94a3b8;
+        padding: 4px 12px 8px;
+        text-align: center;
+    }
+
+    /* -------- Правая колонка (Календарь) ------------------------ */
+    .planner-main {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-width: 0;
+    }
+
+    .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        background: #e5e7eb;
+        border: 1px solid #e5e7eb;
+        gap: 1px;
+        border-radius: 0 0 12px 12px;
+        overflow: hidden;
+    }
+    .cal-day-name {
+        background: #f1f5f9;
+        text-align: center;
+        font-weight: bold;
+        padding: 10px;
+        font-size: 12px;
+        color: #475569;
+        text-transform: uppercase;
+    }
+
+    .cal-cell {
+        background: #fff;
+        min-height: 128px;
+        padding: 8px;
+        cursor: pointer;
+        transition: 0.2s;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+    }
+    .cal-cell:hover {
+        background: #f8fafc;
+    }
+    .cal-cell.drag-over {
+        background-color: #ecfdf5;
+        box-shadow: inset 0 0 0 2px #10b981;
+    }
+    .cal-cell.long-press {
+        box-shadow: inset 0 0 0 2px #1e40af;
+    }
+    /* Ячейки с задачами можно перетаскивать на другую дату */
+    .cal-cell.has-tasks {
+        cursor: grab;
+    }
+    .cal-cell.has-tasks:active {
+        cursor: grabbing;
+    }
+    .cal-cell.drag-source-day {
+        opacity: 0.45;
+        box-shadow: inset 0 0 0 2px #0ea5e9;
+    }
+    .cal-drag-handle {
+        color: #10b981;
+        font-size: 11px;
+        opacity: 0.55;
+        transition: opacity 0.15s;
+    }
+    .cal-cell.has-tasks:hover .cal-drag-handle {
+        opacity: 1;
+    }
+    .cal-date-row { margin-bottom: 5px; }
+
+    .cal-date {
+        font-weight: bold;
+        color: #334155;
+        margin-bottom: 5px;
+        font-size: 14px;
+    }
+    .cal-date.today {
+        color: #fff;
+        background: #10b981;
+        padding: 2px 8px;
+        border-radius: 12px;
+        display: inline-block;
+    }
+    .cal-cell.muted .cal-date {
+        color: #94a3b8;
+    }
+
+    /* Клиентские чипы в ячейке дня */
+    .cal-clients {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        margin-top: 4px;
+        overflow: hidden;
+    }
+    .cal-client-chip {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 6px;
+        background: #eff6ff;
+        color: #1e3a8a;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 10.5px;
+        font-weight: 600;
+        line-height: 1.2;
+        min-height: 16px;
+        overflow: hidden;
+        border-left: 3px solid #3b82f6;
+    }
+    .cal-client-chip .chip-name {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+        flex-grow: 1;
+    }
+    .cal-client-chip .chip-qty {
+        color: #0f172a;
+        background: #dbeafe;
+        border-radius: 3px;
+        padding: 1px 4px;
+        font-size: 9px;
+    }
+    .cal-clients-more {
+        font-size: 10px;
+        color: #64748b;
+        text-align: center;
+        font-style: italic;
+        margin-top: 2px;
+    }
+
+    .task-indicator {
+        background: #E8F5E9;
+        border: 1px solid #C8E6C9;
+        color: #1B5E20;
+        border-radius: 6px;
+        padding: 4px 6px;
+        font-size: 11px;
+        font-weight: bold;
+        margin-top: auto;
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+    }
+
+    /* -------- Hover-попап c разбивкой ---------------------------- */
+    #dayPreviewPopup {
+        position: fixed;
+        z-index: 2000;
+        background: #fff;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        box-shadow: 0 20px 45px -12px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(15, 23, 42, 0.04);
+        width: 360px;
+        max-width: calc(100vw - 32px);
+        max-height: 460px;
+        overflow-y: auto;
+        font-size: 12px;
+        padding: 14px 14px 10px;
+        display: none;
+        pointer-events: none; /* попап — только для чтения, клики пусть ловит ячейка */
+    }
+    #dayPreviewPopup.open {
+        display: block;
+    }
+    #dayPreviewPopup h6 {
+        margin: 0 0 8px;
+        color: #0f172a;
+        font-weight: 700;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+    }
+    #dayPreviewPopup h6 .pop-badge {
+        background: #10b981;
+        color: #fff;
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 11px;
+        font-weight: 700;
+    }
+    #dayPreviewPopup .pop-group {
+        margin-bottom: 10px;
+        padding: 8px 10px;
+        background: #f8fafc;
+        border-radius: 8px;
+        border-left: 3px solid #10b981;
+    }
+    #dayPreviewPopup .pop-group__head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 6px;
+        margin-bottom: 4px;
+    }
+    #dayPreviewPopup .pop-group__client {
+        font-weight: 700;
+        color: #0f172a;
+        font-size: 13px;
+        line-height: 1.2;
+    }
+    #dayPreviewPopup .pop-group__order {
+        color: #0f766e;
+        font-weight: 600;
+        font-size: 11px;
+    }
+    #dayPreviewPopup .pop-group__total {
+        background: #fef3c7;
+        color: #92400e;
+        border-radius: 5px;
+        padding: 1px 6px;
+        font-size: 11px;
+        font-weight: 700;
+        margin-left: auto;
+    }
+    #dayPreviewPopup .pop-items {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+    #dayPreviewPopup .pop-items li {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 3px 0;
+        border-bottom: 1px dotted #e2e8f0;
+    }
+    #dayPreviewPopup .pop-items li:last-child {
+        border-bottom: none;
+    }
+    #dayPreviewPopup .pop-items .plant {
+        color: #111827;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    #dayPreviewPopup .pop-items .meta {
+        color: #64748b;
+        font-size: 11px;
+        white-space: nowrap;
+    }
+    #dayPreviewPopup .pop-items .qty {
+        color: #065f46;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+    #dayPreviewPopup .pop-hint {
+        font-size: 10px;
+        color: #94a3b8;
+        text-align: center;
+        padding-top: 4px;
+        border-top: 1px dashed #e2e8f0;
+        margin-top: 4px;
+    }
+
     /* Адаптив для мобилок */
     @media (max-width: 992px) {
         .planner-layout { flex-direction: column; height: auto; }
-        .planner-sidebar { width: 100%; height: 300px; }
+        .planner-sidebar { width: 100%; height: 340px; }
         .planner-main { height: auto; }
-        .cal-cell { min-height: 80px; }
+        .cal-cell { min-height: 96px; }
+        #dayPreviewPopup { width: calc(100vw - 32px); }
     }
 </style>
 
@@ -62,22 +441,55 @@
 </div>
 
 <div class="planner-layout">
-    
-    <!-- САЙДБАР: Заказы для перетаскивания -->
+
+    <!-- ==================== САЙДБАР ==================== -->
     <div class="planner-sidebar">
         <div class="sidebar-header">
             <h6 class="fw-bold text-primary m-0"><i class="fas fa-inbox me-2"></i>Ждут плана</h6>
-            <div class="small text-muted mt-1">Зажмите и перетащите заказ на нужный день в календаре</div>
+            <div class="small text-muted mt-1">Разверните состав кликом по шеврону, перетащите карточку на день.</div>
         </div>
         <div class="sidebar-content" id="unplanned-orders">
             {% for o in orders_to_plan %}
-            <div class="order-card" draggable="true" ondragstart="drag(event)" data-order-id="{{ o.id }}">
-                <div class="d-flex justify-content-between align-items-start mb-1">
-                    <span class="fw-bold text-primary fs-6">Заказ #{{ o.id }}</span>
-                    <span class="badge bg-danger rounded-pill">{{ o.left_to_plan }} шт</span>
+            <div class="order-card" data-order-id="{{ o.id }}">
+                <div class="order-card__head"
+                     draggable="true"
+                     ondragstart="diggingDrag(event)"
+                     data-order-id="{{ o.id }}">
+                    <span class="order-card__id">#{{ o.id }}</span>
+                    <span class="order-card__client" title="{{ o.client.name }}">{{ o.client.name }}</span>
+                    <span class="order-card__badge">{{ o.left_to_plan }} шт</span>
+                    <button type="button"
+                            class="order-card__toggle js-toggle-order"
+                            title="Показать состав заказа"
+                            aria-label="Показать состав заказа">
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
                 </div>
-                <div class="text-dark fw-bold small">{{ o.client.name }}</div>
-                <div class="text-muted mt-2" style="font-size: 10px;"><i class="fas fa-hand-pointer"></i> Перетащить на дату</div>
+                <div class="order-card__body">
+                    <ul class="order-items">
+                        {% for i in o.items_preview %}
+                        <li>
+                            <div class="plant">{{ i.plant }}</div>
+                            <span class="qty">{{ i.left }} шт</span>
+                            <div class="meta">
+                                <i class="fas fa-ruler-horizontal me-1 opacity-50"></i>{{ i.size }}
+                                <span class="mx-1 opacity-50">·</span>
+                                <i class="fas fa-map-marker-alt me-1 opacity-50"></i>{{ i.field }}
+                                {% if i.dug or i.planned %}
+                                <span class="mx-1 opacity-50">·</span>
+                                <span title="Уже выкопано / уже в плане">
+                                    {% if i.dug %}<i class="fas fa-shovel me-1"></i>{{ i.dug }}/{{ i.total }}{% endif %}
+                                    {% if i.planned %}<i class="fas fa-calendar-check ms-1 me-1"></i>{{ i.planned }}{% endif %}
+                                </span>
+                                {% endif %}
+                            </div>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="order-hint">
+                    <i class="fas fa-hand-pointer"></i> Перетащить шапку карточки на дату
+                </div>
             </div>
             {% else %}
             <div class="text-center text-muted py-5">
@@ -89,9 +501,8 @@
         </div>
     </div>
 
-    <!-- ОСНОВНАЯ ЗОНА: Календарь -->
+    <!-- ==================== КАЛЕНДАРЬ ==================== -->
     <div class="planner-main">
-        <!-- Шапка календаря (Навигация по месяцам) -->
         <div class="card shadow-sm border-0 mb-3">
             <div class="card-body py-2 px-3 d-flex justify-content-between align-items-center">
                 <a href="{{ url_for('digging.digging_planning', month=prev_month, year=prev_year) }}" class="btn btn-sm btn-outline-secondary rounded-circle"><i class="fas fa-chevron-left"></i></a>
@@ -100,9 +511,7 @@
             </div>
         </div>
 
-        <!-- Сама сетка -->
         <div class="card shadow-sm border-0 flex-grow-1">
-            <!-- Дни недели -->
             <div class="calendar-grid" style="border-radius: 12px 12px 0 0; border-bottom: none;">
                 <div class="cal-day-name">Пн</div>
                 <div class="cal-day-name">Вт</div>
@@ -112,23 +521,46 @@
                 <div class="cal-day-name text-danger">Сб</div>
                 <div class="cal-day-name text-danger">Вс</div>
             </div>
-            <!-- Ячейки с числами -->
             <div class="calendar-grid border-top-0">
                 {% for week in calendar_grid %}
                     {% for day in week %}
-                    <div class="cal-cell {% if not day.is_current_month %}muted{% endif %}" 
-                         ondrop="drop(event, '{{ day.date_str }}')" 
-                         ondragover="allowDrop(event)" 
-                         ondragleave="leaveDrop(event)"
-                         onclick="openDayDetails('{{ day.date_str }}')">
-                        
-                        <div class="cal-date {% if day.is_today %}today{% endif %}">{{ day.day }}</div>
-                        
-                        <!-- Индикатор если есть задачи -->
+                    <div class="cal-cell {% if not day.is_current_month %}muted{% endif %} {% if day.tasks_count > 0 %}has-tasks{% endif %}"
+                         data-date="{{ day.date_str }}"
+                         data-has-tasks="{{ '1' if day.tasks_count > 0 else '0' }}"
+                         data-day-json='{{ day.orders_groups|tojson }}'
+                         {% if day.tasks_count > 0 %}draggable="true" ondragstart="diggingDayDragStart(event, '{{ day.date_str }}')"{% endif %}
+                         ondrop="diggingDrop(event, '{{ day.date_str }}')"
+                         ondragover="diggingAllowDrop(event)"
+                         ondragleave="diggingLeaveDrop(event)"
+                         onclick="diggingOpenDay('{{ day.date_str }}')">
+
+                        <div class="cal-date-row d-flex justify-content-between align-items-center">
+                            <div class="cal-date {% if day.is_today %}today{% endif %}">{{ day.day }}</div>
+                            {% if day.tasks_count > 0 %}
+                            <span class="cal-drag-handle" title="Перетащите, чтобы перенести весь план на другой день">
+                                <i class="fas fa-grip-vertical"></i>
+                            </span>
+                            {% endif %}
+                        </div>
+
+                        {% if day.clients_summary %}
+                        <div class="cal-clients">
+                            {% for c in day.clients_summary[:3] %}
+                            <div class="cal-client-chip">
+                                <span class="chip-name" title="{{ c.client }}">{{ c.client }}</span>
+                                <span class="chip-qty">{{ c.qty }}</span>
+                            </div>
+                            {% endfor %}
+                            {% if day.clients_summary|length > 3 %}
+                            <div class="cal-clients-more">+ ещё {{ day.clients_summary|length - 3 }} клиент(а)</div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+
                         {% if day.tasks_count > 0 %}
                         <div class="task-indicator">
-                            <div><i class="fas fa-clipboard-list"></i> {{ day.tasks_count }} задан.</div>
-                            <div class="mt-1"><i class="fas fa-tree"></i> {{ day.total_plants }} шт</div>
+                            <span><i class="fas fa-clipboard-list me-1"></i>{{ day.tasks_count }} задан.</span>
+                            <span><i class="fas fa-tree me-1"></i>{{ day.total_plants }} шт</span>
                         </div>
                         {% endif %}
                     </div>
@@ -138,6 +570,9 @@
         </div>
     </div>
 </div>
+
+<!-- Hover/long-press-попап с разбивкой по заказам и клиентам -->
+<div id="dayPreviewPopup" role="tooltip" aria-hidden="true"></div>
 
 <!-- УНИВЕРСАЛЬНАЯ МОДАЛКА (Используется и для Создания, и для Просмотра дня) -->
 <div class="modal fade" id="universalModal" tabindex="-1" data-bs-backdrop="static">
@@ -154,61 +589,424 @@
 </div>
 
 <script>
-    const modalElement = document.getElementById('universalModal');
-    const modalBody = document.getElementById('modalBody');
-    let myModal;
+    (function () {
+        const modalElement = document.getElementById('universalModal');
+        const modalBody = document.getElementById('modalBody');
+        let myModal = null;
 
-    document.addEventListener("DOMContentLoaded", function() {
-        myModal = new bootstrap.Modal(modalElement);
-    });
+        function ensureModal() {
+            if (!myModal && window.bootstrap) {
+                myModal = new bootstrap.Modal(modalElement);
+            }
+            return myModal;
+        }
 
-    // --- Магия HTML5 Drag and Drop ---
-    function drag(ev) {
-        ev.dataTransfer.setData("order_id", ev.currentTarget.dataset.orderId);
-        ev.currentTarget.style.opacity = '0.4';
-    }
+        document.addEventListener('DOMContentLoaded', ensureModal);
 
-    function allowDrop(ev) {
-        ev.preventDefault();
-        // Находим именно саму ячейку, а не элементы внутри неё
-        const cell = ev.target.closest('.cal-cell');
-        if(cell) cell.classList.add('drag-over');
-    }
-    
-    function leaveDrop(ev) {
-        const cell = ev.target.closest('.cal-cell');
-        if(cell) cell.classList.remove('drag-over');
-    }
+        // ============================================================
+        // Drag & Drop — прокидываем в window, чтобы inline-атрибуты
+        // ondragstart/ondrop в шаблоне могли их найти после hx-swap.
+        // ============================================================
+        window.diggingDrag = function (ev) {
+            const card = ev.currentTarget.closest('.order-card');
+            const orderId = (card && card.dataset.orderId) || ev.currentTarget.dataset.orderId;
+            if (!orderId) return;
+            ev.dataTransfer.setData('order_id', orderId);
+            ev.dataTransfer.effectAllowed = 'move';
+            if (card) card.classList.add('drag-source');
+        };
 
-    // Событие БРОСКА заказа в ячейку
-    function drop(ev, dateStr) {
-        ev.preventDefault();
-        ev.stopPropagation(); // Важно, чтобы не сработал onclick ячейки!
-        
-        document.querySelectorAll('.cal-cell').forEach(el => el.classList.remove('drag-over'));
-        document.querySelectorAll('.order-card').forEach(el => el.style.opacity = '1');
-        
-        const orderId = ev.dataTransfer.getData("order_id");
-        if (!orderId) return;
+        // Перетаскивание всей ячейки календаря — перенос плана с одной даты на другую.
+        window.diggingDayDragStart = function (ev, dateStr) {
+            ev.stopPropagation();
+            ev.dataTransfer.setData('move_date', dateStr);
+            ev.dataTransfer.effectAllowed = 'move';
+            // Прячем hover-попап, если он «висит» — чтобы не мешал.
+            if (typeof window.__diggingHidePreview === 'function') {
+                window.__diggingHidePreview();
+            }
+            const cell = ev.currentTarget;
+            if (cell) cell.classList.add('drag-source-day');
+        };
 
-        modalBody.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-success"></i> Загрузка...</div>';
-        myModal.show();
+        window.diggingAllowDrop = function (ev) {
+            ev.preventDefault();
+            const cell = ev.target.closest('.cal-cell');
+            if (cell) cell.classList.add('drag-over');
+        };
 
-        // Запрашиваем форму создания через HTMX
-        htmx.ajax('GET', `/api/digging/order_plan_form/${orderId}/${dateStr}`, {target: '#modalBody'});
-    }
-    
-    // Событие КЛИКА по ячейке
-    function openDayDetails(dateStr) {
-        modalBody.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-primary"></i> Загрузка плана...</div>';
-        myModal.show();
+        window.diggingLeaveDrop = function (ev) {
+            const cell = ev.target.closest('.cal-cell');
+            if (cell) cell.classList.remove('drag-over');
+        };
 
-        // Запрашиваем детализацию дня через HTMX
-        htmx.ajax('GET', `/api/digging/day_details/${dateStr}`, {target: '#modalBody'});
-    }
+        window.diggingDrop = function (ev, dateStr) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            document.querySelectorAll('.cal-cell').forEach(el => {
+                el.classList.remove('drag-over');
+                el.classList.remove('drag-source-day');
+            });
+            document.querySelectorAll('.order-card').forEach(el => el.classList.remove('drag-source'));
 
-    document.addEventListener('dragend', function(ev) {
-        if(ev.target.classList) ev.target.style.opacity = '1';
-    });
+            // Вариант 1: перенос всего плана с другой даты.
+            const moveDate = ev.dataTransfer.getData('move_date');
+            if (moveDate) {
+                if (moveDate === dateStr) return; // бросили на ту же ячейку
+                diggingMoveDayPlan(moveDate, dateStr);
+                return;
+            }
+
+            // Вариант 2: перетащили карточку заказа из левой колонки.
+            const orderId = ev.dataTransfer.getData('order_id');
+            if (!orderId) return;
+
+            modalBody.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-success"></i> Загрузка...</div>';
+            ensureModal().show();
+            if (window.htmx) htmx.ajax('GET', `/api/digging/order_plan_form/${orderId}/${dateStr}`, { target: '#modalBody' });
+        };
+
+        function diggingMoveDayPlan(fromDate, toDate) {
+            const fmt = (d) => {
+                try { return d.split('-').reverse().join('.'); } catch (_) { return d; }
+            };
+            if (!confirm(`Перенести весь план с ${fmt(fromDate)} на ${fmt(toDate)}?`)) return;
+
+            const fd = new FormData();
+            fd.append('from_date', fromDate);
+            fd.append('to_date', toDate);
+
+            fetch('/api/digging/day_move', {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+            })
+                .then(r => r.json().then(j => ({ ok: r.ok, status: r.status, body: j })))
+                .then(({ ok, body }) => {
+                    if (!ok || !body || !body.ok) {
+                        alert('Не удалось перенести план: ' + (body && body.error ? body.error : 'unknown'));
+                        return;
+                    }
+                    // После серверного апдейта — полная перезагрузка, чтобы пересобрать сетку.
+                    window.location.reload();
+                })
+                .catch(err => {
+                    console.error('[planner] day_move error', err);
+                    alert('Ошибка сети при переносе плана.');
+                });
+        }
+
+        window.diggingOpenDay = function (dateStr) {
+            // Если сейчас открыт попап превью — пусть не перекрывает модалку.
+            hidePreview();
+            modalBody.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-primary"></i> Загрузка плана...</div>';
+            ensureModal().show();
+            if (window.htmx) htmx.ajax('GET', `/api/digging/day_details/${dateStr}`, { target: '#modalBody' });
+        };
+
+        // dragend снимает полупрозрачность у исходной карточки/ячейки.
+        if (!window.__diggingDragendBound) {
+            document.addEventListener('dragend', function () {
+                document.querySelectorAll('.order-card.drag-source').forEach(el => el.classList.remove('drag-source'));
+                document.querySelectorAll('.cal-cell.drag-source-day').forEach(el => el.classList.remove('drag-source-day'));
+            });
+            window.__diggingDragendBound = true;
+        }
+
+        // ============================================================
+        // Разворачивание карточки заказа в левой колонке.
+        // Делегирование — чтобы пережить hx-swap и повторные рендеры.
+        // ============================================================
+        document.addEventListener('click', function (ev) {
+            const btn = ev.target.closest('.js-toggle-order');
+            if (!btn) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            const card = btn.closest('.order-card');
+            if (!card) return;
+            card.classList.toggle('open');
+        });
+
+        // ============================================================
+        // Массовое удаление внутри модалки «План на день».
+        // Модалка НЕ закрывается — мы свапим только внутренний блок
+        // #dayDetailsBody ответом сервера.
+        // ============================================================
+        function refreshBulkDeleteState(root) {
+            const body = root || document.getElementById('dayDetailsBody');
+            if (!body) return;
+            const checks = body.querySelectorAll('.js-task-check');
+            const selected = body.querySelectorAll('.js-task-check:checked');
+            const btn = body.querySelector('.js-task-delete-bulk');
+            const countEl = body.querySelector('.js-selected-count');
+            const allBox = body.querySelector('.js-task-check-all');
+            if (btn) btn.disabled = selected.length === 0;
+            if (countEl) countEl.textContent = String(selected.length);
+            if (allBox) {
+                if (selected.length === 0) {
+                    allBox.checked = false; allBox.indeterminate = false;
+                } else if (selected.length === checks.length) {
+                    allBox.checked = true; allBox.indeterminate = false;
+                } else {
+                    allBox.checked = false; allBox.indeterminate = true;
+                }
+            }
+        }
+
+        function submitBulkDelete(taskIds) {
+            const body = document.getElementById('dayDetailsBody');
+            if (!body || !taskIds.length) return;
+            const dateStr = body.getAttribute('data-date') || '';
+            const fd = new FormData();
+            fd.append('date_str', dateStr);
+            taskIds.forEach(id => fd.append('task_ids[]', id));
+
+            body.style.opacity = '0.5';
+            body.style.pointerEvents = 'none';
+
+            fetch('/api/digging/day_tasks_bulk_delete', {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+            })
+                .then(r => r.text().then(t => ({ ok: r.ok, text: t })))
+                .then(({ ok, text }) => {
+                    if (!ok) {
+                        alert('Ошибка удаления: ' + text.slice(0, 400));
+                        body.style.opacity = '';
+                        body.style.pointerEvents = '';
+                        return;
+                    }
+                    // Свапим весь блок #dayDetailsBody на свежую версию.
+                    body.outerHTML = text;
+                })
+                .catch(err => {
+                    console.error('[planner] bulk delete error', err);
+                    alert('Ошибка сети при удалении.');
+                    body.style.opacity = '';
+                    body.style.pointerEvents = '';
+                });
+        }
+
+        // Делегирование: клики по чекбоксам и кнопкам внутри #dayDetailsBody.
+        document.addEventListener('change', function (ev) {
+            const body = document.getElementById('dayDetailsBody');
+            if (!body || !body.contains(ev.target)) return;
+            if (ev.target.classList.contains('js-task-check-all')) {
+                const checks = body.querySelectorAll('.js-task-check');
+                checks.forEach(cb => { cb.checked = ev.target.checked; });
+            }
+            if (ev.target.classList.contains('js-task-check') ||
+                ev.target.classList.contains('js-task-check-all')) {
+                refreshBulkDeleteState(body);
+            }
+        });
+
+        document.addEventListener('click', function (ev) {
+            const body = document.getElementById('dayDetailsBody');
+            if (!body || !body.contains(ev.target)) return;
+
+            // Удалить выбранные.
+            const bulkBtn = ev.target.closest('.js-task-delete-bulk');
+            if (bulkBtn) {
+                ev.preventDefault();
+                const ids = Array.from(body.querySelectorAll('.js-task-check:checked')).map(cb => cb.value);
+                if (!ids.length) return;
+                if (!confirm(`Снять ${ids.length} задан. из плана? Объём вернётся обратно в заказы.`)) return;
+                submitBulkDelete(ids);
+                return;
+            }
+
+            // Удалить одно задание (через ту же bulk-ручку — чтобы модалка не закрывалась).
+            const oneBtn = ev.target.closest('.js-task-delete-one');
+            if (oneBtn) {
+                ev.preventDefault();
+                const id = oneBtn.getAttribute('data-task-id');
+                if (!id) return;
+                if (!confirm('Снять это задание? Объём вернётся обратно.')) return;
+                submitBulkDelete([id]);
+                return;
+            }
+        });
+
+        // ============================================================
+        // Hover-попап с разбивкой по заказам (появляется через ~350мс
+        // при удержании курсора или сразу при long-press левой кнопкой).
+        // ============================================================
+        const popup = document.getElementById('dayPreviewPopup');
+        let hoverTimer = null;
+        let longPressTimer = null;
+        let activeCell = null;
+
+        function escapeHtml(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function renderPreview(cell) {
+            let groups = [];
+            try {
+                groups = JSON.parse(cell.getAttribute('data-day-json') || '[]');
+            } catch (e) {
+                groups = [];
+            }
+            const dateStr = cell.getAttribute('data-date') || '';
+            const totalQty = groups.reduce((a, g) => a + (g.total_qty || 0), 0);
+            const totalTasks = groups.reduce((a, g) => a + (g.tasks_count || 0), 0);
+
+            if (!groups.length) {
+                popup.innerHTML = `
+                    <h6>${escapeHtml(dateStr)} <span class="pop-badge" style="background:#94a3b8;">пусто</span></h6>
+                    <div style="color:#64748b;">На эту дату план выкопки не составлен.</div>
+                    <div class="pop-hint">Перетащите сюда заказ, чтобы назначить выкопку.</div>
+                `;
+                return;
+            }
+
+            const groupsHtml = groups.map(g => {
+                const itemsHtml = (g.items || []).map(it => `
+                    <li>
+                        <span class="plant" title="${escapeHtml(it.plant)}">${escapeHtml(it.plant)}</span>
+                        <span class="meta">${escapeHtml(it.size)} · ${escapeHtml(it.field)}</span>
+                        <span class="qty">${escapeHtml(it.qty)} шт</span>
+                    </li>
+                `).join('');
+                const commentHtml = (g.items || []).filter(i => i.comment).map(i => `
+                    <div style="font-size:10.5px;color:#b45309;padding:3px 0 0;">
+                        <i class="fas fa-comment-dots me-1"></i>${escapeHtml(i.comment)}
+                    </div>
+                `).join('');
+                return `
+                    <div class="pop-group">
+                        <div class="pop-group__head">
+                            <div style="min-width:0;flex:1;">
+                                <div class="pop-group__client" title="${escapeHtml(g.client)}">${escapeHtml(g.client)}</div>
+                                <div class="pop-group__order">Заказ #${escapeHtml(g.order_id)} · ${escapeHtml(g.tasks_count)} поз.</div>
+                            </div>
+                            <span class="pop-group__total">${escapeHtml(g.total_qty)} шт</span>
+                        </div>
+                        <ul class="pop-items">${itemsHtml}</ul>
+                        ${commentHtml}
+                    </div>
+                `;
+            }).join('');
+
+            popup.innerHTML = `
+                <h6>${escapeHtml(dateStr)}
+                    <span class="pop-badge">${escapeHtml(totalTasks)} поз · ${escapeHtml(totalQty)} шт</span>
+                </h6>
+                ${groupsHtml}
+                <div class="pop-hint">Кликните на день, чтобы открыть и редактировать план.</div>
+            `;
+        }
+
+        function positionPopup(evClientX, evClientY) {
+            // Отступы, чтобы попап не прыгал под курсор.
+            const OFFSET_X = 16;
+            const OFFSET_Y = 16;
+            const popupRect = popup.getBoundingClientRect();
+            let x = evClientX + OFFSET_X;
+            let y = evClientY + OFFSET_Y;
+            const maxX = window.innerWidth - popupRect.width - 8;
+            const maxY = window.innerHeight - popupRect.height - 8;
+            if (x > maxX) x = evClientX - popupRect.width - OFFSET_X;
+            if (y > maxY) y = evClientY - popupRect.height - OFFSET_Y;
+            if (x < 8) x = 8;
+            if (y < 8) y = 8;
+            popup.style.left = x + 'px';
+            popup.style.top = y + 'px';
+        }
+
+        function showPreview(cell, clientX, clientY) {
+            activeCell = cell;
+            renderPreview(cell);
+            popup.classList.add('open');
+            popup.setAttribute('aria-hidden', 'false');
+            positionPopup(clientX, clientY);
+        }
+
+        function hidePreview() {
+            if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+            if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+            popup.classList.remove('open');
+            popup.setAttribute('aria-hidden', 'true');
+            if (activeCell) activeCell.classList.remove('long-press');
+            activeCell = null;
+        }
+
+        // Hover — показываем попап через паузу (чтобы не мигал при быстром
+        // сканировании мышью).
+        document.addEventListener('mouseover', function (ev) {
+            const cell = ev.target.closest('.cal-cell');
+            if (!cell) return;
+            if (hoverTimer) clearTimeout(hoverTimer);
+            hoverTimer = setTimeout(() => {
+                showPreview(cell, ev.clientX, ev.clientY);
+            }, 350);
+        });
+        document.addEventListener('mousemove', function (ev) {
+            if (activeCell && popup.classList.contains('open')) {
+                positionPopup(ev.clientX, ev.clientY);
+            }
+        });
+        document.addEventListener('mouseout', function (ev) {
+            const cell = ev.target.closest('.cal-cell');
+            if (!cell) return;
+            // Если курсор ушёл с ячейки (и не в попап) — прячем.
+            const to = ev.relatedTarget;
+            if (to && (to.closest('#dayPreviewPopup') || to.closest('.cal-cell') === cell)) return;
+            hidePreview();
+        });
+
+        // Long-press на touch-устройствах или mousedown с задержкой — показываем
+        // попап даже без hover (для планшетов и когда пользователь «удерживает»).
+        document.addEventListener('mousedown', function (ev) {
+            if (ev.button !== 0) return;
+            const cell = ev.target.closest('.cal-cell');
+            if (!cell) return;
+            if (longPressTimer) clearTimeout(longPressTimer);
+            longPressTimer = setTimeout(() => {
+                cell.classList.add('long-press');
+                showPreview(cell, ev.clientX, ev.clientY);
+            }, 450);
+        });
+        document.addEventListener('mouseup', function () {
+            if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+            // После долгого hold-а при отпускании ячейки — клик не должен
+            // открывать модалку. Уберём подсветку; попап пусть останется до mouseout.
+            document.querySelectorAll('.cal-cell.long-press').forEach(el => el.classList.remove('long-press'));
+        });
+
+        // На touch-устройствах — long-press через touchstart.
+        document.addEventListener('touchstart', function (ev) {
+            const cell = ev.target.closest('.cal-cell');
+            if (!cell) return;
+            const t = ev.touches && ev.touches[0];
+            if (!t) return;
+            if (longPressTimer) clearTimeout(longPressTimer);
+            longPressTimer = setTimeout(() => {
+                showPreview(cell, t.clientX, t.clientY);
+            }, 500);
+        }, { passive: true });
+        document.addEventListener('touchend', hidePreview);
+        document.addEventListener('touchcancel', hidePreview);
+
+        // Esc / скролл / клик вне — прячем попап.
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') hidePreview();
+        });
+        window.addEventListener('scroll', hidePreview, { passive: true });
+
+        // Экспорт hidePreview в window — чтобы diggingOpenDay мог закрыть попап.
+        window.__diggingHidePreview = hidePreview;
+
+        try {
+            console.debug('[planner] DnD + preview инициализированы. Карточек:',
+                document.querySelectorAll('.order-card').length);
+        } catch (_) {}
+    })();
 </script>
 {% endblock %}

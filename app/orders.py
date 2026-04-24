@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
-from app.models import db, Order, OrderItem, Client, Plant, Size, Field, Payment, StockBalance, Document, DocumentRow, OrderItemHistory, DiggingLog, ActionLog
+from app.models import db, Order, OrderItem, Client, Plant, Size, Field, Payment, StockBalance, Document, DocumentRow, OrderItemHistory, DiggingLog, ActionLog, User
 from app.utils import msk_now, check_stock_availability, get_actual_price, log_action, natural_key, dateru
 from app.models import Project
 
@@ -231,16 +231,38 @@ def orders_list():
     total_stats = {'sum': 0, 'shipped_fact': 0}
     orders_view = []
     for o in orders:
-        if not o.items: 
-            orders_view.append({'order': o, 'rowspan': 1, 'order_items': []})
+        if not o.items:
+            orders_view.append({'order': o, 'rowspan': 1, 'order_items': [], 'is_done': False})
             continue
-        if o.status != 'canceled' and not o.is_deleted: 
+        if o.status != 'canceled' and not o.is_deleted:
             total_stats['sum'] += o.total_sum
             total_stats['shipped_fact'] += sum(i.shipped_quantity for i in o.items)
-            
+
         o.items.sort(key=lambda x: natural_key(x.size.name))
-        orders_view.append({'order': o, 'rowspan': len(o.items), 'order_items': o.items})
-        
+
+        # Полностью завершён = оплачен полностью + всё выкопано + всё отгружено.
+        # Отменённые и призрачные не считаем "завершёнными".
+        is_done = False
+        if o.status not in ('canceled', 'ghost') and not o.is_deleted and o.items:
+            fully_paid = (o.payment_status == 'paid')
+            fully_shipped = all((i.shipped_quantity or 0) >= (i.quantity or 0) for i in o.items)
+            fully_dug = all((i.dug_total or 0) >= (i.quantity or 0) for i in o.items)
+            is_done = fully_paid and fully_shipped and fully_dug
+
+        orders_view.append({'order': o, 'rowspan': len(o.items), 'order_items': o.items, 'is_done': is_done})
+
+    # Финальный порядок: сначала активные незавершённые (в выбранном порядке),
+    # затем полностью завершённые зелёные, затем отменённые/скрытые.
+    # Внутри каждой группы исходный порядок сохраняется (stable partition).
+    def _bucket(v):
+        o = v['order']
+        if o.status == 'canceled' or o.is_deleted:
+            return 2
+        if v['is_done']:
+            return 1
+        return 0
+    orders_view.sort(key=_bucket)
+
     return render_template('orders/orders.html', 
                            orders=orders_view, 
                            stats=total_stats,
@@ -462,8 +484,15 @@ def order_create():
         
         db.session.commit()
         log_action(f"Создал заказ #{o.id}")
+        # Синхронная проверка цен: если есть позиции без цены, сразу уведомим
+        # админа/менеджера карточкой в дашборде. Не ломает основной поток при ошибке.
+        try:
+            from app.anomaly_engine import sync_price_anomaly_for_order
+            sync_price_anomaly_for_order(o.id)
+        except Exception:
+            pass
         return redirect(url_for('orders.orders_list'))
-        
+
     return render_template('orders/order_form.html', clients=Client.query.all(), plants=Plant.query.all(), sizes=Size.query.all(), fields=Field.query.all())
 
 @bp.route('/api/stock_info')
@@ -904,6 +933,14 @@ def order_detail(order_id):
        # ... в конце функции ...
     active_projects = Project.query.filter_by(status='active').order_by(Project.name).all()
 
+    # Синхронная проверка цен заказа: после любого POST на этой странице пользователь
+    # будет редиректнут обратно на GET, и здесь мы обновим/закроем карточку «нет цены».
+    try:
+        from app.anomaly_engine import sync_price_anomaly_for_order
+        sync_price_anomaly_for_order(o.id)
+    except Exception:
+        pass
+
     return render_template('orders/order_detail.html', 
                            order=o, 
                            orders_data=orders_data, 
@@ -933,44 +970,323 @@ def order_ship(order_id):
     item_id = int(request.form.get('item_id'))
     qty = int(request.form.get('quantity'))
     item = OrderItem.query.get(item_id)
-    
-    if qty > (item.quantity - item.shipped_quantity): 
+
+    is_xhr = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+    # Защита от дублей: если пользователь только что (в пределах 30 сек) уже
+    # создал точно такую же отгрузку по этой позиции (совпадают plant/size/
+    # field/year/quantity и user/order), считаем это повторной отправкой (гонка
+    # hx-boost с нашим fetch, сетевой retry, двойной клик на мобильном) и
+    # возвращаем текущее состояние без создания второго документа.
+    # Призрачных заказов это не касается: их отгрузки делаются отдельным флоу
+    # и не проходят через этот endpoint.
+    cutoff = msk_now() - timedelta(seconds=30)
+    dup = (db.session.query(Document)
+           .join(DocumentRow, DocumentRow.document_id == Document.id)
+           .filter(Document.doc_type == 'shipment',
+                   Document.order_id == o.id,
+                   Document.user_id == current_user.id,
+                   Document.date >= cutoff,
+                   DocumentRow.plant_id == item.plant_id,
+                   DocumentRow.size_id == item.size_id,
+                   DocumentRow.field_from_id == item.field_id,
+                   DocumentRow.year == item.year,
+                   DocumentRow.quantity == qty)
+           .first())
+    if dup is not None:
+        current_app.logger.info(
+            "order_ship duplicate suppressed: order=%s item=%s qty=%s user=%s",
+            o.id, item.id, qty, current_user.id,
+        )
+        if is_xhr:
+            return jsonify({'status': 'ok', 'shipped': item.shipped_quantity,
+                            'plan': item.quantity, 'duplicate': True})
+        if return_to:
+            return redirect(return_to)
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+
+    if qty > (item.quantity - item.shipped_quantity):
         flash('Ошибка кол-ва')
     else:
-        # Создаем документ
         doc = Document(doc_type='shipment', user_id=current_user.id, order_id=o.id, comment=f"Отгрузка {o.id}", date=msk_now())
         db.session.add(doc)
-        db.session.flush() # Получаем ID документа
-        
-        # Добавляем строку документа
+        db.session.flush()
+
         db.session.add(DocumentRow(document_id=doc.id, plant_id=item.plant_id, size_id=item.size_id, field_from_id=item.field_id, year=item.year, quantity=qty))
-        
-        # ВАЖНО: Списываем остаток со склада!
+
         from app.utils import get_or_create_stock
         stock = get_or_create_stock(item.plant_id, item.size_id, item.field_id, item.year)
         stock.quantity -= qty
-        
-        # Обновляем прогресс в позиции заказа
+
         item.shipped_quantity += qty
-        
-        # Обновляем статус заказа
+
         if o.status == 'reserved': o.status = 'in_progress'
         if all(i.shipped_quantity >= i.quantity for i in o.items): o.status = 'shipped'
-        
+
         db.session.commit()
-        
-        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+
+        if is_xhr:
             return jsonify({'status': 'ok', 'shipped': item.shipped_quantity, 'plan': item.quantity})
-            
+
         flash('Отгружено (остатки обновлены)')
         log_action(f"Отгрузил из заказа #{o.id}")
-        
-    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+
+    if is_xhr:
         return jsonify({'status': 'error', 'message': 'Ошибка кол-ва'})
-        
+
     if return_to:
         return redirect(return_to)
     return redirect(url_for('orders.order_detail', order_id=order_id))
+
+
+@bp.route('/admin/shipment_duplicates')
+@login_required
+def admin_shipment_duplicates():
+    """Диагностический отчёт: дубли частичных отгрузок.
+
+    Только чтение. БД не меняет. Ищет пары (и более) Document(doc_type='shipment')
+    у одного и того же пользователя и заказа, у которых совпадает DocumentRow
+    по (plant_id, size_id, field_from_id, year, quantity) и которые созданы
+    в пределах 120 сек друг от друга.
+
+    Призрачные заказы (Order.status == 'ghost') и удалённые заказы исключены.
+    Формат: по умолчанию HTML, ?format=json — JSON.
+    """
+    if current_user.role != 'admin':
+        return jsonify({'error': 'forbidden'}), 403
+
+    window_seconds = int(request.args.get('window', 120))
+
+    rows = (db.session.query(
+                Document.id.label('doc_id'),
+                Document.order_id,
+                Document.user_id,
+                Document.date,
+                DocumentRow.id.label('row_id'),
+                DocumentRow.plant_id,
+                DocumentRow.size_id,
+                DocumentRow.field_from_id,
+                DocumentRow.year,
+                DocumentRow.quantity,
+            )
+            .join(DocumentRow, DocumentRow.document_id == Document.id)
+            .join(Order, Order.id == Document.order_id)
+            .filter(Document.doc_type == 'shipment',
+                    Order.status != 'ghost',
+                    Order.is_deleted == False)
+            .order_by(Document.order_id, DocumentRow.plant_id,
+                      DocumentRow.size_id, DocumentRow.field_from_id,
+                      DocumentRow.year, DocumentRow.quantity, Document.date)
+            .all())
+
+    groups = {}
+    for r in rows:
+        key = (r.user_id, r.order_id, r.plant_id, r.size_id,
+               r.field_from_id, r.year, r.quantity)
+        groups.setdefault(key, []).append(r)
+
+    duplicate_groups = []
+    total_extra_qty = 0
+    for key, items in groups.items():
+        if len(items) < 2:
+            continue
+        items_sorted = sorted(items, key=lambda x: x.date)
+        cluster = [items_sorted[0]]
+        clusters = []
+        for it in items_sorted[1:]:
+            if (it.date - cluster[-1].date).total_seconds() <= window_seconds:
+                cluster.append(it)
+            else:
+                if len(cluster) >= 2:
+                    clusters.append(cluster)
+                cluster = [it]
+        if len(cluster) >= 2:
+            clusters.append(cluster)
+        for cl in clusters:
+            extra = len(cl) - 1
+            extra_qty = extra * cl[0].quantity
+            total_extra_qty += extra_qty
+            user = db.session.get(User, cl[0].user_id) if cl[0].user_id else None
+            plant = db.session.get(Plant, cl[0].plant_id) if cl[0].plant_id else None
+            size = db.session.get(Size, cl[0].size_id) if cl[0].size_id else None
+            field = db.session.get(Field, cl[0].field_from_id) if cl[0].field_from_id else None
+            order = db.session.get(Order, cl[0].order_id) if cl[0].order_id else None
+            client = order.client.name if order and order.client else ''
+
+            matching_item = (OrderItem.query
+                             .filter_by(order_id=cl[0].order_id,
+                                        plant_id=cl[0].plant_id,
+                                        size_id=cl[0].size_id,
+                                        field_id=cl[0].field_from_id,
+                                        year=cl[0].year)
+                             .first())
+
+            duplicate_groups.append({
+                'order_id': cl[0].order_id,
+                'client': client,
+                'user': user.username if user else None,
+                'plant': plant.name if plant else None,
+                'size': size.name if size else None,
+                'field': field.name if field else None,
+                'year': cl[0].year,
+                'qty_each': cl[0].quantity,
+                'count': len(cl),
+                'extra_copies': extra,
+                'extra_qty': extra_qty,
+                'docs': [{
+                    'doc_id': it.doc_id,
+                    'row_id': it.row_id,
+                    'date': it.date.strftime('%Y-%m-%d %H:%M:%S') if it.date else None,
+                } for it in cl],
+                'item_id': matching_item.id if matching_item else None,
+                'item_shipped_quantity': matching_item.shipped_quantity if matching_item else None,
+                'item_quantity': matching_item.quantity if matching_item else None,
+                'order_status': order.status if order else None,
+            })
+
+    duplicate_groups.sort(key=lambda g: (-g['extra_qty'], g['order_id']))
+    summary = {
+        'window_seconds': window_seconds,
+        'groups_found': len(duplicate_groups),
+        'total_extra_qty': total_extra_qty,
+    }
+
+    if request.args.get('format') == 'json':
+        return jsonify({'summary': summary, 'duplicates': duplicate_groups})
+
+    return render_template('orders/shipment_duplicates.html',
+                           summary=summary,
+                           duplicates=duplicate_groups)
+
+
+@bp.route('/admin/shipment_duplicates/cleanup', methods=['POST'])
+@login_required
+def admin_shipment_duplicates_cleanup():
+    """Удаление лишних копий shipment-документов.
+
+    На вход: doc_ids — список id документов, которые надо удалить
+    (передаются как повторяющийся параметр формы doc_ids или JSON-массив).
+
+    Для каждого doc_id выполняется ЖЁСТКАЯ проверка безопасности:
+      1) Document.doc_type == 'shipment'
+      2) Заказ не призрачный и не удалён
+      3) Существует ДРУГОЙ Document(doc_type='shipment') с тем же
+         (user_id, order_id) и идентичной DocumentRow (plant/size/field/year/qty).
+         Если такого нет — значит это НЕ дубликат, а единственный документ, и мы
+         его не трогаем.
+
+    Если все проверки прошли:
+      - удаляем DocumentRow и Document
+      - возвращаем stock.quantity += qty (через get_or_create_stock)
+      - пишем ActionLog
+
+    OrderItem.shipped_quantity и Order.status НЕ трогаем: они — источник правды
+    для отображения в редакторе заказа. Бывает, что задублировались только
+    Document/списание склада, а shipped_quantity был изначально корректный
+    (или уже поправлен вручную). Пусть редактор заказа остаётся как есть.
+
+    Всё в одной транзакции. При любой ошибке — rollback.
+    """
+    if current_user.role != 'admin':
+        return jsonify({'error': 'forbidden'}), 403
+
+    data = request.get_json(silent=True) or {}
+    raw_ids = data.get('doc_ids') if data else request.form.getlist('doc_ids')
+    if not raw_ids:
+        return jsonify({'error': 'no doc_ids provided'}), 400
+
+    try:
+        doc_ids = [int(x) for x in raw_ids]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid doc_ids'}), 400
+
+    results = []
+    from app.utils import get_or_create_stock
+
+    try:
+        for doc_id in doc_ids:
+            doc = db.session.get(Document, doc_id)
+            if not doc:
+                results.append({'doc_id': doc_id, 'status': 'skip', 'reason': 'not_found'})
+                continue
+            if doc.doc_type != 'shipment':
+                results.append({'doc_id': doc_id, 'status': 'skip', 'reason': 'wrong_doc_type'})
+                continue
+
+            order = db.session.get(Order, doc.order_id) if doc.order_id else None
+            if not order:
+                results.append({'doc_id': doc_id, 'status': 'skip', 'reason': 'no_order'})
+                continue
+            if order.status == 'ghost' or order.is_deleted:
+                results.append({'doc_id': doc_id, 'status': 'skip', 'reason': 'ghost_or_deleted'})
+                continue
+
+            rows = list(doc.rows)
+            if len(rows) != 1:
+                results.append({'doc_id': doc_id, 'status': 'skip', 'reason': 'unexpected_row_count'})
+                continue
+            row = rows[0]
+
+            twin_exists = (db.session.query(Document.id)
+                           .join(DocumentRow, DocumentRow.document_id == Document.id)
+                           .filter(Document.id != doc.id,
+                                   Document.doc_type == 'shipment',
+                                   Document.order_id == doc.order_id,
+                                   Document.user_id == doc.user_id,
+                                   DocumentRow.plant_id == row.plant_id,
+                                   DocumentRow.size_id == row.size_id,
+                                   DocumentRow.field_from_id == row.field_from_id,
+                                   DocumentRow.year == row.year,
+                                   DocumentRow.quantity == row.quantity)
+                           .first())
+            if not twin_exists:
+                results.append({'doc_id': doc_id, 'status': 'skip', 'reason': 'no_twin_unique_document'})
+                continue
+
+            qty = int(row.quantity or 0)
+            plant_id = row.plant_id
+            size_id = row.size_id
+            field_id = row.field_from_id
+            year = row.year
+
+            stock = get_or_create_stock(plant_id, size_id, field_id, year)
+            stock.quantity = (stock.quantity or 0) + qty
+
+            db.session.delete(doc)
+
+            results.append({
+                'doc_id': doc_id,
+                'status': 'ok',
+                'order_id': order.id,
+                'qty_returned': qty,
+                'plant_id': plant_id,
+                'size_id': size_id,
+                'field_id': field_id,
+                'year': year,
+            })
+
+        db.session.commit()
+
+        ok_results = [r for r in results if r['status'] == 'ok']
+        for r in ok_results:
+            log_action(
+                f"Удалил дубль отгрузки Document #{r['doc_id']} "
+                f"из заказа #{r['order_id']} ({r['qty_returned']} шт возвращено на склад)"
+            )
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("shipment cleanup failed")
+        return jsonify({'error': 'exception', 'message': str(e), 'partial': results}), 500
+
+    summary = {
+        'requested': len(doc_ids),
+        'deleted': sum(1 for r in results if r['status'] == 'ok'),
+        'skipped': sum(1 for r in results if r['status'] == 'skip'),
+        'qty_returned_total': sum(r.get('qty_returned', 0) for r in results if r['status'] == 'ok'),
+    }
+    return jsonify({'summary': summary, 'results': results})
+
 
 @bp.route('/order/<int:order_id>/send_shipment_report', methods=['POST'])
 @login_required

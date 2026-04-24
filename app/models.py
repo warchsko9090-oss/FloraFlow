@@ -47,6 +47,73 @@ class Field(db.Model):
     planting_year = db.Column(db.Integer, default=2017)
     investor = db.relationship('Client', foreign_keys=[investor_id])
 
+    # --- Визуальная карта (Журнал документов → вид «Карта»).
+    # Координаты/размеры в процентах от канваса (0..100), чтобы оставаться
+    # независимыми от размера фонового фото и от размера окна.
+    # map_shape — JSON-массив вершин полигона в процентах от бокса поля
+    # (например [[0,0],[100,0],[100,100],[0,100]] = прямоугольник).
+    # Если любое из полей пустое — фронт нарисует поле в автоматической сетке.
+    map_x = db.Column(db.Float, nullable=True)
+    map_y = db.Column(db.Float, nullable=True)
+    map_w = db.Column(db.Float, nullable=True)
+    map_h = db.Column(db.Float, nullable=True)
+    map_shape = db.Column(db.Text, nullable=True)
+    map_color = db.Column(db.String(20), nullable=True)
+    map_z = db.Column(db.Integer, nullable=True)
+    # Раскладка содержимого карточки поля на карте: 'auto' | 'stack' |
+    # 'row' | 'compact' | 'number-only'. Если NULL — fronend применит 'stack'
+    # (вертикально: номер/итого/состав), это максимально читаемо на любом
+    # размере поля. Админ может переключить в редакторе карты для конкретного поля.
+    map_layout = db.Column(db.String(20), nullable=True)
+
+
+class MapSettings(db.Model):
+    """Глобальные настройки визуальной карты полей. В таблице всегда одна строка (id=1)."""
+    id = db.Column(db.Integer, primary_key=True)
+    background_path = db.Column(db.String(255), nullable=True)   # относительный путь в UPLOAD_FOLDER
+    bg_width = db.Column(db.Integer, nullable=True)              # натуральные размеры фото (для aspect-ratio)
+    bg_height = db.Column(db.Integer, nullable=True)
+    bg_opacity = db.Column(db.Float, default=1.0)                # 0..1
+    # --- Трансформация фонового изображения внутри канваса карты.
+    # bg_fit:
+    #   'contain' — вписать целиком (по умолчанию);
+    #   'cover'   — заполнить весь канвас, обрезая лишнее;
+    #   'stretch' — растянуть до краёв канваса, игнорируя пропорции;
+    #   'custom'  — использовать ручные offset_x/y + scale.
+    # bg_offset_x/y — смещение центра фото относительно центра канваса в процентах от канваса (−100..100).
+    # bg_scale — множитель масштаба поверх fit'а (0.1..5.0), 1.0 — без изменений.
+    # bg_rotation — поворот фото в градусах (−180..180).
+    bg_fit = db.Column(db.String(20), default='cover')
+    bg_offset_x = db.Column(db.Float, default=0.0)
+    bg_offset_y = db.Column(db.Float, default=0.0)
+    bg_scale = db.Column(db.Float, default=1.0)
+    bg_rotation = db.Column(db.Float, default=0.0)
+    # --- Размер рабочей зоны (канваса).
+    # canvas_width  — «физическая» ширина канваса в px. Поля позиционируются в % от неё,
+    #                 а визуальный размер грида в DOM зависит от этой величины и от zoom'а.
+    # canvas_aspect — соотношение сторон канваса. Строка:
+    #                   'auto'  — от натуральных размеров фонового фото (либо 16/9 если фото нет);
+    #                   '16/9', '4/3', '1/1', '21/9', '3/1', '2/1' — фиксированный ratio.
+    #                 Независимость от фото полезна, если снимок не покрывает всю плантацию.
+    canvas_width = db.Column(db.Integer, default=1600)
+    canvas_aspect = db.Column(db.String(20), default='auto')
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @classmethod
+    def get(cls):
+        row = cls.query.get(1)
+        if row is None:
+            row = cls(id=1, bg_opacity=1.0, bg_fit='cover',
+                      bg_offset_x=0.0, bg_offset_y=0.0, bg_scale=1.0, bg_rotation=0.0,
+                      canvas_width=1600, canvas_aspect='auto')
+            db.session.add(row)
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                row = cls.query.get(1)
+        return row
+
 class Supplier(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(200), nullable=False)
@@ -148,7 +215,11 @@ class Order(db.Model):
     # НОВОЕ ПОЛЕ
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True)
     is_barter = db.Column(db.Boolean, default=False)
-    
+
+    # Метка «менеджер подтвердил актуальность резерва» — обнуляет таймер
+    # детектора «резерв без движения 14 дней». NULL для старых заказов.
+    reserve_ack_at = db.Column(db.DateTime, nullable=True)
+
     client = db.relationship('Client')
     items = db.relationship('OrderItem', backref='order', cascade="all, delete-orphan")
     payments = db.relationship('Payment', backref='order', cascade="all, delete-orphan")
@@ -296,6 +367,9 @@ class Employee(db.Model):
     fixed_salary = db.Column(db.Numeric(10, 2), default=0.0)
     is_active = db.Column(db.Boolean, default=True) 
     role = db.Column(db.String(50), default='worker') 
+    # Персональные статьи ЗП (если None — берётся глобальная настройка hr_official_item / hr_unofficial_item)
+    official_budget_item_id = db.Column(db.Integer, db.ForeignKey('budget_item.id'), nullable=True)
+    unofficial_budget_item_id = db.Column(db.Integer, db.ForeignKey('budget_item.id'), nullable=True)
     foreign_profile = db.relationship('ForeignEmployeeProfile', backref='employee', uselist=False, cascade="all, delete-orphan")
     foreign_documents = db.relationship('ForeignEmployeeDocument', backref='employee', cascade="all, delete-orphan")
     patent_periods = db.relationship('PatentPeriod', backref='employee', cascade="all, delete-orphan")
@@ -465,6 +539,8 @@ class CompetitorSnapshot(db.Model):
     date = db.Column(db.DateTime, default=datetime.now)
     name = db.Column(db.String(100)) # Например "Мониторинг Апрель"
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    # Сырой ответ LLM для отладки «почему ИИ вернул это» (при автоматическом запуске).
+    raw_ai_response = db.Column(db.Text, nullable=True)
     rows = db.relationship('CompetitorRow', backref='snapshot', cascade="all, delete-orphan")
 
 class CompetitorRow(db.Model):
@@ -474,10 +550,17 @@ class CompetitorRow(db.Model):
     size_name = db.Column(db.String(50))
     competitor_name = db.Column(db.String(100))
     competitor_price = db.Column(db.Numeric(10, 2), default=0.0)
-    source_link = db.Column(db.String(500)) # <--- Добавили поле для ссылки
+    source_link = db.Column(db.String(500))
     # Кэшируем наши данные на момент загрузки, чтобы история не менялась при смене наших цен
-    our_price_at_moment = db.Column(db.Numeric(10, 2), nullable=True) 
+    our_price_at_moment = db.Column(db.Numeric(10, 2), nullable=True)
     our_cost_at_moment = db.Column(db.Numeric(10, 2), nullable=True)
+    # Поля качества совпадения (заполняются валидатором/ИИ).
+    pack_type = db.Column(db.String(16), nullable=True)      # RB/WRB/grunt/C2..C20/P9/other
+    form = db.Column(db.String(16), nullable=True)           # free/ball/niwaki/topiary/pompon/stamm/other
+    source_excerpt = db.Column(db.Text, nullable=True)       # цитата с сайта конкурента
+    confidence = db.Column(db.Float, nullable=True)          # 0..1 от модели
+    is_rejected = db.Column(db.Boolean, default=False, nullable=False)
+    reject_reasons = db.Column(db.Text, nullable=True)       # JSON-строка со списком причин
 
 # --- ЧАТ И AI ---
 class KnowledgeBase(db.Model):
@@ -714,4 +797,121 @@ class TgTask(db.Model):
     status = db.Column(db.String(20), default='new') # new, done
     sender_name = db.Column(db.String(100)) # Имя руководителя в ТГ
 
+    # Для аналитики по поручениям — проставляется при смене статуса на 'done'.
+    completed_at = db.Column(db.DateTime, nullable=True)
+    completed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    # Ключ дедупликации для авто-аномалий и дайджестов. Стабильный между запусками.
+    # Пример: 'debt_new_order:client=128' или 'ready_stale:order=217'.
+    dedup_key = db.Column(db.String(255), nullable=True, index=True)
+    # Временные метки для отслеживания «как давно длится» и «исчезла ли аномалия».
+    first_seen_at = db.Column(db.DateTime, nullable=True)
+    last_seen_at = db.Column(db.DateTime, nullable=True)
+    severity = db.Column(db.String(20), default='info')  # info / warning / danger
+
+    # --- Расширение жизненного цикла задачи (v2) ---
+    # Автор задачи: для ручного создания = current_user, для AI = None (пришло из чата).
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    # Последняя модификация (reassign / complete). Для сортировки в аналитике.
+    updated_at = db.Column(db.DateTime, nullable=True)
+    # История «передачи» на один шаг назад: кто и когда передал задачу.
+    # Для полноценного audit-log позже можно завести отдельную таблицу.
+    reassigned_from_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    reassigned_at = db.Column(db.DateTime, nullable=True)
+    # Источник задачи — для фильтров в аналитике:
+    #   'tg'       — AI распарсил сообщение из Telegram;
+    #   'manual'   — руководитель/менеджер создал через UI;
+    #   'anomaly'  — автокарточка из anomaly_engine;
+    #   'digest'   — еженедельный дайджест;
+    #   'fallback' — сбой AI, оставили «сырую» карточку.
+    source = db.Column(db.String(20), nullable=True)
+
     assignee = db.relationship('User', foreign_keys=[assignee_id])
+    completed_by = db.relationship('User', foreign_keys=[completed_by_id])
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    reassigned_from = db.relationship('User', foreign_keys=[reassigned_from_id])
+
+
+class WeeklyDigest(db.Model):
+    """История еженедельных дайджестов для admin/executive.
+
+    Один дайджест = одна неделя (понедельник) × один пользователь.
+    Хранит и готовый HTML (для быстрого показа), и структурированные числа
+    (summary_json) — чтобы можно было сравнить с прошлой неделей.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    week_start = db.Column(db.Date, nullable=False, index=True)  # понедельник недели
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content_html = db.Column(db.Text, nullable=False)
+    summary_json = db.Column(db.Text)  # сериализованный словарь с метриками
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    user = db.relationship('User')
+    __table_args__ = (
+        db.UniqueConstraint('week_start', 'user_id', name='_digest_week_user_uc'),
+    )
+
+
+# --- TG-мониторинг чата расходов (app/expense_chat.py) ---
+# Каждое сообщение из чата «Расходы Жемчужниково» сохраняем здесь, чтобы
+# (а) исключить двойную обработку при ретраях webhook,
+# (б) иметь готовое состояние для карточки на дашборде,
+# (в) собрать обучающую выборку {raw_text -> budget_item_id} для авто-режима.
+class ChatExpenseMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    tg_chat_id = db.Column(db.String(64), nullable=False)
+    tg_message_id = db.Column(db.Integer, nullable=False)
+    tg_date = db.Column(db.DateTime, nullable=True)  # время сообщения в МСК
+    raw_text = db.Column(db.Text, nullable=False)
+    sender_name = db.Column(db.String(150), nullable=True)
+
+    parsed_amount = db.Column(db.Numeric(12, 2), nullable=True)
+    parsed_description = db.Column(db.String(500), nullable=True)
+    # 'cash' | 'cashless' | None
+    parsed_payment_type = db.Column(db.String(20), nullable=True)
+
+    # Подсказка классификатора до подтверждения админом (может меняться).
+    suggested_budget_item_id = db.Column(
+        db.Integer, db.ForeignKey('budget_item.id'), nullable=True
+    )
+    # 'pending' | 'matched' | 'imported' | 'rejected' | 'unparseable'
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    # Создан ли по факту Expense и какой TgTask сейчас висит на эту карточку.
+    expense_id = db.Column(db.Integer, db.ForeignKey('expense.id'), nullable=True)
+    task_id = db.Column(db.Integer, db.ForeignKey('tg_task.id'), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+    suggested_item = db.relationship('BudgetItem', foreign_keys=[suggested_budget_item_id])
+    expense = db.relationship('Expense', foreign_keys=[expense_id])
+    task = db.relationship('TgTask', foreign_keys=[task_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('tg_chat_id', 'tg_message_id', name='_tg_chat_msg_uc'),
+        db.Index('idx_chat_expense_status', 'status'),
+    )
+
+
+class ChatExpenseAlias(db.Model):
+    """Обучение классификатора: запомненные связки «короткий ключ описания»
+    → статья бюджета. Заполняется при каждом подтверждении админа в фиде.
+
+    `alias_key` — нормализованные первые ~3-4 значимых слова описания
+    (lower, без знаков препинания). Индекс по нему.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    alias_key = db.Column(db.String(200), nullable=False, index=True)
+    budget_item_id = db.Column(
+        db.Integer, db.ForeignKey('budget_item.id'), nullable=False
+    )
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    hit_count = db.Column(db.Integer, default=1)
+    last_used_at = db.Column(db.DateTime, default=datetime.now)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    budget_item = db.relationship('BudgetItem')
+    created_by = db.relationship('User')
+
+    __table_args__ = (
+        db.UniqueConstraint('alias_key', 'budget_item_id', name='_alias_item_uc'),
+    )

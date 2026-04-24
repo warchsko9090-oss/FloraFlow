@@ -163,7 +163,7 @@
     <!-- 2. Элементы управления: Год, Правка, Менюшки (В одну строку с переносом) -->
     <div class="d-flex flex-wrap justify-content-between align-items-center w-100 gap-2">
         <div class="d-flex align-items-center gap-3">
-            <form id="yearForm" class="m-0">
+            <form id="yearForm" class="m-0" hx-boost="false">
                 <input type="hidden" name="tab" value="{{ active_tab }}">
                 <input type="hidden" name="month" value="{{ target_month }}">
                 <select name="year" class="form-select form-select-sm fw-bold bg-light shadow-sm" style="width: 80px; border: 1px solid #ced4da;" onchange="this.form.submit()">

@@ -67,6 +67,15 @@
     .status-canceled td:first-child { border-left-color: #f44336; }    /* Красный - отмена */
     .status-canceled td { background-color: #fcfcfc; opacity: 0.8; }
 
+    /* ПОЛНОСТЬЮ ЗАВЕРШЁННЫЕ: оплачен + выкопан + отгружен.
+       Бледно-зелёная подсветка всех строк такого заказа, толстая зелёная полоса слева.
+       Всегда отображаются внизу списка (сортировка в orders_list). */
+    .order-done td { background-color: #e8f5e9 !important; }
+    .order-done:hover td { background-color: #dcedc8 !important; }
+    .order-done.row-separator td:first-child { border-left: 6px solid #2E7D32 !important; }
+    .mobile-card.order-done { background: #e8f5e9; border-color: #81C784; }
+    .mobile-card.order-done .mobile-card-header { background: #e8f5e9; }
+
     /* ФИНАНСЫ: Цвет фона ячеек оплаты */
     .pay-paid { background-color: #f1f8e9 !important; }    /* Бледно-зеленый */
     .pay-partial { background-color: #fffde7 !important; } /* Бледно-желтый */
@@ -122,7 +131,7 @@
 
 <!-- Панель фильтров -->
 <div class="filter-panel" style="position: relative; z-index: 10;">
-    <form method="GET" class="d-flex gap-2 flex-wrap align-items-center w-100" id="filterForm">
+    <form method="GET" class="d-flex gap-2 flex-wrap align-items-center w-100" id="filterForm" hx-boost="false">
         <input type="hidden" name="mode" value="{{ mode }}">
         
         <div class="d-flex align-items-center bg-light rounded px-2 border">
@@ -241,9 +250,10 @@
             {% set o = item.order %}
             {% set rows = item.order_items %}
             {% set rowspan = item.rowspan %}
-            
+            {% set done_cls = 'order-done' if item.is_done else '' %}
+
             <!-- ГЛАВНАЯ СТРОКА ЗАКАЗА (С row-separator) -->
-            <tr class="row-separator status-{{ o.status }}">
+            <tr class="row-separator status-{{ o.status }} {{ done_cls }}">
                 <!-- Кнопки действий -->
                 <td rowspan="{{ rowspan }}" class="text-center">
                     <div class="d-flex flex-column gap-1 align-items-center">
@@ -329,7 +339,9 @@
 
                 <!-- Статус (Работы) -->
                 <td rowspan="{{ rowspan }}" class="text-center align-middle" style="min-width: 110px;">
-                    {% if o.is_deleted %}
+                    {% if item.is_done %}
+                        <div class="text-success fw-bold" style="font-size: 12px;"><i class="fas fa-check-circle"></i> Готов+оплачен</div>
+                    {% elif o.is_deleted %}
                         <small class="text-muted">В архиве</small>
                     {% elif o.status == 'shipped' %}
                         <div class="text-success fw-bold" style="font-size: 12px;"><i class="fas fa-check-double"></i> Отгружен</div>
@@ -347,7 +359,7 @@
 
             <!-- ОСТАЛЬНЫЕ ПОЗИЦИИ (Если есть) -->
             {% for i in range(1, rows|length) %}
-            <tr class="status-{{ o.status }}">
+            <tr class="status-{{ o.status }} {{ done_cls }}">
                 {% set r = rows[i] %}
                 <td class="text-dark">{{ r.plant.name }}</td>
                 <td class="text-center text-muted small">{{ r.size.name }}</td>
@@ -372,7 +384,7 @@
 
             <!-- ИТОГО ПО ЗАКАЗУ -->
             {% if o.status != 'canceled' and not o.is_deleted and current_user.role != 'user2' %}
-            <tr class="status-{{ o.status }}" style="background-color: #F8F9FA;">
+            <tr class="status-{{ o.status }} {{ done_cls }}" style="background-color: {% if item.is_done %}#e8f5e9{% else %}#F8F9FA{% endif %};">
                 <!-- Объединяем первые 9 колонок (до Цены включительно) для подписи -->
                 <td colspan="9" class="text-end small text-uppercase text-muted pt-2 pb-2 align-middle">
                     Итого заказ:
@@ -407,7 +419,7 @@
 <div class="d-lg-none">
     {% for item in orders %}
     {% set o = item.order %}
-    <div class="mobile-card shadow-sm">
+    <div class="mobile-card shadow-sm {% if item.is_done %}order-done{% endif %}">
         <!-- Шапка карточки -->
         <div class="mobile-card-header collapsed" data-bs-toggle="collapse" data-bs-target="#order-{{ o.id }}">
             <div class="d-flex flex-column">

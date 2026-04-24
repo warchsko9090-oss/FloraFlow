@@ -19,50 +19,62 @@
         </div>
 
         <div class="alert alert-info py-2 small mb-3">
-            <i class="fas fa-info-circle"></i> Введите количество, которое выкопали <b>СЕГОДНЯ</b>.
+            <i class="fas fa-info-circle"></i> Показаны задания на <b>{{ today.strftime('%d.%m.%Y') if today else 'сегодня' }}</b>{% if overdue_count and overdue_count > 0 %} и <b class="text-danger">{{ overdue_count }}</b> просроченных с прошлых дней{% endif %}. Введите фактически выкопанное количество.
         </div>
 
         <form method="POST" onsubmit="showDiggingOverlay()">
-            {% if groups %}
-                {% for plant_name, items in groups|groupby('plant_name') %}
+            {% if tasks %}
+                {% for plant_name, items in tasks|groupby('plant_name') %}
                 <div class="card mb-3 shadow-sm border-0">
                     <div class="card-header p-2 bg-white">
                         <button class="btn btn-link w-100 text-start text-decoration-none" type="button"
-                                data-bs-toggle="collapse" data-bs-target="#plantCollapse{{ items[0].plant_id }}"
-                                aria-expanded="false" aria-controls="plantCollapse{{ items[0].plant_id }}">
+                                data-bs-toggle="collapse" data-bs-target="#plantCollapse{{ loop.index }}"
+                                aria-expanded="false" aria-controls="plantCollapse{{ loop.index }}">
                             <span class="fw-bold">{{ plant_name }}</span>
-                            <span class="small text-muted">({{ items|length }} {{ 'строка' if items|length == 1 else 'строк' }})</span>
+                            <span class="small text-muted">({{ items|length }} {{ 'задание' if items|length == 1 else 'заданий' }})</span>
                         </button>
                     </div>
-                    <div id="plantCollapse{{ items[0].plant_id }}" class="collapse">
+                    <div id="plantCollapse{{ loop.index }}" class="collapse show">
                         <div class="card-body p-2 bg-light">
-                            {% for g in items %}
+                            {% for t in items %}
                             <div class="border border-2 rounded-3 p-3 mb-3 bg-white shadow-sm">
-                                <!-- Шапка карточки: Крупный размер и Поле -->
-                                <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
-                                    <div class="fw-bold text-dark fs-4 lh-1">{{ g.size_name }}</div>
-                                    <!-- Добавлено слово "Поле" -->
+                                <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                                    <div class="fw-bold text-dark fs-4 lh-1">{{ t.size_name }}</div>
                                     <div class="badge bg-secondary fs-6 py-2 px-3 shadow-sm">
-                                        <i class="fas fa-map-marker-alt opacity-75 me-2"></i>Поле {{ g.field_name }}
+                                        <i class="fas fa-map-marker-alt opacity-75 me-2"></i>Поле {{ t.field_name }}{% if t.year %} · {{ t.year }} г.{% endif %}
                                     </div>
                                 </div>
-                                
-                                <!-- Тело карточки: План и Огромный ввод факта -->
+
+                                <div class="small text-muted mb-2">
+                                    <div><i class="fas fa-file-invoice me-1 text-primary"></i>Заказ <b>#{{ t.order_id }}</b> · <span class="text-dark">{{ t.client_name }}</span></div>
+                                    <div>
+                                        <i class="fas fa-calendar-day me-1 {% if t.is_overdue %}text-danger{% else %}text-warning{% endif %}"></i>План на
+                                        <b{% if t.is_overdue %} class="text-danger"{% endif %}>{{ t.planned_date.strftime('%d.%m.%Y') }}</b>:
+                                        <b>{{ t.planned_qty }}</b> шт.
+                                        {% if t.is_overdue %}
+                                        <span class="badge bg-danger ms-1">Просрочено{% if t.days_overdue %} · {{ t.days_overdue }} дн.{% endif %}</span>
+                                        {% endif %}
+                                    </div>
+                                    {% if t.comment %}<div><i class="fas fa-comment me-1 text-muted"></i>{{ t.comment }}</div>{% endif %}
+                                </div>
+
                                 <div class="d-flex justify-content-between align-items-end">
                                     <div class="text-muted mb-1">
-                                        <div class="small text-uppercase fw-bold mb-1">План копки:</div>
-                                        <!-- Уменьшен шрифт с fs-2 на fs-3 -->
-                                        <div class="fs-3 fw-bold text-dark lh-1">{{ g.left_qty|int }} <span class="fs-6 text-muted fw-normal">шт</span></div>
+                                        <div class="small text-uppercase fw-bold mb-1">Уже выкопано:</div>
+                                        <div class="fs-5 fw-bold text-dark lh-1">
+                                            {{ t.already_before_today }} + {{ t.fact_today }} <span class="fs-6 text-muted fw-normal">из {{ t.ordered }} шт.</span>
+                                        </div>
+                                        <div class="small text-success">Осталось: <b>{{ t.left_to_dig }}</b> шт.</div>
                                     </div>
                                     <div style="width: 130px;">
                                         <label class="small fw-bold text-success text-uppercase mb-1 d-block text-center">Факт (шт)</label>
-                                        <input type="number" 
-                                               name="qty_{{ g.plant_id }}_{{ g.size_id }}_{{ g.field_id }}_{{ g.year }}" 
-                                               class="form-control border-success text-success fw-bold text-center shadow-sm" 
-                                               style="font-size: 28px; height: 60px; border-width: 2px; border-radius: 12px; padding: 0;" 
-                                               placeholder="0" 
-                                               min="0" 
-                                               max="{{ g.left_qty|int }}" 
+                                        <input type="number"
+                                               name="qty_task_{{ t.id }}"
+                                               class="form-control border-success text-success fw-bold text-center shadow-sm"
+                                               style="font-size: 28px; height: 60px; border-width: 2px; border-radius: 12px; padding: 0;"
+                                               placeholder="0"
+                                               min="0"
+                                               max="{{ t.left_to_dig }}"
                                                inputmode="numeric">
                                     </div>
                                 </div>
@@ -81,8 +93,8 @@
             {% else %}
                 <div class="alert alert-light text-center py-5 border">
                     <i class="fas fa-trowel fa-3x text-muted mb-3"></i>
-                    <h5>Нет активных растений</h5>
-                    <p class="text-muted">Нет активных заказов или все вырыто.</p>
+                    <h5>На сегодня заданий нет</h5>
+                    <p class="text-muted">Обратитесь к менеджеру, чтобы он запланировал выкопку через <b>Диспетчерскую (план)</b>.</p>
                 </div>
             {% endif %}
         </form>

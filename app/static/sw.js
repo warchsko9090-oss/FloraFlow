@@ -1,6 +1,15 @@
-const CACHE_VERSION = 'v2'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
+const CACHE_VERSION = 'v45'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
+
+// Страницы и API с интенсивно меняющимся состоянием — всегда только из сети, без кэша.
+// /api/cache-manifest сюда же — его нельзя кэшировать, иначе клиент будет думать,
+// что версия не менялась, и пропустит прогрев.
+const NO_CACHE_PATHS = [
+    '/digging/planning', '/documents', '/logs', '/digging',
+    '/api/visual_stock', '/api/field_recount', '/api/feed',
+    '/api/cache-manifest',
+];
 
 // Список файлов, которые нужны всегда (ОБОЛОЧКА)
 const ASSETS_TO_CACHE = [
@@ -57,6 +66,16 @@ self.addEventListener('fetch', (event) => {
         url.pathname.startsWith('/chat/') || 
         url.pathname.startsWith('/admin/') || 
         url.pathname.startsWith('/shop')) {
+        return;
+    }
+
+    // Для страниц с drag-and-drop и живым состоянием (план, документы, логи)
+    // всегда обращаемся в сеть и НИКОГДА не кэшируем — чтобы избежать устаревших данных
+    const isNoCachePath = NO_CACHE_PATHS.some(
+        p => url.pathname === p || url.pathname.startsWith(p + '/') || url.pathname.startsWith(p + '?')
+    );
+    if (isNoCachePath) {
+        event.respondWith(fetch(event.request, { credentials: 'same-origin' }));
         return;
     }
 

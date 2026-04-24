@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import Blueprint, render_template, request, redirect, url_for, flash, make_response
 from flask_login import login_required, current_user
 from sqlalchemy import func, inspect, text, or_
 from sqlalchemy.exc import OperationalError
 from app.models import db, Order, OrderItem, DiggingLog, Client, Plant, Size, Field, TimeLog, ActionLog, DiggingTask
-from app.utils import msk_now, msk_today, log_action
+from app.utils import msk_now, msk_today, log_action, natural_key
 import requests # <--- ДОБАВИЛИ ИМПОРТ
 import os       # <--- ДОБАВЛЯЕМ ДЛЯ РАБОТЫ С СЕКРЕТАМИ
 
@@ -90,6 +90,8 @@ def mobile_index():
     # Собираем суммарный план по каждой комбинации (растение/размер/поле/год)
     ensure_digging_table_exists()
 
+    today_date = msk_today()
+
     if request.method == 'POST':
         # --- ЗАЩИТА ОТ ДУБЛИКАТОВ ВЫКОПКИ (2 минуты) ---
         cutoff_time = msk_now() - timedelta(minutes=2)
@@ -98,130 +100,81 @@ def mobile_index():
             ActionLog.action.like("Бригадир внес выкопку%"),
             ActionLog.date >= cutoff_time
         ).first()
-        
+
         if recent_log:
             flash('Вы уже сохраняли выкопку только что. Подождите пару минут, чтобы случайно не задвоить данные.', 'warning')
             return redirect(url_for('digging.mobile_index'))
         # -----------------------------------------------
-        
-        # Обработка формы выкопки
+
+        # Обработка формы выкопки — теперь по конкретным заданиям диспетчерской на сегодня
         try:
             count_saved = 0
-            tg_grouped_details = {}
             tg_total_qty = 0
             orders_just_ready = set()
-            all_affected_items = []
-            plant_name_cache = {}
-            size_name_cache = {}
-            field_name_cache = {}
+            affected_items = {}  # {item_id: OrderItem}
+            tasks_to_check = set()
+            # Для Telegram-отчёта: агрегируем по (order_id, plant_id, size_id) — поля в отчёт не попадают.
+            tg_added_by_pos = {}  # {(order_id, plant_id, size_id): qty_added_in_submit}
+            tg_order_ids = set()
 
             for key, val in request.form.items():
-                if not key.startswith('qty_'): continue
+                if not key.startswith('qty_task_'):
+                    continue
                 if not val or not str(val).strip():
                     continue
-
-                parts = key.split('_')
-                if len(parts) != 5: continue
-                _, plant_id, size_id, field_id, year = parts
-
                 try:
+                    task_id = int(key.replace('qty_task_', ''))
                     qty_dig = int(val)
                 except (ValueError, TypeError):
                     continue
+                if qty_dig <= 0:
+                    continue
 
-                if qty_dig > 0:
-                    # --- НОВАЯ ЗАЩИТА: ПРОВЕРЯЕМ ОСТАТОК ---
-                    matching_items = OrderItem.query.join(Order).filter(
-                        Order.status.in_(['reserved', 'in_progress']),
-                        Order.is_deleted == False,
-                        OrderItem.plant_id == int(plant_id),
-                        OrderItem.size_id == int(size_id),
-                        OrderItem.field_id == int(field_id),
-                        OrderItem.year == int(year)
-                    ).all()
+                task = DiggingTask.query.get(task_id)
+                # Разрешаем вносить факт по задачам на сегодня ИЛИ просроченным (planned_date < today).
+                # Будущие (завтра и позже) бригадиру трогать нельзя — их в форме быть не должно вовсе.
+                if not task or task.status == 'done' or task.planned_date > today_date:
+                    continue
+                item = task.item
+                if not item or item.order.is_deleted:
+                    continue
 
-                    total_ordered = sum(item.quantity for item in matching_items)
-                    
-                    # Считаем выкопанное по привязанным позициям (включая старые записи)
-                    assigned_dug = sum(item.dug_quantity or 0 for item in matching_items)
-                    
-                    # Считаем выкопанное по НЕпривязанным позициям
-                    unassigned_dug = db.session.query(func.sum(DiggingLog.quantity)).filter(
-                        DiggingLog.plant_id == int(plant_id),
-                        DiggingLog.size_id == int(size_id),
-                        DiggingLog.field_id == int(field_id),
-                        DiggingLog.year == int(year),
-                        DiggingLog.order_item_id == None,
-                        DiggingLog.status != 'rejected'
-                    ).scalar() or 0
-                    
-                    total_already_dug = assigned_dug + unassigned_dug
-                    
-                    left_to_dig = total_ordered - total_already_dug
-
-                    if qty_dig > left_to_dig:
-                        p_obj = Plant.query.get(int(plant_id))
-                        flash(f'❌ Ошибка: Нельзя выкопать {qty_dig} шт. (Осталось выкопать всего {left_to_dig} шт.) для {p_obj.name if p_obj else ""}. Эта строка пропущена.', 'danger')
-                        continue # Пропускаем сохранение этой строки
-                    # --- КОНЕЦ ЗАЩИТЫ ---
-
-                    # Считаем, сколько было выкопано сегодня до этого сохранения
-                    today_date = msk_now().date()
-                    dug_today_before = db.session.query(func.sum(DiggingLog.quantity)).filter(
-                        DiggingLog.date == today_date,
-                        DiggingLog.plant_id == int(plant_id),
-                        DiggingLog.size_id == int(size_id),
-                        DiggingLog.field_id == int(field_id),
-                        DiggingLog.year == int(year),
-                        DiggingLog.status != 'rejected'
-                    ).scalar() or 0
-
-                    log = DiggingLog(
-                        date=today_date,
-                        plant_id=int(plant_id),
-                        size_id=int(size_id),
-                        field_id=int(field_id),
-                        year=int(year),
-                        user_id=current_user.id,
-                        quantity=qty_dig,
-                        status='pending'
+                ordered_total = item.quantity or 0
+                dug_before = item.dug_total or 0
+                left_to_dig = ordered_total - dug_before
+                if qty_dig > left_to_dig:
+                    flash(
+                        f'❌ Нельзя выкопать {qty_dig} шт. для {item.plant.name} · {item.size.name} '
+                        f'(осталось {left_to_dig} шт.). Строка пропущена.',
+                        'danger'
                     )
-                    db.session.add(log)
-                    count_saved += 1
-                    tg_total_qty += qty_dig
+                    continue
 
-                    # --- Достаем названия для отчета ---
-                    p_id = int(plant_id)
-                    s_id = int(size_id)
-                    f_id = int(field_id)
+                log = DiggingLog(
+                    date=today_date,
+                    order_item_id=item.id,
+                    plant_id=item.plant_id,
+                    size_id=item.size_id,
+                    field_id=item.field_id,
+                    year=item.year,
+                    user_id=current_user.id,
+                    quantity=qty_dig,
+                    status='approved'
+                )
+                db.session.add(log)
+                count_saved += 1
+                tg_total_qty += qty_dig
 
-                    if p_id not in plant_name_cache:
-                        p_obj = Plant.query.get(p_id)
-                        plant_name_cache[p_id] = p_obj.name if p_obj else "Неизвестно"
-                    if s_id not in size_name_cache:
-                        s_obj = Size.query.get(s_id)
-                        size_name_cache[s_id] = s_obj.name if s_obj else "-"
-                    if f_id not in field_name_cache:
-                        f_obj = Field.query.get(f_id)
-                        field_name_cache[f_id] = f_obj.name if f_obj else "-"
+                pos_key = (item.order_id, item.plant_id, item.size_id)
+                tg_added_by_pos[pos_key] = tg_added_by_pos.get(pos_key, 0) + qty_dig
+                tg_order_ids.add(item.order_id)
 
-                    p_name = plant_name_cache[p_id]
-                    s_name = size_name_cache[s_id]
-                    f_name = field_name_cache[f_id]
+                affected_items[item.id] = item
+                tasks_to_check.add(task.id)
 
-                    start_of_day_qty = total_already_dug - dug_today_before
-                    dug_today_total = dug_today_before + qty_dig
-
-                    total_after_save = total_already_dug + qty_dig
-                    status_icon = "✅" if total_after_save >= total_ordered else ("⏳" if total_after_save > 0 else "❌")
-                    detail_line = f"{status_icon} {s_name} ({f_name}) ➔ {start_of_day_qty} + {dug_today_total} из {total_ordered} шт."
-                    tg_grouped_details.setdefault(p_name, []).append(detail_line)
-
-                    all_affected_items.extend(matching_items)
-
-            # Batch-update dug_quantity for all affected items
-            if all_affected_items:
-                item_ids = list(set(it.id for it in all_affected_items))
+            # Пересчет dug_quantity по затронутым позициям
+            if affected_items:
+                item_ids = list(affected_items.keys())
                 dug_agg = db.session.query(
                     DiggingLog.order_item_id, func.sum(DiggingLog.quantity)
                 ).filter(
@@ -229,40 +182,124 @@ def mobile_index():
                     DiggingLog.status != 'rejected'
                 ).group_by(DiggingLog.order_item_id).all()
                 dug_map = {r[0]: int(r[1] or 0) for r in dug_agg}
-                
-                seen_items = set()
-                for item in all_affected_items:
-                    if item.id in seen_items:
-                        continue
-                    seen_items.add(item.id)
+
+                for item in affected_items.values():
                     item.dug_quantity = dug_map.get(item.id, 0)
                     old_status = item.order.status
                     item.order.refresh_status_by_dug()
                     if old_status != 'ready' and item.order.status == 'ready':
                         orders_just_ready.add(item.order)
 
+            # Автозакрытие заданий: задание done, если по позиции выкопано >= planned_qty
+            for tid in tasks_to_check:
+                t = DiggingTask.query.get(tid)
+                if not t:
+                    continue
+                dug_for_item = (t.item.dug_total or 0) if t.item else 0
+                if dug_for_item >= (t.planned_qty or 0):
+                    t.status = 'done'
+
             if count_saved > 0:
-                db.session.commit() # Сохраняем в базу данных
+                db.session.commit()
                 flash(f'Записано позиций: {count_saved}. Спасибо за работу!', 'success')
                 log_action(f"Бригадир внес выкопку ({count_saved} строк)")
-                
-                # --- 1. ОТПРАВКА В ТЕЛЕГРАМ (ОБЩИЙ ОТЧЕТ ПО ВЫКОПКЕ) ---
-                if tg_grouped_details:
-                    msg = f"🚜 <b>Новая выкопка!</b>\n👤 Внес(ла): {current_user.username}\n\n"
-                    for plant_name, plant_lines in tg_grouped_details.items():
-                        msg += f"🌲 <b>{plant_name}</b>\n"
-                        msg += "\n".join(plant_lines)
-                        msg += "\n\n"
-                    msg = msg.rstrip()
-                    msg += f"\n\n📊 <b>Всего выкопано: {tg_total_qty} шт.</b>"
-                    _tg_send(msg, chat_type="digging")
-                
-                # --- 2. ОТПРАВКА В ТЕЛЕГРАМ (ЕСЛИ ЗАКАЗ СТАЛ ГОТОВ) ---
+
+                # --- Telegram-отчёт по выкопке (формат E.3) ---
+                if tg_order_ids:
+                    def _pct(a, b):
+                        return int(round((a or 0) * 100 / b)) if b else 0
+
+                    def _icon(dug, ordered):
+                        if ordered and dug >= ordered:
+                            return "✅"
+                        if dug and dug > 0:
+                            return "⏳"
+                        return "❌"
+
+                    # Telegram на мобиле использует пропорциональный шрифт — выравнивание
+                    # пробелами не работает. Поэтому форматируем «человеческим» образом:
+                    # короткие разделители, жирные числа, без «дырок» слева.
+                    divider = "━━━━━━━━━━━━━"
+                    msg_lines = [
+                        f"🚜 <b>{current_user.username}</b> · выкопка {today_date.strftime('%d.%m')}",
+                    ]
+
+                    for order_id in sorted(tg_order_ids):
+                        order = Order.query.get(order_id)
+                        if not order:
+                            continue
+                        client_name = order.client.name if order.client else "—"
+
+                        # Все позиции заказа — нужны для итога по заказу целиком.
+                        order_items = OrderItem.query.filter_by(order_id=order_id).all()
+
+                        # Агрегация по (plant_id, size_id): одна строка на позицию в отчёте.
+                        pos_map = {}
+                        for oi in order_items:
+                            key = (oi.plant_id, oi.size_id)
+                            if key not in pos_map:
+                                pos_map[key] = {
+                                    'plant_name': oi.plant.name if oi.plant else '—',
+                                    'size_name': oi.size.name if oi.size else '—',
+                                    'ordered': 0,
+                                    'dug': 0,
+                                }
+                            pos_map[key]['ordered'] += oi.quantity or 0
+                            pos_map[key]['dug'] += oi.dug_quantity or 0
+
+                        order_total_ordered = sum(p['ordered'] for p in pos_map.values())
+                        order_total_dug = sum(p['dug'] for p in pos_map.values())
+
+                        # В отчёт пишем ВСЕ позиции заказа: для тронутых — с пометкой «+N»,
+                        # для остальных — текущий прогресс, чтобы было видно общий расклад по заказу.
+                        rows = []
+                        for (p_id, s_id), pos in pos_map.items():
+                            added = tg_added_by_pos.get((order_id, p_id, s_id), 0)
+                            rows.append({**pos, 'added': added})
+
+                        # Нужно хоть одно тронутое по заказу, иначе заказ в отчёт не идёт вовсе.
+                        if not any(r['added'] > 0 for r in rows):
+                            continue
+
+                        rows.sort(key=lambda r: (
+                            0 if r['added'] > 0 else 1,  # тронутые сверху
+                            (r['plant_name'] or '').lower(),
+                            natural_key(r['size_name'] or '')
+                        ))
+
+                        msg_lines.append("")
+                        msg_lines.append(f"🏷 <b>{client_name}</b> · #Заказ-{order_id}")
+                        msg_lines.append(divider)
+                        for p in rows:
+                            icon = _icon(p['dug'], p['ordered'])
+                            pct = _pct(p['dug'], p['ordered'])
+                            title = f"🌳 <b>{p['plant_name']} {p['size_name']}</b>"
+                            if p['added'] > 0:
+                                # Тронутая позиция: сверху — «Выкопано N», снизу — общий прогресс.
+                                msg_lines.append(f"{title}  <b>Выкопано {p['added']}</b>")
+                                msg_lines.append(
+                                    f"   └ {p['dug']}/{p['ordered']} ({pct}%) {icon}"
+                                )
+                            else:
+                                # Нетронутая: одна строка, светлее — чтобы не тянула внимание.
+                                msg_lines.append(
+                                    f"{title}  <i>{p['dug']}/{p['ordered']} ({pct}%) {icon}</i>"
+                                )
+                        msg_lines.append(divider)
+                        opct = _pct(order_total_dug, order_total_ordered)
+                        msg_lines.append(
+                            f"📦 По заказу: <b>{order_total_dug}/{order_total_ordered}</b> ({opct}%)"
+                        )
+
+                    msg_lines.append("")
+                    msg_lines.append(f"📊 <b>Итого сегодня: {tg_total_qty} шт.</b>")
+                    _tg_send("\n".join(msg_lines), chat_type="digging")
+
+                # Заказ готов к отгрузке
                 for r_order in orders_just_ready:
                     ready_msg = f"✅ <b>Заказ № {r_order.id} готов к отгрузке!</b> Клиент {r_order.client.name}"
                     _tg_send(ready_msg, chat_type="orders")
-                # ------------------------------------------------------
-                
+
             else:
                 flash('Вы ничего не ввели.', 'warning')
         except Exception as e:
@@ -271,26 +308,70 @@ def mobile_index():
 
         return redirect(url_for('digging.mobile_index'))
 
-    # Группируем остатки по растению/размеру/полю/году
-    grouped = db.session.query(
-        OrderItem.plant_id,
-        OrderItem.size_id,
-        OrderItem.field_id,
-        OrderItem.year,
-        Plant.name.label('plant_name'),
-        Size.name.label('size_name'),
-        Field.name.label('field_name'),
-        func.sum(OrderItem.quantity - func.coalesce(OrderItem.dug_quantity, 0)).label('left_qty')
-    ).join(Order).join(Plant).join(Size).join(Field)
-    grouped = grouped.filter(
-        Order.status.in_(['reserved', 'in_progress']),
-        Order.is_deleted == False
-    ).group_by(
-        OrderItem.plant_id, OrderItem.size_id, OrderItem.field_id, OrderItem.year
-    ).having(func.sum(OrderItem.quantity - func.coalesce(OrderItem.dug_quantity, 0)) > 0)
-    grouped = grouped.order_by(Plant.name, Size.name, Field.name, OrderItem.year).all()
+    # GET: показываем задания диспетчерской на сегодня + просроченные (которые ещё не закрыты).
+    # Завтрашние и более поздние задания бригадиру не показываем — чтобы не копал вперёд плана.
+    today_tasks = (DiggingTask.query
+                   .filter(DiggingTask.planned_date <= today_date,
+                           DiggingTask.status != 'done')
+                   .join(OrderItem, DiggingTask.order_item_id == OrderItem.id)
+                   .join(Order, OrderItem.order_id == Order.id)
+                   .filter(Order.is_deleted == False)
+                   .all())
 
-    return render_template('digging/digging_form.html', groups=grouped)
+    tasks_view = []
+    for t in today_tasks:
+        item = t.item
+        if not item:
+            continue
+        # Если позиция уже закопана полностью (left_to_dig == 0) — нет смысла держать её в форме.
+        ordered = item.quantity or 0
+        dug_total = item.dug_total or 0
+        if ordered and dug_total >= ordered:
+            continue
+        fact_today = db.session.query(func.sum(DiggingLog.quantity)).filter(
+            DiggingLog.order_item_id == item.id,
+            DiggingLog.date == today_date,
+            DiggingLog.status != 'rejected'
+        ).scalar() or 0
+        is_overdue = t.planned_date < today_date
+        days_overdue = (today_date - t.planned_date).days if is_overdue else 0
+        tasks_view.append({
+            'id': t.id,
+            'planned_date': t.planned_date,
+            'planned_qty': t.planned_qty,
+            'comment': t.comment,
+            'plant_name': item.plant.name if item.plant else '—',
+            'size_name': item.size.name if item.size else '—',
+            'field_name': item.field.name if item.field else '—',
+            'year': item.year,
+            'order_id': item.order_id,
+            'client_name': item.order.client.name if item.order and item.order.client else '—',
+            'ordered': ordered,
+            'dug_total': dug_total,
+            'fact_today': int(fact_today),
+            'already_before_today': max(0, dug_total - int(fact_today)),
+            'left_to_dig': max(0, ordered - dug_total),
+            'is_overdue': is_overdue,
+            'days_overdue': days_overdue,
+        })
+
+    # Сортировка: сначала просроченные (самые старые сверху), затем сегодняшние.
+    # Внутри одинакового статуса — натуральная сортировка по растению/размеру/полю/году.
+    tasks_view.sort(key=lambda r: (
+        0 if r['is_overdue'] else 1,
+        r['planned_date'],
+        r['plant_name'].lower(),
+        natural_key(r['size_name']),
+        natural_key(r['field_name']),
+        r['year'] or 0,
+    ))
+
+    overdue_count = sum(1 for r in tasks_view if r['is_overdue'])
+
+    return render_template('digging/digging_form.html',
+                           tasks=tasks_view,
+                           today=today_date,
+                           overdue_count=overdue_count)
 
 
 @bp.route('/digging/order/<int:order_id>', methods=['GET', 'POST'])
@@ -537,6 +618,16 @@ def analytics():
     workers_per_day = [len(worked.get(d.strftime('%Y-%m-%d'), set())) for d in days]
     dug_per_day = [dug_map.get(d.strftime('%Y-%m-%d'), 0) for d in days]
 
+    # КПД: сколько растений на 1 работника в день.
+    # Если в этот день никто не отмечен в табеле (workers=0) — ставим None,
+    # чтобы линия на графике прервалась и не вводила в заблуждение.
+    efficiency_per_day = []
+    for d_qty, w_qty in zip(dug_per_day, workers_per_day):
+        if w_qty and w_qty > 0:
+            efficiency_per_day.append(round(d_qty / w_qty, 1))
+        else:
+            efficiency_per_day.append(None)
+
     # 4) Разбивка по видам растений (без размеров)
     plant_rows = db.session.query(
         DiggingLog.date,
@@ -593,19 +684,28 @@ def analytics():
     total_dug = sum(dug_per_day)
     total_workers_days = sum(workers_per_day)
 
+    # Средний КПД по дням, где работали люди И была выкопка (обычная арифметическая средняя)
+    eff_valid = [e for e in efficiency_per_day if e is not None and e > 0]
+    avg_efficiency_by_day = round(sum(eff_valid) / len(eff_valid), 1) if eff_valid else 0
+    # Пиковый день
+    peak_efficiency = max(eff_valid) if eff_valid else 0
+
     summary = {
         'days': active_days_count,
         'days_with_digging': days_with_digging,
         'total_workers': total_workers_days,
         'total_dug': total_dug,
         'avg_dug_per_day': int(round(total_dug / days_with_digging)) if days_with_digging > 0 else 0,
-        'avg_dug_per_worker': int(round(total_dug / total_workers_days)) if total_workers_days > 0 else 0,
+        'avg_dug_per_worker': round(total_dug / total_workers_days, 1) if total_workers_days > 0 else 0,
+        'avg_efficiency_by_day': avg_efficiency_by_day,
+        'peak_efficiency': peak_efficiency,
     }
 
     chart_data = {
         'labels': labels,
         'workers': workers_per_day,
         'dug': dug_per_day,
+        'efficiency': efficiency_per_day,
         'plantSeries': plant_series,
     }
 
@@ -674,17 +774,29 @@ def digging_planning():
     # 1. СОБИРАЕМ ЗАКАЗЫ ДЛЯ ЛЕВОЙ КОЛОНКИ (Ждут распределения)
     active_orders = Order.query.filter(Order.status.in_(['reserved', 'in_progress']), Order.is_deleted == False).order_by(Order.date).all()
     orders_to_plan = []
-    
+
     for o in active_orders:
         left_for_order = 0
+        items_preview = []  # детализация позиций, у которых осталось что копать
         for i in o.items:
             planned_qty = sum(t.planned_qty for t in i.digging_tasks if t.status == 'pending')
             left_to_plan = i.quantity - i.dug_total - planned_qty
             if left_to_plan > 0:
                 left_for_order += left_to_plan
-        
+                items_preview.append({
+                    'plant': i.plant.name if i.plant else '—',
+                    'size': i.size.name if i.size else '—',
+                    'field': i.field.name if i.field else '—',
+                    'left': left_to_plan,
+                    'total': i.quantity,
+                    'dug': i.dug_total or 0,
+                    'planned': planned_qty,
+                })
+
         if left_for_order > 0:
-            o.left_to_plan = left_for_order # Временный атрибут для шаблона
+            # Временные атрибуты для шаблона.
+            o.left_to_plan = left_for_order
+            o.items_preview = items_preview
             orders_to_plan.append(o)
 
     # 2. ГЕНЕРИРУЕМ СЕТКУ КАЛЕНДАРЯ
@@ -706,12 +818,44 @@ def digging_planning():
         DiggingTask.status == 'pending'
     ).all()
 
-    # Собираем матрицу: список недель, внутри список дней (словари)
+    # Собираем матрицу: список недель, внутри список дней (словари).
+    # Для каждого дня дополнительно строим группировку по заказу: это
+    # нужно и для превью в ячейке (имена клиентов), и для hover-попапа.
     calendar_grid = []
     for week in month_days:
         week_data = []
         for d in week:
             day_tasks = [t for t in tasks if t.planned_date == d]
+
+            # Группируем задачи этого дня по заказу: {order_id: {...}}.
+            orders_map = {}
+            for t in day_tasks:
+                oi = t.item
+                o = oi.order if oi else None
+                if not o:
+                    continue
+                grp = orders_map.setdefault(o.id, {
+                    'order_id': o.id,
+                    'client': o.client.name if o.client else '—',
+                    'total_qty': 0,
+                    'tasks_count': 0,
+                    'items': [],
+                })
+                grp['total_qty'] += t.planned_qty or 0
+                grp['tasks_count'] += 1
+                grp['items'].append({
+                    'plant': oi.plant.name if oi.plant else '—',
+                    'size': oi.size.name if oi.size else '—',
+                    'field': oi.field.name if oi.field else '—',
+                    'qty': t.planned_qty or 0,
+                    'comment': t.comment or '',
+                })
+            orders_groups = sorted(orders_map.values(), key=lambda g: (-g['total_qty'], g['client']))
+            # Список уникальных клиентов в порядке "кто больше копает — тот первее".
+            clients_summary = []
+            for g in orders_groups:
+                clients_summary.append({'client': g['client'], 'qty': g['total_qty']})
+
             week_data.append({
                 'date_obj': d,
                 'date_str': d.strftime('%Y-%m-%d'),
@@ -719,7 +863,9 @@ def digging_planning():
                 'is_current_month': d.month == month,
                 'is_today': d == today,
                 'tasks_count': len(day_tasks),
-                'total_plants': sum(t.planned_qty for t in day_tasks)
+                'total_plants': sum(t.planned_qty for t in day_tasks),
+                'orders_groups': orders_groups,   # для hover-попапа
+                'clients_summary': clients_summary,  # для чипов клиентов в ячейке
             })
         calendar_grid.append(week_data)
 
@@ -729,13 +875,16 @@ def digging_planning():
     next_month = month + 1 if month < 12 else 1
     next_year = year if month < 12 else year + 1
 
-    return render_template('digging/planning.html', 
-                           orders_to_plan=orders_to_plan, 
+    resp = make_response(render_template('digging/planning.html',
+                           orders_to_plan=orders_to_plan,
                            calendar_grid=calendar_grid,
                            current_year=year,
                            month_name=MONTH_NAMES.get(month, ''),
                            prev_month=prev_month, prev_year=prev_year,
-                           next_month=next_month, next_year=next_year)
+                           next_month=next_month, next_year=next_year))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
 
 # API: Форма ПРИ ПЕРЕТАСКИВАНИИ заказа на календарь
 @bp.route('/api/digging/order_plan_form/<int:order_id>/<date_str>')
@@ -787,35 +936,54 @@ def get_order_plan_form(order_id, date_str):
     """
     return form_html
 
-# API: Детализация при КЛИКЕ на ячейку календаря
-@bp.route('/api/digging/day_details/<date_str>')
-@login_required
-def get_day_details(date_str):
-    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+def _render_day_details_html(target_date):
+    """Рендерит HTML для модалки «план на день». Вынесено, чтобы один и
+    тот же рендер использовать и при первичной загрузке, и при массовом
+    удалении (свап в ту же модалку без её закрытия)."""
     tasks = DiggingTask.query.filter_by(planned_date=target_date, status='pending').all()
-    
     date_formatted = target_date.strftime("%d.%m.%Y")
-    
+    date_str = target_date.strftime("%Y-%m-%d")
+
     if not tasks:
-        return f"<div class='text-center p-4 text-muted'><h5>{date_formatted}</h5>На этот день заданий нет. Перетащите сюда заказ.</div>"
-        
-    tasks_html = f"<div class='mb-3 text-center'><h5 class='fw-bold text-dark'>План на {date_formatted}</h5></div>"
-    
+        return (
+            f"<div id='dayDetailsBody' data-date='{date_str}'>"
+            f"<div class='text-center p-4 text-muted'>"
+            f"<h5 class='fw-bold'>{date_formatted}</h5>"
+            f"На этот день заданий нет. Перетащите сюда заказ."
+            f"</div></div>"
+        )
+
+    total_qty = sum(t.planned_qty or 0 for t in tasks)
+
+    cards_html = ""
     for t in tasks:
-        tasks_html += f"""
-        <div class="card mb-3 border-0 shadow-sm border-start border-4 border-success">
+        comment_html = (
+            f'<div class="mt-3 bg-warning bg-opacity-10 border border-warning p-2 rounded small text-dark">'
+            f'<i class="fas fa-comment-dots text-warning me-1"></i> {t.comment}</div>'
+        ) if t.comment else ''
+
+        cards_html += f"""
+        <div class="card mb-3 border-0 shadow-sm border-start border-4 border-success js-task-card" data-task-id="{t.id}">
             <div class="card-body p-3">
-                <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
-                    <div class="small text-muted text-uppercase fw-bold">
-                        Заказ #{t.item.order_id} <span class="mx-1">&bull;</span> {t.item.order.client.name}
-                    </div>
-                    <form method="POST" action="/digging/planning" onsubmit="return confirm('Снять это задание? Объем вернется обратно.');" hx-boost="false" class="m-0">
-                        <input type="hidden" name="action" value="delete_task">
-                        <input type="hidden" name="task_id" value="{t.id}">
-                        <button type="submit" class="btn btn-link text-danger p-0 m-0" title="Удалить"><i class="fas fa-trash-alt"></i></button>
-                    </form>
+                <div class="d-flex justify-content-between align-items-start mb-2 pb-2 border-bottom gap-2">
+                    <label class="d-flex align-items-center gap-2 flex-grow-1" style="cursor:pointer;">
+                        <input type="checkbox"
+                               class="form-check-input js-task-check"
+                               name="task_ids[]"
+                               value="{t.id}"
+                               style="width:18px;height:18px;margin:0;">
+                        <span class="small text-muted text-uppercase fw-bold">
+                            Заказ #{t.item.order_id} <span class="mx-1">&bull;</span> {t.item.order.client.name}
+                        </span>
+                    </label>
+                    <button type="button"
+                            class="btn btn-link text-danger p-0 m-0 js-task-delete-one"
+                            data-task-id="{t.id}"
+                            title="Снять это задание">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
                 </div>
-                
+
                 <div class="d-flex justify-content-between align-items-start mt-2">
                     <div>
                         <div class="fw-bold text-dark lh-1 mb-2" style="font-size: 1.15rem;">
@@ -830,10 +998,113 @@ def get_day_details(date_str):
                         <h4 class="fw-bold text-success mb-0">{t.planned_qty} <span class="fs-6 text-muted fw-normal">шт</span></h4>
                     </div>
                 </div>
-                
-                {f'<div class="mt-3 bg-warning bg-opacity-10 border border-warning p-2 rounded small text-dark"><i class="fas fa-comment-dots text-warning me-1"></i> {t.comment}</div>' if t.comment else ''}
+
+                {comment_html}
             </div>
         </div>
         """
-        
-    return tasks_html
+
+    header_html = f"""
+    <div id='dayDetailsBody' data-date='{date_str}'>
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <div>
+          <h5 class="fw-bold text-dark m-0">План на {date_formatted}</h5>
+          <div class="small text-muted">{len(tasks)} задан. · {total_qty} шт</div>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <label class="d-flex align-items-center gap-2 small text-muted" style="cursor:pointer;">
+            <input type="checkbox" class="form-check-input js-task-check-all" style="width:16px;height:16px;margin:0;">
+            Выбрать все
+          </label>
+          <button type="button" class="btn btn-danger btn-sm fw-bold js-task-delete-bulk" disabled>
+            <i class="fas fa-trash-alt me-1"></i>Удалить выбранные (<span class="js-selected-count">0</span>)
+          </button>
+        </div>
+      </div>
+      {cards_html}
+    </div>
+    """
+    return header_html
+
+
+# API: Детализация при КЛИКЕ на ячейку календаря
+@bp.route('/api/digging/day_details/<date_str>')
+@login_required
+def get_day_details(date_str):
+    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    return _render_day_details_html(target_date)
+
+
+# API: массовое удаление задач за один день. Принимает task_ids[] + date.
+# В ответ отдаёт свежий HTML детализации дня, чтобы модалка НЕ закрывалась,
+# а просто обновилась на месте.
+@bp.route('/api/digging/day_tasks_bulk_delete', methods=['POST'])
+@login_required
+def digging_day_tasks_bulk_delete():
+    if current_user.role not in ['admin', 'user', 'executive']:
+        return ("forbidden", 403)
+
+    date_str = request.form.get('date_str') or ''
+    raw_ids = request.form.getlist('task_ids[]') or request.form.getlist('task_ids')
+    try:
+        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except Exception:
+        return ("bad date", 400)
+
+    task_ids = []
+    for raw in raw_ids:
+        try:
+            task_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+
+    deleted = 0
+    if task_ids:
+        tasks = DiggingTask.query.filter(
+            DiggingTask.id.in_(task_ids),
+            DiggingTask.planned_date == target_date,
+            DiggingTask.status == 'pending'
+        ).all()
+        for t in tasks:
+            db.session.delete(t)
+            deleted += 1
+        if deleted:
+            db.session.commit()
+
+    return _render_day_details_html(target_date)
+
+
+# API: перенос всего плана с одной даты на другую (drag ячейки календаря).
+# Возвращает JSON; клиент после успеха перезагружает страницу, чтобы
+# перерисовать сетку с новыми позициями.
+@bp.route('/api/digging/day_move', methods=['POST'])
+@login_required
+def digging_day_move():
+    if current_user.role not in ['admin', 'user', 'executive']:
+        return ({"ok": False, "error": "forbidden"}, 403)
+
+    from_str = (request.form.get('from_date') or '').strip()
+    to_str = (request.form.get('to_date') or '').strip()
+    try:
+        from_date = datetime.strptime(from_str, '%Y-%m-%d').date()
+        to_date = datetime.strptime(to_str, '%Y-%m-%d').date()
+    except Exception:
+        return ({"ok": False, "error": "bad_date"}, 400)
+
+    if from_date == to_date:
+        return {"ok": True, "moved": 0, "skipped": "same_date"}
+
+    tasks = DiggingTask.query.filter_by(planned_date=from_date, status='pending').all()
+    moved = 0
+    for t in tasks:
+        t.planned_date = to_date
+        moved += 1
+    if moved:
+        db.session.commit()
+
+    return {
+        "ok": True,
+        "moved": moved,
+        "from": from_str,
+        "to": to_str,
+    }

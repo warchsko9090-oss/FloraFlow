@@ -47,6 +47,54 @@
                         <i class="fas fa-file-alt me-1"></i> Создать Промт (txt)
                     </button>
                 </form>
+
+                {# --- Быстрая проверка через Groq (без браузера) --- #}
+                {# ВАЖНО: не используем HTML-атрибут `disabled`, иначе клик не дойдёт
+                   до обработчика и пользователь не увидит подсказку про GROQ_API_KEY.
+                   Блокировку и визуальный стиль делаем через data-ai-enabled + CSS. #}
+                <div class="alert alert-warning p-2 mt-2 mb-2" style="font-size: 10px; line-height: 1.25;">
+                    <b><i class="fas fa-exclamation-triangle me-1"></i>Важно:</b>
+                    Рекомендуемый способ — <b>«Создать Промт (txt)»</b> выше
+                    и прогнать его в <b>Gemini Deep Research</b> или
+                    ChatGPT с поиском. Там настоящий браузер —
+                    результаты качественнее.<br>
+                    Кнопка ниже — <b>быстрая оценка без браузера</b>,
+                    часто придумывает товары и сайты. Всё подозрительное
+                    автоматически падает во вкладку «Отклонено».
+                </div>
+                <button type="button"
+                        class="btn btn-sm w-100 fw-bold mt-1"
+                        id="aiRunBtn"
+                        data-action="{{ url_for('crm.crm_ai_run') }}"
+                        data-ai-enabled="{{ '1' if ai_enabled else '0' }}"
+                        aria-disabled="{{ 'false' if ai_enabled else 'true' }}"
+                        style="background:linear-gradient(135deg,#546E7A,#78909C);color:#fff;{% if not ai_enabled %}opacity:.55;{% endif %}"
+                        title="{% if ai_enabled %}Быстрая проверка через Groq без браузера. Галлюцинации фильтрует валидатор (вкладка «Отклонено»). Для глубокого анализа используйте TXT-промт + Gemini Deep Research.{% else %}Не задан GROQ_API_KEY в окружении — кликните, чтобы увидеть подробности{% endif %}">
+                    <i class="fas fa-bolt me-1"></i> Быстрая проверка (Groq, без браузера)
+                </button>
+                <div class="form-text" style="font-size: 9px; line-height: 1.1;">
+                    Использует список и регионы из формы выше. 1–3 минуты.
+                    Модель: <code>{{ groq_model_name or 'llama-3.3-70b-versatile' }}</code>.
+                    Для смены — переменная окружения <code>GROQ_MODEL</code>
+                    (напр., <code>groq/compound-beta</code> — с web-search).
+                </div>
+
+                {# --- Канал «Поиск по Avito»: парсинг без LLM, прямые ссылки --- #}
+                <hr class="my-2">
+                <button type="button"
+                        class="btn btn-sm w-100 fw-bold mt-1"
+                        id="avitoRunBtn"
+                        data-action="{{ url_for('crm.crm_avito_scan') }}"
+                        style="background:linear-gradient(135deg,#97CF26,#64A70B);color:#fff;"
+                        title="Сканирует публичную выдачу Avito по списку позиций. Результаты — с прямыми ссылками на карточки. Автоматически фильтрует горшки/ниваки/цены вне коридора.">
+                    <i class="fas fa-search-location me-1"></i> Поиск по Avito
+                </button>
+                <div class="form-text" style="font-size: 9px; line-height: 1.1;">
+                    Парсит до 40 позиций × 10 карточек каждая. ~1 сек на запрос.
+                    Работает лучше с <b>российского IP</b> — на датацентре
+                    (Amvera) Avito может блокировать. Никаких LLM — только поиск
+                    и валидатор. Ссылки ведут прямо на карточку товара.
+                </div>
             </div>
         </div>
         
@@ -128,7 +176,27 @@
                     <i class="fas fa-chart-line me-2 text-warning"></i>Динамика рынка
                 </button>
             </li>
+            <li class="nav-item">
+                <button class="nav-link fw-bold text-dark" id="tab-rejected" data-bs-toggle="tab" data-bs-target="#content-rejected" type="button">
+                    <i class="fas fa-ban me-2 text-danger"></i>Отклонено
+                    {% if rejected_rows and rejected_rows|length > 0 %}
+                    <span class="badge bg-danger ms-1">{{ rejected_rows|length }}</span>
+                    {% endif %}
+                </button>
+            </li>
         </ul>
+
+        {% if current and rejected_rows and rejected_rows|length > 0 %}
+        <div class="alert alert-warning d-flex align-items-center justify-content-between py-2 px-3 mb-3 shadow-sm border-0" style="background:#fff7e6;border-left:4px solid #f57c00!important;">
+            <div class="small">
+                <i class="fas fa-triangle-exclamation text-warning me-2"></i>
+                ИИ/валидатор отклонил <b>{{ rejected_rows|length }}</b> позиций в этой загрузке (горшки, неправильная форма, ценовые выбросы и т.п.).
+            </div>
+            <button class="btn btn-sm btn-outline-warning fw-bold" type="button" onclick="document.getElementById('tab-rejected').click()">
+                Открыть «Отклонено»
+            </button>
+        </div>
+        {% endif %}
 
         <div class="tab-content">
             
@@ -164,8 +232,11 @@
                     {% if r.diff_rub < 0 %}{% set ns.cheap_cnt = ns.cheap_cnt + 1 %}{% endif %}
                 {% endfor %}
 
+                {% set rej_n = (rejected_rows|length) if rejected_rows else 0 %}
+                {% set total_n = ns.count + rej_n %}
+                {% set accuracy = ((ns.count * 100 / total_n) | round(0) | int) if total_n > 0 else 100 %}
                 <div class="row g-3 mb-3">
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="card border-0 shadow-sm bg-danger bg-opacity-10 border-start border-danger border-4">
                             <div class="card-body p-2">
                                 <small class="text-danger fw-bold text-uppercase">Мы дороже (Риск)</small>
@@ -176,7 +247,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="card border-0 shadow-sm bg-success bg-opacity-10 border-start border-success border-4">
                             <div class="card-body p-2">
                                 <small class="text-success fw-bold text-uppercase">Мы дешевле (Демпинг)</small>
@@ -187,13 +258,24 @@
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="card border-0 shadow-sm bg-light border-start border-secondary border-4">
                             <div class="card-body p-2">
                                 <small class="text-muted fw-bold text-uppercase">Всего позиций</small>
                                 <div class="d-flex justify-content-between align-items-end">
                                     <h4 class="mb-0 fw-bold text-dark">{{ ns.count }}</h4>
                                     <span class="badge bg-white text-dark border">{{ current.date.strftime('%d.%m') }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card border-0 shadow-sm border-start border-4" style="border-color:#7b1fa2 !important; background:#f3e5f5;">
+                            <div class="card-body p-2">
+                                <small class="fw-bold text-uppercase" style="color:#6a1b9a;">Качество ИИ</small>
+                                <div class="d-flex justify-content-between align-items-end">
+                                    <h4 class="mb-0 fw-bold" style="color:#4a148c;">{{ accuracy }}%</h4>
+                                    <small class="text-muted">{{ ns.count }} чист. / {{ rej_n }} отклонено</small>
                                 </div>
                             </div>
                         </div>
@@ -309,11 +391,12 @@
                                     <!-- 8: Удаление -->
                                     <td class="text-center bg-white" style="width: 80px;">
                                         {% if current_user.role == 'admin' %}
-                                        <form method="POST" action="{{ url_for('crm.crm_delete_row', row_id=r.id) }}" onsubmit="return confirm('Удалить эту строку из отчета?');">
-                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить">
-                                                <i class="fas fa-trash-alt"></i>
-                                            </button>
-                                        </form>
+                                        <button type="button" class="btn btn-sm btn-outline-danger js-delete-row"
+                                                data-action="{{ url_for('crm.crm_delete_row', row_id=r.id) }}"
+                                                data-label="{{ r.plant }} / {{ r.size }} у {{ r.competitor }}"
+                                                title="Удалить">
+                                            <i class="fas fa-trash-alt"></i>
+                                        </button>
                                         {% else %}
                                         <span class="text-muted small">-</span>
                                         {% endif %}
@@ -362,6 +445,133 @@
                     </div>
                 </div>
             </div>
+
+            {# ВКЛАДКА 3: ОТКЛОНЕНО #}
+            <div class="tab-pane fade" id="content-rejected">
+                {% if not current %}
+                <div class="alert alert-light border text-center py-5">
+                    <i class="fas fa-file-excel fa-3x mb-3 text-success"></i>
+                    <h5>Данных пока нет</h5>
+                    <p class="text-muted">Загрузите файл слева или выберите из истории.</p>
+                </div>
+                {% elif not rejected_rows or rejected_rows|length == 0 %}
+                <div class="alert alert-success border text-center py-4">
+                    <i class="fas fa-circle-check fa-2x mb-2"></i>
+                    <div class="fw-bold">Отклонённых позиций нет</div>
+                    <div class="text-muted small">Все строки прошли валидацию.</div>
+                </div>
+                {% else %}
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
+                        <div>
+                            <i class="fas fa-ban text-danger me-2"></i>
+                            <span class="fw-bold">Отклонено: {{ rejected_rows|length }} позиций</span>
+                        </div>
+                        <small class="text-muted">Кнопка «Вернуть» переместит строку обратно в основное сравнение.</small>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm align-middle mb-0" style="font-size: 13px;">
+                            <thead class="bg-light text-uppercase small text-muted">
+                                <tr>
+                                    <th class="text-start ps-3" style="width: 25%;">Товар / Конкурент</th>
+                                    <th style="width: 5%;">Инфо</th>
+                                    <th class="text-center" style="width: 10%;">Их цена</th>
+                                    <th class="text-center" style="width: 10%;">Наша</th>
+                                    <th style="width: 22%;">Причины</th>
+                                    <th style="width: 20%;">Цитата</th>
+                                    <th style="width: 8%;">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for r in rejected_rows %}
+                                <tr style="background:#fff8f5;">
+                                    <td class="text-start ps-3">
+                                        <div class="fw-bold text-dark">{{ r.plant }}</div>
+                                        <div class="d-flex align-items-center justify-content-between mt-1">
+                                            <span class="badge bg-white text-dark border">{{ r.size }}</span>
+                                            <span class="text-muted fst-italic small">{{ r.competitor }}</span>
+                                        </div>
+                                        {% if r.pack_type or r.form %}
+                                        <div class="small text-muted mt-1">
+                                            {% if r.pack_type %}<span class="badge rounded-pill bg-light text-dark border me-1">упак: {{ r.pack_type }}</span>{% endif %}
+                                            {% if r.form %}<span class="badge rounded-pill bg-light text-dark border">форма: {{ r.form }}</span>{% endif %}
+                                        </div>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-center">
+                                        {% if r.link %}
+                                        <a href="{{ r.link if r.link.startswith('http') else 'https://' + r.link }}" target="_blank" class="btn btn-sm btn-light border text-primary py-0 px-1">
+                                            <i class="fas fa-external-link-alt" style="font-size: 10px;"></i>
+                                        </a>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-center fw-bold">{{ r.comp_price|money_int }}</td>
+                                    <td class="text-center text-muted">{{ r.our_price|money_int }}</td>
+                                    <td>
+                                        {% for b in r.reject_badges %}
+                                        <span class="badge bg-{{ b.color }} me-1 mb-1" title="{{ b.detail }}">
+                                            {{ b.text }}{% if b.detail %} · <span class="opacity-75">{{ b.detail }}</span>{% endif %}
+                                        </span>
+                                        {% endfor %}
+                                    </td>
+                                    <td class="small text-muted fst-italic">
+                                        {% if r.excerpt %}"{{ r.excerpt }}"{% else %}—{% endif %}
+                                    </td>
+                                    <td class="text-center">
+                                        {% if current_user.role in ['admin', 'executive'] %}
+                                        <form method="POST" action="{{ url_for('crm.crm_restore_row', row_id=r.id) }}" class="d-inline" data-hx-boost="false">
+                                            <button type="submit" class="btn btn-sm btn-outline-success mb-1" title="Вернуть в основной список">
+                                                <i class="fas fa-rotate-left"></i>
+                                            </button>
+                                        </form>
+                                        {% endif %}
+                                        {% if current_user.role == 'admin' %}
+                                        <button type="button" class="btn btn-sm btn-outline-danger js-delete-row"
+                                                data-action="{{ url_for('crm.crm_delete_row', row_id=r.id) }}"
+                                                data-label="{{ r.plant }} / {{ r.size }} у {{ r.competitor }}"
+                                                title="Удалить окончательно">
+                                            <i class="fas fa-trash-alt"></i>
+                                        </button>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{# --- Модалка причины удаления (Фаза 5 feedback loop) --- #}
+<div class="modal fade" id="deleteReasonModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <form id="deleteReasonForm" method="POST" action="" data-hx-boost="false">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title fw-bold"><i class="fas fa-trash-alt text-danger me-2"></i>Удалить строку</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-2">
+                    <div class="small text-muted mb-2" id="deleteReasonLabel">—</div>
+                    <label class="form-label small fw-bold">Причина удаления (для обучения ИИ):</label>
+                    <select name="reason_code" class="form-select form-select-sm" required>
+                        <option value="pot">Не тот тип (горшок, контейнер)</option>
+                        <option value="niwaki">Не та форма (ниваки/топиар/шар не подходят)</option>
+                        <option value="price">Ценовой выброс / не конкурент по цене</option>
+                        <option value="wrong_plant">Не то растение</option>
+                        <option value="wrong_region">Не тот регион</option>
+                        <option value="other" selected>Другое</option>
+                    </select>
+                </div>
+                <div class="modal-footer py-2">
+                    <button type="button" class="btn btn-sm btn-light" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-sm btn-danger fw-bold">Удалить</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
@@ -573,6 +783,115 @@
         // Возвращаем отсортированные строки в таблицу
         rows.forEach(row => tbody.appendChild(row));
     }
+
+    // === Модалка "причина удаления" (feedback loop) ===
+    document.addEventListener('click', function (ev) {
+        const btn = ev.target.closest('.js-delete-row');
+        if (!btn) return;
+        ev.preventDefault();
+        const modalEl = document.getElementById('deleteReasonModal');
+        if (!modalEl) return;
+        const form = document.getElementById('deleteReasonForm');
+        form.action = btn.getAttribute('data-action');
+        document.getElementById('deleteReasonLabel').textContent = btn.getAttribute('data-label') || '';
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+    });
+
+    // === Универсальный обработчик кнопок «Быстрая проверка (Groq)» и «Поиск по Avito» ===
+    // Переиспользуем тот же file+regions, что введены в форме «Создать Промт»,
+    // но отправляем на разные endpoint (data-action).
+    // Делегирование на document, чтобы обработчик переживал htmx-swap.
+    document.addEventListener('click', function (ev) {
+        const btn = ev.target.closest('#aiRunBtn, #avitoRunBtn');
+        if (!btn) return;
+        // Если уже запущен — не даём кликнуть повторно.
+        if (btn.dataset.running === '1') {
+            ev.preventDefault();
+            return;
+        }
+        // У Groq-кнопки есть data-ai-enabled — если ключа нет, показываем подсказку.
+        // (У Avito-кнопки такого атрибута нет: парсинг не требует ключа).
+        if (btn.hasAttribute('data-ai-enabled') && btn.getAttribute('data-ai-enabled') !== '1') {
+            ev.preventDefault();
+            alert(
+                'Автоматический анализ выключен: не задан GROQ_API_KEY в окружении.\n\n' +
+                'Что делать:\n' +
+                '• Задайте переменную окружения GROQ_API_KEY (https://console.groq.com/keys).\n' +
+                '• Перезапустите приложение.\n\n' +
+                'Пока ключа нет — пользуйтесь ручным сценарием: «Создать Промт» → отправить в чат → импорт Excel.'
+            );
+            return;
+        }
+
+        const srcForm = document.querySelector('form[action$="/download_ai_prompt"]');
+        if (!srcForm) {
+            alert('Не найдена форма генератора промта на этой странице. Обновите страницу и попробуйте снова.');
+            return;
+        }
+        const fileInput = srcForm.querySelector('input[name="plant_file"]');
+        if (!fileInput || !fileInput.files || !fileInput.files.length) {
+            alert('Сначала выберите файл со списком растений в форме «Создать Промт» выше.');
+            return;
+        }
+
+        const action = btn.getAttribute('data-action');
+        if (!action) {
+            alert('Не указан URL для запроса (data-action). Это баг шаблона.');
+            return;
+        }
+
+        const fd = new FormData(srcForm);
+        const originalHtml = btn.innerHTML;
+        const isAvito = btn.id === 'avitoRunBtn';
+        btn.dataset.running = '1';
+        btn.setAttribute('aria-busy', 'true');
+        btn.style.pointerEvents = 'none';
+        btn.style.opacity = '0.7';
+        btn.innerHTML = isAvito
+            ? '<i class="fas fa-spinner fa-spin me-1"></i> Сканирую Авито... (до 2 мин)'
+            : '<i class="fas fa-spinner fa-spin me-1"></i> Анализирую... (1–3 мин)';
+
+        const restore = () => {
+            btn.dataset.running = '';
+            btn.removeAttribute('aria-busy');
+            btn.style.pointerEvents = '';
+            btn.style.opacity = '';
+            btn.innerHTML = originalHtml;
+        };
+
+        fetch(action, {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+            redirect: 'follow',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        })
+            .then(r => {
+                // Успех: либо явный редирект (fetch его проследовал), либо 2xx HTML-ответ.
+                // В обоих случаях переходим туда, куда показал сервер (с flash-сообщением).
+                if (r.redirected && r.url) {
+                    window.location.href = r.url;
+                    return;
+                }
+                if (r.ok) {
+                    // Нет редиректа — перезагружаем текущую страницу, чтобы показать flash.
+                    window.location.reload();
+                    return;
+                }
+                return r.text().then(txt => {
+                    throw new Error('HTTP ' + r.status + ' ' + r.statusText + '\n\n' + (txt || '').slice(0, 500));
+                });
+            })
+            .catch(err => {
+                console.error('[crm scan] fetch failed:', err);
+                alert(
+                    (isAvito ? 'Ошибка поиска на Avito' : 'Ошибка автоматического анализа') +
+                    ':\n\n' + (err && err.message ? err.message : err)
+                );
+                restore();
+            });
+    });
 
 </script>
 

@@ -61,7 +61,7 @@
 
 <!-- Фильтры (ОБЩИЕ) -->
 <div class="filter-panel">
-    <form method="GET" class="d-flex gap-2 align-items-center w-100 justify-content-between">
+    <form method="GET" class="d-flex gap-2 align-items-center w-100 justify-content-between" hx-boost="false">
         <input type="hidden" name="tab" value="{{ active_tab }}">
         <div class="d-flex gap-2">
             <select name="month" class="form-select form-select-sm" style="width: 120px;" onchange="this.form.submit()">
@@ -93,6 +93,57 @@
 <!--           ВКЛАДКА: СВОД                    -->
 <!-- ========================================== -->
 {% if active_tab == 'summary' %}
+<div class="row g-2 mb-3">
+    <div class="col-6 col-md-2">
+        <div class="card shadow-sm h-100">
+            <div class="card-body p-2">
+                <div class="small text-muted">Заработано (все)</div>
+                <div class="fw-bold">{{ summary_all.earned|money }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card shadow-sm h-100">
+            <div class="card-body p-2">
+                <div class="small text-muted">Офиц. выплаты (все)</div>
+                <div class="fw-bold text-success">{{ summary_all.official|money }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card shadow-sm h-100">
+            <div class="card-body p-2">
+                <div class="small text-muted">Неофиц. выплаты (все)</div>
+                <div class="fw-bold text-success">{{ summary_all.unofficial|money }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card shadow-sm h-100">
+            <div class="card-body p-2">
+                <div class="small text-muted">Прочее (все)</div>
+                <div class="fw-bold {% if summary_all.other < 0 %}text-danger{% else %}text-muted{% endif %}">{{ summary_all.other|money }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card shadow-sm h-100 border-success">
+            <div class="card-body p-2">
+                <div class="small text-muted">Выплачено всего (все)</div>
+                <div class="fw-bold text-success">{{ summary_all.paid_total|money }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card shadow-sm h-100 border-danger">
+            <div class="card-body p-2">
+                <div class="small text-muted">Долг (все)</div>
+                <div class="fw-bold {% if summary_all.balance > 0 %}text-danger{% else %}text-success{% endif %}">{{ summary_all.balance|money }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="d-none d-md-block">
     <div class="table-responsive">
         <table class="table table-sm table-hr table-hover bg-white">
@@ -200,9 +251,15 @@
                 <span class="hr-val">{{ row.earned|money }}</span>
         </div>
         <div class="hr-stat-row">
-            <span class="hr-label">Выплачено:</span>
+            <span class="hr-label">Выплачено офиц./неофиц.:</span>
             <span class="hr-val text-success">{{ (row.paid_official + row.paid_unofficial)|money }}</span>
         </div>
+        {% if row.other_adjust %}
+        <div class="hr-stat-row">
+            <span class="hr-label">Прочее (выпл.+корр.):</span>
+            <span class="hr-val {% if row.other_adjust < 0 %}text-danger{% else %}text-muted{% endif %}">{{ row.other_adjust|money }}</span>
+        </div>
+        {% endif %}
         <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top">
             <span class="fw-bold small text-uppercase">Остаток:</span>
             <span class="fw-bold fs-6 {% if row.balance > 0 %}text-danger{% else %}text-success{% endif %}">{{ row.balance|money }}</span>
@@ -275,12 +332,12 @@
 <div class="row">
     <div class="col-md-6">
         <div class="card shadow-sm">
-            <div class="card-header bg-warning bg-opacity-25 fw-bold">Привязка статей расходов</div>
+            <div class="card-header bg-warning bg-opacity-25 fw-bold">Глобальная привязка статей (для всех сотрудников по умолчанию)</div>
             <div class="card-body">
                 <form method="POST">
                     <input type="hidden" name="action" value="save_settings">
                     <div class="mb-3">
-                        <label class="form-label">Статья "ЗП Официальная"</label>
+                        <label class="form-label">Статья "ЗП Официальная" <small class="text-muted">(общая)</small></label>
                         <select name="official_item_id" class="form-select">
                             <option value="0">- Не выбрано -</option>
                             {% for i in budget_items %}
@@ -289,7 +346,7 @@
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Статья "ЗП Неофициальная"</label>
+                        <label class="form-label">Статья "ЗП Неофициальная" <small class="text-muted">(общая)</small></label>
                         <select name="unofficial_item_id" class="form-select">
                             <option value="0">- Не выбрано -</option>
                             {% for i in budget_items %}
@@ -298,6 +355,58 @@
                         </select>
                     </div>
                     <button class="btn btn-primary">Сохранить настройки</button>
+                </form>
+                <div class="alert alert-info small mb-0 mt-3">
+                    Эти статьи используются по умолчанию. Ниже можно задать персональные статьи для отдельных сотрудников (например, для <b>Влада</b> и <b>Алексея</b> — у них свои статьи в бюджете).
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-info bg-opacity-25 fw-bold">Персональные статьи ЗП (переопределяют глобальные)</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="action" value="save_employee_budget_items">
+                    <div class="table-responsive" style="max-height: 560px; overflow-y: auto;">
+                        <table class="table table-sm align-middle mb-2">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="min-width: 180px;">Сотрудник</th>
+                                    <th>Статья ОФИЦ.</th>
+                                    <th>Статья НЕОФИЦ.</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for emp in employees %}
+                                <tr>
+                                    <td>
+                                        <div class="fw-semibold">{{ emp.name }}</div>
+                                        <div class="text-muted small">{{ roles[emp.role] }}</div>
+                                    </td>
+                                    <td>
+                                        <select name="emp_off_{{ emp.id }}" class="form-select form-select-sm">
+                                            <option value="0">— использовать глобальную —</option>
+                                            {% for i in budget_items %}
+                                            <option value="{{ i.id }}" {% if emp.official_budget_item_id == i.id %}selected{% endif %}>{{ i.code }} {{ i.name }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <select name="emp_unoff_{{ emp.id }}" class="form-select form-select-sm">
+                                            <option value="0">— использовать глобальную —</option>
+                                            {% for i in budget_items %}
+                                            <option value="{{ i.id }}" {% if emp.unofficial_budget_item_id == i.id %}selected{% endif %}>{{ i.code }} {{ i.name }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <button class="btn btn-primary">Сохранить персональные привязки</button>
                 </form>
             </div>
         </div>

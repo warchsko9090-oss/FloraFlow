@@ -139,9 +139,24 @@ def personnel():
     def get_setting_int(key): 
         s = AppSetting.query.get(key)
         return int(s.value) if s and s.value.isdigit() else 0
-        
+
+    def get_setting_int_list(key):
+        s = AppSetting.query.get(key)
+        if not s or not s.value:
+            return []
+        out = []
+        for part in str(s.value).split(','):
+            part = part.strip()
+            if part.isdigit():
+                out.append(int(part))
+        return out
+
     official_item_id = get_setting_int('hr_official_item')
     unofficial_item_id = get_setting_int('hr_unofficial_item')
+    other_salary_item_ids = [
+        bid for bid in get_setting_int_list('hr_other_salary_items')
+        if bid and bid != official_item_id and bid != unofficial_item_id
+    ]
     
     if request.method == 'POST':
         action = request.form.get('action')
@@ -241,10 +256,18 @@ def personnel():
                 paid_do = min(3, len(h['day_offs']))
                 
                 emp_exp = e_map.get(emp.id, {})
-                p_off = emp_exp.get(official_item_id, 0)
-                p_unoff = emp_exp.get(unofficial_item_id, 0)
-                o_adj = a_map.get(emp.id, 0)
-                
+                emp_off_id = emp.official_budget_item_id or official_item_id
+                emp_unoff_id = emp.unofficial_budget_item_id or unofficial_item_id
+                p_off = emp_exp.get(emp_off_id, 0)
+                p_unoff = emp_exp.get(emp_unoff_id, 0) if emp_unoff_id != emp_off_id else 0
+                _ac = {emp_off_id, emp_unoff_id}
+                p_other = Decimal(0)
+                for bid in other_salary_item_ids:
+                    if bid in _ac:
+                        continue
+                    p_other += Decimal(str(emp_exp.get(bid, 0) or 0))
+                o_adj = Decimal(str(a_map.get(emp.id, 0) or 0))
+
                 e_rates = r_map.get(emp.role, {})
                 earned = Decimal(0)
                 if emp.is_salary:
@@ -257,9 +280,8 @@ def personnel():
                     earned += Decimal(str(h['spec'])) * e_rates.get('spec', Decimal(0))
                     earned += Decimal(str(h['spec_over'])) * e_rates.get('spec_over', Decimal(0))
                     earned += Decimal(str(paid_do * 10)) * e_rates.get('norm', Decimal(0))
-                    
-                earned += o_adj
-                debt = earned - (p_off + p_unoff)
+
+                debt = earned - (Decimal(str(p_off)) + Decimal(str(p_unoff)) + p_other + o_adj)
                 
                 if debt > 0:
                     pay_val = min(debt, remaining_amount)
@@ -307,8 +329,29 @@ def personnel():
             s2 = AppSetting.query.get('hr_unofficial_item') or AppSetting(key='hr_unofficial_item')
             s2.value = request.form.get('unofficial_item_id')
             db.session.add(s2)
+
             db.session.commit()
             flash('Настройки сохранены')
+
+        elif action == 'save_employee_budget_items' and current_user.role == 'admin':
+            # Массовое сохранение персональных статей ЗП для сотрудников
+            changed = 0
+            for emp in Employee.query.all():
+                off_key = f'emp_off_{emp.id}'
+                unoff_key = f'emp_unoff_{emp.id}'
+                if off_key not in request.form and unoff_key not in request.form:
+                    continue
+                raw_off = (request.form.get(off_key) or '').strip()
+                raw_unoff = (request.form.get(unoff_key) or '').strip()
+                new_off = int(raw_off) if raw_off.isdigit() and int(raw_off) > 0 else None
+                new_unoff = int(raw_unoff) if raw_unoff.isdigit() and int(raw_unoff) > 0 else None
+                if emp.official_budget_item_id != new_off or emp.unofficial_budget_item_id != new_unoff:
+                    emp.official_budget_item_id = new_off
+                    emp.unofficial_budget_item_id = new_unoff
+                    changed += 1
+            if changed:
+                db.session.commit()
+            flash(f'Персональные статьи ЗП сохранены: изменено {changed} сотрудник(ов)')
             
         elif action == 'save_employee' and current_user.role == 'admin':
             e_id = request.form.get('id')
@@ -522,18 +565,32 @@ def personnel():
     ).filter(EmployeePayment.date >= start_date, EmployeePayment.date <= end_date).group_by(EmployeePayment.employee_id).all()
     adj_map = {r[0]: r[1] or 0 for r in adj_agg}
 
-    data =[]
-    total_summary = {'earned': Decimal(0), 'official': Decimal(0), 'unofficial': Decimal(0), 'other': Decimal(0), 'balance': Decimal(0)}
-    
-    for emp in employees:
+    def _calc_payroll_row(emp):
         h = hours_map.get(emp.id, {'norm': 0.0, 'norm_over': 0.0, 'spec': 0.0, 'spec_over': 0.0, 'day_offs':[], 'worked_days': 0})
         paid_day_offs = min(3, len(h['day_offs']))
             
         emp_exp = exp_map.get(emp.id, {})
-        paid_official = emp_exp.get(official_item_id, 0)
-        paid_unofficial = emp_exp.get(unofficial_item_id, 0)
-        other_adjust = adj_map.get(emp.id, 0)
-        
+
+        # Персональные статьи ЗП (если не заданы — используется глобальная настройка)
+        emp_off_id = emp.official_budget_item_id or official_item_id
+        emp_unoff_id = emp.unofficial_budget_item_id or unofficial_item_id
+
+        paid_official = emp_exp.get(emp_off_id, 0)
+        paid_unofficial = emp_exp.get(emp_unoff_id, 0) if emp_unoff_id != emp_off_id else 0
+
+        # Прочие выплаты сотруднику по дополнительным статьям (глобальный CSV, редкие случаи)
+        _already_counted = {emp_off_id, emp_unoff_id}
+        paid_other_exp = Decimal(0)
+        for bid in other_salary_item_ids:
+            if bid in _already_counted:
+                continue
+            paid_other_exp += Decimal(str(emp_exp.get(bid, 0) or 0))
+
+        # Ручные корректировки/выплаты (EmployeePayment) трактуем как выплату:
+        # + => выдали на руки (уменьшает долг), - => вернули/удержали (увеличивает долг).
+        manual_adjust = Decimal(str(adj_map.get(emp.id, 0) or 0))
+        other_adjust = paid_other_exp + manual_adjust
+
         emp_rates = rates_map.get(emp.role, {})
         earned_base = Decimal(0)
         if emp.is_salary: 
@@ -546,18 +603,47 @@ def personnel():
             earned_base += Decimal(str(h['spec'])) * emp_rates.get('spec', Decimal(0))
             earned_base += Decimal(str(h['spec_over'])) * emp_rates.get('spec_over', Decimal(0))
             earned_base += Decimal(str(paid_day_offs * 10)) * emp_rates.get('norm', Decimal(0))
-            
-        total_earned = earned_base + other_adjust
-        balance = total_earned - (paid_official + paid_unofficial)
-        
-        data.append({'emp': emp, 'hours': h, 'paid_day_offs': paid_day_offs, 'earned': total_earned, 'paid_official': paid_official, 'paid_unofficial': paid_unofficial, 'other_adjust': other_adjust, 'balance': balance})
-        
-        total_summary['earned'] += total_earned
-        total_summary['official'] += paid_official
-        total_summary['unofficial'] += paid_unofficial
-        total_summary['other'] += other_adjust
-        total_summary['balance'] += balance
-        
+
+        total_earned = Decimal(str(earned_base))
+        paid_official = Decimal(str(paid_official or 0))
+        paid_unofficial = Decimal(str(paid_unofficial or 0))
+        balance = total_earned - (paid_official + paid_unofficial + other_adjust)
+
+        return {
+            'emp': emp, 'hours': h, 'paid_day_offs': paid_day_offs,
+            'earned': total_earned,
+            'paid_official': paid_official,
+            'paid_unofficial': paid_unofficial,
+            'paid_other_exp': paid_other_exp,
+            'manual_adjust': manual_adjust,
+            'other_adjust': other_adjust,
+            'balance': balance,
+        }
+
+    data = []
+    total_summary = {'earned': Decimal(0), 'official': Decimal(0), 'unofficial': Decimal(0), 'other': Decimal(0), 'paid_total': Decimal(0), 'balance': Decimal(0)}
+    for emp in employees:
+        row = _calc_payroll_row(emp)
+        data.append(row)
+        total_summary['earned'] += row['earned']
+        total_summary['official'] += row['paid_official']
+        total_summary['unofficial'] += row['paid_unofficial']
+        total_summary['other'] += row['other_adjust']
+        total_summary['paid_total'] += (row['paid_official'] + row['paid_unofficial'] + row['other_adjust'])
+        total_summary['balance'] += row['balance']
+
+    # Итоги для инфо-плашек считаются по всем сотрудникам без исключений
+    all_summary = {'earned': Decimal(0), 'official': Decimal(0), 'unofficial': Decimal(0), 'other': Decimal(0), 'paid_total': Decimal(0), 'balance': Decimal(0)}
+    all_summary_employees = Employee.query.order_by(Employee.name).all()
+    for emp in all_summary_employees:
+        row = _calc_payroll_row(emp)
+        all_summary['earned'] += row['earned']
+        all_summary['official'] += row['paid_official']
+        all_summary['unofficial'] += row['paid_unofficial']
+        all_summary['other'] += row['other_adjust']
+        all_summary['paid_total'] += (row['paid_official'] + row['paid_unofficial'] + row['other_adjust'])
+        all_summary['balance'] += row['balance']
+
     timesheet_data =[]; days_in_month = list(range(1, last_day + 1))
         
     for emp in employees:
@@ -587,7 +673,7 @@ def personnel():
         title_cell.font = Font(bold=True, size=14)
         title_cell.alignment = Alignment(horizontal="center")
 
-        headers =["Сотрудник", "Роль", "Обыч. ч", "О.Пер. ч", "Спец. ч", "С.Пер. ч", "Вых. опл.", "Заработано", "Выплачено офиц.", "Выплачено неофиц.", "Корректировки", "Остаток"]
+        headers =["Сотрудник", "Роль", "Обыч. ч", "О.Пер. ч", "Спец. ч", "С.Пер. ч", "Вых. опл.", "Заработано", "Выплачено офиц.", "Выплачено неофиц.", "Прочее (выпл.+корр.)", "Остаток"]
         for col, h in enumerate(headers, start=1):
             cell = ws.cell(row=2, column=col, value=h)
             cell.font = header_font
@@ -633,6 +719,7 @@ def personnel():
                            active_tab=active_tab, 
                            data=data, 
                            summary=total_summary, 
+                           summary_all=all_summary,
                            timesheet_data=timesheet_data, 
                            days_in_month=days_in_month, 
                            year=selected_year, month=selected_month, 
@@ -643,7 +730,7 @@ def personnel():
                            rate_labels=RATE_TYPES_LABELS, 
                            roles=EMPLOYEE_ROLES, 
                            budget_items=BudgetItem.query.all(), 
-                           settings={'off': official_item_id, 'unoff': unofficial_item_id},
+                           settings={'off': official_item_id, 'unoff': unofficial_item_id, 'others': other_salary_item_ids},
                            today_str=today_str)
 
 @bp.route('/personnel/export')

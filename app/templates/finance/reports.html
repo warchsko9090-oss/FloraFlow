@@ -456,7 +456,7 @@
     <!-- 2. ОБОРОТНАЯ ВЕДОМОСТЬ -->
     {% if active_tab == 'turnover' %}
     <div class="card p-3 mb-3 bg-light shadow-sm border-success border-start border-4">
-        <form method="GET" action="{{ url_for('finance.reports_turnover') }}" class="row g-2 align-items-end">
+        <form method="GET" action="{{ url_for('finance.reports_turnover') }}" class="row g-2 align-items-end" hx-boost="false">
             <div class="col-md-3">
                 <label class="form-label small fw-bold">Растение</label>
                 <select name="plant_id" id="t_plant" class="form-select form-select-sm select-search" required>
@@ -582,7 +582,7 @@
     <!-- 3. ФИНАНСОВЫЙ РЕЗУЛЬТАТ -->
     {% if active_tab == 'financial' and current_user.role in ['admin', 'executive'] %}
     <div class="card p-3 mb-3 bg-light">
-        <form method="GET" action="{{ url_for('finance.reports_financial') }}" class="d-flex gap-3 align-items-center">
+        <form method="GET" action="{{ url_for('finance.reports_financial') }}" class="d-flex gap-3 align-items-center" hx-boost="false">
             <label class="fw-bold">Отчетный год:</label>
             <select name="year" class="form-select form-select-sm" style="width:100px;">
                 {% for y in years %}
@@ -631,8 +631,27 @@
 
     <!-- 4. МАРЖИНАЛЬНОСТЬ -->
     {% if active_tab == 'margin' and current_user.role in ['admin', 'executive'] %}
+
+    {# --- Мини-табы внутри «Маржинальности» --- #}
+    <ul class="nav nav-pills mb-3 gap-1 small">
+        <li class="nav-item">
+            <a class="nav-link {% if view != 'dynamics' %}active{% endif %}"
+               href="{{ url_for('finance.reports_margin', view='snapshot', year=selected_year) }}">
+               <i class="fas fa-camera"></i> Снимок за год
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {% if view == 'dynamics' %}active{% endif %}"
+               href="{{ url_for('finance.reports_margin', view='dynamics') }}">
+               <i class="fas fa-chart-line"></i> Динамика по годам
+            </a>
+        </li>
+    </ul>
+
+    {% if view != 'dynamics' %}
     <div class="bg-light p-2 mb-3 rounded border shadow-sm">
-        <form method="GET" action="{{ url_for('finance.reports_margin') }}" class="d-flex align-items-center flex-wrap gap-2">
+        <form method="GET" action="{{ url_for('finance.reports_margin') }}" class="d-flex align-items-center flex-wrap gap-2" hx-boost="false">
+            <input type="hidden" name="view" value="snapshot">
             <div class="d-flex align-items-center gap-2 bg-white px-2 py-1 rounded border">
                 <label class="fw-bold small">Год:</label>
                 <select name="year" class="form-select form-select-sm border-0" style="width:80px;">
@@ -748,7 +767,296 @@
         <div class="text-center text-muted py-4">Нет данных по маржинальности</div>
         {% endfor %}
     </div>
-    {% endif %}
+    {% endif %} {# /view != dynamics #}
+
+    {# =========================================================
+       ДИНАМИКА МАРЖИНАЛЬНОСТИ ПО ГОДАМ (разрез: растение × год отгрузки)
+       ========================================================= #}
+    {% if view == 'dynamics' %}
+    {% set d = dynamics %}
+
+    {# --- Фильтры --- #}
+    <div class="bg-light p-2 mb-3 rounded border shadow-sm">
+        <div class="small text-muted mb-2">
+            <i class="fas fa-info-circle"></i>
+            Фактическая маржа по отгруженным позициям. Себестоимость = закупка + накопленные расходы (на 31.12 года, предшествующего отгрузке).
+        </div>
+        <form method="GET" action="{{ url_for('finance.reports_margin') }}" class="d-flex align-items-center flex-wrap gap-2" hx-boost="false">
+            <input type="hidden" name="view" value="dynamics">
+            <div class="d-flex align-items-center gap-2 bg-white px-2 py-1 rounded border">
+                <label class="fw-bold small">С:</label>
+                <select name="year_from" class="form-select form-select-sm border-0" style="width:90px;">
+                    {% for y in years %}<option value="{{ y }}" {% if y == d.year_from %}selected{% endif %}>{{ y }}</option>{% endfor %}
+                </select>
+                <label class="fw-bold small">По:</label>
+                <select name="year_to" class="form-select form-select-sm border-0" style="width:90px;">
+                    {% for y in years %}<option value="{{ y }}" {% if y == d.year_to %}selected{% endif %}>{{ y }}</option>{% endfor %}
+                </select>
+            </div>
+
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+                    Растения {% if filters.plants %}<span class="badge bg-secondary">{{ filters.plants|length }}</span>{% endif %}
+                </button>
+                <div class="dropdown-menu p-2 shadow" style="min-width: 250px; max-height: 400px; overflow-y: auto;">
+                    <input type="text" class="form-control form-control-sm mb-2" placeholder="Поиск..." onkeyup="filterList(this, '.chk-plant-dyn')">
+                    <div class="mb-2"><a href="#" onclick="toggleChecks('plant-dyn', false)">Сбросить</a></div>
+                    {% for p in all_plants %}
+                    <div class="form-check chk-plant-dyn">
+                        <input class="form-check-input check-plant-dyn" type="checkbox" name="filter_plant" value="{{ p.id }}" id="dp{{p.id}}" {% if p.id in filters.plants %}checked{% endif %}>
+                        <label class="form-check-label small" for="dp{{p.id}}">{{ p.name }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="btn-group btn-group-sm ms-1" role="group" aria-label="Что отображать в клетках">
+                <input type="radio" class="btn-check" name="cell_mode" id="cm-pct" value="pct" checked>
+                <label class="btn btn-outline-success" for="cm-pct" title="Показать проценты"><i class="fas fa-percent"></i></label>
+                <input type="radio" class="btn-check" name="cell_mode" id="cm-rub" value="rub">
+                <label class="btn btn-outline-success" for="cm-rub" title="Показать суммы в рублях"><i class="fas fa-ruble-sign"></i></label>
+                <input type="radio" class="btn-check" name="cell_mode" id="cm-qty" value="qty">
+                <label class="btn btn-outline-success" for="cm-qty" title="Показать количество шт."><i class="fas fa-cubes"></i></label>
+            </div>
+
+            <button class="btn btn-primary btn-sm px-3 ms-auto" type="submit"><i class="fas fa-sync-alt"></i> Применить</button>
+        </form>
+    </div>
+
+    {# --- Сводка сверху --- #}
+    {% set g = d.grand_total %}
+    <div class="row g-2 mb-3">
+        <div class="col-6 col-md-3">
+            <div class="p-2 rounded border bg-white h-100">
+                <div class="text-muted small">Выручка</div>
+                <div class="fw-bold fs-6">{{ g.revenue|money_int }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="p-2 rounded border bg-white h-100">
+                <div class="text-muted small">Себестоимость</div>
+                <div class="fw-bold fs-6 text-danger">{{ g.cost|money_int }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="p-2 rounded border bg-white h-100">
+                <div class="text-muted small">Маржа (₽)</div>
+                <div class="fw-bold fs-6 {% if g.margin > 0 %}text-success{% else %}text-danger{% endif %}">{{ g.margin|money_int }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="p-2 rounded border bg-white h-100">
+                <div class="text-muted small">Маржа (%)</div>
+                <div class="fw-bold fs-6 {% if g.pct >= 30 %}text-success{% elif g.pct >= 10 %}text-warning{% else %}text-danger{% endif %}">
+                    {{ "%.1f"|format(g.pct) }}%
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# --- CSS для цветовой шкалы и sparkline --- #}
+    <style>
+        .mtx-wrap { overflow-x: auto; }
+        table.margin-matrix { border-collapse: separate; border-spacing: 0; min-width: 780px; }
+        table.margin-matrix th, table.margin-matrix td { padding: 6px 8px; border-bottom: 1px solid #e9ecef; vertical-align: middle; }
+        table.margin-matrix thead th { position: sticky; top: 0; background: #F1F8E9; z-index: 2; font-size: 12px; text-transform: uppercase; letter-spacing: .02em; }
+        table.margin-matrix th.col-plant, table.margin-matrix td.col-plant { position: sticky; left: 0; background: #fff; z-index: 3; min-width: 220px; }
+        table.margin-matrix thead th.col-plant { z-index: 4; background: #F1F8E9; }
+        table.margin-matrix tr.plant-row:hover td { background: #fbfffb; }
+        table.margin-matrix tr.size-row td { background: #fafbfc; font-size: 12px; color: #495057; }
+        table.margin-matrix tr.size-row td.col-plant { padding-left: 28px; color: #6c757d; }
+        table.margin-matrix tr.totals-row td { background: #2E7D32; color: #fff; font-weight: bold; position: sticky; bottom: 0; z-index: 2; }
+        table.margin-matrix tr.totals-row td.col-plant { background: #2E7D32; color: #fff; }
+        .mcell { display: block; text-align: center; border-radius: 6px; padding: 3px 6px; font-weight: 600; font-size: 13px; }
+        .mcell.empty { color: #adb5bd; font-weight: 400; }
+        .mcell-pct-bad     { background: #ffebee; color: #b71c1c; }
+        .mcell-pct-low     { background: #fff3e0; color: #e65100; }
+        .mcell-pct-mid     { background: #fff9c4; color: #795500; }
+        .mcell-pct-good    { background: #dcedc8; color: #33691e; }
+        .mcell-pct-great   { background: #a5d6a7; color: #1b5e20; }
+        .mcell .mcell-sub  { font-size: 10px; font-weight: 400; color: inherit; opacity: .75; display: block; }
+        .spark { display: block; }
+        .trend-up   { color: #2E7D32; }
+        .trend-down { color: #c62828; }
+        .trend-flat { color: #6c757d; }
+        .plant-toggle { cursor: pointer; user-select: none; }
+        .plant-toggle i.chev { transition: transform .15s ease; display: inline-block; }
+        .plant-toggle.open i.chev { transform: rotate(90deg); }
+    </style>
+
+    {# --- Основная таблица --- #}
+    {% macro mcell(cell, mode='pct') -%}
+        {% if cell.revenue and cell.revenue > 0 %}
+            {% set p = cell.pct %}
+            {% if p < 0 %}{% set cls = 'mcell-pct-bad' %}
+            {% elif p < 10 %}{% set cls = 'mcell-pct-low' %}
+            {% elif p < 20 %}{% set cls = 'mcell-pct-mid' %}
+            {% elif p < 35 %}{% set cls = 'mcell-pct-good' %}
+            {% else %}{% set cls = 'mcell-pct-great' %}{% endif %}
+            <span class="mcell {{ cls }}"
+                  title="Маржа: {{ cell.margin|money_int }} ({{ '%.1f'|format(cell.pct) }}%) • Выручка: {{ cell.revenue|money_int }} • Себест.: {{ cell.cost|money_int }} • Шт.: {{ cell.qty }}">
+                <span data-cm="pct">{{ "%.1f"|format(cell.pct) }}%</span>
+                <span data-cm="rub" style="display:none">{{ cell.margin|money_int }}</span>
+                <span data-cm="qty" style="display:none">{{ cell.qty|int }} шт</span>
+                <span class="mcell-sub" data-cm="pct">{{ cell.margin|money_int }}</span>
+                <span class="mcell-sub" data-cm="rub" style="display:none">{{ "%.1f"|format(cell.pct) }}%</span>
+                <span class="mcell-sub" data-cm="qty" style="display:none">{{ "%.1f"|format(cell.pct) }}%</span>
+            </span>
+        {% else %}
+            <span class="mcell empty">—</span>
+        {% endif %}
+    {%- endmacro %}
+
+    {% macro sparkline(points, width=90, height=24) -%}
+        {% set valid = [] %}
+        {% for pair in points %}{% if pair[1] is not none %}{% set _ = valid.append(pair) %}{% endif %}{% endfor %}
+        {% if valid|length >= 2 %}
+            {% set ys = [] %}
+            {% for pair in valid %}{% set _ = ys.append(pair[1]) %}{% endfor %}
+            {% set ymin = ys|min %}
+            {% set ymax = ys|max %}
+            {% set yrange = (ymax - ymin) if (ymax - ymin) > 0.0001 else 1 %}
+            {% set n = points|length %}
+            {% set step = (width - 4) / (n - 1 if n > 1 else 1) %}
+            <svg class="spark" width="{{ width }}" height="{{ height }}" viewBox="0 0 {{ width }} {{ height }}">
+                <polyline fill="none" stroke="#2E7D32" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"
+                    points="{% for pair in points %}{% if pair[1] is not none %}{{ (2 + pair[0] * step)|round(2) }},{{ (height - 2 - (pair[1] - ymin) / yrange * (height - 4))|round(2) }} {% endif %}{% endfor %}" />
+                {% for pair in points %}{% if pair[1] is not none %}
+                    <circle cx="{{ (2 + pair[0] * step)|round(2) }}" cy="{{ (height - 2 - (pair[1] - ymin) / yrange * (height - 4))|round(2) }}" r="1.6" fill="#2E7D32" />
+                {% endif %}{% endfor %}
+            </svg>
+        {% else %}
+            <span class="small text-muted">—</span>
+        {% endif %}
+    {%- endmacro %}
+
+    <div class="mtx-wrap border rounded shadow-sm bg-white">
+        <table class="margin-matrix table-sm w-100" id="marginDynamicsTable">
+            <thead>
+                <tr>
+                    <th class="col-plant">Растение</th>
+                    {% for y in d.years %}
+                    <th class="text-center">{{ y }}</th>
+                    {% endfor %}
+                    <th class="text-center">Итого</th>
+                    <th class="text-center">Тренд</th>
+                    <th class="text-center" title="Разница маржи (%) между первым и последним годом с продажами">Δ</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in d.plants %}
+                <tr class="plant-row" data-plant="{{ p.plant_id }}">
+                    <td class="col-plant plant-toggle" onclick="toggleDynSizes(this)" title="Показать/скрыть размеры">
+                        <i class="fas fa-chevron-right chev me-1 small text-muted"></i>
+                        <span class="fw-bold">{{ p.name }}</span>
+                        <span class="text-muted small ms-1">({{ p.total_qty|int }} шт)</span>
+                    </td>
+                    {% for y in d.years %}
+                    <td class="text-center">{{ mcell(p.cells[y]) }}</td>
+                    {% endfor %}
+                    <td class="text-center">{{ mcell({'revenue': p.total_revenue, 'cost': p.total_cost, 'margin': p.total_margin, 'pct': p.total_pct, 'qty': p.total_qty}) }}</td>
+                    <td class="text-center">{{ sparkline(p.spark_points) }}</td>
+                    <td class="text-center">
+                        {% if p.first_year is not none %}
+                            {% set td = p.trend_delta %}
+                            {% if td > 1 %}
+                                <span class="trend-up fw-bold" title="{{ p.first_year }} → {{ p.last_year }}"><i class="fas fa-arrow-up"></i> +{{ "%.1f"|format(td) }}%</span>
+                            {% elif td < -1 %}
+                                <span class="trend-down fw-bold" title="{{ p.first_year }} → {{ p.last_year }}"><i class="fas fa-arrow-down"></i> {{ "%.1f"|format(td) }}%</span>
+                            {% else %}
+                                <span class="trend-flat" title="{{ p.first_year }} → {{ p.last_year }}"><i class="fas fa-minus"></i> {{ "%.1f"|format(td) }}%</span>
+                            {% endif %}
+                        {% else %}
+                            <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% for s in p.sizes %}
+                <tr class="size-row" data-parent="{{ p.plant_id }}" style="display:none">
+                    <td class="col-plant">{{ s.size_name }} <span class="text-muted">({{ s.total_qty|int }} шт)</span></td>
+                    {% for y in d.years %}
+                    <td class="text-center">{{ mcell(s.cells[y]) }}</td>
+                    {% endfor %}
+                    <td class="text-center">{{ mcell({'revenue': s.total_revenue, 'cost': s.total_cost, 'margin': s.total_margin, 'pct': s.total_pct, 'qty': s.total_qty}) }}</td>
+                    <td class="text-center">{{ sparkline(s.spark_points, width=70, height=20) }}</td>
+                    <td class="text-center">
+                        {% if s.first_year is not none %}
+                            {% set td = s.trend_delta %}
+                            {% if td > 1 %}<span class="trend-up small"><i class="fas fa-arrow-up"></i> +{{ "%.1f"|format(td) }}%</span>
+                            {% elif td < -1 %}<span class="trend-down small"><i class="fas fa-arrow-down"></i> {{ "%.1f"|format(td) }}%</span>
+                            {% else %}<span class="trend-flat small">{{ "%.1f"|format(td) }}%</span>{% endif %}
+                        {% else %}<span class="text-muted">—</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr><td colspan="{{ d.years|length + 4 }}" class="text-center text-muted py-4">Нет данных по отгрузкам за выбранный период</td></tr>
+                {% endfor %}
+            </tbody>
+            {% if d.plants %}
+            <tfoot>
+                <tr class="totals-row">
+                    <td class="col-plant">Итого по всем</td>
+                    {% for y in d.years %}
+                        {% set yt = d.year_totals[y] %}
+                        <td class="text-center">
+                            {% if yt.revenue > 0 %}
+                                <span>{{ "%.1f"|format(yt.pct) }}%</span><br>
+                                <span class="small opacity-75">{{ yt.margin|money_int }}</span>
+                            {% else %}—{% endif %}
+                        </td>
+                    {% endfor %}
+                    <td class="text-center">
+                        {% if d.grand_total.revenue > 0 %}
+                            <span>{{ "%.1f"|format(d.grand_total.pct) }}%</span><br>
+                            <span class="small opacity-75">{{ d.grand_total.margin|money_int }}</span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-center" colspan="2"></td>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+
+    <div class="small text-muted mt-2">
+        <i class="fas fa-lightbulb text-warning"></i>
+        Подсказки: клик по строке растения раскрывает детализацию по размерам. Переключатели
+        <i class="fas fa-percent"></i> / <i class="fas fa-ruble-sign"></i> / <i class="fas fa-cubes"></i>
+        меняют то, что показано в клетках (проценты / рубли / штуки).
+        Цвет клетки: <span class="mcell mcell-pct-bad d-inline-block px-2">&lt; 0%</span>
+        <span class="mcell mcell-pct-low d-inline-block px-2">0–10%</span>
+        <span class="mcell mcell-pct-mid d-inline-block px-2">10–20%</span>
+        <span class="mcell mcell-pct-good d-inline-block px-2">20–35%</span>
+        <span class="mcell mcell-pct-great d-inline-block px-2">≥ 35%</span>
+    </div>
+
+    <script>
+        (function () {
+            // Раскрытие/сворачивание деталей по размерам
+            window.toggleDynSizes = function (tdEl) {
+                var tr = tdEl.closest('tr');
+                var pid = tr.getAttribute('data-plant');
+                var rows = document.querySelectorAll('tr.size-row[data-parent="' + pid + '"]');
+                var opening = tdEl.classList.toggle('open');
+                rows.forEach(function (r) { r.style.display = opening ? '' : 'none'; });
+            };
+
+            // Переключение режима отображения клеток (%/₽/шт)
+            var radios = document.querySelectorAll('input[name="cell_mode"]');
+            function applyMode(mode) {
+                document.querySelectorAll('.mcell [data-cm]').forEach(function (el) {
+                    el.style.display = (el.getAttribute('data-cm') === mode) ? '' : 'none';
+                });
+            }
+            radios.forEach(function (r) {
+                r.addEventListener('change', function () { if (r.checked) applyMode(r.value); });
+            });
+        })();
+    </script>
+
+    {% endif %} {# /view == dynamics #}
+    {% endif %} {# /active_tab == margin #}
 
     <!-- 5. ПАРТНЕР -->
     {% if active_tab == 'investor' and current_user.role in ['admin', 'executive'] %}
@@ -758,7 +1066,7 @@
         <div class="d-flex justify-content-between align-items-center mb-2">
             <div class="small text-muted"><i class="fas fa-info-circle"></i> Себестоимость = Закупка + Накопленные расходы (на 31.12 пред. года). Расчет динамический.</div>
         </div>
-        <form method="GET" action="{{ url_for('finance.reports_investor') }}" class="d-flex align-items-center flex-wrap gap-2">
+        <form method="GET" action="{{ url_for('finance.reports_investor') }}" class="d-flex align-items-center flex-wrap gap-2" hx-boost="false">
             <div class="d-flex align-items-center gap-1 bg-white px-2 py-1 rounded border">
                 <span class="small fw-bold">Период:</span>
                 <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control form-control-sm border-0" style="width: auto;">
@@ -1112,7 +1420,7 @@
     <!-- 7. ПРОЕКТЫ (ОБНОВЛЕННАЯ ВЕРСИЯ) -->
     {% if active_tab == 'projects' and current_user.role in ['admin', 'executive'] %}
     <div class="card p-3 mb-3 bg-light shadow-sm">
-        <form method="GET" action="{{ url_for('finance.reports_projects') }}" class="d-flex align-items-center gap-2">
+        <form method="GET" action="{{ url_for('finance.reports_projects') }}" class="d-flex align-items-center gap-2" hx-boost="false">
             <label class="fw-bold">Год создания:</label>
             <select name="year" class="form-select form-select-sm" style="width: 100px;">
                 {% for y in years %}

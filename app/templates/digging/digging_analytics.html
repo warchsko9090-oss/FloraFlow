@@ -17,7 +17,7 @@
 </div>
 
 <div class="filter-panel">
-    <form method="GET" class="row g-2 align-items-end">
+    <form method="GET" class="row g-2 align-items-end" hx-boost="false">
         <div class="col-md-3">
             <label class="form-label fw-bold small text-muted text-uppercase">С</label>
             <input type="date" name="from" class="form-control" value="{{ start_date }}">
@@ -40,7 +40,7 @@
 
 <!-- Карточки сводки -->
 <div class="row g-3 mb-4">
-    <div class="col-md-3">
+    <div class="col-6 col-md-4 col-xl">
         <div class="card border-0 shadow-sm h-100 border-start border-4 border-primary">
             <div class="card-body">
                 <h6 class="text-muted small text-uppercase">Рабочих дней</h6>
@@ -49,7 +49,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col-6 col-md-4 col-xl">
         <div class="card border-0 shadow-sm h-100 border-start border-4 border-success">
             <div class="card-body">
                 <h6 class="text-muted small text-uppercase">Работали</h6>
@@ -58,7 +58,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col-6 col-md-4 col-xl">
         <div class="card border-0 shadow-sm h-100 border-start border-4 border-warning">
             <div class="card-body">
                 <h6 class="text-muted small text-uppercase">Выкопано</h6>
@@ -67,12 +67,26 @@
             </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col-6 col-md-6 col-xl">
         <div class="card border-0 shadow-sm h-100 border-start border-4 border-info">
             <div class="card-body">
                 <h6 class="text-muted small text-uppercase">Средний/день</h6>
                 <h3 class="fw-bold mb-0">{{ summary.avg_dug_per_day }}</h3>
                 <small class="text-muted">растений за {{ summary.days_with_digging }} дн. с выкопкой</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl">
+        <div class="card border-0 shadow-sm h-100 border-start border-4" style="border-color:#7b1fa2 !important;">
+            <div class="card-body">
+                <h6 class="text-muted small text-uppercase d-flex align-items-center justify-content-between">
+                    <span><i class="fas fa-gauge-high me-1"></i> КПД (шт/чел)</span>
+                    {% if summary.peak_efficiency %}
+                        <span class="badge rounded-pill" style="background:#f3e5f5;color:#6a1b9a;font-weight:600;" title="Лучший показатель за период">пик {{ summary.peak_efficiency }}</span>
+                    {% endif %}
+                </h6>
+                <h3 class="fw-bold mb-0" style="color:#7b1fa2;">{{ summary.avg_dug_per_worker }}</h3>
+                <small class="text-muted">общий КПД • в среднем по дням: <b>{{ summary.avg_efficiency_by_day }}</b></small>
             </div>
         </div>
     </div>
@@ -89,7 +103,8 @@
             <canvas id="prodChart"></canvas>
         </div>
         <div class="text-center mt-2 text-muted small fst-italic">
-            Легенда: зеленая линия — сотрудники, синяя — вырытые растения, остальные — разбивка по видам.
+            Легенда: <span style="color:#28a745">зелёная</span> — сотрудники, <span style="color:#36a2eb">синяя</span> — вырытые растения,
+            <span style="color:#7b1fa2">фиолетовая</span> — КПД (растений на 1 работника), остальные — разбивка по видам.
         </div>
     </div>
 </div>
@@ -137,6 +152,7 @@
         var labels = cfg.labels;
         var workers = cfg.workers;
         var dug = cfg.dug;
+        var efficiency = cfg.efficiency || [];
         var plantSeries = cfg.plantSeries || [];
         var existing = Chart.getChart(canvas);
         if (existing) existing.destroy();
@@ -166,6 +182,22 @@
                         pointRadius: 4,
                         yAxisID: 'y',
                         order: 1
+                    },
+                    {
+                        label: 'КПД (шт/чел)',
+                        data: efficiency,
+                        type: 'line',
+                        borderColor: 'rgba(123, 31, 162, 1)',
+                        backgroundColor: 'rgba(123, 31, 162, 0.15)',
+                        borderWidth: 2.5,
+                        borderDash: [6, 4],
+                        tension: 0.25,
+                        pointRadius: 4,
+                        pointStyle: 'rectRot',
+                        pointBackgroundColor: 'rgba(123, 31, 162, 1)',
+                        yAxisID: 'y2',
+                        spanGaps: false,
+                        order: 0
                     }
                 ].concat(plantSeries)
             },
@@ -212,6 +244,24 @@
                             drawOnChartArea: false
                         },
                         beginAtZero: true
+                    },
+                    y2: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        title: {
+                            display: true,
+                            text: 'КПД (шт/чел)',
+                            color: '#7b1fa2'
+                        },
+                        ticks: {
+                            color: '#7b1fa2'
+                        },
+                        grid: {
+                            drawOnChartArea: false
+                        },
+                        beginAtZero: true,
+                        offset: true
                     }
                 }
             }

@@ -1604,39 +1604,227 @@ def reports_financial():
 def reports_margin():
     if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
     year = int(request.args.get('year', msk_now().year))
-    
+    view = (request.args.get('view') or 'snapshot').lower()
+    if view not in ('snapshot', 'dynamics'):
+        view = 'snapshot'
+
     # Получаем списки ID для фильтрации
     f_plants = [int(x) for x in request.args.getlist('filter_plant')]
     f_sizes = [int(x) for x in request.args.getlist('filter_size')]
     f_fields = [int(x) for x in request.args.getlist('filter_field')]
 
-    cost_data = calculate_cost_data(year)
-    accum = cost_data['accumulated_costs_map']
     rows = []
-    
-    for r in get_detailed_stock_at_year_end(year):
-        # Применяем фильтры
-        if f_plants and r['plant_id'] not in f_plants: continue
-        if f_sizes and r['size_id'] not in f_sizes: continue
-        if f_fields and r['field_id'] not in f_fields: continue
+    dynamics = None
 
-        tc = r['purchase_price'] + accum.get(r['year'], Decimal(0))
-        margin = r['selling_price'] - tc
-        margin_percent = (margin / r['selling_price'] * 100) if r['selling_price'] > 0 else 0
-        
-        rows.append({
-            'name': r['name'], 'size': r['size'], 'field': r['field'], 
-            'price': r['selling_price'], 'cost': tc, 
-            'margin': margin, 'margin_percent': margin_percent,
-            'size_name': r['size'] # Для сортировки
-        })
-        
-    return render_template('finance/reports.html', active_tab='margin', years=range(2017, 2051), 
+    if view == 'snapshot':
+        cost_data = calculate_cost_data(year)
+        accum = cost_data['accumulated_costs_map']
+
+        for r in get_detailed_stock_at_year_end(year):
+            if f_plants and r['plant_id'] not in f_plants: continue
+            if f_sizes and r['size_id'] not in f_sizes: continue
+            if f_fields and r['field_id'] not in f_fields: continue
+
+            tc = r['purchase_price'] + accum.get(r['year'], Decimal(0))
+            margin = r['selling_price'] - tc
+            margin_percent = (margin / r['selling_price'] * 100) if r['selling_price'] > 0 else 0
+
+            rows.append({
+                'name': r['name'], 'size': r['size'], 'field': r['field'],
+                'price': r['selling_price'], 'cost': tc,
+                'margin': margin, 'margin_percent': margin_percent,
+                'size_name': r['size'],
+            })
+    else:
+        dynamics = _build_margin_dynamics(
+            year_from=int(request.args.get('year_from') or (year - 4)),
+            year_to=int(request.args.get('year_to') or year),
+            f_plants=f_plants, f_sizes=f_sizes, f_fields=f_fields,
+        )
+
+    return render_template('finance/reports.html', active_tab='margin', years=range(2017, 2051),
                            selected_year=year, rows=rows,
-                           all_plants=Plant.query.all(),
-                           all_sizes=Size.query.all(), 
+                           view=view, dynamics=dynamics,
+                           all_plants=Plant.query.order_by(Plant.name).all(),
+                           all_sizes=Size.query.all(),
                            all_fields=Field.query.all(),
                            filters={'plants': f_plants, 'sizes': f_sizes, 'fields': f_fields})
+
+
+def _build_margin_dynamics(year_from, year_to, f_plants=None, f_sizes=None, f_fields=None):
+    """Динамика фактической маржинальности в разрезе растения × года отгрузки.
+
+    Маржа считается по фактически отгруженным позициям (shipped_quantity > 0):
+    - выручка = price * shipped_quantity (из OrderItem);
+    - себестоимость = (purchase_price партии + накопленная себестоимость до year_of_sale - 1) * qty;
+    - год отгрузки определяем по Order.date.year (исключаем canceled/ghost/is_deleted).
+
+    Возвращает структуру, удобную для рендера:
+    {
+        'years': [2020, 2021, ...],
+        'plants': [ {plant_id, name, cells: {year: {qty, revenue, cost, margin, pct}},
+                     total_qty, total_revenue, total_cost, total_margin, total_pct,
+                     trend_delta, spark_points: [(idx, pct), ...],
+                     sizes: [ { size_name, cells: {...}, total_* } ]
+                   }, ...],
+        'year_totals': {year: {qty, revenue, cost, margin, pct}},
+        'grand_total': {qty, revenue, cost, margin, pct},
+    }
+    """
+    from sqlalchemy.orm import joinedload
+
+    if year_from > year_to:
+        year_from, year_to = year_to, year_from
+    years = list(range(year_from, year_to + 1))
+    f_plants = f_plants or []
+    f_sizes = f_sizes or []
+    f_fields = f_fields or []
+
+    # Кеш цен закупки по партиям
+    stock_prices = {
+        (sb.plant_id, sb.size_id, sb.field_id, sb.year): (sb.purchase_price or Decimal(0))
+        for sb in StockBalance.query.all()
+    }
+    # Кеш накопленной себестоимости: {year_basis: {batch_year: Decimal}}
+    costs_cache = {}
+
+    q = db.session.query(OrderItem, Order).join(Order).options(
+        joinedload(OrderItem.plant), joinedload(OrderItem.size)
+    ).filter(
+        Order.status != 'canceled',
+        Order.status != 'ghost',
+        Order.is_deleted == False,  # noqa: E712
+        OrderItem.shipped_quantity > 0,
+        func.extract('year', Order.date) >= year_from,
+        func.extract('year', Order.date) <= year_to,
+    )
+    if f_plants:
+        q = q.filter(OrderItem.plant_id.in_(f_plants))
+    if f_sizes:
+        q = q.filter(OrderItem.size_id.in_(f_sizes))
+    if f_fields:
+        q = q.filter(OrderItem.field_id.in_(f_fields))
+
+    def _empty_cell():
+        return {'qty': Decimal(0), 'revenue': Decimal(0), 'cost': Decimal(0),
+                'margin': Decimal(0), 'pct': 0.0}
+
+    plants_map = {}  # plant_id -> {name, cells{year:_cell}, sizes{size_name:_cell}, ...}
+
+    for item, order in q.all():
+        ysale = order.date.year
+        if ysale not in years:
+            continue
+        qty = Decimal(item.shipped_quantity or 0)
+        if qty <= 0:
+            continue
+        price = item.price if item.price is not None else Decimal(0)
+        revenue = price * qty
+
+        basis = ysale - 1
+        if basis not in costs_cache:
+            costs_cache[basis] = calculate_cost_data(basis).get('accumulated_costs_map', {})
+        accum_unit = costs_cache[basis].get(item.year, Decimal(0))
+        purch_unit = stock_prices.get((item.plant_id, item.size_id, item.field_id, item.year), Decimal(0))
+        cost_unit = (purch_unit or Decimal(0)) + (accum_unit or Decimal(0))
+        cost = cost_unit * qty
+
+        pid = item.plant_id
+        pdata = plants_map.setdefault(pid, {
+            'plant_id': pid,
+            'name': item.plant.name if item.plant else f'Растение #{pid}',
+            'cells': {y: _empty_cell() for y in years},
+            'sizes_map': {},
+            'total_qty': Decimal(0), 'total_revenue': Decimal(0),
+            'total_cost': Decimal(0), 'total_margin': Decimal(0),
+        })
+
+        c = pdata['cells'][ysale]
+        c['qty'] += qty
+        c['revenue'] += revenue
+        c['cost'] += cost
+        c['margin'] = c['revenue'] - c['cost']
+
+        pdata['total_qty'] += qty
+        pdata['total_revenue'] += revenue
+        pdata['total_cost'] += cost
+
+        # Детализация по размеру
+        size_name = item.size.name if item.size else '—'
+        sdata = pdata['sizes_map'].setdefault(size_name, {
+            'size_name': size_name,
+            'cells': {y: _empty_cell() for y in years},
+            'total_qty': Decimal(0), 'total_revenue': Decimal(0),
+            'total_cost': Decimal(0), 'total_margin': Decimal(0),
+        })
+        sc = sdata['cells'][ysale]
+        sc['qty'] += qty
+        sc['revenue'] += revenue
+        sc['cost'] += cost
+        sc['margin'] = sc['revenue'] - sc['cost']
+        sdata['total_qty'] += qty
+        sdata['total_revenue'] += revenue
+        sdata['total_cost'] += cost
+
+    # Постобработка: проценты, тренд, sparkline
+    def _finalize(d):
+        for y, c in d['cells'].items():
+            c['pct'] = float(c['margin'] / c['revenue'] * 100) if c['revenue'] > 0 else 0.0
+        d['total_margin'] = d['total_revenue'] - d['total_cost']
+        d['total_pct'] = float(d['total_margin'] / d['total_revenue'] * 100) if d['total_revenue'] > 0 else 0.0
+        non_empty = [(y, d['cells'][y]['pct']) for y in years if d['cells'][y]['revenue'] > 0]
+        if len(non_empty) >= 2:
+            d['trend_delta'] = non_empty[-1][1] - non_empty[0][1]
+            d['first_year'] = non_empty[0][0]
+            d['last_year'] = non_empty[-1][0]
+        else:
+            d['trend_delta'] = 0.0
+            d['first_year'] = d['last_year'] = None
+        d['spark_points'] = [(i, d['cells'][y]['pct'] if d['cells'][y]['revenue'] > 0 else None)
+                             for i, y in enumerate(years)]
+
+    year_totals = {y: _empty_cell() for y in years}
+    plants = []
+    for pid, pdata in plants_map.items():
+        _finalize(pdata)
+        # Сортируем размеры по выручке
+        sizes = sorted(pdata['sizes_map'].values(), key=lambda s: s['total_revenue'], reverse=True)
+        for s in sizes:
+            _finalize(s)
+        pdata['sizes'] = sizes
+        pdata.pop('sizes_map', None)
+        plants.append(pdata)
+        # Копим общие итоги по годам
+        for y in years:
+            c = pdata['cells'][y]
+            yt = year_totals[y]
+            yt['qty'] += c['qty']
+            yt['revenue'] += c['revenue']
+            yt['cost'] += c['cost']
+            yt['margin'] = yt['revenue'] - yt['cost']
+
+    for y, yt in year_totals.items():
+        yt['pct'] = float(yt['margin'] / yt['revenue'] * 100) if yt['revenue'] > 0 else 0.0
+
+    grand = {'qty': Decimal(0), 'revenue': Decimal(0), 'cost': Decimal(0), 'margin': Decimal(0), 'pct': 0.0}
+    for yt in year_totals.values():
+        grand['qty'] += yt['qty']
+        grand['revenue'] += yt['revenue']
+        grand['cost'] += yt['cost']
+    grand['margin'] = grand['revenue'] - grand['cost']
+    grand['pct'] = float(grand['margin'] / grand['revenue'] * 100) if grand['revenue'] > 0 else 0.0
+
+    # Сортируем растения по выручке (от большего к меньшему)
+    plants.sort(key=lambda p: p['total_revenue'], reverse=True)
+
+    return {
+        'years': years,
+        'year_from': year_from,
+        'year_to': year_to,
+        'plants': plants,
+        'year_totals': year_totals,
+        'grand_total': grand,
+    }
 
 @bp.route('/reports/investor')
 @login_required

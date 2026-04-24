@@ -174,7 +174,7 @@
     <!-- ЖУРНАЛ + ФИЛЬТРЫ (СПРАВА) -->
     <div class="col-md-9">
         <div class="filter-panel">
-            <form method="GET" class="d-flex gap-2 flex-wrap align-items-center" id="filterForm">
+            <form method="GET" class="d-flex gap-2 flex-wrap align-items-center" id="filterForm" hx-boost="false">
                 <div>
                     <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control form-control-sm">
                 </div>

@@ -1,0 +1,408 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    :root { --fd-bg: #f8fafc; }
+    body { background: var(--fd-bg); }
+
+    .ana-wrapper { max-width: 1280px; margin: 0 auto; padding-bottom: 80px; }
+
+    /* Header */
+    .ana-header {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 20px;
+    }
+    .ana-header h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+    .ana-header .btn-back {
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+        padding: 8px 14px; font-weight: 600; font-size: .9rem;
+        color: #0f172a; text-decoration: none !important;
+        transition: all .15s ease;
+    }
+    .ana-header .btn-back:hover { background: #f1f5f9; border-color: #cbd5e1; }
+
+    /* KPI tiles (reused styles) */
+    .kpi-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px; margin-bottom: 24px;
+    }
+    .kpi-tile {
+        position: relative; background: #fff; border: 1px solid #e2e8f0;
+        border-radius: 14px; padding: 14px 16px;
+        text-decoration: none !important; color: #0f172a;
+        box-shadow: 0 1px 2px rgba(0,0,0,.03);
+        transition: transform .15s ease, box-shadow .2s ease;
+        overflow: hidden;
+    }
+    .kpi-tile:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(15,23,42,.08); }
+    .kpi-tile::before {
+        content: ""; position: absolute; inset: 0 auto 0 0; width: 4px;
+        background: var(--kpi-accent, #10b981);
+    }
+    .kpi-tile .kpi-icon {
+        position: absolute; top: 12px; right: 12px;
+        width: 32px; height: 32px; border-radius: 9px;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--kpi-accent-bg, rgba(16,185,129,.1));
+        color: var(--kpi-accent, #10b981); font-size: .9rem;
+    }
+    .kpi-tile .kpi-title { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: 6px; padding-right: 40px; }
+    .kpi-tile .kpi-value { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.03em; color: #0f172a; line-height: 1.1; margin-bottom: 2px; }
+    .kpi-tile .kpi-sub   { font-size: .74rem; color: #64748b; }
+
+    .kpi-tile.color-success   { --kpi-accent: #10b981; --kpi-accent-bg: rgba(16,185,129,.10); }
+    .kpi-tile.color-primary   { --kpi-accent: #3b82f6; --kpi-accent-bg: rgba(59,130,246,.10); }
+    .kpi-tile.color-danger    { --kpi-accent: #ef4444; --kpi-accent-bg: rgba(239,68,68,.10); }
+    .kpi-tile.color-warning   { --kpi-accent: #f59e0b; --kpi-accent-bg: rgba(245,158,11,.12); }
+    .kpi-tile.color-info      { --kpi-accent: #0ea5e9; --kpi-accent-bg: rgba(14,165,233,.10); }
+    .kpi-tile.color-secondary { --kpi-accent: #64748b; --kpi-accent-bg: rgba(100,116,139,.10); }
+
+    /* Chart cards */
+    .chart-grid {
+        display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px;
+    }
+    @media (max-width: 991px) { .chart-grid { grid-template-columns: 1fr; } }
+
+    .chart-card {
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+        padding: 18px 20px; box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    }
+    .chart-card h6 {
+        font-weight: 700; color: #0f172a; margin: 0 0 4px 0; letter-spacing: -.01em;
+    }
+    .chart-card .chart-sub { font-size: .78rem; color: #64748b; margin-bottom: 14px; }
+    .chart-box { position: relative; height: 300px; }
+    .chart-box.sm { height: 240px; }
+
+    /* Table in cards */
+    .ana-table { width: 100%; font-size: .88rem; }
+    .ana-table thead th { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: #64748b; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding: 8px 6px; text-align: left; }
+    .ana-table tbody td { padding: 9px 6px; border-bottom: 1px solid #f1f5f9; color: #0f172a; }
+    .ana-table tbody tr:last-child td { border-bottom: 0; }
+    .ana-table .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .ana-table .share-bar {
+        display: inline-block; height: 6px; background: #e2e8f0; border-radius: 3px;
+        vertical-align: middle; margin-left: 6px; width: 60px; position: relative; overflow: hidden;
+    }
+    .ana-table .share-bar > span {
+        display: block; height: 100%; background: linear-gradient(90deg, #10b981, #34d399);
+        border-radius: 3px;
+    }
+
+    .empty-state {
+        padding: 30px; text-align: center; color: #94a3b8; font-size: .9rem;
+    }
+</style>
+
+<div class="ana-wrapper">
+
+    <div class="ana-header">
+        <div>
+            <h4><i class="fas fa-chart-line me-2 text-success"></i>Аналитика</h4>
+            <span class="text-muted small">Состояние бизнеса на {{ today.strftime('%d.%m.%Y') }}</span>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{{ url_for('main.analytics_tasks') }}" class="btn-back" style="background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); color: #fff !important; border: 0;">
+                <i class="fas fa-list-check me-1"></i>
+                {% if current_user.role in ['admin', 'executive'] %}Поручения{% else %}Мои поручения{% endif %}
+            </a>
+            <a href="{{ url_for('main.index') }}" class="btn-back">
+                <i class="fas fa-arrow-left me-1"></i> К задачам
+            </a>
+        </div>
+    </div>
+
+    <!-- KPI TILES -->
+    {% if kpi_tiles %}
+    <div class="kpi-grid">
+        {% for t in kpi_tiles %}
+            <a class="kpi-tile color-{{ t.color }}" href="{{ t.url }}">
+                <div class="kpi-icon"><i class="fas {{ t.icon }}"></i></div>
+                <div class="kpi-title">{{ t.title }}</div>
+                <div class="kpi-value">{{ t.value_fmt }}</div>
+                <div class="kpi-sub">{{ t.sub }}</div>
+            </a>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- ВЫРУЧКА ПО МЕСЯЦАМ + ВОРОНКА ЗАКАЗОВ -->
+    <div class="chart-grid">
+        {% if analytics.show_revenue_chart %}
+        <div class="chart-card">
+            <h6>Поступления денег по месяцам</h6>
+            <div class="chart-sub">Сумма всех платежей клиентов · последние 12 календарных месяцев</div>
+            <div class="chart-box">
+                <canvas id="chartRevenue"></canvas>
+            </div>
+        </div>
+        <div class="chart-card">
+            <h6>Статусы заказов</h6>
+            <div class="chart-sub">Распределение активных заказов</div>
+            <div class="chart-box sm">
+                <canvas id="chartFunnel"></canvas>
+            </div>
+        </div>
+        {% else %}
+        <div class="chart-card" style="grid-column: 1 / -1;">
+            <h6>Статусы заказов</h6>
+            <div class="chart-sub">Распределение активных заказов</div>
+            <div class="chart-box sm">
+                <canvas id="chartFunnel"></canvas>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if analytics.cashflow_months %}
+    <!-- КЭШ-ФЛО -->
+    <div class="chart-card mb-3">
+        <h6>Кэш-флоу по месяцам</h6>
+        <div class="chart-sub">Приход (платежи клиентов) vs Расход (все затраты)</div>
+        <div class="chart-box">
+            <canvas id="chartCashflow"></canvas>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ТОП КЛИЕНТЫ + ТОП РАСТЕНИЯ -->
+    <div class="chart-grid">
+        <div class="chart-card">
+            <h6>Топ клиентов за {{ today.year }}</h6>
+            <div class="chart-sub">По выручке, с долей в общих продажах</div>
+            {% if analytics.top_clients %}
+            <table class="ana-table">
+                <thead>
+                    <tr>
+                        <th style="width: 28px">#</th>
+                        <th>Клиент</th>
+                        <th class="num">Выручка</th>
+                        <th style="width: 130px">Доля</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in analytics.top_clients %}
+                    <tr>
+                        <td class="text-muted">{{ loop.index }}</td>
+                        <td>{{ c.name }}</td>
+                        <td class="num">{{ '%s ₽'|format('{:,.0f}'.format(c.revenue).replace(',', ' ')) }}</td>
+                        <td>
+                            <span class="text-muted small">{{ c.share }}%</span>
+                            <span class="share-bar"><span style="width: {{ c.share }}%"></span></span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">Продаж в этом году пока нет</div>
+            {% endif %}
+        </div>
+
+        <div class="chart-card">
+            <h6>Топ растений за {{ today.year }}</h6>
+            <div class="chart-sub">По количеству штук в проданных заказах</div>
+            {% if analytics.top_plants %}
+            <div class="chart-box">
+                <canvas id="chartPlants"></canvas>
+            </div>
+            {% else %}
+            <div class="empty-state">Нет продаж в этом году</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ПОРУЧЕНИЯ + ДОЛЖНИКИ -->
+    <div class="chart-grid">
+        <div class="chart-card">
+            <h6>Поручения из Telegram</h6>
+            <div class="chart-sub">
+                Активных: {{ analytics.tg_summary.active or 0 }} ·
+                просроченных: {{ analytics.tg_summary.overdue or 0 }} ·
+                выполнено всего: {{ analytics.tg_summary.done_total or 0 }}
+            </div>
+            {% if analytics.tg_summary.by_assignee %}
+            <table class="ana-table">
+                <thead>
+                    <tr><th>Исполнитель</th><th class="num">Активных задач</th></tr>
+                </thead>
+                <tbody>
+                    {% for r in analytics.tg_summary.by_assignee %}
+                    <tr><td>{{ r.name }}</td><td class="num">{{ r.count }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">Нет назначенных поручений</div>
+            {% endif %}
+        </div>
+
+        <div class="chart-card">
+            <h6>Топ должников</h6>
+            <div class="chart-sub">По приблизительной задолженности</div>
+            {% if analytics.debtors %}
+            <table class="ana-table">
+                <thead>
+                    <tr><th>Клиент</th><th class="num">Долг</th></tr>
+                </thead>
+                <tbody>
+                    {% for d in analytics.debtors %}
+                    <tr>
+                        <td>{{ d.name }}</td>
+                        <td class="num">{{ '%s ₽'|format('{:,.0f}'.format(d.debt).replace(',', ' ')) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">Все расчёты в норме</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+    const palette = {
+        green: '#10b981', greenSoft: 'rgba(16,185,129,.18)',
+        blue: '#3b82f6', blueSoft: 'rgba(59,130,246,.18)',
+        red: '#ef4444', redSoft: 'rgba(239,68,68,.2)',
+        amber: '#f59e0b', amberSoft: 'rgba(245,158,11,.2)',
+        slate: '#64748b', slateSoft: 'rgba(100,116,139,.2)',
+        sky: '#0ea5e9', skySoft: 'rgba(14,165,233,.2)',
+    };
+
+    const fmtMoney = (v) => {
+        const n = Number(v) || 0;
+        return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(n) + ' ₽';
+    };
+
+    Chart.defaults.font.family = 'inherit';
+    Chart.defaults.color = '#475569';
+    Chart.defaults.borderColor = '#e2e8f0';
+
+    // --- Выручка по месяцам ---
+    const revData = {{ analytics.revenue_months|tojson }};
+    const revCanvas = document.getElementById('chartRevenue');
+    if (revCanvas && revData && revData.length) {
+        new Chart(revCanvas, {
+            type: 'bar',
+            data: {
+                labels: revData.map(r => r.label),
+                datasets: [{
+                    label: 'Поступления',
+                    data: revData.map(r => r.value),
+                    backgroundColor: palette.greenSoft,
+                    borderColor: palette.green,
+                    borderWidth: 1.5,
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: (c) => fmtMoney(c.parsed.y) } },
+                },
+                scales: {
+                    y: { ticks: { callback: (v) => fmtMoney(v) }, grid: { color: '#f1f5f9' } },
+                    x: { grid: { display: false } },
+                }
+            }
+        });
+    }
+
+    // --- Воронка заказов ---
+    const funnelData = {{ analytics.order_funnel|tojson }};
+    if (funnelData && funnelData.length) {
+        const colors = [palette.blue, palette.amber, palette.green, palette.slate, palette.red, '#a855f7'];
+        new Chart(document.getElementById('chartFunnel'), {
+            type: 'doughnut',
+            data: {
+                labels: funnelData.map(r => r.status),
+                datasets: [{
+                    data: funnelData.map(r => r.count),
+                    backgroundColor: funnelData.map((_, i) => colors[i % colors.length]),
+                    borderWidth: 2, borderColor: '#fff',
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                cutout: '60%',
+                plugins: {
+                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } }
+                }
+            }
+        });
+    }
+
+    // --- Кэш-флоу ---
+    const cfData = {{ analytics.cashflow_months|tojson }};
+    if (cfData && cfData.length && document.getElementById('chartCashflow')) {
+        new Chart(document.getElementById('chartCashflow'), {
+            type: 'line',
+            data: {
+                labels: cfData.map(r => r.label),
+                datasets: [
+                    {
+                        label: 'Приход',
+                        data: cfData.map(r => r.inc),
+                        borderColor: palette.green, backgroundColor: palette.greenSoft,
+                        tension: .35, fill: true, pointRadius: 3,
+                    },
+                    {
+                        label: 'Расход',
+                        data: cfData.map(r => r.out),
+                        borderColor: palette.red, backgroundColor: palette.redSoft,
+                        tension: .35, fill: true, pointRadius: 3,
+                    }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } },
+                    tooltip: { callbacks: { label: (c) => c.dataset.label + ': ' + fmtMoney(c.parsed.y) } },
+                },
+                scales: {
+                    y: { ticks: { callback: (v) => fmtMoney(v) }, grid: { color: '#f1f5f9' } },
+                    x: { grid: { display: false } },
+                }
+            }
+        });
+    }
+
+    // --- Топ растений (горизонтальный бар) ---
+    const plantsData = {{ analytics.top_plants|tojson }};
+    if (plantsData && plantsData.length && document.getElementById('chartPlants')) {
+        new Chart(document.getElementById('chartPlants'), {
+            type: 'bar',
+            data: {
+                labels: plantsData.map(r => r.name),
+                datasets: [{
+                    label: 'шт.',
+                    data: plantsData.map(r => r.qty),
+                    backgroundColor: palette.blueSoft,
+                    borderColor: palette.blue, borderWidth: 1.5,
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: (c) => c.parsed.x + ' шт.' } },
+                },
+                scales: {
+                    x: { grid: { color: '#f1f5f9' } },
+                    y: { grid: { display: false } },
+                }
+            }
+        });
+    }
+})();
+</script>
+
+{% endblock %}

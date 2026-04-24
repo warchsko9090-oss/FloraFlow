@@ -17,7 +17,7 @@
 
 <!-- Фильтр даты -->
 <div class="filter-panel">
-    <form method="GET" class="d-flex align-items-center gap-2">
+    <form method="GET" class="d-flex align-items-center gap-2" hx-boost="false">
         <label class="fw-bold text-muted small text-uppercase">Дата работ:</label>
         <input type="date" name="date" value="{{ target_date }}" class="form-control form-control-sm" style="width: auto;" onchange="this.form.submit()">
     </form>

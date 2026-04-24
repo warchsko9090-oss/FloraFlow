@@ -2,7 +2,8 @@ from flask import Blueprint, jsonify, request, render_template, redirect, url_fo
 from flask_login import login_required, current_user
 from sqlalchemy import func, text
 from app.models import db, KnowledgeBase, ChatLog, SQLExample
-from app.ai_agent import process_query 
+# Новый tool-calling бот — основной движок ответов.
+from app.ai_chat_tools import process_chat_query
 
 bp = Blueprint('chat', __name__)
 
@@ -63,11 +64,11 @@ def ask():
             final_answer += f'<br><a href="{kb_match.link}" class="btn btn-sm btn-success mt-2">Перейти</a>'
         source = "base"
     else:
-        # 2. AI (Динамика)
+        # 2. AI (Tool-calling)
         try:
-            # Если роль executive, представляемся для AI как admin
+            # Если роль executive — для AI она эквивалентна admin (видит всё).
             ai_role = 'admin' if current_user.role == 'executive' else current_user.role
-            final_answer = process_query(user_msg, ai_role)
+            final_answer = process_chat_query(user_msg, ai_role)
         except Exception as e:
             final_answer = f"Ошибка системы: {e}"
 
