@@ -2578,10 +2578,20 @@ def db_health():
     is_pg = uri.startswith('postgresql') or uri.startswith('postgres')
     error = None
     db_total = None
+    db_total_bytes = None
     tables = []
     fat_columns = []
     row_counts = []
     tips = []
+    pg_extra = {
+        'all_dbs': [],
+        'wal_pretty': None,
+        'wal_bytes': None,
+        'wal_files': None,
+        'slots': [],
+        'settings': {},
+        'archiver': None,
+    }
 
     # Кандидаты на «раздувание» — большие TEXT/JSON, которые копятся со временем
     # и обычно не нужны для операционной работы.
@@ -2608,9 +2618,103 @@ def db_health():
 
     try:
         if is_pg:
-            db_total = db.session.execute(
-                text('SELECT pg_size_pretty(pg_database_size(current_database()))')
-            ).scalar()
+            size_row = db.session.execute(text(
+                'SELECT pg_database_size(current_database()) AS bytes, '
+                'pg_size_pretty(pg_database_size(current_database())) AS pretty'
+            )).mappings().first()
+            db_total = size_row['pretty'] if size_row else None
+            db_total_bytes = int(size_row['bytes'] or 0) if size_row else 0
+
+            try:
+                pg_extra['all_dbs'] = [
+                    dict(r) for r in db.session.execute(text("""
+                        SELECT datname AS name,
+                               pg_size_pretty(pg_database_size(oid)) AS pretty,
+                               pg_database_size(oid) AS bytes
+                        FROM pg_database
+                        WHERE datallowconn
+                        ORDER BY pg_database_size(oid) DESC
+                    """)).mappings()
+                ]
+            except Exception:
+                db.session.rollback()
+
+            # WAL на диске Amvera часто больше логической БД в сотни раз
+            try:
+                wal = db.session.execute(text("""
+                    SELECT COUNT(*) AS files,
+                           COALESCE(SUM(size), 0) AS bytes,
+                           pg_size_pretty(COALESCE(SUM(size), 0)) AS pretty
+                    FROM pg_ls_waldir()
+                """)).mappings().first()
+                if wal:
+                    pg_extra['wal_files'] = int(wal['files'] or 0)
+                    pg_extra['wal_bytes'] = int(wal['bytes'] or 0)
+                    pg_extra['wal_pretty'] = wal['pretty']
+            except Exception:
+                db.session.rollback()
+                tips.append(
+                    'Нет прав на pg_ls_waldir() — размер WAL не видно из приложения. '
+                    'Напишите в поддержку Amvera: «проверьте размер pg_wal и replication slots».'
+                )
+
+            try:
+                pg_extra['slots'] = [
+                    dict(r) for r in db.session.execute(text("""
+                        SELECT slot_name,
+                               slot_type,
+                               active,
+                               wal_status,
+                               pg_size_pretty(
+                                   pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
+                               ) AS retained,
+                               pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) AS retained_bytes
+                        FROM pg_replication_slots
+                        ORDER BY retained_bytes DESC NULLS LAST
+                    """)).mappings()
+                ]
+            except Exception:
+                db.session.rollback()
+                try:
+                    pg_extra['slots'] = [
+                        dict(r) for r in db.session.execute(text("""
+                            SELECT slot_name, slot_type, active,
+                                   pg_size_pretty(
+                                       pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
+                                   ) AS retained,
+                                   pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) AS retained_bytes
+                            FROM pg_replication_slots
+                            ORDER BY retained_bytes DESC NULLS LAST
+                        """)).mappings()
+                    ]
+                except Exception:
+                    db.session.rollback()
+
+            try:
+                settings = db.session.execute(text("""
+                    SELECT name, setting, unit
+                    FROM pg_settings
+                    WHERE name IN (
+                        'max_wal_size', 'min_wal_size', 'wal_keep_size',
+                        'max_slot_wal_keep_size', 'archive_mode', 'archive_command'
+                    )
+                """)).mappings()
+                for s in settings:
+                    pg_extra['settings'][s['name']] = (
+                        f"{s['setting']}{(' ' + s['unit']) if s['unit'] else ''}"
+                    ).strip()
+            except Exception:
+                db.session.rollback()
+
+            try:
+                pg_extra['archiver'] = dict(db.session.execute(text("""
+                    SELECT archived_count, failed_count,
+                           last_archived_time, last_failed_time,
+                           last_failed_wal
+                    FROM pg_stat_archiver
+                """)).mappings().first() or {})
+            except Exception:
+                db.session.rollback()
 
             tables = [
                 dict(r) for r in db.session.execute(text("""
@@ -2657,31 +2761,45 @@ def db_health():
                 except Exception:
                     db.session.rollback()
 
-            # Подсказки по самым частым виновникам в этом ERP
-            tip_map = {
-                'competitor_snapshot': 'Можно обнулить raw_ai_response у старых снимков — цены в строках останутся.',
-                'competitor_row': 'Старые source_excerpt / reject_reasons можно очистить без потери цен.',
-                'chat_log': 'История AI-чата — кандидаты на удаление старше 90 дней.',
-                'tg_task': 'Закрытые задачи (status=done) старше нескольких месяцев можно архивировать/удалять.',
-                'weekly_digest': 'Старые дайджесты можно удалить — они только для просмотра.',
-                'order_item_history': 'История правок позиций: обычно нужна 3–12 мес., старше — можно чистить.',
-                'action_log': 'Журнал действий растёт постоянно; старше 6–12 мес. обычно безопасно удалять.',
-                'chat_expense_message': 'Сырые сообщения чата расходов — после обработки часто не нужны.',
-            }
-            for t in tables[:8]:
-                tip = tip_map.get(t['name'])
-                if tip:
-                    tips.append(f"{t['name']} ({t['total']}): {tip}")
+            # Главный вывод при «Amvera 10 ГБ, а таблицы 16 МБ»
+            wal_b = pg_extra.get('wal_bytes') or 0
+            if db_total_bytes and db_total_bytes < 100 * 1024 * 1024:
+                tips.insert(0,
+                    f'Логическая БД маленькая ({db_total}). Чистить заказы/логи ERP почти бесполезно '
+                    f'для диска Amvera: там ~10 ГБ занимают служебные файлы PostgreSQL '
+                    f'(WAL / слоты / бэкапы), а не ваши таблицы.'
+                )
+            if wal_b and wal_b > 500 * 1024 * 1024:
+                tips.insert(0,
+                    f'WAL = {pg_extra.get("wal_pretty")} ({pg_extra.get("wal_files")} файлов) — '
+                    f'это и есть основной потребитель диска. Обычный DELETE таблиц его не уменьшит.'
+                )
+            stuck_slots = [
+                s for s in (pg_extra.get('slots') or [])
+                if (s.get('retained_bytes') or 0) > 200 * 1024 * 1024
+                or s.get('active') is False
+            ]
+            if stuck_slots:
+                names = ', '.join(s.get('slot_name') or '?' for s in stuck_slots[:5])
+                tips.insert(0,
+                    f'Подозрительные replication slots: {names}. '
+                    f'Они удерживают WAL. Это чинит поддержка Amvera (или drop слота), не удаление строк ERP.'
+                )
+
+            arch = pg_extra.get('archiver') or {}
+            if arch.get('failed_count') and int(arch.get('failed_count') or 0) > 0:
+                tips.insert(0,
+                    f'Архивация WAL падала (failed_count={arch.get("failed_count")}). '
+                    f'Из‑за этого pg_wal раздувается. Напишите в Amvera про archive failures.'
+                )
 
             tips.append(
-                'После удаления данных место на диске Amvera освобождается не сразу: '
-                'нужен VACUUM (на managed PG часто достаточно обычного VACUUM; '
-                'полный VACUUM FULL требует окно обслуживания). '
-                'Если диск уже 100% — сначала увеличьте тариф диска, иначе VACUUM может не пройти.'
+                '39% от 25 ГБ ≈ ~10 ГБ — это почти весь старый «полный» диск 10 ГБ. '
+                'После увеличения тарифа данные не исчезли: просто стало больше свободного места.'
             )
             tips.append(
-                'Диск БД ≠ только «ваши таблицы»: туда входят индексы, WAL, bloat. '
-                'Если топ-таблицы малы, а диск полный — смотрите bloat/WAL у поддержки Amvera.'
+                'Чистка action_log/tg_task освободит килобайты–мегабайты. '
+                'Чтобы освободить гигабайты — нужен разбор WAL/слотов у Amvera, не VACUUM таблиц ERP.'
             )
         else:
             # SQLite (локальная разработка)
@@ -2731,10 +2849,12 @@ def db_health():
         'admin_db_health.html',
         is_pg=is_pg,
         db_total=db_total,
+        db_total_bytes=db_total_bytes,
         tables=tables,
         fat_columns=fat_columns,
         row_counts=row_counts,
         tips=tips,
+        pg_extra=pg_extra,
         error=error,
     )
 

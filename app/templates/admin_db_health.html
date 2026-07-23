@@ -15,14 +15,142 @@
 
 <div class="alert alert-secondary py-2 small mb-3">
     Движок: <strong>{% if is_pg %}PostgreSQL (Amvera){% else %}SQLite (локально){% endif %}</strong>
-    {% if db_total %} · размер БД: <strong>{{ db_total }}</strong>{% endif %}
+    {% if db_total %} · логический размер БД: <strong>{{ db_total }}</strong>{% endif %}
     · только роль <code>admin</code>
 </div>
+
+{% if is_pg %}
+<div class="alert alert-warning border-warning mb-3">
+    <div class="fw-bold mb-1">Почему Amvera показывает ~10 ГБ, а тут ~16 МБ?</div>
+    <div class="small mb-0">
+        Страница считает <em>данные вашей БД</em> (<code>pg_database_size</code>).
+        Диск Amvera — это весь том Postgres: <strong>WAL</strong> (журналы транзакций), слоты репликации, служебные файлы, иногда бэкапы.
+        Когда диск был 100% из 10 ГБ, туда как раз набились служебные файлы. После апгрейда до 25 ГБ стало ~39% — это те же ~10 ГБ, просто доля меньше.
+        <strong>Чистить заказы/логи ERP почти бесполезно</strong> для этих гигабайт — нужен разбор WAL у Amvera.
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Логическая БД (ERP)</div>
+                <div class="fs-4 fw-bold">{{ db_total or '—' }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">WAL на диске (<code>pg_wal</code>)</div>
+                <div class="fs-4 fw-bold {% if pg_extra.wal_bytes and pg_extra.wal_bytes > 500000000 %}text-danger{% endif %}">
+                    {{ pg_extra.wal_pretty or 'нет доступа / пусто' }}
+                </div>
+                {% if pg_extra.wal_files is not none %}
+                <div class="small text-muted">файлов: {{ pg_extra.wal_files }}</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Replication slots</div>
+                <div class="fs-4 fw-bold">{{ pg_extra.slots|length }}</div>
+                <div class="small text-muted">слоты, удерживающие WAL</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if pg_extra.slots %}
+<div class="card border-0 shadow-sm mb-3">
+    <div class="card-header bg-white fw-bold">Replication slots (частая причина «диска 10 ГБ при БД 16 МБ»)</div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Имя</th>
+                    <th>Тип</th>
+                    <th>Active</th>
+                    <th>WAL status</th>
+                    <th class="text-end">Удерживает WAL</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in pg_extra.slots %}
+                <tr class="{% if not s.active or (s.retained_bytes or 0) > 200000000 %}table-warning{% endif %}">
+                    <td class="font-monospace">{{ s.slot_name }}</td>
+                    <td>{{ s.slot_type }}</td>
+                    <td>{% if s.active %}<span class="text-success">да</span>{% else %}<span class="text-danger fw-bold">нет</span>{% endif %}</td>
+                    <td>{{ s.wal_status or '—' }}</td>
+                    <td class="text-end fw-semibold">{{ s.retained or '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% if pg_extra.all_dbs or pg_extra.settings %}
+<div class="row g-3 mb-3">
+    {% if pg_extra.all_dbs %}
+    <div class="col-md-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white fw-bold">Все базы на инстансе</div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light"><tr><th>БД</th><th class="text-end">Размер</th></tr></thead>
+                    <tbody>
+                        {% for d in pg_extra.all_dbs %}
+                        <tr>
+                            <td class="font-monospace">{{ d.name }}</td>
+                            <td class="text-end">{{ d.pretty }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% if pg_extra.settings %}
+    <div class="col-md-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white fw-bold">Настройки WAL</div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <tbody>
+                        {% for name, val in pg_extra.settings.items() %}
+                        <tr>
+                            <td class="font-monospace small">{{ name }}</td>
+                            <td class="text-end small">{{ val }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if pg_extra.archiver %}
+            <div class="card-footer small text-muted">
+                Архиватор: archived={{ pg_extra.archiver.archived_count }},
+                failed={{ pg_extra.archiver.failed_count }}
+                {% if pg_extra.archiver.last_failed_wal %}
+                · last fail: {{ pg_extra.archiver.last_failed_wal }}
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+{% endif %}
 
 {% if tips %}
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-body py-3">
-        <div class="fw-bold mb-2"><i class="fas fa-lightbulb me-1 text-warning"></i>Что чистить в первую очередь</div>
+        <div class="fw-bold mb-2"><i class="fas fa-lightbulb me-1 text-warning"></i>Выводы</div>
         <ul class="mb-0 small ps-3">
             {% for tip in tips %}
             <li class="mb-1">{{ tip }}</li>
@@ -35,7 +163,7 @@
 <div class="row g-3">
     <div class="col-lg-7">
         <div class="card border-0 shadow-sm">
-            <div class="card-header bg-white fw-bold">Топ таблиц по размеру (с индексами)</div>
+            <div class="card-header bg-white fw-bold">Топ таблиц ERP (с индексами) — обычно мелочь</div>
             <div class="table-responsive">
                 <table class="table table-sm table-hover mb-0">
                     <thead class="table-light">
@@ -70,7 +198,7 @@
     <div class="col-lg-5">
         {% if fat_columns %}
         <div class="card border-0 shadow-sm mb-3">
-            <div class="card-header bg-white fw-bold">«Толстые» TEXT/JSON поля</div>
+            <div class="card-header bg-white fw-bold">«Толстые» TEXT/JSON поля ERP</div>
             <div class="table-responsive">
                 <table class="table table-sm mb-0">
                     <thead class="table-light">
@@ -121,10 +249,9 @@
 </div>
 
 <div class="alert alert-light border mt-3 small mb-0">
-    <strong>Как пользоваться:</strong>
-    откройте страницу после того, как БД снова отвечает → пришлите скрин/топ-5 таблиц и «толстые поля» —
-    по ним сделаем безопасную очистку (без заказов, клиентов и остатков).
-    Адрес: <code>/admin/db-health</code>
+    Адрес: <code>/admin/db-health</code>.
+    Если WAL большой или слот inactive — текст для поддержки Amvera:
+    «Диск PVC ~10 ГБ при pg_database_size ~16 МБ. Проверьте размер pg_wal, pg_replication_slots и архивацию WAL (CloudNativePG).»
 </div>
 {% endif %}
 {% endblock %}
