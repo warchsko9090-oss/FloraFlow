@@ -824,11 +824,15 @@ def foreign_employees():
         days_left = None
         if period and period.end_date:
             days_left = (period.end_date - today).days
+        reg_days_left = None
+        if profile and profile.registration_end_date:
+            reg_days_left = (profile.registration_end_date - today).days
         rows.append({
             'employee': emp,
             'profile': profile,
             'period': period,
-            'days_left': days_left
+            'days_left': days_left,
+            'reg_days_left': reg_days_left,
         })
     rows.sort(key=lambda x: natural_key(x['employee'].name))
     return render_template('hr/foreign_employees.html', rows=rows, today=today)
@@ -859,6 +863,10 @@ def foreign_employee_card(employee_id):
                 profile.passport_issued_by = request.form.get('passport_issued_by', '').strip()
                 profile.migration_card_number = request.form.get('migration_card_number', '').strip()
                 profile.registration_address = request.form.get('registration_address', '').strip()
+                reg_end_raw = request.form.get('registration_end_date')
+                profile.registration_end_date = (
+                    datetime.strptime(reg_end_raw, '%Y-%m-%d').date() if reg_end_raw else None
+                )
                 profile.inn = request.form.get('inn', '').strip()
                 profile.snils = request.form.get('snils', '').strip()
                 profile.notes = request.form.get('notes', '').strip()
@@ -1055,9 +1063,9 @@ def run_patent_reminders():
     expected = os.environ.get('PATENT_REMINDER_TOKEN')
     if not expected or token != expected:
         return jsonify({'status': 'forbidden'}), 403
-    from app.patent_reminders import run_patent_reminders_job
-    sent_count, message = run_patent_reminders_job()
-    return jsonify({'status': 'ok', 'sent': sent_count, 'message': message})
+    from app.patent_reminders import run_all_foreign_reminders_job
+    result = run_all_foreign_reminders_job()
+    return jsonify({'status': 'ok', **result})
 
 @bp.route('/personnel/report_success')
 @login_required

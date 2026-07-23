@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 
-from app.models import db, PatentPeriod, PatentPayment, PatentReminderLog, ForeignEmployeeProfile
+from app.models import (
+    db, PatentPeriod, PatentPayment, PatentReminderLog,
+    ForeignEmployeeProfile, RegistrationReminderLog, Employee,
+)
 from app.utils import msk_today
 from app.telegram import send_message as _send_tg_message_impl
 
@@ -13,6 +16,10 @@ REMINDER_LABEL_DAYS = {
     'day3': 3,
 }
 
+# Регистрация: только окно «за 7 дней» (с догоном 4–7, как у патента day7).
+REGISTRATION_REMINDER_WINDOW = (4, 7)
+REGISTRATION_REMINDER_LABEL = 7
+
 
 def _send_tg_message(text):
     return _send_tg_message_impl(text, chat_type="patents")
@@ -24,6 +31,14 @@ def _employee_name(period):
         return profile.full_name
     if period.employee and period.employee.name:
         return period.employee.name
+    return 'Сотрудник'
+
+
+def _profile_name(profile):
+    if profile and profile.full_name:
+        return profile.full_name
+    if profile and profile.employee and profile.employee.name:
+        return profile.employee.name
     return 'Сотрудник'
 
 
@@ -107,3 +122,106 @@ def run_patent_reminders_job():
         ))
     db.session.commit()
     return len(notify_rows), "sent"
+
+
+def _current_patent_for_employee(employee_id: int):
+    return PatentPeriod.query.filter_by(
+        employee_id=employee_id, is_current=True, status='active'
+    ).first()
+
+
+def _patent_status_line(period, today) -> str:
+    """Строка про патент для сообщения о регистрации."""
+    if not period or not period.end_date:
+        return (
+            "  Патент: не указан ⚠️ "
+            "Продление регистрации возможно только при действующем патенте"
+        )
+    patent_days = (period.end_date - today).days
+    end_str = period.end_date.strftime('%d.%m.%Y')
+    if patent_days < 0:
+        return (
+            f"  Патент: истёк {abs(patent_days)} дн. назад (был до {end_str}) ⚠️ "
+            "Продление регистрации возможно только при действующем патенте"
+        )
+    if patent_days == 0:
+        return f"  Патент действует до сегодня ({end_str})"
+    return f"  Патент действует ещё {patent_days} дн., до {end_str}"
+
+
+def _registration_reminder_already_sent(employee_id: int, registration_end_date) -> bool:
+    return RegistrationReminderLog.query.filter_by(
+        employee_id=employee_id,
+        reminder_type='day7',
+        registration_end_date=registration_end_date,
+    ).first() is not None
+
+
+def run_registration_reminders_job():
+    """TG-напоминания за ~7 дней до окончания регистрации (чат patents)."""
+    today = msk_today()
+    lo, hi = REGISTRATION_REMINDER_WINDOW
+    notify_rows = []
+
+    profiles = (
+        ForeignEmployeeProfile.query
+        .join(Employee, Employee.id == ForeignEmployeeProfile.employee_id)
+        .filter(
+            ForeignEmployeeProfile.registration_end_date.isnot(None),
+            Employee.is_active.is_(True),
+        )
+        .all()
+    )
+
+    for profile in profiles:
+        end_date = profile.registration_end_date
+        delta = (end_date - today).days
+        if delta < lo or delta > hi:
+            continue
+        if _registration_reminder_already_sent(profile.employee_id, end_date):
+            continue
+        patent = _current_patent_for_employee(profile.employee_id)
+        notify_rows.append((profile, delta, patent))
+
+    if not notify_rows:
+        return 0, "nothing_to_send"
+
+    lines = ["<b>Напоминание по регистрации</b>", ""]
+    for profile, delta, patent in notify_rows:
+        name = _profile_name(profile)
+        end_str = profile.registration_end_date.strftime('%d.%m.%Y')
+        lines.append(
+            f"• {name} — до окончания регистрации осталось {delta} дн. "
+            f"(до {end_str})"
+        )
+        lines.append(_patent_status_line(patent, today))
+        lines.append("")
+
+    message_text = "\n".join(lines).rstrip()
+
+    ok, send_result = _send_tg_message(message_text)
+    if not ok:
+        return 0, f"send_failed: {send_result}"
+
+    for profile, _delta, _patent in notify_rows:
+        db.session.add(RegistrationReminderLog(
+            employee_id=profile.employee_id,
+            reminder_type='day7',
+            registration_end_date=profile.registration_end_date,
+            target_date=today,
+            sent_at=datetime.utcnow(),
+            message_text=message_text,
+        ))
+    db.session.commit()
+    return len(notify_rows), "sent"
+
+
+def run_all_foreign_reminders_job():
+    """Патенты + регистрация (один запуск ежедневного джоба)."""
+    patent_count, patent_msg = run_patent_reminders_job()
+    reg_count, reg_msg = run_registration_reminders_job()
+    return {
+        'patent': (patent_count, patent_msg),
+        'registration': (reg_count, reg_msg),
+        'total': patent_count + reg_count,
+    }

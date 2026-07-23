@@ -517,6 +517,7 @@ class ForeignEmployeeProfile(db.Model):
     passport_issued_by = db.Column(db.String(255))
     migration_card_number = db.Column(db.String(100))
     registration_address = db.Column(db.String(255))
+    registration_end_date = db.Column(db.Date, nullable=True)
     inn = db.Column(db.String(50))
     snils = db.Column(db.String(50))
     notes = db.Column(db.Text)
@@ -591,6 +592,27 @@ class PatentReminderLog(db.Model):
         db.UniqueConstraint('patent_period_id', 'reminder_type', 'target_date', name='uq_patent_reminder_once'),
         db.Index('idx_patent_reminder_target', 'target_date'),
     )
+
+
+class RegistrationReminderLog(db.Model):
+    """Лог TG-напоминаний об окончании регистрации иностранного сотрудника."""
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=False)
+    reminder_type = db.Column(db.String(20), nullable=False, default='day7')  # day7
+    registration_end_date = db.Column(db.Date, nullable=False)
+    target_date = db.Column(db.Date, nullable=False)
+    sent_at = db.Column(db.DateTime, default=datetime.now)
+    message_text = db.Column(db.Text)
+    employee = db.relationship('Employee', foreign_keys=[employee_id])
+    __table_args__ = (
+        db.UniqueConstraint(
+            'employee_id', 'reminder_type', 'registration_end_date',
+            name='uq_registration_reminder_once',
+        ),
+        db.Index('idx_registration_reminder_target', 'target_date'),
+        db.Index('idx_registration_reminder_employee', 'employee_id'),
+    )
+
 
 class Expense(db.Model):
     id = db.Column(db.Integer, primary_key=True)

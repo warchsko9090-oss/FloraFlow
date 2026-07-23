@@ -64,6 +64,12 @@
                     <input type="text" class="form-control" name="registration_address" value="{{ profile.registration_address if profile else '' }}">
                 </div>
                 <div class="mb-2">
+                    <label class="form-label">Регистрация действует до</label>
+                    <input type="date" class="form-control" name="registration_end_date"
+                           value="{{ profile.registration_end_date.strftime('%Y-%m-%d') if profile and profile.registration_end_date else '' }}">
+                    <div class="form-text">Уведомление в Telegram за 7 дней до этой даты (тот же чат, что и по патентам).</div>
+                </div>
+                <div class="mb-2">
                     <label class="form-label">Комментарий</label>
                     <textarea class="form-control" rows="3" name="notes">{{ profile.notes if profile else '' }}</textarea>
                 </div>

@@ -72,7 +72,7 @@ def _release_file_lock(path):
 
 
 def _run_daily_patent_reminders(app):
-    """Ежедневные напоминания по патентам — 9:00 МСК, с файловым локом."""
+    """Ежедневные напоминания по патентам и регистрации — 9:00 МСК, с файловым локом."""
     lock_path = os.path.join(_lock_dir(app), '.patent_reminders.lock')
     if not _acquire_file_lock(lock_path):
         _logger.info('daily patent reminders: lock held by another worker, skip')
@@ -80,9 +80,12 @@ def _run_daily_patent_reminders(app):
     try:
         with app.app_context():
             try:
-                from app.patent_reminders import run_patent_reminders_job
-                sent_count, message = run_patent_reminders_job()
-                _logger.info('daily patent reminders (scheduled): sent=%s %s', sent_count, message)
+                from app.patent_reminders import run_all_foreign_reminders_job
+                result = run_all_foreign_reminders_job()
+                _logger.info(
+                    'daily patent/registration reminders (scheduled): %s',
+                    result,
+                )
             except Exception:
                 _logger.exception('daily patent reminders (scheduled) failed')
     finally:

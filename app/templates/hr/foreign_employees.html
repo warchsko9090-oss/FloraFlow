@@ -6,7 +6,7 @@
             <i class="fas fa-passport"></i>
             Иностранные сотрудники и патенты
         </div>
-        <div class="page-subtitle">Карточки сотрудников, документы и контроль сроков патента.</div>
+        <div class="page-subtitle">Карточки сотрудников, документы, сроки патента и регистрации.</div>
     </div>
 </div>
 
@@ -19,7 +19,9 @@
                     <th>Телефон</th>
                     <th>Дом</th>
                     <th>Патент до</th>
-                    <th>Осталось дней</th>
+                    <th>Патент, дн.</th>
+                    <th>Регистрация до</th>
+                    <th>Регистрация, дн.</th>
                     <th></th>
                 </tr>
             </thead>
@@ -42,6 +44,18 @@
                             <span class="badge bg-warning text-dark">{{ row.days_left }} дн.</span>
                         {% else %}
                             <span class="badge bg-success">{{ row.days_left }} дн.</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ row.profile.registration_end_date.strftime('%d.%m.%Y') if row.profile and row.profile.registration_end_date else '-' }}</td>
+                    <td>
+                        {% if row.reg_days_left is none %}
+                            -
+                        {% elif row.reg_days_left < 0 %}
+                            <span class="badge bg-danger">Просрочена</span>
+                        {% elif row.reg_days_left <= 14 %}
+                            <span class="badge bg-warning text-dark">{{ row.reg_days_left }} дн.</span>
+                        {% else %}
+                            <span class="badge bg-success">{{ row.reg_days_left }} дн.</span>
                         {% endif %}
                     </td>
                     <td class="text-end">

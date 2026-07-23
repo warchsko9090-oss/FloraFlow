@@ -72,6 +72,7 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('shop_plant_card', 'seedling_pruning', "VARCHAR(160) DEFAULT ''", "VARCHAR(160) DEFAULT ''"),
     ('shop_plant_card', 'seedling_is_hot', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
     ('shop_plant_card', 'seedling_display_order', 'INTEGER DEFAULT 0', 'INTEGER DEFAULT 0'),
+    ('foreign_employee_profile', 'registration_end_date', 'DATE', 'DATE'),
 ]
 
 _LEGACY_INDEXES = [
