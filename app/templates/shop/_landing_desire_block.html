@@ -1,0 +1,32 @@
+<section class="px-4 py-14 sm:py-20 shop-page-glow">
+    <div class="max-w-6xl mx-auto grid lg:grid-cols-2 gap-10 lg:gap-14 items-center">
+        <div class="reveal">
+            <h2 class="font-serif text-3xl sm:text-4xl lg:text-5xl font-bold text-brand-cream leading-tight mb-8">
+                {{ landing.desire_title }}<br>
+                <span class="text-brand-brass">{{ landing.desire_title_accent }}</span>
+            </h2>
+            <ul class="space-y-3">
+                {% for i in range(1, 7) %}
+                {% set text = landing|attr('desire_check_' ~ i) %}
+                {% if text %}
+                <li class="flex items-start gap-3 text-base sm:text-lg text-brand-graphite">
+                    <i class="fa-solid fa-check text-brand-brass mt-1.5 text-sm shrink-0" aria-hidden="true"></i>
+                    <span>{{ text }}</span>
+                </li>
+                {% endif %}
+                {% endfor %}
+            </ul>
+        </div>
+        <div class="reveal" aria-hidden="true">
+            <div class="shop-panel relative overflow-hidden min-h-[280px] sm:min-h-[420px]">
+                <div class="shop-panel-accent"></div>
+                <div id="desire-slides" class="absolute inset-0">
+                    {% if desire_slides and desire_slides[0] %}
+                    <div class="bg-slide active" style="background-image:url('{{ desire_slides[0] }}')"></div>
+                    {% endif %}
+                </div>
+                <div class="absolute inset-0 z-[2] pointer-events-none bg-gradient-to-t from-brand-bg/70 via-brand-bg/10 to-brand-bg/30"></div>
+            </div>
+        </div>
+    </div>
+</section>

@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h4 class="mb-0 fw-bold text-dark"><i class="fas fa-file-invoice me-2 text-secondary"></i>Счет № {{ invoice_number }}</h4>
+        <div class="text-muted small">
+            от {{ invoice_date|dateru }} <span class="mx-2">|</span> Клиент: <b>{{ client.name }}</b>
+        </div>
+    </div>
+    <a href="{{ return_to or url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm">Назад</a>
+</div>
+
+<!-- СВОДНЫЕ ПОКАЗАТЕЛИ -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm border-start border-4 border-primary h-100">
+            <div class="card-body py-2">
+                <small class="text-uppercase text-muted fw-bold">Сумма счета</small>
+                <h4 class="mb-0 fw-bold">{{ stats.total_sum|money }}</h4>
+                <small class="text-muted">{{ stats.total_items_qty }} растений в {{ stats.orders_count }} заказах</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm border-start border-4 border-success h-100">
+            <div class="card-body py-2">
+                <small class="text-uppercase text-muted fw-bold">Оплачено</small>
+                <h4 class="mb-0 fw-bold text-success">{{ stats.paid_sum|money }}</h4>
+                {% set percent = (stats.paid_sum / stats.total_sum * 100)|int if stats.total_sum > 0 else 0 %}
+                <div class="progress mt-1" style="height: 4px;">
+                    <div class="progress-bar bg-success" style="width: {{ percent }}%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm border-start border-4 border-warning h-100">
+            <div class="card-body py-2">
+                <small class="text-uppercase text-muted fw-bold">Отгружено (Сумма)</small>
+                <h4 class="mb-0 fw-bold text-dark">{{ stats.shipped_sum|money }}</h4>
+                <small class="text-muted">Осталось отгрузить: {{ (stats.total_sum - stats.shipped_sum)|money }}</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm border-start border-4 border-danger h-100 bg-light">
+            <div class="card-body py-2">
+                <small class="text-uppercase text-muted fw-bold">Долг клиента</small>
+                {% set debt = stats.total_sum - stats.paid_sum %}
+                <h4 class="mb-0 fw-bold {% if debt > 0 %}text-danger{% else %}text-success{% endif %}">{{ debt|money }}</h4>
+                {% if debt <= 0 %}<small class="text-success"><i class="fas fa-check"></i> Оплачен полностью</small>{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ВКЛАДКИ -->
+<ul class="nav nav-tabs mb-3" id="invTabs" role="tablist">
+    <li class="nav-item"><button class="nav-link active fw-bold" data-bs-toggle="tab" data-bs-target="#tab-orders">📦 Заказы (Состав)</button></li>
+    <li class="nav-item"><button class="nav-link fw-bold text-dark" data-bs-toggle="tab" data-bs-target="#tab-matrix"><i class="fas fa-th me-1 text-warning"></i> Сводная матрица</button></li>
+    <li class="nav-item"><button class="nav-link fw-bold text-dark" data-bs-toggle="tab" data-bs-target="#tab-docs"><i class="fas fa-history me-1 text-info"></i> История (Оплаты/Отгрузки)</button></li>
+</ul>
+
+<div class="tab-content">
+    
+    <!-- 1. СПИСОК ЗАКАЗОВ -->
+    <div class="tab-pane fade show active" id="tab-orders">
+        <div class="accordion" id="accOrders">
+            {% for o in orders %}
+            <div class="accordion-item mb-3 border shadow-sm rounded overflow-hidden">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed bg-light" type="button" data-bs-toggle="collapse" data-bs-target="#ord{{ o.id }}">
+                        <div class="d-flex w-100 justify-content-between align-items-center me-3">
+                            <div>
+                                <span class="fw-bold text-primary me-2">Заказ #{{ o.id }}</span>
+                                <span class="badge bg-white text-dark border">{{ o.date|dateru }}</span>
+                                <span class="badge {% if o.status=='shipped' %}bg-success{% else %}bg-warning text-dark{% endif %} ms-1">{{ o.status }}</span>
+                            </div>
+                            <div class="fw-bold text-dark">
+                                {{ o.total_sum|money }}
+                            </div>
+                        </div>
+                    </button>
+                </h2>
+                <div id="ord{{ o.id }}" class="accordion-collapse collapse show" data-bs-parent="#accOrders">
+                    <div class="accordion-body p-0">
+                        <table class="table table-sm table-bordered mb-0" style="font-size: 13px;">
+                            <thead class="table-light text-muted text-center">
+                                <tr>
+                                    <th>Растение</th>
+                                    <th>Размер</th>
+                                    <th>Поле</th>
+                                    <th>Цена</th>
+                                    <th>Кол-во</th>
+                                    <th>Отгр.</th>
+                                    <th>Сумма</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for i in o.items %}
+                                <tr>
+                                    <td>{{ i.plant.name }}</td>
+                                    <td class="text-center">{{ i.size.name }}</td>
+                                    <td class="text-center text-muted">{{ i.field.name }}</td>
+                                    <td class="text-end">{{ i.price|money }}</td>
+                                    <td class="text-center fw-bold">{{ i.quantity }}</td>
+                                    <td class="text-center {% if i.shipped_quantity >= i.quantity %}text-success fw-bold{% else %}text-muted{% endif %}">
+                                        {{ i.shipped_quantity }}
+                                    </td>
+                                    <td class="text-end fw-bold">{{ i.sum|money }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        <div class="p-2 bg-light text-end border-top">
+                            <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="btn btn-sm btn-primary">
+                                <i class="fas fa-edit me-1"></i> Редактировать / Отгрузить заказ #{{ o.id }}
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- 2. СВОДНАЯ МАТРИЦА (УДОБСТВО) -->
+    <div class="tab-pane fade" id="tab-matrix">
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-warning bg-opacity-10 border-warning">
+                <i class="fas fa-info-circle me-1"></i> Здесь суммируются одинаковые позиции из всех заказов этого счета.
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover table-bordered mb-0 align-middle" style="font-size: 13px;">
+                    <thead class="table-light text-center">
+                        <tr>
+                            <th>Растение</th>
+                            <th>Размер</th>
+                            <th>В заказах</th>
+                            <th>Цена ср.</th>
+                            <th>План</th>
+                            <th class="text-success">Выкопано</th> <!-- NEW -->
+                            <th>Отгружено</th>
+                            <th>Остаток</th>
+                            <th>Статус</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in matrix %}
+                        {% set left = row.total_qty - row.shipped_qty %}
+                        {% set pct = (row.shipped_qty / row.total_qty * 100)|int %}
+                        <tr class="{% if left == 0 %}table-success bg-opacity-10{% endif %}">
+                            <td class="fw-bold">{{ row.plant }}</td>
+                            <td class="text-center">{{ row.size }}</td>
+                            <td class="text-center">
+                                {% for oid in row.orders_links %}
+                                <a href="{{ url_for('orders.order_detail', order_id=oid) }}" class="badge bg-light text-primary border text-decoration-none">#{{ oid }}</a>
+                                {% endfor %}
+                            </td>
+                            <td class="text-end text-muted">{{ row.avg_price|money_int }}</td>
+                            <td class="text-center fw-bold fs-6">{{ row.total_qty }}</td>
+                            <td class="text-center fw-bold">
+                                {% if row.dug_qty >= row.total_qty %}
+                                    <span class="text-success"><i class="fas fa-check"></i> {{ row.dug_qty }}</span>
+                                {% elif row.dug_qty > 0 %}
+                                    <span class="text-warning">{{ row.dug_qty }}</span>
+                                {% else %}
+                                    <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-center fw-bold text-success">{{ row.shipped_qty }}</td>
+                            <td class="text-center fw-bold {% if left > 0 %}text-danger{% else %}text-muted{% endif %}">
+                                {{ left }}
+                            </td>
+                            <td style="width: 100px;">
+                                <div class="progress" style="height: 6px;">
+                                    <div class="progress-bar {% if pct == 100 %}bg-success{% else %}bg-warning{% endif %}" style="width: {{ pct }}%"></div>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. ДОКУМЕНТЫ (ИСТОРИЯ) -->
+    <div class="tab-pane fade" id="tab-docs">
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-success text-white fw-bold"><i class="fas fa-money-bill-wave me-2"></i> Поступления денег</div>
+                    <ul class="list-group list-group-flush small">
+                        {% for p in payments %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <span class="d-block fw-bold">{{ p.date|dateru }}</span>
+                                <span class="text-muted">по заказу #{{ p.order_id }}</span>
+                                {% if p.comment %}<br><i class="text-muted">{{ p.comment }}</i>{% endif %}
+                            </div>
+                            <div class="fw-bold text-success fs-6">+ {{ p.amount|money }}</div>
+                        </li>
+                        {% else %}
+                        <li class="list-group-item text-muted text-center p-4">Нет платежей</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-primary text-white fw-bold"><i class="fas fa-truck me-2"></i> Фактические отгрузки</div>
+                    <ul class="list-group list-group-flush small">
+                        {% for s in shipments %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <span class="d-block fw-bold">{{ s.date.strftime('%d.%m.%Y') }}</span>
+                                <span class="text-muted">из заказа #{{ s.order_id }}</span>
+                                {% if s.comment %}<br><i class="text-muted">{{ s.comment }}</i>{% endif %}
+                            </div>
+                            <div class="text-end">
+                                <div class="badge bg-primary rounded-pill">{{ s.qty }} шт.</div>
+                                <div class="text-muted mt-1" style="font-size: 9px;">Док #{{ s.id }}</div>
+                            </div>
+                        </li>
+                        {% else %}
+                        <li class="list-group-item text-muted text-center p-4">Нет отгрузок</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

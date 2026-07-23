@@ -1,0 +1,30 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>{{ shop_page_title|default('Княжество') }}</title>
+<meta name="description" content="{{ shop_meta_description|default('Премиальный архитектурный питомник в Тульской области. Взрослые деревья, хвойные и формованные растения для ландшафтных проектов, архитекторов и B2B-заказчиков.') }}">
+{% include 'shop/_favicon_links.html' %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    tailwind.config = {
+        theme: {
+            extend: {
+                colors: {
+                    brand: {
+                        bg: '#111814', bgSoft: '#161D19', card: '#1C2420', cardHover: '#232B27',
+                        cream: '#F7F5F0', pine: '#111814', brass: '#B69A6D', brassHover: '#C4AB7E',
+                        brassDim: '#8A7555', graphite: '#C8C5BE', muted: '#7A7E78',
+                        border: '#2E3632', borderLight: '#3D4741', low: '#D47A45'
+                    }
+                },
+                fontFamily: { sans: ['Golos Text', 'sans-serif'], serif: ['Cormorant', 'serif'] }
+            }
+        }
+    }
+</script>
+{% include 'shop/_styles.html' %}
+{% include 'shop/_seo_meta.html' %}
+{% include 'shop/_metrika.html' %}

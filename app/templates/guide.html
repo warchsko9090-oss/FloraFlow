@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="d-flex align-items-center mb-4">
+            <i class="fas fa-book-reader fa-3x text-success me-3"></i>
+            <div>
+                <h3 class="mb-0 fw-bold text-dark">База знаний и Инструкции</h3>
+                <p class="text-muted mb-0">Простые ответы на вопрос "Как это сделать?"</p>
+            </div>
+        </div>
+
+        <div class="accordion shadow-sm" id="guideAccordion">
+
+            <!-- РАЗДЕЛ 1: ЗАКАЗЫ -->
+            <div class="accordion-item border-0 mb-2 rounded overflow-hidden">
+                <h2 class="accordion-header">
+                    <button class="accordion-button fw-bold bg-light text-dark" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne">
+                        <i class="fas fa-shopping-cart text-primary me-2"></i> 1. Всё о ЗАКАЗАХ (Создание, Редактирование, Оплаты)
+                    </button>
+                </h2>
+                <div id="collapseOne" class="accordion-collapse collapse show" data-bs-parent="#guideAccordion">
+                    <div class="accordion-body bg-white">
+                        
+                        <div class="row">
+                            <div class="col-md-6 border-end">
+                                <h6 class="text-success fw-bold"><i class="fas fa-plus-circle"></i> Новый заказ</h6>
+                                <ol class="small">
+                                    <li>В меню <b>"Заказы"</b> нажмите кнопку <b>"Новый заказ"</b>.</li>
+                                    <li>Выберите <b>Клиента</b>.</li>
+                                    <li>Добавляйте растения: выберите название, размер и поле.</li>
+                                    <li>Укажите количество. Если нужно добавить еще строку — нажмите "Добавить строку".</li>
+                                    <li>Нажмите <b>"Создать заказ"</b>. Товар сразу зарезервируется.</li>
+                                </ol>
+
+                                <h6 class="text-primary fw-bold mt-3"><i class="fas fa-edit"></i> Редактирование заказа</h6>
+                                <p class="small mb-1">Откройте заказ (кнопка <i class="fas fa-folder-open text-primary"></i>) и вы увидите список товаров:</p>
+                                <ul class="small">
+                                    <li><b>Изменить цену или кол-во:</b> Просто сотрите старую цифру в таблице, напишите новую и нажмите кнопку "Сохранить изменения" (внизу таблицы).</li>
+                                    <li><b>Добавить товар:</b> Нажмите кнопку "+ Добавить позицию" над таблицей.</li>
+                                    <li><b>Удалить строку:</b> Нажмите красный значок мусорки <i class="fas fa-trash text-danger"></i> справа от товара (можно удалить, только если товар еще не отгружен).</li>
+                                    <li><b>Вписать номер счета:</b> В блоке слева "Данные клиента" впишите номер и дату счета, затем нажмите "Сохранить".</li>
+                                </ul>
+                            </div>
+                            
+                            <div class="col-md-6">
+                                <h6 class="text-warning fw-bold text-dark"><i class="fas fa-ruble-sign"></i> Деньги (Оплаты)</h6>
+                                <p class="small mb-1">Чтобы отметить, что клиент прислал деньги:</p>
+                                <ol class="small">
+                                    <li>Внутри заказа, слева, найдите блок <b>"Платежи"</b>.</li>
+                                    <li>Нажмите <b>"+ Добавить оплату"</b>.</li>
+                                    <li>Выберите дату и впишите сумму. Можно добавить комментарий (например, "перевод на карту").</li>
+                                    <li>Нажмите "Сохранить".</li>
+                                </ol>
+
+                                <h6 class="text-danger fw-bold mt-3"><i class="fas fa-times-circle"></i> Отмена заказа</h6>
+                                <p class="small">Если клиент передумал: внутри заказа слева внизу нажмите красную кнопку <b>"Отменить заказ"</b>. Весь товар вернется в свободную продажу.</p>
+
+                                <div class="alert alert-secondary p-2 mt-3 small border-start border-4 border-primary">
+                                    <i class="fas fa-filter text-primary"></i> <b>Поиск и Фильтры в списке заказов:</b><br>
+                                    Вверху страницы заказов есть серая полоса. Там можно выбрать:
+                                    <ul class="mb-0 ps-3">
+                                        <li><b>Даты:</b> чтобы найти заказы за определенный период.</li>
+                                        <li><b>Клиент:</b> чтобы увидеть заказы только одного человека.</li>
+                                        <li><b>Статус:</b> например, найти только "В работе" или "Отгруженные".</li>
+                                    </ul>
+                                    После выбора нажмите синюю кнопку с лупой <i class="fas fa-search"></i>.
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- РАЗДЕЛ 2: СКЛАД -->
+            <div class="accordion-item border-0 mb-2 rounded overflow-hidden">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed fw-bold bg-light text-dark" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo">
+                        <i class="fas fa-warehouse text-success me-2"></i> 2. СКЛАД: Остатки и Инвентаризация
+                    </button>
+                </h2>
+                <div id="collapseTwo" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
+                    <div class="accordion-body bg-white">
+                        <div class="alert alert-success bg-opacity-10 border-success p-2 mb-3">
+                            <i class="fas fa-info-circle"></i> Самое важное: смотрите на колонку <b class="text-success">СВОБОДНО</b>. Это то, что можно продавать. Колонка "ВСЕГО" включает товар, который уже в резерве у других.
+                        </div>
+
+                        <h6 class="fw-bold">Режимы просмотра (кнопки сверху справа):</h6>
+                        <ul class="small">
+                            <li><span class="badge bg-success">Товарные</span> — обычный режим. Показывает Растение, Размер и Цену. Удобно для продаж.</li>
+                            <li><span class="badge bg-secondary">По полям</span> — технический режим. Скрывает размер, но показывает <b>Год партии</b> и <b>Поле</b>. Удобно, чтобы понять, на каком поле сколько горшков стоит.</li>
+                        </ul>
+
+                        <h6 class="fw-bold mt-3">Как найти нужное (Фильтры):</h6>
+                        <p class="small">Сверху есть серые кнопки-выпадашки:</p>
+                        <ul class="small">
+                            <li><b>Растения:</b> Можно выбрать одно или несколько (например, только Туи и Сосны).</li>
+                            <li><b>Размеры:</b> Можно выбрать конкретный размер (например, только C3).</li>
+                            <li><b>Поля:</b> Чтобы узнать, что стоит на конкретной площадке (например, "Поле 1").</li>
+                        </ul>
+                        <p class="small text-muted">После выбора нажмите зеленую кнопку со стрелочками <i class="fas fa-sync-alt"></i>, чтобы применить фильтр.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- РАЗДЕЛ 3: ОТЧЕТЫ -->
+            <div class="accordion-item border-0 mb-2 rounded overflow-hidden">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed fw-bold bg-light text-dark" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree">
+                        <i class="fas fa-chart-pie text-warning me-2"></i> 3. ОТЧЕТЫ: Сверка и Движение товара
+                    </button>
+                </h2>
+                <div id="collapseThree" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
+                    <div class="accordion-body bg-white">
+                        <ul class="nav nav-tabs mb-3" id="guideReportTabs">
+                            <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#guide-act">Акт сверки</a></li>
+                            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#guide-turnover">Оборотная ведомость</a></li>
+                        </ul>
+
+                        <div class="tab-content">
+                            <!-- АКТ СВЕРКИ -->
+                            <div class="tab-pane fade show active" id="guide-act">
+                                <p class="small"><b>Зачем:</b> Понять, кто кому должен денег (мы клиенту или клиент нам).</p>
+                                <ol class="small">
+                                    <li>Выберите вкладку "Сверка".</li>
+                                    <li><b>Обязательно выберите Клиента</b> из списка.</li>
+                                    <li>Можно указать период (даты "с" и "по"), если нужно проверить за конкретный месяц.</li>
+                                    <li>Нажмите кнопку <b>"Сформировать"</b>.</li>
+                                </ol>
+                                <p class="small mb-0">Смотрите на колонку <b>Сальдо</b> (справа):</p>
+                                <ul class="small text-muted">
+                                    <li><span class="text-danger">Красное число</span> — клиент нам должен.</li>
+                                    <li><span class="text-success">Зеленое число</span> — мы должны клиенту (переплата).</li>
+                                </ul>
+                            </div>
+
+                            <!-- ОБОРОТКА -->
+                            <div class="tab-pane fade" id="guide-turnover">
+                                <p class="small"><b>Зачем:</b> Узнать историю растения (откуда пришло, кому ушло).</p>
+                                <ol class="small">
+                                    <li>Выберите вкладку "Оборот".</li>
+                                    <li><b>Обязательно</b> заполните все 3 поля фильтра слева направо:
+                                        <ul>
+                                            <li>Сначала <b>Растение</b>.</li>
+                                            <li>Затем <b>Поле</b> (откуда оно).</li>
+                                            <li>Затем <b>Партия (Год)</b>.</li>
+                                        </ul>
+                                    </li>
+                                    <li>Нажмите "Сформировать".</li>
+                                </ol>
+                                <p class="small text-muted">Вы увидите таблицу: когда товар пришел (+Приход) и когда был отгружен (-Расход) с именами авторов операций.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- РАЗДЕЛ 4: ДОКУМЕНТЫ (Приход, Перемещение, Списание) -->
+            <div class="accordion-item border-0 mb-2 rounded overflow-hidden">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed fw-bold bg-light text-dark" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFour">
+                        <i class="fas fa-file-invoice text-secondary me-2"></i> 4. ЖУРНАЛ ДОКУМЕНТОВ (Операции склада)
+                    </button>
+                </h2>
+                <div id="collapseFour" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
+                    <div class="accordion-body bg-white">
+                        <p class="small">В меню <b>"Склад -> Журнал документов"</b> вы можете проводить операции без создания заказов.</p>
+                        
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <div class="border rounded p-2 h-100">
+                                    <h6 class="fw-bold text-primary small">Перемещение</h6>
+                                    <p class="small text-muted mb-1">Перевезти товар с одного поля на другое.</p>
+                                    <ul class="small mb-0 ps-3">
+                                        <li>Выберите "Растение" и "Размер".</li>
+                                        <li><b>Откуда:</b> выберите поле, где товар стоит сейчас.</li>
+                                        <li><b>Год:</b> выберите партию.</li>
+                                        <li><b>Куда:</b> выберите новое поле.</li>
+                                        <li>Укажите кол-во и нажмите кнопку внизу.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="border rounded p-2 h-100">
+                                    <h6 class="fw-bold text-success small">Поступление</h6>
+                                    <p class="small text-muted mb-1">Приход нового товара на склад.</p>
+                                    <ul class="small mb-0 ps-3">
+                                        <li>Сверху укажите <b>Год партии</b> (текущий год).</li>
+                                        <li>Выберите Растение, Размер.</li>
+                                        <li><b>Куда:</b> на какое поле ставим.</li>
+                                        <li>Укажите кол-во.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="border rounded p-2 h-100">
+                                    <h6 class="fw-bold text-info small">Изменение размера</h6>
+                                    <p class="small text-muted mb-1">Если растение выросло (пересортица).</p>
+                                    <ul class="small mb-0 ps-3">
+                                        <li>Укажите Растение и Поле.</li>
+                                        <li><b>Текущий размер:</b> какой был (например, C2).</li>
+                                        <li><b>В какой размер меняем:</b> какой стал (например, C3).</li>
+                                        <li>Количество растений не изменится, поменяется только их название в остатках.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="border rounded p-2 h-100 bg-light">
+                                    <h6 class="fw-bold text-muted small">Отгрузки (Таблица внизу)</h6>
+                                    <p class="small text-muted mb-0">Внизу страницы есть таблица "Отгрузки (Факт)". Это история всех отгрузок по заказам. Там ничего заполнять не нужно, это просто для просмотра архива.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+        </div> <!-- Конец аккордеона -->
+
+        <div class="mt-4 p-3 bg-white border rounded shadow-sm">
+            <h6 class="fw-bold text-success"><i class="fas fa-headset me-2"></i> Нужна помощь?</h6>
+            <p class="mb-0 small">Если что-то не работает или вы сделали ошибку, которую не можете исправить — не переживайте. Позвоните администратору или напишите в чат поддержки (зеленая кнопка внизу справа).</p>
+        </div>
+
+    </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,430 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    :root { --fd-bg: #f8fafc; }
+    body { background: var(--fd-bg); }
+
+    .ana-wrapper { max-width: 1280px; margin: 0 auto; padding-bottom: 80px; }
+
+    .ana-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .ana-header h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+    .ana-header .actions { display: flex; gap: 8px; }
+    .ana-header .btn-sec {
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+        padding: 8px 14px; font-weight: 600; font-size: .9rem;
+        color: #0f172a; text-decoration: none !important; transition: all .15s ease;
+    }
+    .ana-header .btn-sec:hover { background: #f1f5f9; border-color: #cbd5e1; }
+
+    /* KPI-like tiles */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .kpi-tile {
+        position: relative; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+        padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.03); overflow: hidden;
+    }
+    .kpi-tile::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--kpi-accent, #10b981); }
+    .kpi-tile .kpi-icon {
+        position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; border-radius: 9px;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--kpi-accent-bg, rgba(16,185,129,.1)); color: var(--kpi-accent, #10b981); font-size: .9rem;
+    }
+    .kpi-tile .kpi-title { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: 6px; padding-right: 40px; }
+    .kpi-tile .kpi-value { font-size: 1.45rem; font-weight: 800; letter-spacing: -0.03em; color: #0f172a; line-height: 1.1; margin-bottom: 2px; }
+    .kpi-tile .kpi-sub   { font-size: .75rem; color: #64748b; }
+
+    .kpi-tile.color-info      { --kpi-accent: #0ea5e9; --kpi-accent-bg: rgba(14,165,233,.10); }
+    .kpi-tile.color-danger    { --kpi-accent: #ef4444; --kpi-accent-bg: rgba(239,68,68,.10); }
+    .kpi-tile.color-success   { --kpi-accent: #10b981; --kpi-accent-bg: rgba(16,185,129,.10); }
+    .kpi-tile.color-warning   { --kpi-accent: #f59e0b; --kpi-accent-bg: rgba(245,158,11,.12); }
+    .kpi-tile.color-primary   { --kpi-accent: #3b82f6; --kpi-accent-bg: rgba(59,130,246,.10); }
+
+    .chart-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
+    @media (max-width: 991px) { .chart-grid { grid-template-columns: 1fr; } }
+    .chart-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px 20px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+    .chart-card h6 { font-weight: 700; color: #0f172a; margin: 0 0 4px 0; }
+    .chart-card .chart-sub { font-size: .78rem; color: #64748b; margin-bottom: 14px; }
+    .chart-box { position: relative; height: 300px; }
+    .chart-box.sm { height: 240px; }
+
+    .emp-table { width: 100%; font-size: .9rem; }
+    .emp-table thead th { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: #64748b; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding: 10px 8px; text-align: left; }
+    .emp-table tbody td { padding: 10px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+    .emp-table tbody tr:last-child td { border-bottom: 0; }
+    .emp-table .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .emp-table .rank {
+        display: inline-flex; width: 24px; height: 24px; border-radius: 50%;
+        align-items: center; justify-content: center; font-size: .75rem; font-weight: 700;
+        background: #f1f5f9; color: #64748b;
+    }
+    .emp-table .rank.gold   { background: #fef3c7; color: #b45309; }
+    .emp-table .rank.silver { background: #e2e8f0; color: #475569; }
+    .emp-table .rank.bronze { background: #fed7aa; color: #9a3412; }
+
+    .chip {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 8px; border-radius: 6px; font-size: .78rem; font-weight: 600;
+    }
+    .chip.ok   { background: rgba(16,185,129,.12); color: #047857; }
+    .chip.warn { background: rgba(245,158,11,.14); color: #b45309; }
+    .chip.bad  { background: rgba(239,68,68,.12); color: #b91c1c; }
+    .chip.muted{ background: #f1f5f9; color: #64748b; }
+
+    .empty-state { padding: 30px; text-align: center; color: #94a3b8; font-size: .9rem; }
+</style>
+
+<div class="ana-wrapper">
+
+    <div class="ana-header">
+        <div>
+            <h4><i class="fas fa-list-check me-2 text-info"></i>Аналитика по поручениям</h4>
+            <span class="text-muted small">
+                {% if data.summary.scope == 'self' %}
+                    Только мои задачи (как исполнителя)
+                {% else %}
+                    Контроль исполнения и эффективность сотрудников
+                {% endif %}
+                · {{ today.strftime('%d.%m.%Y') }}
+            </span>
+        </div>
+        <div class="actions">
+            <a href="{{ url_for('main.analytics') }}" class="btn-sec"><i class="fas fa-chart-line me-1"></i> Общая аналитика</a>
+            <a href="{{ url_for('main.index') }}" class="btn-sec"><i class="fas fa-arrow-left me-1"></i> К задачам</a>
+        </div>
+    </div>
+
+    <!-- Сводка -->
+    <div class="kpi-grid">
+        <div class="kpi-tile color-info">
+            <div class="kpi-icon"><i class="fas fa-list-ul"></i></div>
+            <div class="kpi-title">Активных поручений</div>
+            <div class="kpi-value">{{ data.summary.active or 0 }}</div>
+            <div class="kpi-sub">сейчас в работе</div>
+        </div>
+        <div class="kpi-tile color-danger">
+            <div class="kpi-icon"><i class="fas fa-triangle-exclamation"></i></div>
+            <div class="kpi-title">Просроченных</div>
+            <div class="kpi-value">{{ data.summary.overdue or 0 }}</div>
+            <div class="kpi-sub">дедлайн в прошлом</div>
+        </div>
+        <div class="kpi-tile color-success">
+            <div class="kpi-icon"><i class="fas fa-check-double"></i></div>
+            <div class="kpi-title">Выполнено за 30 дней</div>
+            <div class="kpi-value">{{ data.summary.done_30d or 0 }}</div>
+            <div class="kpi-sub">закрытые поручения</div>
+        </div>
+        <div class="kpi-tile color-warning">
+            <div class="kpi-icon"><i class="fas fa-stopwatch"></i></div>
+            <div class="kpi-title">Среднее время</div>
+            <div class="kpi-value">
+                {% if data.summary.avg_hours %}
+                    {% if data.summary.avg_hours >= 48 %}
+                        {{ (data.summary.avg_hours / 24)|round(1) }} дн.
+                    {% else %}
+                        {{ data.summary.avg_hours }} ч
+                    {% endif %}
+                {% else %}—{% endif %}
+            </div>
+            <div class="kpi-sub">
+                медиана:
+                {% if data.summary.med_hours %}
+                    {% if data.summary.med_hours >= 48 %}
+                        {{ (data.summary.med_hours / 24)|round(1) }} дн.
+                    {% else %}
+                        {{ data.summary.med_hours }} ч
+                    {% endif %}
+                {% else %}—{% endif %}
+                · выборка {{ data.summary.sample_size or 0 }}
+            </div>
+        </div>
+    </div>
+
+    <!-- График по дням + возраст задач -->
+    <div class="chart-grid">
+        <div class="chart-card">
+            <h6>Поручения за последние 30 дней</h6>
+            <div class="chart-sub">Созданные (синий) vs выполненные (зелёный) — по дням</div>
+            <div class="chart-box">
+                <canvas id="chartDaily"></canvas>
+            </div>
+        </div>
+        <div class="chart-card">
+            <h6>Возраст активных задач</h6>
+            <div class="chart-sub">Сколько дней задача уже висит</div>
+            <div class="chart-box sm">
+                <canvas id="chartAge"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Источник + тип задачи -->
+    <div class="chart-grid">
+        <div class="chart-card">
+            <h6>Откуда приходят поручения</h6>
+            <div class="chart-sub">Распределение задач по источнику</div>
+            {% if data.by_source %}
+            <div class="chart-box sm">
+                <canvas id="chartSource"></canvas>
+            </div>
+            {% else %}
+            <div class="empty-state">Нет данных</div>
+            {% endif %}
+        </div>
+        <div class="chart-card">
+            <h6>Тип задачи</h6>
+            <div class="chart-sub">На что чаще всего уходит время</div>
+            {% if data.by_action_type %}
+            <div class="chart-box sm">
+                <canvas id="chartActionType"></canvas>
+            </div>
+            {% else %}
+            <div class="empty-state">Нет данных</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Горячие (давно просроченные) задачи -->
+    <div class="chart-card mb-3">
+        <h6><i class="fas fa-fire text-danger me-1"></i> Горячие задачи (просрочены более 3 дней)</h6>
+        <div class="chart-sub">Кому-то срочно нужно вмешаться. Топ-15 по возрасту просрочки.</div>
+        {% if data.hot %}
+        <table class="emp-table">
+            <thead>
+                <tr>
+                    <th>Задача</th>
+                    <th>Исполнитель</th>
+                    <th>Источник</th>
+                    <th class="num">Дедлайн был</th>
+                    <th class="num">Просрочено</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for h in data.hot %}
+                <tr>
+                    <td>{{ h.title }}</td>
+                    <td>
+                        {% if h.assignee %}
+                            <span class="chip muted"><i class="fas fa-user-circle"></i> @{{ h.assignee }}</span>
+                        {% elif h.assignee_role %}
+                            <span class="chip muted">отдел {{ h.assignee_role }}</span>
+                        {% else %}
+                            <span class="chip warn">не назначена</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="chip muted">{{ h.source }}</span></td>
+                    <td class="num">{{ h.deadline }}</td>
+                    <td class="num">
+                        {% if h.days_overdue >= 14 %}
+                            <span class="chip bad"><i class="fas fa-fire"></i> {{ h.days_overdue }} дн.</span>
+                        {% elif h.days_overdue >= 7 %}
+                            <span class="chip warn">{{ h.days_overdue }} дн.</span>
+                        {% else %}
+                            <span class="chip muted">{{ h.days_overdue }} дн.</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">Горячих задач нет — отличный результат.</div>
+        {% endif %}
+    </div>
+
+    <!-- Рейтинг сотрудников -->
+    {% if data.summary.scope != 'self' %}
+    <div class="chart-card">
+        <h6>Рейтинг исполнителей</h6>
+        <div class="chart-sub">Оценка = выполнено − 2×просрочено, с бонусом за скорость · за последние 30 дней</div>
+        {% if data.by_employee %}
+        <table class="emp-table">
+            <thead>
+                <tr>
+                    <th style="width: 44px">#</th>
+                    <th>Сотрудник</th>
+                    <th class="num">Активных</th>
+                    <th class="num">Просрочено</th>
+                    <th class="num">Выполнено (30 дн)</th>
+                    <th class="num">Среднее время</th>
+                    <th class="num">Оценка</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for emp in data.by_employee %}
+                <tr>
+                    <td>
+                        {% set rank_cls = 'gold' if loop.index == 1 else ('silver' if loop.index == 2 else ('bronze' if loop.index == 3 else '')) %}
+                        <span class="rank {{ rank_cls }}">{{ loop.index }}</span>
+                    </td>
+                    <td>
+                        <div class="fw-bold">{{ emp.username }}</div>
+                        <div class="small text-muted">роль: {{ emp.role }}</div>
+                    </td>
+                    <td class="num">{{ emp.active }}</td>
+                    <td class="num">
+                        {% if emp.overdue == 0 %}
+                            <span class="chip ok">0</span>
+                        {% elif emp.overdue <= 2 %}
+                            <span class="chip warn">{{ emp.overdue }}</span>
+                        {% else %}
+                            <span class="chip bad">{{ emp.overdue }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="num">{{ emp.done_30d }}</td>
+                    <td class="num">
+                        {% if emp.avg_hours %}
+                            {% if emp.avg_hours >= 48 %}
+                                {{ (emp.avg_hours / 24)|round(1) }} дн.
+                            {% else %}
+                                {{ emp.avg_hours }} ч
+                            {% endif %}
+                        {% else %}
+                            <span class="chip muted">нет данных</span>
+                        {% endif %}
+                    </td>
+                    <td class="num">
+                        {% if emp.score >= 5 %}
+                            <span class="chip ok"><i class="fas fa-fire"></i> {{ emp.score }}</span>
+                        {% elif emp.score >= 0 %}
+                            <span class="chip muted">{{ emp.score }}</span>
+                        {% else %}
+                            <span class="chip bad">{{ emp.score }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">Пока не назначено ни одного поручения</div>
+        {% endif %}
+    </div>
+    {% endif %}{# scope != self #}
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    const palette = {
+        green: '#10b981', greenSoft: 'rgba(16,185,129,.18)',
+        blue: '#3b82f6', blueSoft: 'rgba(59,130,246,.18)',
+        red: '#ef4444', redSoft: 'rgba(239,68,68,.18)',
+        amber: '#f59e0b', amberSoft: 'rgba(245,158,11,.18)',
+        slate: '#64748b', slateSoft: 'rgba(100,116,139,.18)',
+        sky: '#0ea5e9', skySoft: 'rgba(14,165,233,.18)',
+    };
+    Chart.defaults.font.family = 'inherit';
+    Chart.defaults.color = '#475569';
+    Chart.defaults.borderColor = '#e2e8f0';
+
+    const daily = {{ data.daily|tojson }};
+    if (daily && daily.length) {
+        new Chart(document.getElementById('chartDaily'), {
+            type: 'bar',
+            data: {
+                labels: daily.map(r => r.label),
+                datasets: [
+                    {
+                        label: 'Создано',
+                        data: daily.map(r => r.created),
+                        backgroundColor: palette.blueSoft,
+                        borderColor: palette.blue,
+                        borderWidth: 1.5, borderRadius: 5,
+                    },
+                    {
+                        label: 'Выполнено',
+                        data: daily.map(r => r.done),
+                        backgroundColor: palette.greenSoft,
+                        borderColor: palette.green,
+                        borderWidth: 1.5, borderRadius: 5,
+                    }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: '#f1f5f9' } },
+                    x: { grid: { display: false } },
+                }
+            }
+        });
+    }
+
+    const age = {{ data.age_buckets|tojson }};
+    if (age && age.length) {
+        const colors = [palette.green, palette.sky, palette.amber, '#f97316', palette.red];
+        new Chart(document.getElementById('chartAge'), {
+            type: 'doughnut',
+            data: {
+                labels: age.map(r => r.label),
+                datasets: [{
+                    data: age.map(r => r.count),
+                    backgroundColor: colors,
+                    borderWidth: 2, borderColor: '#fff',
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                cutout: '62%',
+                plugins: {
+                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } }
+                }
+            }
+        });
+    }
+
+    const sources = {{ data.by_source|tojson }};
+    const srcEl = document.getElementById('chartSource');
+    if (srcEl && sources && sources.length) {
+        const palBySource = {
+            tg: palette.sky, manual: palette.green, anomaly: palette.amber,
+            digest: palette.blue, fallback: palette.red,
+        };
+        new Chart(srcEl, {
+            type: 'doughnut',
+            data: {
+                labels: sources.map(r => r.label),
+                datasets: [{
+                    data: sources.map(r => r.count),
+                    backgroundColor: sources.map(r => palBySource[r.key] || palette.slate),
+                    borderWidth: 2, borderColor: '#fff',
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, cutout: '62%',
+                plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } }
+            }
+        });
+    }
+
+    const actions = {{ data.by_action_type|tojson }};
+    const actEl = document.getElementById('chartActionType');
+    if (actEl && actions && actions.length) {
+        new Chart(actEl, {
+            type: 'bar',
+            data: {
+                labels: actions.map(r => r.label),
+                datasets: [{
+                    label: 'Задач',
+                    data: actions.map(r => r.count),
+                    backgroundColor: palette.skySoft,
+                    borderColor: palette.sky,
+                    borderWidth: 1.5, borderRadius: 5,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: '#f1f5f9' } },
+                    y: { grid: { display: false } },
+                }
+            }
+        });
+    }
+})();
+</script>
+
+{% endblock %}

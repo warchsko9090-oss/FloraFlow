@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+
+<html lang="ru" xmlns:pdf="http://www.xhtml2pdf.com">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <title>Товарные остатки — Княжество</title>
+
+    <style>
+
+        @page {
+
+            size: A4 portrait;
+
+            margin: 0;
+
+        }
+
+
+
+        * { margin: 0; padding: 0; }
+
+
+
+        body {
+
+            font-family: DejaVuSans, sans-serif;
+
+            font-size: 8.5pt;
+
+            color: #F7F5F0;
+
+            background-color: #111814;
+
+        }
+
+
+
+        .sheet {
+
+            width: 595pt;
+
+            background-color: #111814;
+
+        }
+
+
+
+        .inset {
+
+            padding-left: 36pt;
+
+            padding-right: 36pt;
+
+        }
+
+
+
+        .top-bar {
+
+            background-color: #B69A6D;
+
+            height: 2.5pt;
+
+            font-size: 1pt;
+
+            line-height: 1pt;
+
+        }
+
+
+
+        .header { padding-top: 20pt; padding-bottom: 2pt; }
+
+        .brand { font-size: 22pt; font-weight: bold; color: #FAFAF8; letter-spacing: 1.8pt; line-height: 1.05; }
+
+        .brand-tag { font-size: 7.5pt; color: #B69A6D; letter-spacing: 1.4pt; text-transform: uppercase; margin-top: 5pt; }
+
+        .meta-date { font-size: 8pt; color: #8A9088; text-align: right; line-height: 1.4; }
+
+        .meta-note { font-size: 7.5pt; color: #6B726C; text-align: right; margin-top: 3pt; }
+
+
+
+        .ornament { padding-top: 9pt; padding-bottom: 9pt; }
+
+        .orn-line { background-color: #3D4741; height: 0.5pt; font-size: 1pt; }
+
+        .orn-gem { width: 4pt; height: 4pt; background-color: #B69A6D; }
+
+        .orn-gap { width: 6pt; font-size: 1pt; }
+
+
+
+        .doc-title { font-size: 14pt; font-weight: bold; color: #FAFAF8; text-align: center; letter-spacing: 0.5pt; }
+
+        .doc-sub { font-size: 8pt; color: #8A9088; text-align: center; font-style: italic; margin-top: 4pt; }
+
+
+
+        .items-head td {
+
+            font-size: 7.5pt;
+
+            letter-spacing: 0.8pt;
+
+            text-transform: uppercase;
+
+            color: #8A7555;
+
+            padding: 0 4pt 6pt;
+
+            border-bottom: 0.75pt solid #B69A6D;
+
+            vertical-align: bottom;
+
+        }
+
+
+
+        .group td {
+
+            padding: 5pt 4pt 4pt;
+
+            border-bottom: 0.5pt solid #2E3632;
+
+            background-color: #161D19;
+
+            font-weight: bold;
+
+            color: #F7F5F0;
+
+            vertical-align: middle;
+
+        }
+
+
+
+        .detail td {
+
+            padding: 5pt 4pt;
+
+            border-bottom: 0.35pt solid #252C28;
+
+            color: #C8C5BE;
+
+            vertical-align: middle;
+
+        }
+
+
+
+        .c-name { text-align: left; }
+
+        .c-name-merged { width: 80%; }
+
+        .plant-head-line { white-space: nowrap; }
+
+        .c-size { text-align: center; font-weight: bold; font-size: 8.5pt; color: #E8E4DC; width: 18%; }
+
+        .c-price { text-align: right; white-space: nowrap; }
+
+        .c-free { text-align: center; font-weight: bold; color: #B69A6D; }
+
+        .plant-title { font-size: 9pt; font-weight: bold; color: #F7F5F0; }
+
+        .latin { font-size: 7.5pt; font-style: italic; color: #8A9088; font-weight: normal; display: block; margin-top: 2pt; line-height: 1.2; }
+
+        .plant-attrs {
+            display: inline;
+            font-size: 9pt;
+            font-weight: bold;
+            color: #B69A6D;
+            letter-spacing: 0.1pt;
+        }
+
+        .plant-attr-dot { color: #6B726C; font-weight: normal; }
+
+
+
+        .section-wrap {
+            margin-top: 12pt;
+            margin-bottom: 12pt;
+            background-color: #1A2420;
+            border: 1pt solid #B69A6D;
+        }
+        .section-wrap-new-page { page-break-before: always; break-before: page; }
+        .section-bar {
+            background-color: #B69A6D;
+            height: 3pt;
+            font-size: 1pt;
+            line-height: 1pt;
+        }
+        .section-body {
+            padding: 12pt 10pt;
+            text-align: center;
+            vertical-align: middle;
+        }
+        .section-title {
+            font-size: 12pt;
+            font-weight: bold;
+            color: #FAFAF8;
+            letter-spacing: 1.2pt;
+            text-transform: uppercase;
+            padding: 0;
+            text-align: center;
+            line-height: 1.25;
+        }
+        .section-sub {
+            font-size: 8pt;
+            color: #D4C4A4;
+            padding: 4pt 0 0;
+            letter-spacing: 0.3pt;
+            text-align: center;
+            line-height: 1.25;
+        }
+
+        .items-head-wrap { padding-top: 6pt; }
+
+        .gallery-wrap { padding-top: 14pt; padding-bottom: 10pt; }
+        .gallery-title {
+            font-size: 9pt;
+            font-weight: bold;
+            color: #B69A6D;
+            letter-spacing: 1pt;
+            text-transform: uppercase;
+            text-align: center;
+            margin-bottom: 8pt;
+        }
+        .gallery-item img {
+            width: 100%;
+            height: 95pt;
+            object-fit: cover;
+            display: block;
+            background: #1A2420;
+        }
+
+        .footer-block { padding-top: 10pt; padding-bottom: 18pt; }
+
+        .footer-validity {
+            font-size: 8pt;
+            color: #A7A59E;
+            text-align: center;
+            margin-bottom: 10pt;
+            letter-spacing: 0.2pt;
+        }
+
+        .footer-contact { font-size: 8pt; color: #B69A6D; text-align: center; }
+
+        .footer-note { font-size: 7.5pt; color: #6B726C; margin-top: 6pt; font-style: italic; text-align: center; }
+
+    </style>
+
+</head>
+
+<body>
+
+<table class="sheet" cellpadding="0" cellspacing="0">
+
+    <tr><td class="top-bar">&nbsp;</td></tr>
+
+
+
+    <tr>
+
+        <td class="header inset">
+
+            <table width="100%" cellpadding="0" cellspacing="0">
+
+                <tr>
+
+                    <td style="width: 55%; vertical-align: top;">
+
+                        <div class="brand">Княжество</div>
+
+                        <div class="brand-tag">Архитектурный питомник · Тульская область</div>
+
+                    </td>
+
+                    <td style="width: 45%; vertical-align: top;">
+
+                        <div class="meta-date">от {{ doc_date.strftime('%d.%m.%Y') }}</div>
+
+                        <div class="meta-note">Сформировано {{ generated_at.strftime('%d.%m.%Y %H:%M') }}</div>
+
+                    </td>
+
+                </tr>
+
+            </table>
+
+        </td>
+
+    </tr>
+
+
+
+    <tr>
+
+        <td class="ornament">
+            <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td width="50%">&nbsp;</td>
+                    <td align="center" width="120pt">
+                        <table width="120pt" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td class="orn-line" width="45%">&nbsp;</td>
+                                <td class="orn-gap">&nbsp;</td>
+                                <td class="orn-gem">&nbsp;</td>
+                                <td class="orn-gap">&nbsp;</td>
+                                <td class="orn-line" width="45%">&nbsp;</td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td width="50%">&nbsp;</td>
+                </tr>
+            </table>
+        </td>
+
+    </tr>
+
+
+
+    <tr>
+
+        <td class="inset" style="padding-bottom: 10pt;">
+
+            <div class="doc-title">Товарные остатки</div>
+
+            <div class="doc-sub">Позиции каталога на сайте · цены розничные</div>
+
+        </td>
+
+    </tr>
+
+
+
+    {% set ns = namespace(has_any=false) %}
+    {# force_on_request: секция «Саженцы» — как в ERP, наличие только «по запросу» у размера #}
+    {% macro render_group_block(block_groups, force_on_request=false) %}
+        {% for group in block_groups %}
+            {% set ns.has_any = true %}
+            {% set all_on_request = force_on_request or (group.rows|length > 0 and group.rows|selectattr('pdf_on_request')|list|length == group.rows|length) %}
+            <tr>
+                <td class="inset">
+                    <table width="100%" cellpadding="0" cellspacing="0" class="group" style="table-layout: fixed;">
+                        <tr>
+                            <td class="c-name c-name-merged" colspan="3">
+                                <span class="plant-head-line"><span class="plant-title">{{ group.name }}</span>{% if group.root_system or group.pruning %}<span class="plant-attrs">{% if group.root_system %}<span class="plant-attr-dot"> · </span>{{ group.root_system }}{% endif %}{% if group.pruning %}<span class="plant-attr-dot"> · </span>{{ group.pruning }}{% endif %}</span>{% endif %}</span>
+                                {% if group.latin_name %}<span class="latin">{{ group.latin_name }}</span>{% endif %}
+                            </td>
+                            <td class="c-free" style="width: 20%;">{% if all_on_request %}&nbsp;{% else %}{{ group.totals.free }}{% endif %}</td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+            {% for row in group.rows %}
+            <tr>
+                <td class="inset">
+                    <table width="100%" cellpadding="0" cellspacing="0" class="detail" style="table-layout: fixed;">
+                        <tr>
+                            <td class="c-name" style="width: 42%;">&nbsp;</td>
+                            <td class="c-size" style="width: 18%;">{{ row.size or '—' }}</td>
+                            <td class="c-price" style="width: 20%;">{{ fmt(row.price) }}</td>
+                            <td class="c-free" style="width: 20%;">{% if force_on_request or row.pdf_on_request %}по запросу{% else %}{{ row.free }}{% endif %}</td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+            {% endfor %}
+        {% endfor %}
+    {% endmacro %}
+
+    {% macro render_section_header(title, subtitle, qty_label='Свободно', new_page=false) %}
+    <tr>
+        <td class="inset{% if new_page %} section-wrap-new-page{% endif %}" style="padding-top: 10pt; padding-bottom: 8pt;">
+            <div class="section-wrap">
+                <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr><td class="section-bar">&nbsp;</td></tr>
+                    <tr>
+                        <td class="section-body" height="42" valign="middle" align="center">
+                            <div class="section-title">{{ title }}</div>
+                            {% if subtitle %}<div class="section-sub">{{ subtitle }}</div>{% endif %}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </td>
+    </tr>
+    <tr>
+        <td class="inset items-head-wrap">
+            <table width="100%" cellpadding="0" cellspacing="0" class="items-head" style="table-layout: fixed;">
+                <tr>
+                    <td class="c-name" style="width: 42%;">Растение</td>
+                    <td class="c-size" style="width: 18%;">Размер</td>
+                    <td class="c-price" style="width: 20%;">Цена</td>
+                    <td class="c-free" style="width: 20%;">{{ qty_label }}</td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+    {% endmacro %}
+
+    {% if ground_groups %}
+    {{ render_section_header('Растения в грунте', 'Товарные позиции открытого грунта') }}
+    {{ render_group_block(ground_groups) }}
+    {% endif %}
+
+    {% if promo_photos and ground_groups and container_groups %}
+    <tr>
+        <td class="inset gallery-wrap">
+            <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    {% for url in promo_photos %}
+                    <td style="width: {{ (100 / (promo_photos|length))|int }}%; padding: 0 3pt;" class="gallery-item">
+                        <img src="{{ url }}">
+                    </td>
+                    {% endfor %}
+                </tr>
+            </table>
+            {% if print_settings and print_settings.get('footer_text') %}
+            <div style="margin-top: 8pt; text-align: center; color: #7A7E78; font-size: 7.5pt; font-style: italic;">
+                {{ print_settings.get('footer_text') }}
+            </div>
+            {% endif %}
+        </td>
+    </tr>
+    {% endif %}
+
+    {% if container_groups %}
+    {{ render_section_header('Саженцы', 'Саженцы · контейнер', qty_label='Наличие', new_page=ground_groups|length > 0) }}
+    {{ render_group_block(container_groups, force_on_request=true) }}
+    <tr>
+        <td class="inset" style="padding: 6pt 0 10pt; text-align: center; color: #6B726C; font-size: 8pt; font-style: italic;">
+            Точное наличие и цену растений в контейнерах уточняйте у менеджера
+        </td>
+    </tr>
+    {% endif %}
+
+    {% if not ground_groups and not container_groups %}
+    <tr>
+        <td class="inset" style="padding: 24pt 0; text-align: center; color: #7A7E78; font-style: italic;">
+            Нет позиций, включённых в отображение на сайте
+        </td>
+    </tr>
+    {% endif %}
+
+
+
+    <tr>
+
+        <td class="ornament">
+            <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td width="50%">&nbsp;</td>
+                    <td align="center" width="120pt">
+                        <table width="120pt" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td class="orn-line" width="45%">&nbsp;</td>
+                                <td class="orn-gap">&nbsp;</td>
+                                <td class="orn-gem">&nbsp;</td>
+                                <td class="orn-gap">&nbsp;</td>
+                                <td class="orn-line" width="45%">&nbsp;</td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td width="50%">&nbsp;</td>
+                </tr>
+            </table>
+        </td>
+
+    </tr>
+
+
+
+    <tr>
+
+        <td class="footer-block inset">
+
+            <div class="footer-validity">Цены актуальны на {{ doc_date.strftime('%d.%m.%Y') }} — дата формирования прайса.</div>
+
+            {% if shop_contacts %}
+
+
+            <div class="footer-contact">
+
+                {% for c in shop_contacts %}
+
+                    {% if not loop.first %} · {% endif %}
+
+                    {% if c.label %}{{ c.label }}: {% endif %}{{ c.value }}
+
+                {% endfor %}
+
+            </div>
+
+            {% endif %}
+
+            <div class="footer-note">B2B · Архитектурный питомник «Княжество»</div>
+
+        </td>
+
+    </tr>
+
+</table>
+
+</body>
+
+</html>
+

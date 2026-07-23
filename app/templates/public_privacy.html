@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Политика обработки персональных данных — Княжество</title>
+    {% set shop_meta_description = 'Политика обработки персональных данных сайта Княжество: порядок обработки, хранения и защиты персональной информации пользователей.' %}
+    {% set shop_og_type = 'article' %}
+    <meta name="description" content="{{ shop_meta_description }}">
+    {% include 'shop/_favicon_links.html' %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            bg: '#111814', bgSoft: '#161D19', card: '#1C2420', cardHover: '#232B27',
+                            cream: '#F7F5F0', pine: '#111814', brass: '#B69A6D', brassHover: '#C4AB7E',
+                            brassDim: '#8A7555', graphite: '#C8C5BE', muted: '#7A7E78',
+                            border: '#2E3632', borderLight: '#3D4741', low: '#D47A45'
+                        }
+                    },
+                    fontFamily: { sans: ['Golos Text', 'sans-serif'], serif: ['Cormorant', 'serif'] }
+                }
+            }
+        }
+    </script>
+    {% include 'shop/_styles.html' %}
+    {% include 'shop/_seo_meta.html' %}
+    {% include 'shop/_metrika.html' %}
+    {% include 'shop/_legal_styles.html' %}
+</head>
+<body class="bg-brand-bg text-brand-cream font-sans antialiased selection:bg-brand-brass/30 min-h-screen">
+
+    <div id="bg-slideshow" aria-hidden="true"><div id="bg-slides"></div><div class="bg-slideshow-overlay"></div></div>
+
+    <div class="relative z-10 min-h-screen flex flex-col">
+        {% include 'shop/_header.html' %}
+
+        <main class="flex-1 px-4 py-10 sm:py-14 pb-24 shop-page-glow">
+            <div class="max-w-3xl mx-auto">
+                <a href="{{ url_for('public_client_api.public_shop') }}" class="shop-page-back reveal inline-flex items-center gap-2 text-sm text-brand-muted hover:text-brand-brass transition-colors mb-10">
+                    <i class="fa-solid fa-arrow-left text-[10px]"></i>
+                    <span>Каталог</span>
+                </a>
+
+                <header class="reveal text-center max-w-2xl mx-auto mb-10 sm:mb-12">
+                    <div class="flex items-center justify-center gap-3 mb-5">
+                        <span class="ornament-line w-10 sm:w-14 inline-block"></span>
+                        <span class="ornament-diamond flex-shrink-0"></span>
+                        <span class="ornament-line w-10 sm:w-14 inline-block"></span>
+                    </div>
+                    <p class="text-brand-brass text-[10px] uppercase tracking-[0.35em] font-medium mb-4">Правовая информация</p>
+                    <h1 class="font-serif text-3xl sm:text-4xl lg:text-[2.75rem] font-bold tracking-[0.02em] text-brand-cream leading-[1.1]">
+                        Политика обработки<br>персональных данных
+                    </h1>
+                </header>
+
+                <article class="shop-panel reveal reveal-delay-1">
+                    <div class="shop-panel-accent"></div>
+                    <div class="shop-panel-inner legal-doc">
+                        <div class="legal-meta">
+                            <span>Редакция от <b>{{ updated_date }}</b></span>
+                            <span>Действует на сайте <b>{{ request.host }}</b></span>
+                        </div>
+
+                        <p class="legal-lead">
+                            Настоящая Политика определяет порядок обработки и защиты персональных данных
+                            физических лиц (далее — «Пользователи»), пользующихся сайтом, и разработана
+                            во исполнение требований Федерального закона от 27.07.2006 № 152-ФЗ
+                            «О персональных данных».
+                        </p>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">1.</span>
+                                <h2 class="legal-section-title">Общие положения</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>1.1. Политика обработки персональных данных (далее — «Политика») действует в отношении всей информации, которую Оператор может получить о Пользователе во время использования им сайта <strong>{{ request.host }}</strong> (далее — «Сайт»).</p>
+                                <p>1.2. Использование Сайта означает безоговорочное согласие Пользователя с настоящей Политикой и указанными в ней условиями обработки его персональных данных. В случае несогласия с условиями Политики Пользователь должен воздержаться от использования Сайта и заполнения форм.</p>
+                                <p>1.3. Политика разработана в соответствии с Федеральным законом от 27.07.2006 № 152-ФЗ «О персональных данных», Конституцией Российской Федерации и иными нормативными правовыми актами, регулирующими обработку персональных данных.</p>
+                                <p>1.4. Оператор обрабатывает персональные данные на законной и справедливой основе. Действие Политики не распространяется на действия и интернет-ресурсы третьих лиц.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">2.</span>
+                                <h2 class="legal-section-title">Оператор персональных данных</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Оператором, организующим и осуществляющим обработку персональных данных, является:</p>
+                                <dl class="legal-operator">
+                                    <div class="legal-operator-row"><dt>Наименование</dt><dd>{{ op_name }}</dd></div>
+                                    {% if op_inn %}<div class="legal-operator-row"><dt>ИНН</dt><dd>{{ op_inn }}</dd></div>{% endif %}
+                                    {% if op_ogrn %}<div class="legal-operator-row"><dt>ОГРН</dt><dd>{{ op_ogrn }}</dd></div>{% endif %}
+                                    {% if op_addr %}<div class="legal-operator-row"><dt>Адрес</dt><dd>{{ op_addr }}</dd></div>{% endif %}
+                                    {% if op_email %}<div class="legal-operator-row"><dt>E-mail</dt><dd><a href="mailto:{{ op_email }}">{{ op_email }}</a></dd></div>{% endif %}
+                                    {% if op_phone %}<div class="legal-operator-row"><dt>Телефон</dt><dd>{{ op_phone }}</dd></div>{% endif %}
+                                </dl>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">3.</span>
+                                <h2 class="legal-section-title">Основные понятия</h2>
+                            </div>
+                            <div class="legal-body">
+                                <ul class="legal-list">
+                                    <li><strong>Персональные данные</strong> — любая информация, относящаяся к прямо или косвенно определённому или определяемому физическому лицу (субъекту персональных данных).</li>
+                                    <li><strong>Обработка персональных данных</strong> — любое действие (операция) или совокупность действий, совершаемых с использованием средств автоматизации или без таковых, включая сбор, запись, систематизацию, накопление, хранение, уточнение, использование, передачу, обезличивание, блокирование, удаление, уничтожение персональных данных.</li>
+                                    <li><strong>Оператор</strong> — юридическое лицо, самостоятельно или совместно с другими лицами организующее и (или) осуществляющее обработку персональных данных, а также определяющее цели обработки.</li>
+                                    <li><strong>Субъект персональных данных (Пользователь)</strong> — физическое лицо, чьи персональные данные обрабатываются.</li>
+                                    <li><strong>Cookie</strong> — небольшой фрагмент данных, отправляемый веб-сайтом и хранимый на устройстве Пользователя.</li>
+                                </ul>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">4.</span>
+                                <h2 class="legal-section-title">Правовые основания обработки</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Оператор обрабатывает персональные данные Пользователя на следующих правовых основаниях:</p>
+                                <ul class="legal-list">
+                                    <li>согласие Пользователя на обработку его персональных данных, выражаемое путём проставления отметки в соответствующем поле формы на Сайте;</li>
+                                    <li>Федеральный закон от 27.07.2006 № 152-ФЗ «О персональных данных»;</li>
+                                    <li>исполнение договора, стороной которого является субъект персональных данных, а также для заключения договора по инициативе субъекта (подготовка и направление коммерческого предложения);</li>
+                                    <li>иные федеральные законы и нормативные правовые акты в сфере защиты персональных данных.</li>
+                                </ul>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">5.</span>
+                                <h2 class="legal-section-title">Цели обработки персональных данных</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Персональные данные обрабатываются исключительно в следующих целях:</p>
+                                <ul class="legal-list">
+                                    <li>обработка заявок на подготовку и направление коммерческого предложения (КП);</li>
+                                    <li>обработка заявок на позиции «по запросу» и уточнение наличия, сроков и условий поставки;</li>
+                                    <li>обратная связь с Пользователем, в том числе направление уведомлений и ответов на обращения;</li>
+                                    <li>согласование условий самовывоза и доставки продукции;</li>
+                                    <li>исполнение обязательств по заключённым договорам.</li>
+                                </ul>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">6.</span>
+                                <h2 class="legal-section-title">Перечень обрабатываемых данных</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Оператор обрабатывает следующие персональные данные, предоставляемые Пользователем добровольно при заполнении форм на Сайте:</p>
+                                <ul class="legal-list">
+                                    <li>фамилия, имя, отчество либо наименование организации (ИНН);</li>
+                                    <li>номер контактного телефона;</li>
+                                    <li>адрес электронной почты;</li>
+                                    <li>содержание сообщения и состав запрашиваемой продукции (коммерческое предложение).</li>
+                                </ul>
+                                <p>Оператор не обрабатывает специальные категории персональных данных (о расовой, национальной принадлежности, политических взглядах, состоянии здоровья и т. п.), а также биометрические персональные данные.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">7.</span>
+                                <h2 class="legal-section-title">Принципы и условия обработки</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>7.1. Обработка персональных данных осуществляется на законной и справедливой основе, ограничивается достижением конкретных, заранее определённых и законных целей.</p>
+                                <p>7.2. Не допускается объединение баз данных, содержащих персональные данные, обработка которых осуществляется в целях, несовместимых между собой.</p>
+                                <p>7.3. Обрабатываются только те персональные данные, которые отвечают целям их обработки; их содержание и объём соответствуют заявленным целям и не являются избыточными.</p>
+                                <p>7.4. Обработка осуществляется как с использованием средств автоматизации, так и без использования таковых.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">8.</span>
+                                <h2 class="legal-section-title">Сроки обработки и хранения</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>8.1. Персональные данные обрабатываются до достижения целей обработки либо до отзыва Пользователем согласия на обработку персональных данных.</p>
+                                <p>8.2. По достижении целей обработки или в случае отзыва согласия персональные данные подлежат уничтожению либо обезличиванию в сроки, установленные законодательством Российской Федерации, если иное не предусмотрено договором или законом (в том числе требованиями к срокам хранения бухгалтерских и налоговых документов).</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">9.</span>
+                                <h2 class="legal-section-title">Передача персональных данных</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>9.1. Оператор не передаёт персональные данные третьим лицам, за исключением случаев, предусмотренных законодательством Российской Федерации, а также случаев, когда это необходимо для исполнения договора с Пользователем (например, передача транспортным компаниям для организации доставки).</p>
+                                <p>9.2. Трансграничная передача персональных данных (на территорию иностранных государств) Оператором не осуществляется.</p>
+                                <p>9.3. Оператор вправе поручить обработку персональных данных другому лицу с согласия Пользователя на основании заключаемого договора при условии соблюдения таким лицом принципов и правил обработки, предусмотренных Федеральным законом № 152-ФЗ.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">10.</span>
+                                <h2 class="legal-section-title">Использование файлов cookie</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>10.1. Сайт использует файлы cookie и аналогичные технологии для обеспечения корректной работы Сайта, сохранения пользовательских настроек (в том числе состояния корзины) и анализа посещаемости.</p>
+                                <p>10.2. Пользователь может в любой момент отключить сохранение файлов cookie в настройках своего браузера или удалить уже сохранённые файлы. Отключение cookie может привести к некорректной работе отдельных функций Сайта.</p>
+                                <p>10.3. Продолжая использование Сайта, Пользователь выражает согласие на использование файлов cookie.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">11.</span>
+                                <h2 class="legal-section-title">Права субъекта персональных данных</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Пользователь имеет право:</p>
+                                <ul class="legal-list">
+                                    <li>получать информацию, касающуюся обработки его персональных данных;</li>
+                                    <li>требовать уточнения, блокирования или уничтожения персональных данных в случае, если они являются неполными, устаревшими, неточными, незаконно полученными или не являются необходимыми для заявленной цели обработки;</li>
+                                    <li>отозвать согласие на обработку персональных данных;</li>
+                                    <li>обжаловать действия или бездействие Оператора в уполномоченный орган по защите прав субъектов персональных данных (Роскомнадзор) или в судебном порядке.</li>
+                                </ul>
+                                <p>Для реализации своих прав, а также для отзыва согласия Пользователь направляет Оператору соответствующий запрос{% if op_email %} на адрес электронной почты <a href="mailto:{{ op_email }}">{{ op_email }}</a>{% endif %}.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">12.</span>
+                                <h2 class="legal-section-title">Меры по защите данных</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Оператор принимает необходимые правовые, организационные и технические меры для защиты персональных данных от неправомерного или случайного доступа, уничтожения, изменения, блокирования, копирования, распространения, а также от иных неправомерных действий третьих лиц, в соответствии со статьёй 19 Федерального закона № 152-ФЗ.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">13.</span>
+                                <h2 class="legal-section-title">Заключительные положения</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>13.1. Оператор вправе вносить изменения в настоящую Политику. Новая редакция Политики вступает в силу с момента её размещения на Сайте, если иное не предусмотрено новой редакцией.</p>
+                                <p>13.2. Действующая редакция Политики постоянно доступна на Сайте по настоящему адресу.</p>
+                                <p>13.3. По всем вопросам, связанным с обработкой персональных данных, Пользователь может обратиться к Оператору{% if op_email %} по адресу <a href="mailto:{{ op_email }}">{{ op_email }}</a>{% endif %}.</p>
+                            </div>
+                        </section>
+                    </div>
+                </article>
+
+                <div class="reveal reveal-delay-2 mt-8 text-center">
+                    <a href="{{ url_for('public_client_api.public_consent') }}" class="inline-flex items-center gap-2 text-sm text-brand-muted hover:text-brand-brass transition-colors">
+                        <span>Согласие на обработку персональных данных</span>
+                        <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    </a>
+                </div>
+            </div>
+        </main>
+
+        {% include 'shop/_footer.html' %}
+    </div>
+
+    {% include 'shop/_scroll_top.html' %}
+    {% include 'shop/_cookie_consent.html' %}
+
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=3"></script>
+    <script>
+        window.onload = () => {
+            Shop.init([], {});
+            Shop.deferBgSlideshow();
+            Shop.initScrollTopButton();
+            const obs = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('visible');
+                        obs.unobserve(entry.target);
+                    }
+                });
+            }, { threshold: 0.06, rootMargin: '0px 0px -24px 0px' });
+            document.querySelectorAll('.reveal').forEach(el => {
+                const rect = el.getBoundingClientRect();
+                if (rect.top < window.innerHeight * 0.92) el.classList.add('visible');
+                else obs.observe(el);
+            });
+        };
+    </script>
+</body>
+</html>

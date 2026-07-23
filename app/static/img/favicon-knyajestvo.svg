@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Knyajestvo">
+  <rect width="64" height="64" rx="14" fill="#111814"/>
+  <rect x="4" y="4" width="56" height="56" rx="12" fill="none" stroke="#B69A6D" stroke-width="2"/>
+  <path d="M22 44V19h4l6 10 6-10h4v25h-4V27l-6 9-6-9v17z" fill="#F7F5F0"/>
+  <circle cx="32" cy="32" r="26" fill="none" stroke="#B69A6D" stroke-opacity=".24"/>
+</svg>

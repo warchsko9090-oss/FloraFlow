@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h4 class="mb-0">Поступление</h4>
+        <div class="text-muted small">Карточки с несколькими позициями (грунт и контейнерная площадка вперемешку). Цена закупки и поставщик → себестоимость.</div>
+    </div>
+    <a href="{{ url_for('stock.documents') }}" class="btn btn-outline-secondary btn-sm">Журнал документов</a>
+</div>
+
+{% if can_post %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold">Новая карточка поступления</div>
+    <div class="card-body">
+        <form method="POST" id="receiptForm">
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-md-3">
+                    <label class="form-label small mb-0">Дата</label>
+                    <input type="date" name="date" class="form-control form-control-sm" value="{{ today }}" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small mb-0">Поставщик</label>
+                    <select name="supplier_id" class="form-select form-select-sm select-search">
+                        <option value="">— не указан —</option>
+                        {% for s in suppliers %}
+                        <option value="{{ s.id }}">{{ s.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label small mb-0">Комментарий</label>
+                    <input type="text" name="comment" class="form-control form-control-sm" placeholder="Накладная / партия">
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered align-middle bg-white mb-2" id="receiptTable">
+                    <thead class="table-light small">
+                        <tr>
+                            <th>Растение</th>
+                            <th>Размер</th>
+                            <th>Куда (поле)</th>
+                            <th style="width:90px">Год партии</th>
+                            <th style="width:90px">Кол-во</th>
+                            <th style="width:110px">Цена закупки</th>
+                            <th style="width:36px"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="receipt-row">
+                            <td>
+                                <select name="plant[]" class="form-select form-select-sm select-search" required>
+                                    <option value="" disabled selected>—</option>
+                                    {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+                                </select>
+                            </td>
+                            <td>
+                                <select name="size[]" class="form-select form-select-sm select-search" required>
+                                    {% for s in sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                                </select>
+                            </td>
+                            <td>
+                                <select name="field_to[]" class="form-select form-select-sm select-search" required>
+                                    {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+                                </select>
+                            </td>
+                            <td><input type="number" name="year[]" class="form-control form-control-sm" value="{{ current_year }}" required></td>
+                            <td><input type="number" name="quantity[]" class="form-control form-control-sm" min="1" required></td>
+                            <td><input type="number" step="0.01" name="purchase_price[]" class="form-control form-control-sm" placeholder="0"></td>
+                            <td class="text-center"><button type="button" class="btn btn-link text-danger p-0" onclick="this.closest('tr').remove()">&times;</button></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="d-flex justify-content-between">
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addReceiptRow()">+ позиция</button>
+                <button type="submit" class="btn btn-success btn-sm">Провести поступление</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info small">Просмотр журнала поступлений. Проведение доступно admin/executive.</div>
+{% endif %}
+
+<h6 class="fw-bold mb-2">Журнал поступлений</h6>
+{% if docs %}
+<div class="table-responsive">
+    <table class="table table-sm table-hover bg-white" style="font-size:13px;">
+        <thead class="table-light">
+            <tr>
+                <th style="width:70px">Док.</th>
+                <th style="width:140px">Дата</th>
+                <th>Поставщик</th>
+                <th>Позиции</th>
+                <th style="width:110px">Кто</th>
+                {% if current_user.role == 'admin' %}<th style="width:90px"></th>{% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for doc in docs %}
+            <tr>
+                <td class="small">#{{ doc.id }}</td>
+                <td class="text-muted small">{{ doc.date.strftime('%d.%m.%Y %H:%M') if doc.date else '—' }}</td>
+                <td class="small">{{ doc.supplier.name if doc.supplier else '—' }}</td>
+                <td class="small">
+                    {% for r in doc.rows %}
+                    <div>
+                        {{ r.plant.name if r.plant else '?' }} · {{ r.size.name if r.size else '?' }}
+                        → {{ r.field_to.name if r.field_to else '?' }} / {{ r.year }}
+                        · <b>{{ r.quantity }}</b> шт
+                        {% if r.purchase_price %}· закуп. {{ '%.0f'|format(r.purchase_price) }}{% endif %}
+                    </div>
+                    {% endfor %}
+                    {% if doc.comment %}<div class="text-muted">{{ doc.comment }}</div>{% endif %}
+                </td>
+                <td class="small">{{ doc.user.username if doc.user else '—' }}</td>
+                {% if current_user.role == 'admin' %}
+                <td class="text-end">
+                    <a href="{{ url_for('stock.document_edit', doc_id=doc.id) }}" class="btn btn-link btn-sm p-0"><i class="fas fa-edit"></i></a>
+                    <form method="POST" action="{{ url_for('stock.document_delete', doc_id=doc.id) }}" class="d-inline">
+                        <button class="btn btn-link btn-sm p-0 text-danger ms-1" onclick="return confirm('Удалить поступление #{{ doc.id }}?');"><i class="fas fa-trash"></i></button>
+                    </form>
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="text-muted small border rounded bg-light p-3">Поступлений пока нет.</div>
+{% endif %}
+
+<template id="tplReceiptRow">
+    <tr class="receipt-row">
+        <td>
+            <select name="plant[]" class="form-select form-select-sm select-search" required>
+                <option value="" disabled selected>—</option>
+                {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="size[]" class="form-select form-select-sm select-search" required>
+                {% for s in sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="field_to[]" class="form-select form-select-sm select-search" required>
+                {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td><input type="number" name="year[]" class="form-control form-control-sm" value="{{ current_year }}" required></td>
+        <td><input type="number" name="quantity[]" class="form-control form-control-sm" min="1" required></td>
+        <td><input type="number" step="0.01" name="purchase_price[]" class="form-control form-control-sm" placeholder="0"></td>
+        <td class="text-center"><button type="button" class="btn btn-link text-danger p-0" onclick="this.closest('tr').remove()">&times;</button></td>
+    </tr>
+</template>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function addReceiptRow() {
+    const tpl = document.getElementById('tplReceiptRow');
+    const tbody = document.querySelector('#receiptTable tbody');
+    if (!tpl || !tbody) return;
+    tbody.appendChild(tpl.content.cloneNode(true));
+    const row = tbody.lastElementChild;
+    if (window.jQuery && jQuery.fn.select2) {
+        $(row).find('select.select-search').select2({ width: '100%', dropdownParent: $(document.body) });
+    }
+}
+document.addEventListener('DOMContentLoaded', function() {
+    if (window.jQuery && jQuery.fn.select2) {
+        $('#receiptForm select.select-search').select2({ width: '100%' });
+    }
+});
+</script>
+{% endblock %}

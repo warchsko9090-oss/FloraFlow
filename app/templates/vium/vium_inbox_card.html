@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1240px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; }
+  .vium-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; }
+
+  .meta-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 18px; }
+  .meta-row .lbl { font-size: .74rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+  .meta-row .val { font-weight: 700; color: #0f172a; }
+
+  .vium-table th, .vium-table td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+  .vium-table thead th { font-size: .74rem; text-transform: uppercase; color: #475569; background: #f8fafc; font-weight: 700; }
+  .num { text-align: right; }
+  .src-cell { font-size: .82rem; color: #475569; max-width: 360px; }
+  .empty { text-align: center; color: #94a3b8; padding: 30px; }
+
+  .st-chip { display: inline-block; font-size: .72rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .st-new      { background: #DBEAFE; color: #1E40AF; }
+  .st-ready    { background: #DCFCE7; color: #166534; }
+  .st-done     { background: #F0FDF4; color: #15803D; }
+  .st-skipped  { background: #F3F4F6; color: #6B7280; }
+  .st-error    { background: #FEE2E2; color: #991B1B; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4><i class="fas fa-file-invoice me-2 text-primary"></i>
+        Карточка инбокса #{{ item.id }}
+        <span class="st-chip st-{{ item.status }}">
+          {% if item.status == 'new'    %}В очереди
+          {% elif item.status == 'ready'  %}Готов к проверке
+          {% elif item.status == 'done'   %}Проведено
+          {% elif item.status == 'skipped'%}Пропущено
+          {% elif item.status == 'error'  %}Ошибка
+          {% else %}{{ item.status }}{% endif %}
+        </span>
+      </h4>
+      <span class="text-muted small">
+        {% if item.invoice %}{{ item.invoice.original_name }}{% endif %}
+      </span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      {% if item.invoice %}
+      <a class="btn btn-outline-secondary"
+         href="{{ url_for('finance.invoice_download', inv_id=item.invoice.id) }}">
+        <i class="fas fa-file-pdf"></i> Скачать PDF
+      </a>
+      {% endif %}
+      <a class="btn btn-light" href="{{ url_for('vium.vium_inbox') }}">
+        <i class="fas fa-arrow-left"></i> К инбоксу
+      </a>
+    </div>
+  </div>
+
+  {% if item.error %}
+    <div class="alert alert-danger">{{ item.error }}</div>
+  {% endif %}
+
+  <div class="vium-card">
+    <div class="meta-row">
+      {% if item.invoice %}
+      <div>
+        <div class="lbl">Сумма счёта</div>
+        <div class="val">{{ item.invoice.amount|money_int }}</div>
+      </div>
+      <div>
+        <div class="lbl">Статья бюджета</div>
+        <div class="val">{{ item.invoice.item.name if item.invoice.item else '—' }}</div>
+      </div>
+      <div>
+        <div class="lbl">Срок оплаты</div>
+        <div class="val">{{ item.invoice.due_date.strftime('%d.%m.%Y') if item.invoice.due_date else '—' }}</div>
+      </div>
+      {% endif %}
+      <div>
+        <div class="lbl">Создано</div>
+        <div class="val">{{ item.created_at.strftime('%d.%m.%Y %H:%M') if item.created_at else '—' }}</div>
+      </div>
+      {% if item.parsed_at %}
+      <div>
+        <div class="lbl">Распознано</div>
+        <div class="val">{{ item.parsed_at.strftime('%d.%m.%Y %H:%M') }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if item.status in ('new', 'error') and not parsed_lines %}
+  <div class="vium-card text-center">
+    <p class="text-muted">PDF ещё не распознан. Нажмите кнопку, чтобы запустить парсер.</p>
+    <form method="POST" action="{{ url_for('vium.vium_inbox_parse', item_id=item.id) }}" class="m-0">
+      <button class="btn btn-success">
+        <i class="fas fa-magic"></i> Запустить распознавание
+      </button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if parsed_lines %}
+  <form method="POST" action="{{ url_for('vium.vium_inbox_commit', item_id=item.id) }}">
+    <div class="vium-card p-0">
+      <table class="vium-table table mb-0">
+        <thead>
+          <tr>
+            <th style="width: 30px;"></th>
+            <th style="width: 30%;">Строка из счёта</th>
+            <th style="width: 30%;">Материал ВиУМ</th>
+            <th style="width: 12%;" class="num">Кол-во</th>
+            <th style="width: 12%;" class="num">Цена</th>
+            <th style="width: 12%;" class="num">Сумма</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for ln in parsed_lines %}
+          {% set sug = suggested[loop.index0] %}
+          <tr>
+            <td>
+              <input type="checkbox" class="form-check-input" name="skip[]" value="{{ loop.index0 }}"
+                     title="Пропустить эту строку">
+            </td>
+            <td class="src-cell">
+              <div><b>{{ ln.description }}</b></div>
+              {% if ln.unit %}<div class="small text-muted">{{ ln.unit }}</div>{% endif %}
+              <input type="hidden" name="description[]" value="{{ ln.description }}">
+            </td>
+            <td>
+              <select class="form-select form-select-sm" name="material_id[]">
+                <option value="">— выберите —</option>
+                {% for m in materials %}
+                <option value="{{ m.id }}"
+                        {% if sug and sug == m.id %}selected{% endif %}>
+                  {{ m.name }} ({{ m.unit }})
+                </option>
+                {% endfor %}
+              </select>
+              {% if sug %}<div class="small text-success mt-1"><i class="fas fa-magic"></i> предложено AI</div>{% endif %}
+            </td>
+            <td class="num">
+              <input type="number" step="0.001" min="0"
+                     class="form-control form-control-sm text-end qty-input"
+                     name="qty[]" value="{{ '%g'|format(ln.qty|float) if ln.qty else '' }}"
+                     data-row="{{ loop.index0 }}">
+            </td>
+            <td class="num">
+              <input type="number" step="0.01" min="0"
+                     class="form-control form-control-sm text-end price-input"
+                     name="unit_price[]" value="{{ '%g'|format(ln.unit_price|float) if ln.unit_price else '' }}"
+                     data-row="{{ loop.index0 }}">
+            </td>
+            <td class="num row-total" data-row="{{ loop.index0 }}">
+              {% if ln.qty and ln.unit_price %}
+                {{ '{:,.2f}'.format((ln.qty|float) * (ln.unit_price|float)) }}
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="d-flex justify-content-end flex-wrap gap-2">
+      <button class="btn btn-success" type="submit">
+        <i class="fas fa-check"></i> Провести поступление
+      </button>
+    </div>
+  </form>
+
+  <form method="POST" action="{{ url_for('vium.vium_inbox_skip', item_id=item.id) }}"
+        class="d-flex justify-content-start mt-2">
+    <button class="btn btn-outline-secondary">
+      <i class="fas fa-ban"></i> Не оцифровывать
+    </button>
+  </form>
+
+  <script>
+  (function() {
+    function recalcRow(row) {
+      const q = parseFloat((document.querySelector('.qty-input[data-row="'+row+'"]')||{}).value) || 0;
+      const p = parseFloat((document.querySelector('.price-input[data-row="'+row+'"]')||{}).value) || 0;
+      const cell = document.querySelector('.row-total[data-row="'+row+'"]');
+      if (cell) cell.textContent = (q && p) ? (q*p).toLocaleString('ru-RU', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '';
+    }
+    document.querySelectorAll('.qty-input, .price-input').forEach(el => {
+      el.addEventListener('input', () => recalcRow(el.dataset.row));
+    });
+  })();
+  </script>
+  {% else %}
+    {% if item.status == 'done' %}
+      <div class="vium-card empty">
+        Поступление уже проведено.
+        {% if item.operation %}
+          <a href="{{ url_for('vium.vium_operation_view', op_id=item.operation.id) }}">Открыть операцию</a>
+        {% endif %}
+      </div>
+    {% elif item.status == 'skipped' %}
+      <div class="vium-card empty">Помечено как «не оцифровывать».</div>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

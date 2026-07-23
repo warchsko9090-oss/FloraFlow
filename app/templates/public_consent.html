@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Согласие на обработку персональных данных — Княжество</title>
+    {% set shop_meta_description = 'Согласие на обработку персональных данных на сайте Княжество для отправки заявок, обратной связи и подготовки коммерческих предложений.' %}
+    {% set shop_og_type = 'article' %}
+    <meta name="description" content="{{ shop_meta_description }}">
+    {% include 'shop/_favicon_links.html' %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            bg: '#111814', bgSoft: '#161D19', card: '#1C2420', cardHover: '#232B27',
+                            cream: '#F7F5F0', pine: '#111814', brass: '#B69A6D', brassHover: '#C4AB7E',
+                            brassDim: '#8A7555', graphite: '#C8C5BE', muted: '#7A7E78',
+                            border: '#2E3632', borderLight: '#3D4741', low: '#D47A45'
+                        }
+                    },
+                    fontFamily: { sans: ['Golos Text', 'sans-serif'], serif: ['Cormorant', 'serif'] }
+                }
+            }
+        }
+    </script>
+    {% include 'shop/_styles.html' %}
+    {% include 'shop/_seo_meta.html' %}
+    {% include 'shop/_metrika.html' %}
+    {% include 'shop/_legal_styles.html' %}
+</head>
+<body class="bg-brand-bg text-brand-cream font-sans antialiased selection:bg-brand-brass/30 min-h-screen">
+
+    <div id="bg-slideshow" aria-hidden="true"><div id="bg-slides"></div><div class="bg-slideshow-overlay"></div></div>
+
+    <div class="relative z-10 min-h-screen flex flex-col">
+        {% include 'shop/_header.html' %}
+
+        <main class="flex-1 px-4 py-10 sm:py-14 pb-24 shop-page-glow">
+            <div class="max-w-3xl mx-auto">
+                <a href="{{ url_for('public_client_api.public_shop') }}" class="shop-page-back reveal inline-flex items-center gap-2 text-sm text-brand-muted hover:text-brand-brass transition-colors mb-10">
+                    <i class="fa-solid fa-arrow-left text-[10px]"></i>
+                    <span>Каталог</span>
+                </a>
+
+                <header class="reveal text-center max-w-2xl mx-auto mb-10 sm:mb-12">
+                    <div class="flex items-center justify-center gap-3 mb-5">
+                        <span class="ornament-line w-10 sm:w-14 inline-block"></span>
+                        <span class="ornament-diamond flex-shrink-0"></span>
+                        <span class="ornament-line w-10 sm:w-14 inline-block"></span>
+                    </div>
+                    <p class="text-brand-brass text-[10px] uppercase tracking-[0.35em] font-medium mb-4">Правовая информация</p>
+                    <h1 class="font-serif text-3xl sm:text-4xl lg:text-[2.75rem] font-bold tracking-[0.02em] text-brand-cream leading-[1.1]">
+                        Согласие на обработку<br>персональных данных
+                    </h1>
+                </header>
+
+                <article class="shop-panel reveal reveal-delay-1">
+                    <div class="shop-panel-accent"></div>
+                    <div class="shop-panel-inner legal-doc">
+                        <div class="legal-meta">
+                            <span>Редакция от <b>{{ updated_date }}</b></span>
+                            <span>Действует на сайте <b>{{ request.host }}</b></span>
+                        </div>
+
+                        <p class="legal-lead">
+                            Проставляя отметку в поле «Согласен на обработку персональных данных» и отправляя
+                            форму на сайте, я, действуя свободно, своей волей и в своём интересе, даю
+                            настоящее согласие на обработку моих персональных данных на условиях,
+                            изложенных ниже.
+                        </p>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">1.</span>
+                                <h2 class="legal-section-title">Оператор</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Согласие предоставляется Оператору персональных данных:</p>
+                                <dl class="legal-operator">
+                                    <div class="legal-operator-row"><dt>Наименование</dt><dd>{{ op_name }}</dd></div>
+                                    {% if op_inn %}<div class="legal-operator-row"><dt>ИНН</dt><dd>{{ op_inn }}</dd></div>{% endif %}
+                                    {% if op_ogrn %}<div class="legal-operator-row"><dt>ОГРН</dt><dd>{{ op_ogrn }}</dd></div>{% endif %}
+                                    {% if op_addr %}<div class="legal-operator-row"><dt>Адрес</dt><dd>{{ op_addr }}</dd></div>{% endif %}
+                                    {% if op_email %}<div class="legal-operator-row"><dt>E-mail</dt><dd><a href="mailto:{{ op_email }}">{{ op_email }}</a></dd></div>{% endif %}
+                                    {% if op_phone %}<div class="legal-operator-row"><dt>Телефон</dt><dd>{{ op_phone }}</dd></div>{% endif %}
+                                </dl>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">2.</span>
+                                <h2 class="legal-section-title">Перечень персональных данных</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Согласие даётся на обработку следующих персональных данных, указываемых мной при заполнении форм на Сайте:</p>
+                                <ul class="legal-list">
+                                    <li>фамилия, имя, отчество либо наименование организации (ИНН);</li>
+                                    <li>номер контактного телефона;</li>
+                                    <li>адрес электронной почты;</li>
+                                    <li>содержание сообщения и состав запрашиваемой продукции.</li>
+                                </ul>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">3.</span>
+                                <h2 class="legal-section-title">Цели обработки</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Персональные данные обрабатываются в целях:</p>
+                                <ul class="legal-list">
+                                    <li>подготовки и направления коммерческого предложения (КП) по запросу;</li>
+                                    <li>обработки заявок на позиции «по запросу», уточнения наличия, цен и сроков поставки;</li>
+                                    <li>осуществления обратной связи и направления ответов на обращения;</li>
+                                    <li>согласования условий самовывоза и доставки;</li>
+                                    <li>заключения и исполнения договоров.</li>
+                                </ul>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">4.</span>
+                                <h2 class="legal-section-title">Перечень действий и способы обработки</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Я даю согласие на совершение Оператором следующих действий с моими персональными данными: сбор, запись, систематизация, накопление, хранение, уточнение (обновление, изменение), извлечение, использование, передача (предоставление, доступ), обезличивание, блокирование, удаление и уничтожение.</p>
+                                <p>Обработка персональных данных может осуществляться как с использованием средств автоматизации, так и без использования таких средств (смешанная обработка).</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">5.</span>
+                                <h2 class="legal-section-title">Срок действия согласия</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Настоящее согласие действует с момента его предоставления (отправки формы) и до достижения целей обработки персональных данных либо до момента его отзыва.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">6.</span>
+                                <h2 class="legal-section-title">Порядок отзыва согласия</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Согласие может быть отозвано мной в любой момент путём направления Оператору письменного уведомления{% if op_email %} на адрес электронной почты <a href="mailto:{{ op_email }}">{{ op_email }}</a>{% endif %}{% if op_addr %} либо по адресу: {{ op_addr }}{% endif %}.</p>
+                                <p>В случае отзыва согласия Оператор прекращает обработку персональных данных и уничтожает их в сроки, установленные законодательством Российской Федерации, за исключением случаев, когда обработка может быть продолжена на иных законных основаниях.</p>
+                            </div>
+                        </section>
+
+                        <section class="legal-section">
+                            <div class="legal-section-head">
+                                <span class="legal-section-num">7.</span>
+                                <h2 class="legal-section-title">Подтверждение</h2>
+                            </div>
+                            <div class="legal-body">
+                                <p>Я подтверждаю, что ознакомлен(а) с <a href="{{ url_for('public_client_api.public_privacy') }}">Политикой обработки персональных данных</a> Оператора, мне понятны мои права, предусмотренные Федеральным законом от 27.07.2006 № 152-ФЗ «О персональных данных», а указанные мной персональные данные являются достоверными.</p>
+                                <p>Я подтверждаю, что предоставленное согласие является конкретным, предметным, информированным, сознательным и однозначным.</p>
+                            </div>
+                        </section>
+                    </div>
+                </article>
+
+                <div class="reveal reveal-delay-2 mt-8 text-center">
+                    <a href="{{ url_for('public_client_api.public_privacy') }}" class="inline-flex items-center gap-2 text-sm text-brand-muted hover:text-brand-brass transition-colors">
+                        <i class="fa-solid fa-arrow-left text-[10px]"></i>
+                        <span>Политика обработки персональных данных</span>
+                    </a>
+                </div>
+            </div>
+        </main>
+
+        {% include 'shop/_footer.html' %}
+    </div>
+
+    {% include 'shop/_scroll_top.html' %}
+    {% include 'shop/_cookie_consent.html' %}
+
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=3"></script>
+    <script>
+        window.onload = () => {
+            Shop.init([], {});
+            Shop.deferBgSlideshow();
+            Shop.initScrollTopButton();
+            const obs = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('visible');
+                        obs.unobserve(entry.target);
+                    }
+                });
+            }, { threshold: 0.06, rootMargin: '0px 0px -24px 0px' });
+            document.querySelectorAll('.reveal').forEach(el => {
+                const rect = el.getBoundingClientRect();
+                if (rect.top < window.innerHeight * 0.92) el.classList.add('visible');
+                else obs.observe(el);
+            });
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+{% set site_name = 'Княжество' %}
+{% set page_title = shop_page_title|default(site_name) %}
+{% set page_description = shop_meta_description|default('Премиальный архитектурный питомник в Тульской области. Взрослые деревья, хвойные и формованные растения для ландшафтных проектов, архитекторов и B2B-заказчиков.') %}
+{% set canonical_url = shop_canonical_url|default(request.base_url if request is defined else '') %}
+{% set og_type = shop_og_type|default('website') %}
+{% set og_image_url = shop_og_image|default((request.url_root.rstrip('/') ~ url_for('static', filename='img/og-knyajestvo.svg')) if request is defined else '') %}
+{% set page_locale = 'ru_RU' %}
+<link rel="canonical" href="{{ canonical_url }}">
+<meta property="og:locale" content="{{ page_locale }}">
+<meta property="og:type" content="{{ og_type }}">
+<meta property="og:site_name" content="{{ site_name }}">
+<meta property="og:title" content="{{ page_title }}">
+<meta property="og:description" content="{{ page_description }}">
+<meta property="og:url" content="{{ canonical_url }}">
+{% if og_image_url %}
+<meta property="og:image" content="{{ og_image_url }}">
+<meta property="og:image:alt" content="{{ page_title }}">
+{% endif %}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ page_title }}">
+<meta name="twitter:description" content="{{ page_description }}">
+{% if og_image_url %}
+<meta name="twitter:image" content="{{ og_image_url }}">
+{% endif %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "{{ request.url_root.rstrip('/') if request is defined else '' }}/#organization",
+      "name": "Княжество",
+      "url": "{{ request.url_root.rstrip('/') if request is defined else '' }}",
+      "logo": "{{ request.url_root.rstrip('/') ~ url_for('static', filename='img/favicon-knyajestvo.svg') if request is defined else '' }}",
+      "description": "Премиальный архитектурный питомник в Тульской области. Формованные, хвойные и взрослые растения для частных усадеб, ландшафтных бюро и B2B-проектов."
+    },
+    {
+      "@type": "WebSite",
+      "@id": "{{ request.url_root.rstrip('/') if request is defined else '' }}/#website",
+      "url": "{{ request.url_root.rstrip('/') if request is defined else '' }}",
+      "name": "Княжество",
+      "publisher": {
+        "@id": "{{ request.url_root.rstrip('/') if request is defined else '' }}/#organization"
+      },
+      "inLanguage": "ru-RU"
+    }
+  ]
+}
+</script>

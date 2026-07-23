@@ -1,0 +1,12 @@
+<a href="{{ contact_href(telegram) }}"
+   class="shop-tg-link group"
+   target="_blank"
+   rel="noopener noreferrer"
+   aria-label="{% if telegram.label %}{{ telegram.label }}{% else %}Telegram{% endif %}: {{ telegram.value }}"
+   title="{% if telegram.label %}{{ telegram.label }}{% else %}Telegram{% endif %}">
+    <span class="shop-tg-icon" aria-hidden="true"><i class="fa-brands fa-telegram"></i></span>
+    <span class="shop-tg-text">
+        <span class="shop-tg-label">{% if telegram.label %}{{ telegram.label }}{% else %}Telegram{% endif %}</span>
+        <span class="shop-tg-handle">{{ telegram.value }}</span>
+    </span>
+</a>

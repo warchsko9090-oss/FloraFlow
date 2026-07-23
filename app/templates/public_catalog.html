@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    {% set shop_page_title = 'Княжество — B2B питомник' %}
+    {% set shop_meta_description = 'Купить растения для ландшафтных и девелоперских проектов: взрослые деревья, хвойные, формованные растения и свободные остатки архитектурного питомника Княжество.' %}
+    {% set shop_og_type = 'website' %}
+    {% include 'shop/_shop_head.html' %}
+</head>
+<body class="bg-brand-bg text-brand-cream font-sans antialiased selection:bg-brand-brass/30 min-h-screen">
+
+    <div id="bg-slideshow" aria-hidden="true"><div id="bg-slides"></div><div class="bg-slideshow-overlay"></div></div>
+
+    <div class="relative z-10 min-h-screen flex flex-col">
+        {% include 'shop/_header.html' %}
+
+        <main class="flex-1 px-4 py-10 sm:py-14 pb-32 shop-page-glow shop-main-with-cart">
+            <div class="max-w-6xl mx-auto">
+                <div class="flex flex-col gap-5 mb-10 reveal reveal-delay-2">
+                    <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+                        <div>
+                            <div class="flex items-center gap-3 mb-3">
+                                <span class="ornament-line w-8 inline-block"></span>
+                                <p class="text-brand-brass text-[10px] uppercase tracking-[0.3em] font-medium">Каталог</p>
+                            </div>
+                            <h1 class="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-brand-cream">Свободные остатки</h1>
+                            <p class="text-base text-brand-graphite mt-2 font-serif italic">Тульская область · B2B</p>
+                        </div>
+                        <div class="relative shrink-0 w-full sm:w-48 md:w-52">
+                            <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted text-xs pointer-events-none"></i>
+                            <input id="search" type="search" placeholder="Поиск…"
+                                class="w-full h-9 pl-9 pr-3 rounded-sm border border-brand-border bg-brand-card text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 transition-colors"
+                                oninput="filterCatalog()">
+                        </div>
+                    </div>
+                    <div class="hidden md:flex flex-wrap gap-2" id="cat-filters"></div>
+                </div>
+
+                <section id="section-regular">
+                    <div id="section-ground-header" class="hidden flex items-center gap-4 mb-8 reveal">
+                        <span class="h-px flex-1 bg-gradient-to-r from-transparent via-brand-border to-brand-border"></span>
+                        <div class="text-center px-2">
+                            <div class="flex items-center justify-center gap-3 mb-2">
+                                <span class="ornament-diamond flex-shrink-0"></span>
+                            </div>
+                            <h2 class="font-serif text-2xl sm:text-3xl font-bold tracking-tight text-brand-cream">Растения в грунте</h2>
+                        </div>
+                        <span class="h-px flex-1 bg-gradient-to-l from-transparent via-brand-border to-brand-border"></span>
+                    </div>
+                    <div id="catalog-regular" class="grid grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5 lg:gap-6"></div>
+                </section>
+
+                <section id="section-seedlings" class="hidden mt-14 sm:mt-16">
+                    <div class="flex items-center gap-4 mb-8 reveal">
+                        <span class="h-px flex-1 bg-gradient-to-r from-transparent via-brand-border to-brand-border"></span>
+                        <div class="text-center px-2">
+                            <div class="flex items-center justify-center gap-3 mb-2">
+                                <span class="ornament-diamond flex-shrink-0"></span>
+                            </div>
+                            <h2 class="font-serif text-2xl sm:text-3xl font-bold tracking-tight text-brand-cream">Контейнерные позиции</h2>
+                        </div>
+                        <span class="h-px flex-1 bg-gradient-to-l from-transparent via-brand-border to-brand-border"></span>
+                    </div>
+                    <div id="catalog-seedlings" class="grid grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5 lg:gap-6"></div>
+                </section>
+
+                <p id="empty-state" class="hidden text-center text-brand-muted py-20 font-serif italic text-lg">Ничего не найдено</p>
+            </div>
+        </main>
+
+        {% include 'shop/_footer.html' %}
+    </div>
+
+    {% include 'shop/_scroll_top.html' %}
+    {% include 'shop/_cart.html' %}
+    {% include 'shop/_checkout.html' %}
+    {% include 'shop/_cookie_consent.html' %}
+
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=8"></script>
+    <script>
+        const plants = {{ plants_json|safe }};
+        let activeCategory = 'all';
+        let scrollObserver = null;
+
+        const plantPageUrl = p => (p.is_container || p.is_seedling)
+            ? `/shop/plant/${p.plant_id}?seedling=1`
+            : `/shop/plant/${p.plant_id}`;
+
+        function initScrollReveal() {
+            scrollObserver = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('visible');
+                        scrollObserver.unobserve(entry.target);
+                    }
+                });
+            }, { threshold: 0.08, rootMargin: '0px 0px -20px 0px' });
+        }
+
+        function attachReveal(el) {
+            const rect = el.getBoundingClientRect();
+            if (rect.top < window.innerHeight * 0.95 && rect.bottom > 0) {
+                el.classList.add('visible');
+                return;
+            }
+            scrollObserver.observe(el);
+        }
+
+        function observeCatalogCards() {
+            document.querySelectorAll('.catalog-card:not(.visible)').forEach(attachReveal);
+        }
+
+        function buildCategoryFilters() {
+            const groundPlants = plants.filter(p => !p.is_container);
+            const cats = [...new Set(groundPlants.map(p => p.name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+            const container = document.getElementById('cat-filters');
+            container.innerHTML = '';
+            const mkBtn = (cat, label, active) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.dataset.cat = cat;
+                btn.className = 'cat-btn px-3 py-2 rounded-sm text-xs font-medium transition-colors text-left ' +
+                    (active
+                        ? 'bg-brand-brass text-brand-bg uppercase tracking-wider text-[11px]'
+                        : 'border border-brand-border bg-transparent text-brand-muted hover:border-brand-brass/50 hover:text-brand-cream');
+                btn.textContent = label;
+                btn.onclick = () => setCategory(cat);
+                container.appendChild(btn);
+            };
+            mkBtn('all', 'Все', true);
+            cats.forEach(cat => mkBtn(cat, cat, false));
+        }
+
+        function setCategory(cat) {
+            activeCategory = cat;
+            document.querySelectorAll('.cat-btn').forEach(btn => {
+                const on = btn.dataset.cat === cat;
+                btn.className = 'cat-btn px-3 py-2 rounded-sm text-xs font-medium transition-colors text-left ' +
+                    (on
+                        ? 'bg-brand-brass text-brand-bg uppercase tracking-wider text-[11px]'
+                        : 'border border-brand-border bg-transparent text-brand-muted hover:border-brand-brass/50 hover:text-brand-cream');
+            });
+            filterCatalog();
+        }
+
+        function filterCatalog() {
+            const q = document.getElementById('search').value.toLowerCase().trim();
+            const visible = plants.filter(p => {
+                // Теги быстрого доступа — только «грунт»
+                if (activeCategory !== 'all' && p.is_container) return false;
+                if (activeCategory !== 'all' && p.name !== activeCategory) return false;
+                if (!q) return true;
+                return `${p.name} ${p.latin}`.toLowerCase().includes(q);
+            });
+            renderCatalog(visible);
+            document.getElementById('empty-state').classList.toggle('hidden', visible.length > 0);
+        }
+
+        function buildCard(plant) {
+            const card = document.createElement('a');
+            card.href = plantPageUrl(plant);
+            const hotClass = plant.is_hot ? ' catalog-tile-hot' : '';
+            card.className = 'catalog-card catalog-tile shop-panel reveal block overflow-hidden group relative' + hotClass;
+            const imgBlock = plant.img
+                ? `<img src="${Shop.esc(plant.img)}" class="catalog-tile-photo w-full h-full object-cover object-center" alt="${Shop.esc(plant.name)}" loading="lazy" decoding="async">`
+                : `<div class="w-full h-full flex items-center justify-center bg-brand-bgSoft"><i class="fa-solid fa-seedling text-brand-muted/25 text-4xl"></i></div>`;
+            const hotBadge = plant.is_hot ? '<span class="catalog-hot-badge">Топ</span>' : '';
+            const sectionBadge = plant.is_container
+                ? (plant.is_seedling
+                    ? '<span class="inline-block mt-2 text-[10px] uppercase tracking-wider text-brand-brassDim border border-brand-brass/30 px-2 py-0.5 rounded-sm">Саженцы</span>'
+                    : '<span class="inline-block mt-2 text-[10px] uppercase tracking-wider text-brand-brassDim border border-brand-brass/30 px-2 py-0.5 rounded-sm">Контейнерная площадка</span>')
+                : '';
+            const sizesLine = (!plant.is_seedling && plant.size_hint)
+                ? `<p class="text-xs text-brand-muted mt-2 leading-snug">${Shop.esc(plant.size_hint)}</p>`
+                : '';
+            const tags = [];
+            if (plant.root_system) tags.push(`<span class="catalog-tag"><i class="fa-solid fa-seedling"></i><span>${Shop.esc(plant.root_system)}</span></span>`);
+            if (plant.pruning) tags.push(`<span class="catalog-tag"><i class="fa-solid fa-scissors"></i><span>${Shop.esc(plant.pruning)}</span></span>`);
+            const tagsBlock = tags.length ? `<div class="flex flex-wrap gap-1.5 mt-2.5">${tags.join('')}</div>` : '';
+            const stockHint = plant.has_on_request && plant.total_stock <= 0
+                ? '<p class="text-xs sm:text-sm uppercase tracking-wider text-brand-brassDim mt-2">Есть позиции по запросу</p>'
+                : (plant.total_stock > 0 ? `<p class="text-xs sm:text-sm text-brand-graphite mt-2 tabular-nums">${plant.total_stock} шт в наличии</p>` : '');
+            card.innerHTML = `
+                ${hotBadge}
+                <div class="shop-panel-accent"></div>
+                <div class="relative aspect-square overflow-hidden bg-brand-bgSoft">${imgBlock}</div>
+                <div class="p-4 sm:p-5 border-t border-brand-border/60">
+                    <h3 class="font-serif font-semibold leading-tight text-brand-cream text-base sm:text-lg group-hover:text-brand-brass transition-colors">${Shop.esc(plant.name)}</h3>
+                    ${plant.latin ? `<p class="font-serif italic text-sm sm:text-base text-brand-graphite mt-1.5 leading-snug">${Shop.esc(plant.latin)}</p>` : ''}
+                    ${sectionBadge}
+                    ${sizesLine}
+                    ${tagsBlock}
+                    ${stockHint}
+                </div>`;
+            return card;
+        }
+
+        function renderCatalog(items = plants) {
+            const regularGrid = document.getElementById('catalog-regular');
+            const seedlingGrid = document.getElementById('catalog-seedlings');
+            const seedlingSection = document.getElementById('section-seedlings');
+            const regularSection = document.getElementById('section-regular');
+            const groundHeader = document.getElementById('section-ground-header');
+            regularGrid.innerHTML = '';
+            seedlingGrid.innerHTML = '';
+
+            const regularItems = items.filter(p => !p.is_container);
+            const seedlingItems = items.filter(p => p.is_container);
+
+            regularItems.forEach(plant => regularGrid.appendChild(buildCard(plant)));
+            seedlingItems.forEach(plant => seedlingGrid.appendChild(buildCard(plant)));
+
+            const showGround = regularItems.length > 0;
+            const showContainer = seedlingItems.length > 0;
+            regularSection.classList.toggle('hidden', !showGround);
+            seedlingSection.classList.toggle('hidden', !showContainer);
+            if (groundHeader) {
+                groundHeader.classList.toggle('hidden', !(showGround && showContainer));
+            }
+
+            observeCatalogCards();
+            document.querySelectorAll('#section-seedlings .reveal:not(.catalog-card)').forEach(attachReveal);
+        }
+
+        window.onload = () => {
+            Shop.init({{ catalog_json|safe }});
+            initScrollReveal();
+            Shop.deferBgSlideshow();
+            Shop.initScrollTopButton();
+            buildCategoryFilters();
+            renderCatalog();
+            document.querySelectorAll('.reveal:not(.catalog-card)').forEach(attachReveal);
+            document.addEventListener('keydown', e => {
+                if (e.key === 'Escape') Shop.closeCheckoutModal();
+            });
+        };
+    </script>
+</body>
+</html>

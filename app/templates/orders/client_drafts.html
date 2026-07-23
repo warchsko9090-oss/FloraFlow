@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title"><i class="fas fa-file-signature"></i> Заказы на согласование</div>
+        <div class="page-subtitle">Заявки с публичной витрины — требуют двух согласований (менеджер питомника + менеджер сайта).</div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm">К заказам</a>
+        <a href="{{ url_for('orders.shop_on_requests_list') }}" class="btn btn-outline-primary btn-sm">
+            По запросу
+            {% if site_badges and (site_badges.on_request.new or site_badges.on_request.overdue) %}
+            <span class="dash-badge ms-1" aria-label="По запросу: {{ site_badges.on_request.new }} новых, {{ site_badges.on_request.overdue }} просрочено">
+                {% if site_badges.on_request.new %}<span class="dash-pill today" title="Новые">{{ site_badges.on_request.new }}</span>{% endif %}
+                {% if site_badges.on_request.overdue %}<span class="dash-pill overdue" title="Не согласовано более 24 часов">{{ site_badges.on_request.overdue }}</span>{% endif %}
+            </span>
+            {% endif %}
+        </a>
+    </div>
+</div>
+
+<div class="filter-panel mb-3">
+    <form method="GET" class="d-flex gap-2" hx-boost="false">
+        <select class="form-select form-select-sm" name="mode" style="max-width: 240px;">
+            <option value="new" {% if mode == 'new' %}selected{% endif %}>На согласовании</option>
+            <option value="approved" {% if mode == 'approved' %}selected{% endif %}>Согласованные</option>
+            <option value="rejected" {% if mode == 'rejected' %}selected{% endif %}>Отклонённые</option>
+            <option value="all" {% if mode == 'all' %}selected{% endif %}>Все</option>
+        </select>
+        <button class="btn btn-success btn-sm">Показать</button>
+    </form>
+</div>
+
+<div class="card section-card">
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Дата</th>
+                    <th>Клиент</th>
+                    <th>Телефон</th>
+                    <th>Позиций</th>
+                    <th>Кол-во</th>
+                    <th>Согласования</th>
+                    <th>Статус</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in drafts %}
+                <tr>
+                    <td>#{{ d.doc.id }}</td>
+                    <td>{{ d.doc.date|dateru }}</td>
+                    <td>{{ d.meta.customer_name }}</td>
+                    <td>{{ d.meta.phone or '-' }}</td>
+                    <td>{{ d.items_count }}</td>
+                    <td>{{ d.items_qty }}</td>
+                    <td class="small">
+                        {% if d.doc.doc_type == 'client_draft' %}
+                        {% for key, slot in d.approval.slots.items() %}
+                        <div>
+                            {% if slot.done %}
+                            <span class="text-success"><i class="fas fa-check"></i></span>
+                            {% else %}
+                            <span class="text-muted"><i class="fas fa-clock"></i></span>
+                            {% endif %}
+                            {{ slot.label }}: {% if slot.done %}{{ slot.username }}{% else %}—{% endif %}
+                        </div>
+                        {% endfor %}
+                        {% elif d.doc.doc_type == 'client_draft_approved' %}
+                        <span class="text-success">2/2</span>
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if d.doc.doc_type == 'client_draft' %}
+                        <span class="badge bg-warning text-dark">{{ d.approval.done_count }}/{{ d.approval.required_count }}</span>
+                        {% elif d.doc.doc_type == 'client_draft_approved' %}
+                        <span class="badge bg-success">в резерве</span>
+                        {% else %}
+                        <span class="badge bg-secondary">отклонена</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('orders.client_draft_detail', doc_id=d.doc.id) }}">Открыть</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="9" class="text-center text-muted py-4">Нет заявок</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

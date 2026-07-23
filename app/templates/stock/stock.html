@@ -1,0 +1,1393 @@
+{% extends "base.html" %}
+{% block content %}
+<style id="stock-kp-styles">
+    /* === ЭКРАН: как остатки контейнерной площадки (компактная table-1c) === */
+    .table-stock {
+        font-size: 13px;
+        border-collapse: collapse;
+        width: 100%;
+        background: #fff;
+    }
+
+    .table-stock thead th {
+        position: sticky; top: 0; z-index: 100;
+        background-color: #f8f9fa !important;
+        color: #374151 !important;
+        vertical-align: middle;
+        text-align: center;
+        padding: 10px 8px;
+        font-weight: 600;
+        font-size: 12px;
+        letter-spacing: 0;
+        text-transform: none;
+        border: none;
+        border-bottom: 1px solid #e5e7eb;
+        box-shadow: none;
+        white-space: nowrap;
+    }
+    .table-stock thead th.text-start { text-align: left !important; }
+
+    .group-header-row {
+        background-color: #F3F4F6;
+        font-weight: 700;
+        color: #111827;
+        border-bottom: 1px solid #e5e7eb;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+    .group-header-row:hover { background-color: #E5E7EB; color: #000; }
+    .group-header-row td { padding: 10px 8px; vertical-align: middle; }
+
+    .detail-row td {
+        border: 1px solid #f3f4f6;
+        padding: 7px 8px;
+        vertical-align: middle;
+        background: #fff;
+        font-size: 12.5px;
+    }
+
+    .section-header-row td {
+        background: #fff !important;
+        border-bottom: 1px solid #e5e7eb !important;
+    }
+
+    .text-center { text-align: center !important; }
+    .text-end { text-align: right !important; }
+    .text-start { text-align: left !important; }
+
+    /* Мягкие акценты колонок (без тяжёлой «зелёной» заливки) */
+    .col-free-header { color: #1B5E20 !important; }
+    .col-free-cell { color: #1B5E20; font-weight: 600; text-align: center; }
+    .col-fact-header { color: #01579B !important; }
+    .col-fact-cell { color: #0277BD; font-weight: 600; text-align: center; }
+    .col-reserve { color: #c2410c; font-weight: 600; text-align: center; }
+    .col-shipped { color: #6b7280; text-align: center; }
+    .col-sum { font-weight: 700; text-align: right; color: #111827; white-space: nowrap; }
+    .col-free-sum { color: #1B5E20; font-weight: 700; text-align: right; white-space: nowrap; }
+
+    .stock-footer-row td {
+        background-color: #f8f9fa !important;
+        color: #111827 !important;
+        font-weight: 700;
+        padding: 10px 8px;
+        border-top: 1px solid #e5e7eb;
+        font-size: 13px;
+        vertical-align: middle;
+        text-transform: none;
+    }
+    .stock-footer-row .footer-label-cell {
+        text-align: right !important;
+    }
+    .stock-footer-row .footer-free,
+    .stock-footer-row .footer-fact {
+        text-align: center !important;
+        white-space: nowrap;
+    }
+    .stock-footer-row .footer-free { color: #1B5E20 !important; }
+    .stock-footer-row .footer-fact { color: #01579B !important; }
+    .stock-footer-row .footer-free-sum,
+    .stock-footer-row .footer-sum {
+        text-align: right !important;
+        white-space: nowrap;
+        padding-right: 12px !important;
+        font-variant-numeric: tabular-nums;
+    }
+    .stock-footer-row .footer-free-sum { color: #1B5E20 !important; }
+
+    .price-edit-input {
+        width: 100%;
+        text-align: right;
+        border: none;
+        background: transparent;
+        border-bottom: 1px dotted #ccc;
+        font-weight: bold;
+        color: #333;
+    }
+
+    .print-latin { display: none; }
+    .print-header, .print-gallery { display: none; }
+
+    body.kp-print .app-sidebar,
+    body.kp-print .app-header,
+    body.kp-print .bottom-nav,
+    body.kp-print #chatButton,
+    body.kp-print #chatWindow,
+    body.kp-print #networkStatus,
+    body.kp-print .no-print,
+    body.kp-print form,
+    body.kp-print .modal { display: none !important; }
+    body.kp-print .app-shell {
+        display: block !important;
+        grid-template-columns: 1fr !important;
+        grid-template-rows: auto 1fr !important;
+        grid-template-areas: "main" "main" !important;
+    }
+    body.kp-print main.app-main { margin: 0 !important; padding: 0 !important; }
+
+    @media print {
+        @page { size: A4 portrait; margin: 10mm; }
+        body, .table-stock { font-family: Arial, Helvetica, sans-serif !important; }
+        body { background: white; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        
+        /* ВАЖНО: скрываем layout приложения (сайдбар/хедер/нижняя навигация) */
+        .app-sidebar, .app-header, .bottom-nav { display: none !important; }
+        .app-shell {
+            grid-template-columns: 1fr !important;
+            grid-template-rows: auto 1fr !important;
+            grid-template-areas: "main" "main" !important;
+        }
+        main.app-main { margin: 0 !important; }
+
+        .navbar, .btn, .no-print, .d-md-none, .d-lg-none, .bg-light, form, .modal { display: none !important; }
+        #chatButton, #chatWindow { display: none !important; } 
+        
+        .print-header { display: block !important; margin-bottom: 20px; border-bottom: 2px solid #2E7D32; padding-bottom: 10px; }
+        .print-header h1 { font-size: 16pt !important; margin-bottom: 0 !important; }
+        .print-header p, .print-header div { font-size: 9pt !important; }
+        
+        .table-responsive { display: block !important; border: none !important; }
+        .table-stock {
+            width: 100% !important;
+            border: none !important;
+            border-collapse: collapse !important;
+            table-layout: fixed !important;
+        }
+
+        .table-stock thead th {
+            background-color: #2E7D32 !important; color: white !important;
+            border: none !important; padding: 6px !important; font-size: 9pt !important;
+            box-sizing: border-box !important;
+            text-transform: uppercase !important;
+            font-weight: 800 !important;
+        }
+        .table-stock td {
+            border: none !important; padding: 5px 6px !important; font-size: 9pt !important; line-height: 1.25 !important;
+            background: #fff !important;
+            box-sizing: border-box !important;
+            vertical-align: middle !important;
+        }
+
+        /* === Ширины колонок в печати === */
+        .kp-col-name  { width: 50% !important; word-wrap: break-word !important; overflow-wrap: break-word !important; white-space: normal !important; text-align: left !important; }
+        .kp-col-size  { width: 14% !important; white-space: normal !important; word-break: keep-all !important; text-align: center !important; }
+        .kp-col-price { width: 16% !important; white-space: nowrap !important; text-align: right !important; }
+        .col-free-header, .col-free-cell { width: 20% !important; white-space: nowrap !important; text-align: center !important; }
+
+        /* Подпись "ИТОГО ПО СКЛАДУ" и пустые ячейки тфута в КП не нужны */
+        .table-stock tfoot { display: none !important; }
+
+        /* В ячейке "Растение" flex мешает естественному переносу — отключаем */
+        .kp-col-name > div { display: block !important; }
+        .kp-col-name .print-latin { display: inline !important; margin-left: 6px !important; }
+        .kp-col-name span { vertical-align: baseline !important; }
+
+        /* СКРЫВАЕМ ЛИШНИЕ КОЛОНКИ */
+        .col-field, .col-reserve, .col-shipped, .col-fact-header, .col-fact-cell, .footer-fact, .col-sum, .col-free-sum, .footer-sum, .col-info, .col-year { display: none !important; }
+
+        .collapse { display: table-row !important; height: auto !important; visibility: visible !important; }
+        .rotate-icon { display: none !important; }
+
+        /* === Карточная разметка позиций в КП === */
+        .group-header-row { background-color: #F1F8E9 !important; page-break-after: avoid !important; page-break-inside: avoid !important; }
+        .group-header-row td {
+            background-color: #F1F8E9 !important;
+            border-top: 2px solid #2E7D32 !important;
+            border-bottom: 1px solid #C5E1A5 !important;
+            font-weight: 800 !important; font-size: 10.5pt !important; color: #1B5E20 !important;
+            text-transform: uppercase !important;
+            padding: 8px 6px !important;
+        }
+        .detail-row td {
+            border-bottom: 1px dotted #E0E0E0 !important;
+            padding: 4px 6px !important;
+            font-size: 9pt !important;
+        }
+        .detail-row.last-of-group td { border-bottom: none !important; padding-bottom: 6px !important; }
+
+        /* Пустая строка-разделитель между позициями */
+        .group-gap-row td {
+            border: none !important;
+            background: #fff !important;
+            height: 14px !important;
+            padding: 0 !important;
+        }
+
+        .stock-footer-row td { background-color: #fff !important; color: #000 !important; border-top: 2px solid #2E7D32 !important; font-size: 10pt !important; padding-top: 8px !important; }
+        .stock-footer-row .footer-free { background-color: #E8F5E9 !important; border: 1px solid #81C784 !important; font-weight: bold; }
+        
+        /* СТИЛЬ ЛАТИНИЦЫ В ПЕЧАТИ */
+        .print-latin { 
+            display: inline-block !important; 
+            font-size: 8pt !important; 
+            color: #555 !important; 
+            font-weight: normal !important;
+            font-style: italic !important;
+            margin-left: 10px !important;
+            text-transform: none !important; 
+        }
+
+        .print-gallery { display: block !important; margin-top: 20px; page-break-inside: avoid; }
+        .gallery-title { text-align: center; font-weight: bold; margin-bottom: 10px; font-size: 10pt; border-bottom: 1px solid #ccc; }
+        .gallery-row { display: flex; justify-content: space-between; gap: 5px; }
+        .gallery-item { width: 32%; height: 120px; border: 1px solid #eee; overflow: hidden; }
+        .gallery-item img { width: 100%; height: 100%; object-fit: cover; }
+    }
+</style>
+
+<!-- ШАПКА ДЛЯ ПЕЧАТИ -->
+<div class="print-header">
+    <div class="d-flex justify-content-between align-items-start mb-3">
+        <div style="width: 40%;">
+            {% if print_settings.get('company_logo_url') %}
+            <img src="{{ print_settings.get('company_logo_url') }}" alt="Logo" style="max-height: 70px; width: auto; object-fit: contain;">
+            {% else %}
+            <h2 class="fw-bold text-uppercase text-secondary m-0">LOGOTYPE</h2>
+            {% endif %}
+        </div>
+        <div class="text-end" style="width: 60%;">
+            <h4 class="fw-bold m-0" style="color: #2E7D32;">{{ print_settings.get('company_name', 'Название компании') }}</h4>
+            <div class="small text-muted mb-1">{{ print_settings.get('footer_text', '') }}</div>
+            <div class="small fw-bold">
+                {% if print_settings.get('phone') %}<span class="ms-3">{{ print_settings.get('phone') }}</span>{% endif %}
+                {% if print_settings.get('website') %}<span class="ms-3">{{ print_settings.get('website') }}</span>{% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="text-center">
+        <h2 class="fw-bold text-uppercase m-0">Товарные остатки</h2>
+        <p class="text-muted m-0">от {{ end_date }}</p>
+    </div>
+</div>
+
+<!-- ИНТЕРФЕЙС + ФИЛЬТРЫ (Как было, скрыто при печати) -->
+<div class="page-header no-print">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-warehouse"></i>
+            Остатки на складе
+        </div>
+        <div class="page-subtitle">
+            Текущие остатки, резервы и свободный товар по всем полям и партиям.
+        </div>
+    </div>
+    <div class="page-actions">
+        <div class="btn-group btn-group-sm">
+            <a href="{{ url_for('stock.stock_report', mode='product', end_date=end_date) }}" class="btn {% if report_mode=='product' %}btn-success{% else %}btn-outline-secondary{% endif %}">Товарные</a>
+            <a href="{{ url_for('stock.stock_report', mode='inventory', end_date=end_date) }}" class="btn {% if report_mode=='inventory' %}btn-success{% else %}btn-outline-secondary{% endif %}">По полям</a>
+        </div>
+    </div>
+</div>
+
+<div class="filter-panel no-print">
+    <!-- ИСПРАВЛЕНИЕ: Добавили hx-boost="false" чтобы браузер корректно очищал кэш формы -->
+    <form class="d-flex align-items-center flex-wrap gap-2 w-100" method="GET" id="stockForm" hx-boost="false">
+        <input type="hidden" name="mode" value="{{ report_mode }}">
+        <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm" style="width: auto;">
+        
+        <!-- Фильтры -->
+        <div class="dropdown">
+            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Растения {% if selected_plants %}({{ selected_plants|length }}){% endif %}</button>
+            <div class="dropdown-menu dropdown-check-list shadow" style="max-height: 300px; overflow-y: auto;">
+                <!-- ИСПРАВЛЕНИЕ: Заменили href="#" на javascript:void(0) -->
+                <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('plant', false)">Сбросить</a></div>
+                <input type="text" class="form-control form-control-sm mx-2 mb-2" style="width:90%" placeholder="Поиск..." onkeyup="filterList(this, '.chk-plant-div')">
+                {% for p in all_plants %}
+                <div class="form-check ms-3 chk-plant-div"><input class="form-check-input check-plant" type="checkbox" name="filter_plant" value="{{ p.id }}" id="p{{p.id}}" {% if p.id in selected_plants %}checked{% endif %}><label class="form-check-label small" for="p{{p.id}}">{{ p.name }}</label></div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <div class="dropdown">
+            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Размеры {% if selected_sizes %}<span class="badge bg-secondary">{{ selected_sizes|length }}</span>{% endif %}</button>
+            <div class="dropdown-menu dropdown-check-list shadow" style="max-height: 300px; overflow-y: auto;">
+                <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('size', false)">Сбросить</a></div>
+                {% for s in all_sizes %}
+                <div class="form-check ms-3"><input class="form-check-input check-size" type="checkbox" name="filter_size" value="{{ s.id }}" id="s{{s.id}}" {% if s.id in selected_sizes %}checked{% endif %}><label class="form-check-label small" for="s{{s.id}}">{{ s.name }}</label></div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="dropdown">
+            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Поля {% if selected_fields %}({{ selected_fields|length }}){% endif %}</button>
+            <div class="dropdown-menu dropdown-check-list shadow" style="max-height: 300px; overflow-y: auto;">
+                <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('field', false)">Сбросить</a></div>
+                {% for f in all_fields %}
+                <div class="form-check ms-3"><input class="form-check-input check-field" type="checkbox" name="filter_field" value="{{ f.id }}" id="f{{f.id}}" {% if f.id in selected_fields %}checked{% endif %}><label class="form-check-label small" for="f{{f.id}}">{{ f.name }}</label></div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="dropdown">
+            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Год</button>
+            <div class="dropdown-menu dropdown-check-list shadow">
+                <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('year', false)">Сбросить</a></div>
+                {% for y in all_years %}
+                <div class="form-check ms-3"><input class="form-check-input check-year" type="checkbox" name="filter_year" value="{{ y }}" id="y{{y}}" {% if y in selected_years %}checked{% endif %}><label class="form-check-label small" for="y{{y}}">{{ y }}</label></div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Быстрый поиск по растению (как на остатках площадки) -->
+        <input type="text" id="stockPlantSearch" class="form-control form-control-sm" style="width:200px"
+               placeholder="Поиск растения…" oninput="stockApplyPlantSearch()">
+
+        <!-- Кнопки управления гармошкой -->
+        <div class="btn-group btn-group-sm ms-2 shadow-sm">
+            <button type="button" class="btn btn-white border" onclick="expandAllStocks()" title="Раскрыть все"><i class="fas fa-angle-double-down text-secondary"></i></button>
+            <button type="button" class="btn btn-white border" onclick="collapseAllStocks()" title="Свернуть все"><i class="fas fa-angle-double-up text-secondary"></i></button>
+        </div>
+
+        <button class="btn btn-success btn-sm ms-2"><i class="fas fa-sync-alt"></i></button>
+        <div class="ms-auto d-flex gap-2 align-items-center">
+            {% if current_user.role != 'user2' %}
+            <select id="stockPriceMode" class="form-select form-select-sm" style="width:auto" title="Тип цены в выгрузке">
+                <option value="wholesale">Опт</option>
+                <option value="retail" selected>Розница</option>
+            </select>
+            {% endif %}
+            <button type="button" onclick="downloadStockExcel()" class="btn btn-success btn-sm" id="stockExcelExport" data-hx-boost="false">
+               <i class="fas fa-file-excel"></i>
+            </button>
+            
+            {% if current_user.role == 'admin' %}
+            <button type="button" class="btn btn-outline-dark btn-sm" data-bs-toggle="modal" data-bs-target="#printSettingsModal"><i class="fas fa-cog"></i> Шапка</button>
+            {% endif %}
+            <button type="button" onclick="printKP()" class="btn btn-dark btn-sm"><i class="fas fa-print"></i> Выгрузка тов. остатков</button>
+        </div>
+    </form>
+</div>
+
+<!-- ТАБЛИЦА ПК -->
+<script type="application/json" id="stockRowPricesData">{{ stock_row_prices|tojson }}</script>
+<div class="table-responsive d-none d-lg-block">
+    <table class="table table-sm table-hover table-1c table-stock bg-white mb-0" id="stockTable" data-price-mode="retail"
+           data-exclude-raw="{{ '1' if report_mode == 'product' and not size_filter_manual else '0' }}">
+        <thead class="table-light">
+            <tr>
+                <th class="text-start ps-3" onclick="sortStockGroups(0)">Растение</th>
+                {% if report_mode != 'inventory' %}<th>Размер</th>{% endif %}
+                <th class="col-field">Поле</th>
+                {% if current_user.role != 'user2' %}<th>Цена</th>{% endif %}
+                <th class="col-reserve">Резерв</th>
+                <th class="col-shipped">Отгружено</th>
+                <th class="col-free-header">Свободно</th>
+                {% if current_user.role != 'user2' %}<th class="col-free-header col-free-sum">Сумма (своб.)</th>{% endif %}
+                <th class="col-fact-header">Факт</th>
+                {% if current_user.role != 'user2' %}<th class="col-sum">Сумма</th>{% endif %}
+                {% if report_mode == 'inventory' %}<th class="col-year">Год</th>{% endif %}
+                <th class="col-info" style="width: 50px;"></th>
+            </tr>
+        </thead>
+        <tbody id="stockTableBody">
+        {% set section_ns = namespace(key='') %}
+        {% for group in report_data %}
+            {% if group.is_section %}
+            {% set section_ns.key = group.section_key or '' %}
+            <tr class="section-header-row {% if group.section_key == 'raw_seedlings' %}section-raw{% else %}{% endif %}"
+                data-section-key="{{ group.section_key or '' }}"
+                data-print="{{ '0' if group.section_key == 'raw_seedlings' else '1' }}">
+                <td colspan="{% if report_mode != 'inventory' %}{% if current_user.role != 'user2' %}11{% else %}8{% endif %}{% else %}{% if current_user.role != 'user2' %}10{% else %}7{% endif %}{% endif %}"
+                    class="ps-3 py-2">
+                    <div class="fw-bold text-uppercase small text-muted" style="letter-spacing:.04em;">{{ group.name }}</div>
+                    {% if group.section_key == 'ground' %}
+                    <div class="small text-muted">Товарные позиции открытого грунта</div>
+                    {% elif group.section_key == 'containers' %}
+                    <div class="small text-muted">Товарные саженцы (Саженцы · контейнер, промер не обязателен)</div>
+                    {% elif group.section_key == 'raw_seedlings' %}
+                    <div class="small text-muted">Нетов / саженцы без контейнера — на экране, не в КП и автофильтре</div>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            {% set unique_id = loop.index %}
+            
+            <!-- === ЗАГОЛОВОК ГРУППЫ (РАСТЕНИЕ) === -->
+            <tr class="group-header-row" data-bs-toggle="collapse" data-bs-target=".stock-collapse-{{ unique_id }}"
+                id="header-{{ unique_id }}" data-plant-name="{{ group.name|e }}"
+                data-section-key="{{ section_ns.key }}">
+                <td class="ps-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="fas fa-chevron-right rotate-icon text-muted" id="icon-{{ unique_id }}"></i>
+                        
+                        <!-- Русское название -->
+                        <span class="fw-bold">{{ group.name }}</span>
+
+                        <!-- РЕДАКТИРОВАНИЕ (Только Админ, на Экране) -->
+                        {% if current_user.role == 'admin' %}
+                        <form method="POST" style="display:inline-block;" class="no-print" onclick="event.stopPropagation()">
+                            <input type="hidden" name="update_info" value="1">
+                            <!-- Берем ID растения из первой строки этой группы -->
+                            <input type="hidden" name="plant_id" value="{{ group.data.rows[0].plant_id }}">
+                            
+                            <input type="text" name="latin_name" value="{{ group.data.latin_name or '' }}" 
+                                   class="form-control form-control-sm border-0 bg-transparent text-muted small fst-italic p-0" 
+                                   style="width: 150px; border-bottom: 1px dashed #ccc !important; height: 20px;"
+                                   placeholder="Add Latin..." 
+                                   title="Нажмите Enter для сохранения"
+                                   onblur="this.form.submit()">
+                        </form>
+                        {% endif %}
+
+                        <!-- ОТОБРАЖЕНИЕ (Для Печати и обычных пользователей) -->
+                        {% if group.data.latin_name %}
+                            <!-- Класс print-latin скрывает это на экране (display:none в стилях), но показывает при печати -->
+                            <!-- Если нужно показывать и на экране обычным юзерам, уберите класс print-latin -->
+                            <span class="print-latin">{{ group.data.latin_name }}</span>
+                        {% endif %}
+                    </div>
+                </td>
+                
+                {% if report_mode != 'inventory' %}<td class="text-muted small">{{ group.data.rows|length }} поз.</td>{% endif %}
+                
+                <td class="col-field text-muted small">
+                    {% set fields_short = group.data.rows | map(attribute='fields_str') | join(', ') | truncate(20) %}
+                    {{ fields_short }}
+                </td>
+                
+                {% if current_user.role != 'user2' %}<td></td>{% endif %}
+                
+                <td class="col-reserve text-center">{{ group.data.totals.reserved }}</td>
+                <td class="col-shipped text-center text-muted">{{ group.data.totals.shipped }}</td>
+                
+                <td class="col-free-cell">{{ group.data.totals.free }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-free-sum pe-2">{{ group.data.totals.free_sum|money }}</td>{% endif %}
+                
+                <td class="col-fact-cell">{{ group.data.totals.qty }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum text-end fw-bold pe-2">{{ group.data.totals.sum|money }}</td>{% endif %}
+                {% if report_mode == 'inventory' %}<td class="col-year"></td>{% endif %}
+                <td class="col-info"></td>
+            </tr>
+
+            <!-- === ДЕТАЛИ (РАЗМЕРЫ) === -->
+            {% for row in group.data.rows %}
+            <tr class="collapse stock-collapse-{{ unique_id }} detail-row"
+                data-plant-id="{{ row.plant_id }}"
+                data-size-id="{{ row.size_id }}"
+                data-section-key="{{ section_ns.key }}"
+                data-wholesale-price="{{ row.price|round(0)|int }}"
+                data-free-qty="{{ row.free|round(0)|int }}"
+                data-fact-qty="{{ row.quantity|round(0)|int }}"
+                data-reserved="{{ row.reserved|round(0)|int }}"
+                data-shipped="{{ row.shipped|round(0)|int }}">
+                <td class="border-0 ps-4"></td> <!-- Пустая ячейка под Растение для отступа -->
+                
+                {% if report_mode != 'inventory' %}<td class="small">{{ row.size }}</td>{% endif %}
+
+                <td class="col-field small text-muted">{{ row.fields_str }}</td>
+                
+                {% if current_user.role != 'user2' %}
+                <td class="text-end fw-bold stock-price-cell">
+                    <!-- Логика отображения цены -->
+                    {% if report_mode != 'inventory' and current_user.role == 'admin' %}
+                    <span class="stock-price-wholesale-view">
+                        <form method="POST" style="display:inline;" class="no-print stock-price-form">
+                            <input type="hidden" name="update_price" value="1">
+                            <input type="hidden" name="plant_id" value="{{ row.plant_id }}">
+                            <input type="hidden" name="size_id" value="{{ row.size_id }}">
+                            <input type="text" name="price" value="{{ row.price|money_int }}" class="price-edit-input" onblur="this.form.submit()">
+                        </form>
+                    </span>
+                    <span class="stock-price-retail-view d-none fw-bold"></span>
+                    <span class="d-none d-print-inline fw-bold stock-price-print">{{ row.price|money_int }}</span>
+                    {% else %}
+                        <span class="stock-price-value">{{ row.price|money_int }}</span>
+                    {% endif %}
+                </td>
+                {% endif %}
+                
+                <td class="col-reserve">{{ row.reserved if row.reserved > 0 else '0' }}</td>
+                <td class="col-shipped text-center text-muted">{{ row.shipped if row.shipped > 0 else '0' }}</td>
+                
+                <td class="col-free-cell">{{ row.free }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-free-sum pe-2">{{ row.free_sum|money }}</td>{% endif %}
+                
+                <td class="col-fact-cell">{{ row.quantity }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum text-end fw-bold pe-2">{{ row.sum|money }}</td>{% endif %}
+                {% if report_mode == 'inventory' %}<td class="col-year text-center">{{ row.year }}</td>{% endif %}
+                
+                <!-- КОЛОНКА ИНФО (ТЕПЕРЬ ПУСТАЯ ИЛИ ПРОСТО ИКОНКА) -->
+                <td class="col-info text-center text-muted small">
+                    <i class="fas fa-info-circle text-opacity-25"></i>
+                </td>
+            </tr>
+            {% endfor %}
+            {% endif %}
+        {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr class="stock-footer-row table-light">
+                <td class="text-end pe-3 footer-label-cell" colspan="{% if report_mode != 'inventory' %}6{% else %}5{% endif %}">
+                    Итого по складу
+                </td>
+                
+                <!-- Колонка Свободно -->
+                <td class="footer-free" id="stockFootFree">{{ grand_total.free }}</td>
+                
+                <!-- Сумма (Свободно) -->
+                {% if current_user.role != 'user2' %}
+                <td class="footer-free-sum col-free-sum pe-2" id="stockFootFreeSum">{{ grand_total.free_sum|money }}</td>
+                {% endif %}
+                
+                <!-- Колонка Всего -->
+                <td class="footer-fact col-fact-cell" id="stockFootFact">{{ grand_total.qty }}</td>
+                
+                <!-- Сумма -->
+                {% if current_user.role != 'user2' %}
+                <td class="footer-sum col-sum pe-2" id="stockFootSum">{{ grand_total.sum|money }}</td>
+                {% endif %}
+                
+                <!-- Год и Инфо (пустые для выравнивания) -->
+                {% if report_mode == 'inventory' %}<td class="col-year"></td>{% endif %}
+                <td class="col-info"></td>
+            </tr>
+        </tfoot>
+    </table>
+</div>
+
+<!-- МОБИЛЬНАЯ ВЕРСИЯ (Оставляем как есть) -->
+<div class="d-lg-none">
+    {% for group in report_data %}
+    {% if group.is_section %}
+    <div class="px-3 py-2 fw-bold text-success text-uppercase small border-bottom">{{ group.name }}</div>
+    {% else %}
+    {% set unique_id = loop.index %}
+    <div class="stock-mobile-card">
+        <div class="stock-mobile-header collapsed" data-bs-toggle="collapse" data-bs-target="#mob-stock-{{ unique_id }}">
+            <div style="flex: 1;"><div class="fw-bold">{{ group.name }}</div></div>
+            <div class="text-end"><div class="badge-qty bg-qty-free">{{ group.data.totals.free }}</div></div>
+        </div>
+        <div id="mob-stock-{{ unique_id }}" class="collapse stock-mobile-body">
+            {% for row in group.data.rows %}
+            <div class="stock-mobile-row">
+                <div>{{ row.size }}</div>
+                {% if current_user.role != 'user2' %}
+                <div class="text-end fw-bold">{{ row.price|money_int }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+
+<!-- Галерея для печати -->
+<div class="print-gallery">
+    <div class="gallery-title">Наши растения</div>
+    <div class="gallery-row">
+        <!-- Проверяем наличие фото перед выводом контейнера -->
+        <div class="gallery-item">
+            {% if print_settings.get('promo_photo_1_url') %}
+            <img src="{{ print_settings.get('promo_photo_1_url') }}">
+            {% endif %}
+        </div>
+        <div class="gallery-item">
+            {% if print_settings.get('promo_photo_2_url') %}
+            <img src="{{ print_settings.get('promo_photo_2_url') }}">
+            {% endif %}
+        </div>
+        <div class="gallery-item">
+            {% if print_settings.get('promo_photo_3_url') %}
+            <img src="{{ print_settings.get('promo_photo_3_url') }}">
+            {% endif %}
+        </div>
+    </div>
+    <div style="margin-top: 20px; text-align: center; color: #777; font-size: 10px; font-style: italic;">
+        {{ print_settings.get('footer_text', 'Выращено с любовью и заботой о качестве.') }}
+    </div>
+</div>
+
+<div class="modal fade" id="printSettingsModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="{{ url_for('stock.save_print_header') }}" enctype="multipart/form-data">
+          <div class="modal-header"><h5 class="modal-title">Настройки КП</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+          <div class="modal-body">
+            <!-- Поля настроек (те же) -->
+            <div class="mb-3"><label>Логотип</label><input type="file" name="logo" class="form-control"></div>
+            <div class="mb-3"><label>Компания</label><input type="text" name="company_name" class="form-control" value="{{ print_settings.get('company_name', '') }}"></div>
+            <div class="mb-3"><label>Подпись</label><textarea name="footer_text" class="form-control">{{ print_settings.get('footer_text', '') }}</textarea></div>
+            <div class="row"><div class="col-6"><input type="text" name="phone" class="form-control" placeholder="Тел" value="{{ print_settings.get('phone', '') }}"></div><div class="col-6"><input type="text" name="email" class="form-control" placeholder="Email" value="{{ print_settings.get('email', '') }}"></div></div>
+            <div class="mt-2"><input type="text" name="website" class="form-control" placeholder="Сайт" value="{{ print_settings.get('website', '') }}"></div>
+            <div class="mt-3 small fw-bold">Фото галереи:</div>
+            <div class="row"><div class="col-4"><input type="file" name="photo1" class="form-control form-control-sm"></div><div class="col-4"><input type="file" name="photo2" class="form-control form-control-sm"></div><div class="col-4"><input type="file" name="photo3" class="form-control form-control-sm"></div></div>
+          </div>
+          <div class="modal-footer"><button class="btn btn-primary">Сохранить</button></div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var collapseElements = document.querySelectorAll('.collapse');
+        collapseElements.forEach(function(el) {
+            var id = el.id.split('-')[2];
+            if(id) {
+                var icon = document.getElementById('icon-' + id);
+                if (icon) {
+                    el.addEventListener('show.bs.collapse', function () { icon.style.transform = 'rotate(90deg)'; });
+                    el.addEventListener('hide.bs.collapse', function () { icon.style.transform = 'rotate(0deg)'; });
+                }
+            }
+        });
+    });
+    function checkAll(type, check) { document.querySelectorAll('.check-' + type).forEach(el => el.checked = check); }
+    function filterList(input, selector) {
+        const filter = input.value.toLowerCase();
+        document.querySelectorAll(selector).forEach(div => { div.style.display = div.textContent.toLowerCase().includes(filter) ? '' : 'none'; });
+    }
+    function sortStockGroups(n) {
+        // Простая сортировка (реализация есть в прошлых версиях, тут для краткости)
+    }
+
+    // === Управление гармошкой ===
+    function expandAllStocks() {
+        // Ищем все скрытые строки деталей
+        const collapses = document.querySelectorAll('.detail-row.collapse:not(.show)');
+        collapses.forEach(el => {
+            new bootstrap.Collapse(el, { toggle: false }).show();
+        });
+    }
+
+    function collapseAllStocks() {
+        // Ищем все открытые строки деталей
+        const collapses = document.querySelectorAll('.detail-row.collapse.show');
+        collapses.forEach(el => {
+            new bootstrap.Collapse(el, { toggle: false }).hide();
+        });
+    }
+
+    function stockRowIsVisible(el) {
+        if (!el) return false;
+        if (el.style.display === 'none') return false;
+        // Скрытый родитель группы тоже считаем невидимым
+        return true;
+    }
+
+    function stockShouldCountRow(row, table) {
+        if (!stockRowIsVisible(row)) return false;
+        if (table && table.dataset.excludeRaw === '1' && row.dataset.sectionKey === 'raw_seedlings') {
+            return false;
+        }
+        return true;
+    }
+
+    function stockRecalcVisibleTotals(table) {
+        table = table || document.getElementById('stockTable');
+        if (!table) return;
+        const mode = getStockPriceMode();
+        const prices = getStockRowPrices();
+        const priceIdx = getStockPriceColIdx(table);
+
+        let footFree = 0, footFact = 0, footRes = 0, footShip = 0;
+        let footFreeSum = 0, footSum = 0;
+
+        collectStockTableGroups(table).forEach(g => {
+            const headerVisible = stockRowIsVisible(g.header);
+            let groupFree = 0, groupFact = 0, groupRes = 0, groupShip = 0;
+            let groupFreeSum = 0, groupSum = 0;
+            let visibleDetails = 0;
+
+            g.details.forEach(d => {
+                // Детали могут быть display:none из поиска; collapse не влияет на итог
+                const searchHidden = d.style.display === 'none';
+                if (searchHidden) return;
+                if (table.dataset.excludeRaw === '1' && d.dataset.sectionKey === 'raw_seedlings') return;
+
+                visibleDetails += 1;
+                const key = `${d.dataset.plantId}_${d.dataset.sizeId}`;
+                const rowPrices = prices[key];
+                const unit = rowPrices
+                    ? (mode === 'retail' ? rowPrices.retail : rowPrices.wholesale)
+                    : (parseFloat(d.dataset.wholesalePrice) || 0);
+                const free = parseFloat(d.dataset.freeQty) || 0;
+                const fact = parseFloat(d.dataset.factQty) || 0;
+                const reserved = parseFloat(d.dataset.reserved) || 0;
+                const shipped = parseFloat(d.dataset.shipped) || 0;
+                const freeSum = unit * free;
+                const rowSum = unit * fact;
+
+                if (priceIdx >= 0) {
+                    const cells = Array.from(d.children);
+                    if (cells[priceIdx]) setStockPriceCellValue(cells[priceIdx], unit, mode);
+                }
+                const freeSumTd = d.querySelector('.col-free-sum');
+                if (freeSumTd) freeSumTd.textContent = formatStockMoneyFull(freeSum);
+                const sumTd = d.querySelector('.col-sum');
+                if (sumTd) sumTd.textContent = formatStockMoneyFull(rowSum);
+
+                groupFree += free;
+                groupFact += fact;
+                groupRes += reserved;
+                groupShip += shipped;
+                groupFreeSum += freeSum;
+                groupSum += rowSum;
+            });
+
+            const anyVisible = headerVisible && visibleDetails > 0;
+            if (g.header) {
+                // Заголовок уже скрыт поиском при необходимости
+                const hFree = g.header.querySelector('.col-free-cell');
+                if (hFree && anyVisible) hFree.textContent = String(Math.round(groupFree));
+                const hFact = g.header.querySelector('.col-fact-cell');
+                if (hFact && anyVisible) hFact.textContent = String(Math.round(groupFact));
+                const hRes = g.header.querySelector('.col-reserve');
+                if (hRes && anyVisible) hRes.textContent = String(Math.round(groupRes));
+                const hShip = g.header.querySelector('.col-shipped');
+                if (hShip && anyVisible) hShip.textContent = String(Math.round(groupShip));
+                const hFreeSum = g.header.querySelector('.col-free-sum');
+                if (hFreeSum && anyVisible) hFreeSum.textContent = formatStockMoneyFull(groupFreeSum);
+                const hSum = g.header.querySelector('.col-sum');
+                if (hSum && anyVisible) hSum.textContent = formatStockMoneyFull(groupSum);
+                const metaCell = g.header.children[1];
+                if (metaCell && anyVisible && (metaCell.textContent || '').includes('поз')) {
+                    metaCell.textContent = visibleDetails + ' поз.';
+                }
+            }
+
+            if (!anyVisible) return;
+            if (table.dataset.excludeRaw === '1' && g.header?.dataset.sectionKey === 'raw_seedlings') return;
+
+            footFree += groupFree;
+            footFact += groupFact;
+            footRes += groupRes;
+            footShip += groupShip;
+            footFreeSum += groupFreeSum;
+            footSum += groupSum;
+        });
+
+        const setTxt = (sel, val) => {
+            const el = table.querySelector(sel);
+            if (el) el.textContent = val;
+        };
+        setTxt('#stockFootFree, tfoot .footer-free', String(Math.round(footFree)));
+        setTxt('#stockFootFact, tfoot .footer-fact', String(Math.round(footFact)));
+        setTxt('#stockFootFreeSum, tfoot .footer-free-sum', formatStockMoneyFull(footFreeSum));
+        setTxt('#stockFootSum, tfoot .footer-sum', formatStockMoneyFull(footSum));
+    }
+
+    function stockApplyPlantSearch() {
+        const q = (document.getElementById('stockPlantSearch')?.value || '').trim().toLowerCase();
+        document.querySelectorAll('#stockTable .group-header-row').forEach(header => {
+            const name = (header.getAttribute('data-plant-name') || header.textContent || '').toLowerCase();
+            const match = !q || name.includes(q);
+            const target = header.getAttribute('data-bs-target');
+            header.style.display = match ? '' : 'none';
+            if (target) {
+                document.querySelectorAll(target).forEach(row => {
+                    row.style.display = match ? '' : 'none';
+                });
+            }
+        });
+        // Секции без видимых групп прячем
+        let pendingSection = null;
+        let sectionHasVisible = false;
+        const flushSection = () => {
+            if (pendingSection) {
+                pendingSection.style.display = sectionHasVisible ? '' : 'none';
+            }
+            pendingSection = null;
+            sectionHasVisible = false;
+        };
+        document.querySelectorAll('#stockTable tbody tr').forEach(tr => {
+            if (tr.classList.contains('section-header-row')) {
+                flushSection();
+                pendingSection = tr;
+                sectionHasVisible = false;
+                return;
+            }
+            if (tr.classList.contains('group-header-row') && pendingSection) {
+                if (tr.style.display !== 'none') sectionHasVisible = true;
+            }
+        });
+        flushSection();
+        stockRecalcVisibleTotals();
+    }
+
+    // Минимальные утилиты вместо Bootstrap/FontAwesome в PDF (экономия ~5–15 МБ).
+    const KP_PRINT_UTILS_CSS = `
+      .d-flex { display: flex !important; }
+      .justify-content-between { justify-content: space-between !important; }
+      .align-items-start { align-items: flex-start !important; }
+      .text-end { text-align: right !important; }
+      .fw-bold { font-weight: 700 !important; }
+      .m-0 { margin: 0 !important; }
+      .mb-1 { margin-bottom: 0.25rem !important; }
+      .mb-3 { margin-bottom: 1rem !important; }
+      .ms-3 { margin-left: 1rem !important; }
+      .text-uppercase { text-transform: uppercase !important; }
+      .text-secondary { color: #6c757d !important; }
+      .text-muted { color: #6c757d !important; }
+      .small { font-size: 0.875em !important; }
+      body, .table-stock { font-family: Arial, Helvetica, sans-serif !important; }
+    `;
+
+    const STOCK_EXPORT_URL = {{ url_for('stock.stock_report_export')|tojson }};
+
+    function getStockRowPrices() {
+        const el = document.getElementById('stockRowPricesData');
+        if (!el) return {};
+        try { return JSON.parse(el.textContent || '{}'); } catch (e) { return {}; }
+    }
+
+    function formatStockMoney(n) {
+        return Math.round(Number(n) || 0).toLocaleString('ru-RU');
+    }
+
+    function formatStockMoneyFull(n) {
+        const val = Number(n) || 0;
+        return val.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₽';
+    }
+
+    function getStockPriceMode() {
+        return document.getElementById('stockPriceMode')?.value || 'retail';
+    }
+
+    function getStockPriceColIdx(table) {
+        let idx = -1;
+        table.querySelectorAll('thead th').forEach((th, i) => {
+            if ((th.textContent || '').trim().toUpperCase().includes('ЦЕНА')) idx = i;
+        });
+        return idx;
+    }
+
+    function collectStockTableGroups(table) {
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return [];
+        const groups = [];
+        let cur = null;
+        Array.from(tbody.children).forEach(r => {
+            if (r.classList.contains('group-header-row')) {
+                cur = { header: r, details: [] };
+                groups.push(cur);
+            } else if (cur && r.classList.contains('detail-row')) {
+                cur.details.push(r);
+            }
+        });
+        return groups;
+    }
+
+    function setStockPriceCellValue(priceCell, unit, mode) {
+        if (!priceCell) return;
+        const wholesaleView = priceCell.querySelector('.stock-price-wholesale-view');
+        const retailView = priceCell.querySelector('.stock-price-retail-view');
+        const plainValue = priceCell.querySelector('.stock-price-value');
+        const printValue = priceCell.querySelector('.stock-price-print');
+
+        if (wholesaleView && retailView) {
+            if (mode === 'retail') {
+                wholesaleView.classList.add('d-none');
+                retailView.classList.remove('d-none');
+                retailView.textContent = formatStockMoney(unit);
+            } else {
+                wholesaleView.classList.remove('d-none');
+                retailView.classList.add('d-none');
+            }
+        } else if (plainValue) {
+            plainValue.textContent = formatStockMoney(unit);
+        }
+        if (printValue) printValue.textContent = formatStockMoney(unit);
+    }
+
+    function applyPriceModeToTable(table, mode, options = {}) {
+        const prices = getStockRowPrices();
+        if (!table || !prices || Object.keys(prices).length === 0) return;
+
+        const forcePlainText = !!options.forcePlainText;
+        table.dataset.priceMode = mode;
+
+        table.querySelectorAll('thead th').forEach(th => {
+            const txt = (th.textContent || '').trim().toUpperCase();
+            if (txt.includes('ЦЕНА')) {
+                th.textContent = mode === 'retail' ? 'ЦЕНА (РОЗНИЦА)' : 'ЦЕНА (ОПТ)';
+            }
+        });
+
+        if (forcePlainText) {
+            const priceIdx = getStockPriceColIdx(table);
+            collectStockTableGroups(table).forEach(g => {
+                g.details.forEach(d => {
+                    const key = `${d.dataset.plantId}_${d.dataset.sizeId}`;
+                    const rowPrices = prices[key];
+                    if (!rowPrices) return;
+                    const unit = mode === 'retail' ? rowPrices.retail : rowPrices.wholesale;
+                    const cells = Array.from(d.children);
+                    if (priceIdx >= 0 && cells[priceIdx]) {
+                        cells[priceIdx].textContent = formatStockMoney(unit);
+                    }
+                });
+            });
+            return;
+        }
+
+        stockRecalcVisibleTotals(table);
+    }
+
+    function initStockPriceModeControls() {
+        const modeEl = document.getElementById('stockPriceMode');
+        const table = document.getElementById('stockTable');
+        if (!modeEl || !table) return;
+        if (modeEl.dataset.bound === '1') {
+            applyPriceModeToTable(table, modeEl.value || 'retail');
+            return;
+        }
+        modeEl.dataset.bound = '1';
+        applyPriceModeToTable(table, modeEl.value || 'retail');
+        modeEl.addEventListener('change', function() {
+            applyPriceModeToTable(table, this.value);
+        });
+    }
+
+    window.downloadStockExcel = function downloadStockExcel() {
+        const form = document.getElementById('stockForm');
+        if (!form) return;
+        const params = new URLSearchParams();
+        new FormData(form).forEach((value, key) => params.append(key, value));
+        params.set('price_mode', getStockPriceMode());
+
+        // Быстрый поиск: в Excel только видимые растения
+        const q = (document.getElementById('stockPlantSearch')?.value || '').trim();
+        if (q) {
+            params.delete('filter_plant');
+            const ids = new Set();
+            document.querySelectorAll('#stockTable .group-header-row').forEach(header => {
+                if (header.style.display === 'none') return;
+                const target = header.getAttribute('data-bs-target');
+                if (!target) return;
+                document.querySelectorAll(target).forEach(d => {
+                    if (d.dataset.plantId) ids.add(d.dataset.plantId);
+                });
+            });
+            ids.forEach(id => params.append('filter_plant', id));
+            if (!ids.size) {
+                // Нет видимых — пустой набор (не выгружаем всё подряд)
+                params.append('filter_plant', '0');
+            }
+        }
+
+        params.set('_', String(Date.now()));
+        window.open(`${STOCK_EXPORT_URL}?${params.toString()}`, '_blank');
+    };
+
+    function parseQtyFromCell(tr, selector) {
+        const td = tr.querySelector(selector);
+        if (!td) return 0;
+        const txt = (td.textContent || '').replace(/\s+/g, '').replace(',', '.');
+        const m = txt.match(/-?\d+(?:\.\d+)?/);
+        return m ? parseFloat(m[0]) : 0;
+    }
+
+    function applyStockColClasses(table) {
+        const colClassByIdx = {};
+        table.querySelectorAll('thead th').forEach((th, idx) => {
+            const txt = (th.textContent || '').trim().toUpperCase();
+            if (txt.startsWith('РАСТЕНИЕ')) colClassByIdx[idx] = 'kp-col-name';
+            else if (txt.startsWith('РАЗМЕР')) colClassByIdx[idx] = 'kp-col-size';
+            else if (txt.includes('ЦЕНА')) colClassByIdx[idx] = 'kp-col-price';
+        });
+        const applyColClass = (tr) => {
+            Array.from(tr.children).forEach((cell, i) => {
+                const cls = colClassByIdx[i];
+                if (cls) cell.classList.add(cls);
+            });
+        };
+        table.querySelectorAll('thead tr, tbody tr, tfoot tr').forEach(applyColClass);
+    }
+
+    document.addEventListener('DOMContentLoaded', initStockPriceModeControls);
+    document.addEventListener('htmx:afterSwap', initStockPriceModeControls);
+    initStockPriceModeControls();
+    // Первичный пересчёт итогов (розница / автофильтр без нетов)
+    if (document.getElementById('stockTable')) {
+        stockRecalcVisibleTotals();
+    }
+
+    function getStockPrintStyles() {
+        const el = document.getElementById('stock-kp-styles');
+        return el ? el.outerHTML : '';
+    }
+
+    function getStockPrintDocTitle() {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const dateStr = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()}`;
+        return `Товарные остатки ${dateStr}`;
+    }
+
+    function withPrintDocumentTitle(docTitle, printFn) {
+        const prevTitle = document.title;
+        document.title = docTitle;
+        let restored = false;
+        const restoreTitle = () => {
+            if (restored) return;
+            restored = true;
+            document.title = prevTitle;
+        };
+        const onAfterPrint = () => restoreTitle();
+        window.addEventListener('afterprint', onAfterPrint, { once: true });
+        setTimeout(restoreTitle, 60000);
+        try {
+            printFn(restoreTitle);
+        } catch (e) {
+            restoreTitle();
+            throw e;
+        }
+    }
+
+    function compressImageForPrint(src, maxW, maxH, quality = 0.82) {
+        return new Promise((resolve) => {
+            if (!src || String(src).startsWith('data:')) {
+                resolve(src);
+                return;
+            }
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                let w = img.naturalWidth || img.width;
+                let h = img.naturalHeight || img.height;
+                if (!w || !h) {
+                    resolve(src);
+                    return;
+                }
+                const scale = Math.min(maxW / w, maxH / h, 1);
+                w = Math.max(1, Math.round(w * scale));
+                h = Math.max(1, Math.round(h * scale));
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    resolve(src);
+                    return;
+                }
+                ctx.drawImage(img, 0, 0, w, h);
+                try {
+                    resolve(canvas.toDataURL('image/jpeg', quality));
+                } catch (e) {
+                    resolve(src);
+                }
+            };
+            img.onerror = () => resolve(src);
+            img.src = src;
+        });
+    }
+
+    async function optimizePrintImages(root) {
+        const tasks = [];
+        root.querySelectorAll('img').forEach((img) => {
+            const inGallery = !!img.closest('.gallery-item');
+            const maxW = inGallery ? 520 : 360;
+            const maxH = inGallery ? 260 : 160;
+            tasks.push(
+                compressImageForPrint(img.src, maxW, maxH).then((dataUrl) => {
+                    if (dataUrl) img.src = dataUrl;
+                })
+            );
+        });
+        await Promise.all(tasks);
+    }
+
+    function deliverPrintDocument(html, docTitle) {
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+        document.body.appendChild(iframe);
+        const win = iframe.contentWindow;
+        const doc = win.document;
+        doc.open();
+        doc.write(html);
+        doc.close();
+        const doPrint = () => {
+            withPrintDocumentTitle(docTitle, () => {
+                try { win.focus(); } catch (e) {}
+                try { doc.title = docTitle; } catch (e) {}
+                try {
+                    win.addEventListener('afterprint', () => {
+                        try { iframe.remove(); } catch (e) {}
+                    }, { once: true });
+                    win.print();
+                } catch (e) {}
+                setTimeout(() => { try { iframe.remove(); } catch (e) {} }, 2000);
+            });
+        };
+        if (doc.readyState === 'complete') {
+            setTimeout(doPrint, 300);
+        } else {
+            win.onload = () => setTimeout(doPrint, 300);
+            setTimeout(doPrint, 1500);
+        }
+    }
+
+    async function printKP() {
+        // Печатаем КП через лёгкий iframe без layout/CSS приложения,
+        // чтобы в PDF не попадали Bootstrap, Font Awesome, Inter и пр.
+        const headerEl = document.querySelector('.print-header');
+        const tableEl = document.getElementById('stockTable');
+        const galleryEl = document.querySelector('.print-gallery');
+
+        // Имя файла = «Товарные остатки DD.MM.YYYY» (Chrome/Edge берут title родительского окна)
+        const docTitle = getStockPrintDocTitle();
+
+        if (!tableEl) {
+            document.body.classList.add('kp-print');
+            withPrintDocumentTitle(docTitle, () => {
+                window.addEventListener('afterprint', () => {
+                    document.body.classList.remove('kp-print');
+                }, { once: true });
+                setTimeout(() => document.body.classList.remove('kp-print'), 60000);
+                window.print();
+            });
+            return;
+        }
+
+        // --- Готовим клон таблицы: убираем позиции с free<=0 ---
+        const cloned = tableEl.cloneNode(true);
+        const tbody = cloned.querySelector('tbody');
+        const colCount = (cloned.querySelector('thead tr')?.children?.length) || 6;
+
+        // --- Проставляем классы колонок для управления шириной в печати ---
+        applyStockColClasses(cloned);
+
+        // Чистим формы в ячейках (например, поле ввода латиницы у админа),
+        // чтобы они не оставляли пустого места в печати.
+        cloned.querySelectorAll('form').forEach(f => f.remove());
+        // Иконки сворачивания тоже не нужны
+        cloned.querySelectorAll('.rotate-icon').forEach(i => i.remove());
+        // Полностью убираем нижнюю строку "ИТОГО ПО СКЛАДУ" из печатной выгрузки
+        cloned.querySelectorAll('tfoot').forEach(tf => tf.remove());
+
+        const parseFreeFromRow = (tr) => {
+            const td = tr.querySelector('.col-free-cell');
+            if (!td) return 0;
+            const txt = (td.textContent || '').replace(/\s+/g, '').replace(',', '.');
+            const m = txt.match(/-?\d+(?:\.\d+)?/);
+            return m ? parseFloat(m[0]) : 0;
+        };
+
+        let totalFree = 0;
+        let groundTableHtml = '';
+        let containerTableHtml = '';
+        if (tbody) {
+            const rows = Array.from(tbody.children);
+            const blocks = [];
+            let cur = null;
+            rows.forEach(r => {
+                if (r.classList.contains('section-header-row')) {
+                    cur = null;
+                    // print=0 (сырые Нетов/без промера): помечаем секцию как skip,
+                    // иначе activeKey остаётся «containers» и строки утекают в КП.
+                    const skip = r.dataset.print === '0';
+                    blocks.push({
+                        type: 'section',
+                        row: r,
+                        key: skip ? '__skip__' : (r.dataset.sectionKey || ''),
+                        skip,
+                    });
+                } else if (r.classList.contains('group-header-row')) {
+                    cur = { type: 'group', header: r, details: [] };
+                    blocks.push(cur);
+                } else if (cur && cur.type === 'group' && r.classList.contains('detail-row')) {
+                    cur.details.push(r);
+                }
+            });
+
+            const buildSectionRows = (filterKey) => {
+                const newRows = [];
+                let firstGroup = true;
+                let sectionPending = null;
+                let activeKey = '';
+                blocks.forEach(b => {
+                    if (b.type === 'section') {
+                        activeKey = b.skip ? '__skip__' : (b.key || '');
+                        if (b.skip) {
+                            sectionPending = null;
+                            return;
+                        }
+                        if (!filterKey || activeKey === filterKey) {
+                            sectionPending = b.row;
+                        } else {
+                            sectionPending = null;
+                        }
+                        return;
+                    }
+                    if (activeKey === '__skip__') return;
+                    if (filterKey && activeKey && activeKey !== filterKey) return;
+                    if (filterKey && !activeKey && filterKey !== 'ground') return;
+
+                    const headerFree = parseFreeFromRow(b.header);
+                    if (headerFree <= 0) return;
+                    const goodDetails = b.details.filter(d => parseFreeFromRow(d) > 0);
+                    if (goodDetails.length === 0) return;
+
+                    if (sectionPending) {
+                        if (!firstGroup) {
+                            const gapTr = document.createElement('tr');
+                            gapTr.className = 'group-gap-row';
+                            gapTr.innerHTML = `<td colspan="${colCount}"></td>`;
+                            newRows.push(gapTr);
+                        }
+                        newRows.push(sectionPending);
+                        sectionPending = null;
+                        firstGroup = false;
+                    }
+                    if (!firstGroup) {
+                        const gapTr = document.createElement('tr');
+                        gapTr.className = 'group-gap-row';
+                        gapTr.innerHTML = `<td colspan="${colCount}"></td>`;
+                        newRows.push(gapTr);
+                    }
+                    firstGroup = false;
+                    newRows.push(b.header);
+                    goodDetails.forEach((d, i) => {
+                        const clone = d.cloneNode(true);
+                        clone.classList.remove('collapse');
+                        clone.classList.add('show');
+                        if (i === goodDetails.length - 1) clone.classList.add('last-of-group');
+                        newRows.push(clone);
+                    });
+                    totalFree += headerFree;
+                });
+                return newRows;
+            };
+
+            const hasContainerSection = blocks.some(b => b.type === 'section' && b.key === 'containers');
+            const groundRows = buildSectionRows(hasContainerSection ? 'ground' : null);
+            const containerRows = hasContainerSection ? buildSectionRows('containers') : [];
+
+            const mapTovarnySizeLabelForPdf = (tbl) => {
+                // В БД канон «Товарный», в PDF остатков показываем «Саженцы».
+                tbl.querySelectorAll('td').forEach(td => {
+                    if (td.querySelector('input, select, button, form')) return;
+                    const t = td.textContent || '';
+                    if (t.indexOf('Товарный') === -1) return;
+                    td.textContent = t.split('Товарный').join('Саженцы');
+                });
+            };
+
+            const makeTableHtml = (rowList, sectionMeta) => {
+                const tClone = cloned.cloneNode(true);
+                const tb = tClone.querySelector('tbody');
+                tb.innerHTML = '';
+                // В tbody только растения — заголовок секции выносим НАД thead
+                rowList.forEach(r => {
+                    if (r.classList && r.classList.contains('section-header-row')) return;
+                    tb.appendChild(r.cloneNode ? r.cloneNode(true) : r);
+                });
+                applyStockColClasses(tClone);
+                mapTovarnySizeLabelForPdf(tClone);
+                applyPriceModeToTable(tClone, getStockPriceMode(), { forcePlainText: true });
+                // В PDF не пишем «N поз.» у наименования — колонка размера у группы пустая.
+                tClone.querySelectorAll('.group-header-row td').forEach(td => {
+                    const t = (td.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (/^\d+\s*поз\.?$/i.test(t)) td.textContent = '';
+                });
+                if (sectionMeta && sectionMeta.onRequestQty) {
+                    tClone.querySelectorAll('thead th').forEach(th => {
+                        const txt = (th.textContent || '').trim().toUpperCase();
+                        if (txt.includes('КОЛ-ВО') || txt.includes('СВОБОДНО')) {
+                            th.textContent = 'НАЛИЧИЕ';
+                        }
+                    });
+                    // «по запросу» только у размера; напротив наименования — пусто.
+                    tClone.querySelectorAll('.group-header-row .col-free-cell').forEach(td => {
+                        td.textContent = '';
+                    });
+                    tClone.querySelectorAll('.detail-row .col-free-cell, .footer-free').forEach(td => {
+                        td.textContent = 'по запросу';
+                    });
+                }
+                let banner = '';
+                if (sectionMeta && sectionMeta.title) {
+                    banner = `<div class="kp-section-banner" style="margin:10px 0 6px;padding:8px 12px;background:#E8F5E9;border-top:3px solid #2E7D32;text-align:center;">
+                        <div style="font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:13pt;">${sectionMeta.title}</div>
+                        ${sectionMeta.sub ? `<div style="color:#666;font-size:9pt;margin-top:2px;">${sectionMeta.sub}</div>` : ''}
+                    </div>`;
+                }
+                let footerNote = '';
+                if (sectionMeta && sectionMeta.footerNote) {
+                    footerNote = `<div style="margin:8px 0 14px;text-align:center;color:#666;font-size:9pt;font-style:italic;">${sectionMeta.footerNote}</div>`;
+                }
+                return `${banner}<div class="table-responsive">${tClone.outerHTML}</div>${footerNote}`;
+            };
+
+            if (groundRows.length) {
+                groundTableHtml = makeTableHtml(groundRows, {
+                    title: 'Растения в грунте',
+                    sub: 'Товарные позиции открытого грунта',
+                });
+            }
+            if (containerRows.length) {
+                containerTableHtml = makeTableHtml(containerRows, {
+                    title: 'Саженцы',
+                    sub: 'Саженцы · контейнер (± промер)',
+                    onRequestQty: true,
+                    footerNote: 'Точное наличие и цену растений в контейнерах уточняйте у менеджера',
+                });
+            }
+
+            // fallback: если секций нет — одна таблица как раньше
+            if (!groundTableHtml && !containerTableHtml) {
+                const allRows = buildSectionRows(null);
+                groundTableHtml = makeTableHtml(allRows, null);
+            }
+        } else {
+            applyPriceModeToTable(cloned, getStockPriceMode(), { forcePlainText: true });
+            groundTableHtml = `<div class="table-responsive">${cloned.outerHTML}</div>`;
+        }
+
+        const footerFreeTd = cloned.querySelector('tfoot .footer-free');
+        if (footerFreeTd) {
+            footerFreeTd.textContent = totalFree.toLocaleString('ru-RU');
+        }
+
+        let headerHtml = '';
+        let galleryHtml = '';
+        if (headerEl) {
+            const hClone = headerEl.cloneNode(true);
+            await optimizePrintImages(hClone);
+            headerHtml = hClone.outerHTML;
+        }
+        if (galleryEl && groundTableHtml && containerTableHtml) {
+            const gClone = galleryEl.cloneNode(true);
+            await optimizePrintImages(gClone);
+            galleryHtml = gClone.outerHTML;
+        }
+
+        const stockStyles = getStockPrintStyles();
+        const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${docTitle}</title>
+  ${stockStyles}
+  <style>${KP_PRINT_UTILS_CSS}</style>
+  <style>
+    .no-print, form, .modal, .btn, .navbar,
+    .app-sidebar, .app-header, .bottom-nav,
+    #chatButton, #chatWindow, #networkStatus,
+    .offcanvas, .dropdown-menu, .toast,
+    nav, aside, header.app-header, footer { display:none !important; }
+    .app-shell { display:block !important; grid-template-columns: 1fr !important; grid-template-areas: "main" !important; }
+    main.app-main { margin:0 !important; padding:0 !important; }
+    .print-header, .print-gallery { display:block !important; }
+    .section-header-row td { background:#E8F5E9 !important; border-top:2px solid #2E7D32 !important; }
+    body { background:#fff; margin: 0; padding: 8mm; }
+    * { box-shadow: none !important; text-shadow: none !important; animation: none !important; transition: none !important; }
+  </style>
+</head>
+<body class="kp-print">
+  ${headerHtml}
+  ${groundTableHtml}
+  ${galleryHtml}
+  ${containerTableHtml}
+</body>
+</html>`;
+
+        deliverPrintDocument(html, docTitle);
+    }
+</script>
+{% endblock %}

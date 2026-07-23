@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1240px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+  .vium-head .btn-sec, .vium-head .btn-prim {
+    border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: .9rem;
+    text-decoration: none !important; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .vium-head .btn-sec { background: #fff; border: 1px solid #e2e8f0; color: #0f172a; }
+  .vium-head .btn-prim { background: #2E7D32; color: #fff; border: 1px solid #2E7D32; }
+
+  .vium-filters {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+    padding: 12px 14px; margin-bottom: 16px;
+  }
+  .vium-filters .row > div { margin-bottom: 8px; }
+
+  .vium-table { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; }
+  .vium-table th, .vium-table td { padding: 10px 14px; vertical-align: middle; border-bottom: 1px solid #f1f5f9; }
+  .vium-table thead th { font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+    color: #475569; background: #f8fafc; font-weight: 700; }
+  .vium-table tbody tr:hover { background: #fafbff; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .kind-chip {
+    display: inline-block; font-size: .72rem; font-weight: 700;
+    padding: 3px 10px; border-radius: 999px;
+  }
+  .kind-intake   { background: #DCFCE7; color: #166534; }
+  .kind-consume  { background: #FEF3C7; color: #92400E; }
+  .kind-writeoff { background: #FEE2E2; color: #991B1B; }
+  .kind-adjust   { background: #DBEAFE; color: #1E40AF; }
+  .empty { text-align: center; color: #94a3b8; padding: 30px; font-size: .9rem; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4><i class="fas fa-list me-2 text-primary"></i>Журнал операций ВиУМ</h4>
+      <span class="text-muted small">Поступления, расходы, списания и корректировки.</span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn-sec" href="{{ url_for('vium.vium_report') }}">
+        <i class="fas fa-arrow-left"></i> К остаткам
+      </a>
+      <a class="btn-prim" href="{{ url_for('vium.vium_operation_new', kind='intake') }}">
+        <i class="fas fa-plus"></i> Новая операция
+      </a>
+    </div>
+  </div>
+
+  <form method="GET" class="vium-filters">
+    <div class="row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label small text-muted m-0">Тип</label>
+        <select name="kind" class="form-select form-select-sm">
+          <option value="">Все</option>
+          {% for k, l in kind_choices %}
+          <option value="{{ k }}" {% if f_kind == k %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label small text-muted m-0">Материал</label>
+        <select name="material_id" class="form-select form-select-sm">
+          <option value="">Все</option>
+          {% for m in materials %}
+          <option value="{{ m.id }}" {% if f_material|string == m.id|string %}selected{% endif %}>
+            {{ m.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small text-muted m-0">С даты</label>
+        <input type="date" class="form-control form-control-sm" name="start_date" value="{{ f_start }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small text-muted m-0">По дату</label>
+        <input type="date" class="form-control form-control-sm" name="end_date" value="{{ f_end }}">
+      </div>
+      <div class="col-md-1 text-end">
+        <button class="btn btn-success btn-sm w-100"><i class="fas fa-filter"></i></button>
+      </div>
+    </div>
+  </form>
+
+  <div class="vium-table">
+    {% if operations %}
+    <table class="table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Дата</th>
+          <th>Тип</th>
+          <th>Материалы</th>
+          <th>Комментарий</th>
+          <th class="num">Кол-во строк</th>
+          <th>Автор</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for op in operations %}
+        <tr>
+          <td>
+            <strong>{{ op.date.strftime('%d.%m.%Y') if op.date else '—' }}</strong>
+            <div class="small text-muted">#{{ op.id }}</div>
+          </td>
+          <td>
+            <span class="kind-chip kind-{{ op.kind }}">
+              {% for k, l in kind_choices %}{% if k == op.kind %}{{ l }}{% endif %}{% endfor %}
+            </span>
+          </td>
+          <td>
+            {% set names = [] %}
+            {% for ln in op.lines[:3] %}
+              {% if ln.material %}{% set _ = names.append(ln.material.name) %}{% endif %}
+            {% endfor %}
+            {{ names|join(', ') }}
+            {% if op.lines|length > 3 %}<span class="small text-muted">… +{{ op.lines|length - 3 }}</span>{% endif %}
+          </td>
+          <td class="text-muted small">{{ op.comment or '' }}</td>
+          <td class="num">{{ op.lines|length }}</td>
+          <td class="small text-muted">{{ op.created_by.username if op.created_by else '—' }}</td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{{ url_for('vium.vium_operation_view', op_id=op.id) }}">
+              <i class="fas fa-eye"></i>
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">Операций пока нет.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

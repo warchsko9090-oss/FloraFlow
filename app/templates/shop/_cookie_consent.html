@@ -1,0 +1,133 @@
+﻿<style>
+    .cookie-consent {
+        position: fixed;
+        left: 0.85rem;
+        right: 0.85rem;
+        bottom: calc(0.85rem + env(safe-area-inset-bottom, 0px));
+        z-index: 90;
+        display: flex;
+        justify-content: flex-start;
+        pointer-events: none;
+    }
+    @media (min-width: 640px) {
+        .cookie-consent {
+            left: 1.5rem;
+            right: auto;
+            max-width: 23rem;
+        }
+    }
+    .cookie-consent-inner {
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+        width: 100%;
+        padding: 0.65rem 0.7rem 0.65rem 0.75rem;
+        border: 1px solid rgba(182, 154, 109, 0.32);
+        border-radius: 3px;
+        background: rgba(22, 29, 25, 0.94);
+        -webkit-backdrop-filter: blur(14px);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.18);
+        transform: translateY(150%);
+        opacity: 0;
+        transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.55s ease;
+    }
+    .cookie-consent.is-visible .cookie-consent-inner {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    .cookie-consent-icon {
+        flex-shrink: 0;
+        width: 1.85rem;
+        height: 1.85rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 2px;
+        background: rgba(182, 154, 109, 0.12);
+        color: #B69A6D;
+        font-size: 0.8rem;
+    }
+    .cookie-consent-text {
+        flex: 1;
+        min-width: 0;
+        font-size: 11px;
+        line-height: 1.45;
+        color: #C8C5BE;
+        letter-spacing: 0.01em;
+    }
+    .cookie-consent-text a {
+        color: #B69A6D;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+    }
+    .cookie-consent-text a:hover { color: #C4AB7E; }
+    .cookie-consent-btn {
+        flex-shrink: 0;
+        padding: 0.45rem 0.9rem;
+        border-radius: 2px;
+        border: 1px solid rgba(182, 154, 109, 0.55);
+        background: rgba(182, 154, 109, 0.12);
+        color: #F7F5F0;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.1s;
+    }
+    .cookie-consent-btn:hover {
+        background: rgba(182, 154, 109, 0.24);
+        border-color: #B69A6D;
+        color: #FAFAF8;
+    }
+    .cookie-consent-btn:active { transform: scale(0.97); }
+    @media (max-width: 359px) {
+        .cookie-consent-icon { display: none; }
+    }
+</style>
+
+<div id="cookie-consent" class="cookie-consent" role="dialog" aria-live="polite" aria-label="Уведомление об использовании cookie" hidden>
+    <div class="cookie-consent-inner">
+        <span class="cookie-consent-icon" aria-hidden="true"><i class="fa-solid fa-cookie-bite"></i></span>
+        <p class="cookie-consent-text">
+            Используем cookie и обрабатываем <a href="{{ url_for('public_client_api.public_privacy') }}">персональные данные</a> для работы сайта.
+        </p>
+        <button type="button" id="cookie-consent-accept" class="cookie-consent-btn">Принять</button>
+    </div>
+</div>
+
+<script>
+    (function () {
+        var KEY = 'knyazhestvo_cookie_consent';
+        function hasConsent() {
+            try { return localStorage.getItem(KEY) === '1'; } catch (e) { return false; }
+        }
+        function setConsent() {
+            try { localStorage.setItem(KEY, '1'); } catch (e) {}
+        }
+        function init() {
+            var el = document.getElementById('cookie-consent');
+            if (!el) return;
+            if (hasConsent()) { el.remove(); return; }
+            el.hidden = false;
+            requestAnimationFrame(function () {
+                setTimeout(function () { el.classList.add('is-visible'); }, 400);
+            });
+            var accept = document.getElementById('cookie-consent-accept');
+            if (accept) {
+                accept.addEventListener('click', function () {
+                    setConsent();
+                    el.classList.remove('is-visible');
+                    setTimeout(function () { el.remove(); }, 600);
+                });
+            }
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    })();
+</script>

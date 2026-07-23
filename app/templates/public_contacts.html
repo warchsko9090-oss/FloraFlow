@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{{ contacts_page.page_heading }} — Княжество</title>
+    {% set shop_meta_description = 'Контакты архитектурного питомника Княжество: реквизиты, телефон, мессенджеры, адрес площадки и координаты для посещения питомника в Тульской области.' %}
+    {% set shop_og_type = 'website' %}
+    <meta name="description" content="{{ shop_meta_description }}">
+    {% include 'shop/_favicon_links.html' %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            bg: '#111814', bgSoft: '#161D19', card: '#1C2420', cardHover: '#232B27',
+                            cream: '#F7F5F0', pine: '#111814', brass: '#B69A6D', brassHover: '#C4AB7E',
+                            brassDim: '#8A7555', graphite: '#C8C5BE', muted: '#7A7E78',
+                            border: '#2E3632', borderLight: '#3D4741', low: '#D47A45'
+                        }
+                    },
+                    fontFamily: { sans: ['Golos Text', 'sans-serif'], serif: ['Cormorant', 'serif'] }
+                }
+            }
+        }
+    </script>
+    {% include 'shop/_styles.html' %}
+    {% include 'shop/_seo_meta.html' %}
+    {% include 'shop/_metrika.html' %}
+    {% include 'shop/_contacts_page_styles.html' %}
+</head>
+<body class="bg-brand-bg text-brand-cream font-sans antialiased selection:bg-brand-brass/30 min-h-screen contacts-page">
+
+    <div id="bg-slideshow" aria-hidden="true"><div id="bg-slides"></div><div class="bg-slideshow-overlay"></div></div>
+
+    <div class="relative z-10 min-h-screen flex flex-col">
+        {% include 'shop/_header.html' %}
+
+        <main class="flex-1 px-4 py-10 sm:py-14 pb-24 shop-page-glow">
+            <div class="max-w-6xl mx-auto">
+                <a href="{{ url_for('public_client_api.public_shop') }}" class="shop-page-back reveal inline-flex items-center gap-2 text-sm text-brand-muted hover:text-brand-brass transition-colors mb-10 sm:mb-12">
+                    <i class="fa-solid fa-arrow-left text-[10px]"></i>
+                    <span>Каталог</span>
+                </a>
+
+                <header class="shop-page-hero reveal text-center max-w-2xl mx-auto mb-12 sm:mb-16">
+                    <div class="flex items-center justify-center gap-3 mb-5">
+                        <span class="ornament-line w-10 sm:w-14 inline-block"></span>
+                        <span class="ornament-diamond flex-shrink-0"></span>
+                        <span class="ornament-line w-10 sm:w-14 inline-block"></span>
+                    </div>
+                    <p class="text-brand-brass text-[10px] uppercase tracking-[0.35em] font-medium mb-4">Княжество · Тульская область</p>
+                    <h1 class="font-serif text-4xl sm:text-5xl lg:text-[3.25rem] font-bold tracking-[0.02em] text-brand-cream leading-[1.08] mb-4">
+                        {{ contacts_page.page_heading }}
+                    </h1>
+                    {% if contacts_page.map_pin_label %}
+                    <p class="font-serif italic text-brand-graphite/85 text-lg sm:text-xl leading-relaxed">
+                        {{ contacts_page.map_pin_label }}
+                    </p>
+                    {% endif %}
+                </header>
+
+                {% set header_phone = shop_contacts|selectattr('contact_type', 'equalto', 'phone')|list|first if shop_contacts else none %}
+                {% if header_phone %}
+                <div class="contacts-cta-wrap reveal reveal-delay-1 flex justify-center mb-12 sm:mb-14">
+                    {% with phone=header_phone %}{% include 'shop/_phone_link.html' %}{% endwith %}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 lg:gap-8 items-start">
+                    <div class="xl:col-span-5 reveal reveal-delay-1">
+                        <article class="shop-panel h-full">
+                            <div class="shop-panel-accent"></div>
+                            <div class="shop-panel-inner">
+                                <div class="shop-section-head">
+                                    <span class="shop-section-num">01</span>
+                                    <div>
+                                        <p class="shop-section-eyebrow">Компания</p>
+                                        <h2 class="shop-section-title">Реквизиты</h2>
+                                    </div>
+                                </div>
+
+                                {% if company_requisites %}
+                                <dl class="contacts-requisites">
+                                    {% for req in company_requisites %}
+                                    <div class="contacts-req-item">
+                                        <dt>{{ req.label }}</dt>
+                                        <dd>{{ req.value }}</dd>
+                                    </div>
+                                    {% endfor %}
+                                </dl>
+                                {% else %}
+                                <p class="contacts-empty font-serif italic">Реквизиты будут опубликованы позже.</p>
+                                {% endif %}
+
+                                {% if shop_contacts %}
+                                <div class="shop-divider">
+                                    <span class="shop-divider-gem"></span>
+                                </div>
+                                <div class="shop-section-head shop-section-head-sm">
+                                    <span class="shop-section-num">02</span>
+                                    <div>
+                                        <p class="shop-section-eyebrow">Связь</p>
+                                        <h2 class="shop-section-title">Как с нами связаться</h2>
+                                    </div>
+                                </div>
+                                <div class="contacts-chips">
+                                    {% for c in shop_contacts %}
+                                    <a href="{{ contact_href(c) }}"
+                                       class="contact-chip{% if c.contact_type == 'phone' %} contact-chip-primary{% endif %}"
+                                       {% if c.contact_type in ['telegram', 'whatsapp', 'max'] %} target="_blank" rel="noopener"{% endif %}>
+                                        <span class="contact-chip-icon" aria-hidden="true">
+                                            {% if c.contact_type == 'phone' %}
+                                            <i class="fa-solid fa-phone"></i>
+                                            {% elif c.contact_type == 'email' %}
+                                            <i class="fa-solid fa-envelope"></i>
+                                            {% elif c.contact_type == 'telegram' %}
+                                            <i class="fa-brands fa-telegram"></i>
+                                            {% elif c.contact_type == 'whatsapp' %}
+                                            <i class="fa-brands fa-whatsapp"></i>
+                                            {% else %}
+                                            <i class="fa-solid fa-comment-dots"></i>
+                                            {% endif %}
+                                        </span>
+                                        <span class="contact-chip-body">
+                                            <span class="contact-chip-label">{% if c.label %}{{ c.label }}{% else %}{{ contact_display_label(c) }}{% endif %}</span>
+                                            <span class="contact-chip-value">{{ c.value }}</span>
+                                        </span>
+                                        <i class="fa-solid fa-chevron-right contact-chip-arrow"></i>
+                                    </a>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+                        </article>
+                    </div>
+
+                    <div class="xl:col-span-7 flex flex-col gap-6 lg:gap-8">
+                        <article class="shop-panel reveal reveal-delay-2 flex flex-col min-h-[380px] sm:min-h-[440px]">
+                            <div class="shop-panel-accent"></div>
+                            <div class="contacts-map-head">
+                                <div class="shop-section-head shop-section-head-inline mb-0">
+                                    <span class="shop-section-num">03</span>
+                                    <div>
+                                        <p class="shop-section-eyebrow">Локация</p>
+                                        <h2 class="shop-section-title">Как нас найти</h2>
+                                    </div>
+                                </div>
+                                {% if contacts_page.map_pin_label %}
+                                <p class="contacts-map-pin"><i class="fa-solid fa-location-dot mr-2 text-brand-brass/80"></i>{{ contacts_page.map_pin_label }}</p>
+                                {% endif %}
+                            </div>
+                            <div class="contacts-map-frame">
+                                <div class="contacts-map-wrap">{{ map_embed|safe }}</div>
+                            </div>
+                        </article>
+
+                        {% if contacts_page.location_address or contacts_page.location_coordinates %}
+                        <article class="shop-panel reveal reveal-delay-3">
+                            <div class="shop-panel-accent"></div>
+                            <div class="shop-panel-inner">
+                                <div class="shop-section-head shop-section-head-sm mb-5">
+                                    <span class="shop-section-num">04</span>
+                                    <div>
+                                        <p class="shop-section-eyebrow">Локация</p>
+                                        <h2 class="shop-section-title">Адрес площадки</h2>
+                                    </div>
+                                </div>
+                                <div class="contacts-copy-grid">
+                                    {% if contacts_page.location_address %}
+                                    <button type="button"
+                                            class="contacts-copy-card"
+                                            data-copy-value="{{ contacts_page.location_address }}"
+                                            aria-label="Скопировать адрес питомника">
+                                        <span class="contacts-copy-label">Адрес питомника</span>
+                                        <span class="contacts-copy-value">{{ contacts_page.location_address }}</span>
+                                        <span class="contacts-copy-hint"><i class="fa-regular fa-copy mr-2"></i>Нажмите, чтобы скопировать</span>
+                                    </button>
+                                    {% endif %}
+                                    {% if contacts_page.location_coordinates %}
+                                    <button type="button"
+                                            class="contacts-copy-card"
+                                            data-copy-value="{{ contacts_page.location_coordinates }}"
+                                            aria-label="Скопировать координаты">
+                                        <span class="contacts-copy-label">Координаты</span>
+                                        <span class="contacts-copy-value">{{ contacts_page.location_coordinates }}</span>
+                                        <span class="contacts-copy-hint"><i class="fa-regular fa-copy mr-2"></i>Нажмите, чтобы скопировать</span>
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </article>
+                        {% endif %}
+
+                        <article class="shop-panel reveal reveal-delay-3">
+                            <div class="shop-panel-accent"></div>
+                            <div class="shop-panel-inner">
+                                <div class="contacts-about-grid">
+                                    <div class="contacts-about-mark" aria-hidden="true">"</div>
+                                    <div>
+                                        {% if contacts_page.about_heading %}
+                                        <p class="shop-section-eyebrow mb-2">{{ contacts_page.about_heading }}</p>
+                                        {% endif %}
+                                        {% if contacts_page.about_paragraph_1 %}
+                                        <p class="contacts-about-lead font-serif text-xl sm:text-2xl text-brand-cream leading-snug mb-5">
+                                            {{ contacts_page.about_paragraph_1 }}
+                                        </p>
+                                        {% endif %}
+                                        {% if contacts_page.about_paragraph_2 %}
+                                        <p class="contacts-about-sub font-serif italic text-brand-graphite/90 text-base sm:text-lg leading-relaxed">
+                                            {{ contacts_page.about_paragraph_2 }}
+                                        </p>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </article>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        {% include 'shop/_footer.html' %}
+    </div>
+
+    {% include 'shop/_scroll_top.html' %}
+    {% include 'shop/_cookie_consent.html' %}
+
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=3"></script>
+    <script>
+        window.onload = () => {
+            Shop.init([], {});
+            Shop.deferBgSlideshow();
+            Shop.initScrollTopButton();
+            document.querySelectorAll('.contacts-copy-card').forEach(card => {
+                card.addEventListener('click', async () => {
+                    const value = card.getAttribute('data-copy-value') || '';
+                    if (!value) return;
+                    try {
+                        await navigator.clipboard.writeText(value);
+                        card.classList.add('is-copied');
+                        setTimeout(() => card.classList.remove('is-copied'), 1200);
+                    } catch (e) {
+                        const tmp = document.createElement('textarea');
+                        tmp.value = value;
+                        tmp.style.position = 'fixed';
+                        tmp.style.opacity = '0';
+                        document.body.appendChild(tmp);
+                        tmp.focus();
+                        tmp.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(tmp);
+                        card.classList.add('is-copied');
+                        setTimeout(() => card.classList.remove('is-copied'), 1200);
+                    }
+                });
+            });
+            const obs = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('visible');
+                        obs.unobserve(entry.target);
+                    }
+                });
+            }, { threshold: 0.06, rootMargin: '0px 0px -24px 0px' });
+            document.querySelectorAll('.reveal').forEach(el => {
+                const rect = el.getBoundingClientRect();
+                if (rect.top < window.innerHeight * 0.92) el.classList.add('visible');
+                else obs.observe(el);
+            });
+        };
+    </script>
+</body>
+</html>

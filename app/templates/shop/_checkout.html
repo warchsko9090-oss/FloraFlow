@@ -1,0 +1,46 @@
+<div id="checkout-modal" class="fixed inset-0 bg-brand-bg/80 backdrop-blur-sm hidden flex justify-center items-center p-4 overflow-y-auto">
+    <div class="shop-modal-panel shop-panel w-full max-w-lg rounded-sm relative my-4">
+        <div class="shop-panel-accent"></div>
+        <button type="button" onclick="Shop.closeCheckoutModal()" class="absolute top-3 right-3 text-brand-muted hover:text-brand-cream w-8 h-8 flex items-center justify-center rounded-sm hover:bg-brand-bgSoft transition-colors z-10">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+
+        <div id="checkout-step-review" class="p-7">
+            <h2 class="font-serif text-xl font-bold mb-1 text-brand-cream">Проверьте Коммерческое предложение</h2>
+            <p class="text-brand-muted text-sm mb-5">Измените количество или удалите позиции перед отправкой Коммерческого предложения.</p>
+            <div id="checkout-review-list" class="space-y-3 max-h-[50vh] overflow-y-auto pr-1 mb-5"></div>
+            <div class="flex items-center justify-between pt-4 border-t border-brand-border mb-5">
+                <span class="text-sm text-brand-muted uppercase tracking-wider">Итого</span>
+                <span id="checkout-review-total" class="font-serif text-2xl font-bold text-brand-cream">0 ₽</span>
+            </div>
+            <button type="button" id="checkout-next-btn" onclick="Shop.goToCheckoutForm()" class="shop-btn-primary w-full disabled:opacity-40 disabled:cursor-not-allowed">
+                Далее — контакты
+            </button>
+        </div>
+
+        <div id="checkout-step-form" class="p-7 hidden">
+            <button type="button" onclick="Shop.backToCheckoutReview()" class="inline-flex items-center gap-2 text-sm text-brand-muted hover:text-brand-brass transition-colors mb-4">
+                <i class="fa-solid fa-arrow-left text-xs"></i>
+                <span>Назад к Коммерческому предложению</span>
+            </button>
+            <h2 class="font-serif text-xl font-bold mb-1 text-brand-cream">Запрос Коммерческого предложения</h2>
+            <p class="text-brand-muted text-sm mb-5">Коммерческое предложение уйдёт менеджеру. Уточним наличие и логистику по телефону.</p>
+            <form id="order-form" method="POST" action="{{ url_for('public_client_api.public_shop') }}" onsubmit="return Shop.prepareOrderSubmit(event)" class="space-y-3">
+                <input type="text" name="customer_name" required placeholder="Наименование компании"
+                    class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft">
+                <input type="tel" name="phone" placeholder="Телефон"
+                    class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft">
+                <input type="email" name="email" placeholder="E-mail (необязательно)"
+                    class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft">
+                <div id="order-qty-fields"></div>
+                <label class="shop-consent">
+                    <input type="checkbox" name="pd_consent" value="1" required class="shop-consent-checkbox">
+                    <span class="shop-consent-text">Согласен на <a href="{{ url_for('public_client_api.public_consent') }}" target="_blank" rel="noopener">обработку персональных данных</a></span>
+                </label>
+                <button type="submit" class="shop-btn-primary w-full mt-1">
+                    Отправить КП
+                </button>
+            </form>
+        </div>
+    </div>
+</div>

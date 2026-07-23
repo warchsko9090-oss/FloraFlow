@@ -1,0 +1,1114 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h4 class="mb-0 text-success fw-bold"><i class="fas fa-store me-2"></i>Витрина «Княжество»</h4>
+        <p class="text-muted small mb-0">Фон, фото, контакты, цены, каталог и главная страница</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        <a href="{{ url_for('public_client_api.landing_preview') }}" target="_blank" class="btn btn-outline-secondary btn-sm">
+            <i class="fas fa-flask me-1"></i>Предпросмотр главной
+        </a>
+        <a href="{{ url_for('public_client_api.public_shop_contacts') }}" target="_blank" class="btn btn-outline-secondary btn-sm">
+        <i class="fas fa-address-book me-1"></i>Страница контактов
+    </a>
+    <a href="{{ url_for('public_client_api.public_shop') }}" target="_blank" class="btn btn-outline-success btn-sm">
+        <i class="fas fa-external-link-alt me-1"></i>Открыть витрину
+    </a>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'background' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='background') }}">Фон витрины</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'photos' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='photos') }}">Товары и фото</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'contacts' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='contacts') }}">Контакты</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'prices' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='prices') }}">Цены</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'catalog' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='catalog') }}">Товарные позиции</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'seedlings' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='seedlings') }}">Саженцы</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'contact_page' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='contact_page') }}">Страница контактов</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'landing' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='landing') }}">Главная страница</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'brandbook' %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index', tab='brandbook') }}">Брендбук</a>
+    </li>
+</ul>
+
+{% if tab == 'brandbook' %}
+{% include 'shop/_brandbook_reference.html' %}
+{% elif tab == 'background' %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light fw-semibold">Загрузка фона (слайд-шоу)</div>
+    <div class="card-body">
+        <p class="text-muted small">Изображения сохраняются в <code>data-sidebar</code> и используются на <code>/shop</code> и на <strong>главной странице</strong> (слайд-шоу). Форматы: {{ image_extensions }}.</p>
+        <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end">
+            <input type="hidden" name="tab" value="background">
+            <input type="hidden" name="action" value="upload_background">
+            <div class="col-md-8">
+                <input type="file" name="photos" class="form-control" accept="image/*" multiple required>
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-success w-100"><i class="fas fa-upload me-1"></i>Загрузить</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Текущие слайды ({{ sidebar_items|length }})</div>
+    <div class="card-body">
+        {% if sidebar_items %}
+        <div class="row g-3">
+            {% for item in sidebar_items %}
+            <div class="col-6 col-md-4 col-lg-3">
+                <div class="border rounded overflow-hidden bg-light">
+                    <img src="{{ item.url }}" alt="" class="w-100" style="height:120px;object-fit:cover;">
+                    <div class="p-2 d-flex justify-content-between align-items-center gap-1">
+                        <span class="small text-truncate" title="{{ item.name }}">{{ item.name }}</span>
+                        <form method="POST" onsubmit="return confirm('Удалить {{ item.name }}?');">
+                            <input type="hidden" name="tab" value="background">
+                            <input type="hidden" name="action" value="delete_background">
+                            <input type="hidden" name="filename" value="{{ item.name }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger"><i class="fas fa-trash"></i></button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Фоновые изображения не загружены.</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{% if tab == 'photos' %}
+<p class="text-muted small mb-3">Для каждого растения — <strong>два независимых набора фото</strong>: «В грунте» (секция каталога сверху) и «Контейнерная площадка» (секция внизу). Первое фото набора — на карточке. Плашка «Топ», корневая система и стрижка для контейнеров задаются на вкладке «Саженцы».</p>
+{% if plant_cards %}
+<div class="card shadow-sm mb-3" id="photo-filter-panel">
+    <div class="card-body py-3">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+            <div class="position-relative flex-grow-1" style="min-width:220px;max-width:360px">
+                <i class="fas fa-search position-absolute text-muted" style="left:10px;top:50%;transform:translateY(-50%)"></i>
+                <input type="text" id="photoFilterSearch" class="form-control form-control-sm ps-4" placeholder="Поиск растения…" autocomplete="off">
+            </div>
+            <button type="button" class="btn btn-outline-primary btn-sm" id="photoSelectAll"><i class="fas fa-check-double me-1"></i>Выбрать все</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="photoResetSel"><i class="fas fa-times me-1"></i>Сбросить выбор</button>
+            <span class="badge bg-light text-dark border ms-auto" id="photoFilterCount"></span>
+        </div>
+        <div id="photoFilterList" class="d-flex flex-wrap gap-2" style="max-height:170px;overflow:auto;padding:2px">
+            {% for card in plant_cards %}
+            <label class="photo-filter-chip border rounded px-2 py-1 small d-inline-flex align-items-center gap-1 mb-0" data-name="{{ card.name|lower }}" style="cursor:pointer">
+                <input type="checkbox" class="form-check-input mt-0 photo-filter-cb" value="{{ card.id }}">
+                <span>{{ card.name }}</span>
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+<p class="text-muted small mb-3" id="photoEmptyFilter" style="display:none">Нет растений по выбранному фильтру.</p>
+{% for card in plant_cards %}
+<div class="card shadow-sm mb-3 photo-plant-card" id="plant-card-{{ card.id }}" data-plant-id="{{ card.id }}" data-plant-name="{{ card.name|lower }}">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span class="fw-semibold">{{ card.name }}</span>
+        <span class="badge bg-secondary">грунт: {{ card.photos|length }} · контейнер: {{ card.container_photos|length }}</span>
+    </div>
+    <div class="card-body">
+        <h6 class="text-success small fw-semibold mb-2"><i class="fas fa-tree me-1"></i>Фото — растения в грунте</h6>
+        <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end mb-3">
+            <input type="hidden" name="tab" value="photos">
+            <input type="hidden" name="action" value="upload_plant_photos">
+            <input type="hidden" name="plant_id" value="{{ card.id }}">
+            <input type="hidden" name="photo_variant" value="ground">
+            <div class="col-md-8">
+                <input type="file" name="photos" class="form-control form-control-sm" accept="image/*" multiple>
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-success btn-sm w-100">Добавить фото (грунт)</button>
+            </div>
+        </form>
+        {% if card.photos %}
+        <div class="row g-2 mb-4">
+            {% for photo in card.photos %}
+            <div class="col-6 col-md-3 col-lg-2">
+                <div class="border rounded overflow-hidden">
+                    <img src="{{ photo.url }}" alt="" class="w-100" style="height:90px;object-fit:cover;">
+                    <div class="p-1 text-center">
+                        <form method="POST" onsubmit="return confirm('Удалить фото?');">
+                            <input type="hidden" name="tab" value="photos">
+                            <input type="hidden" name="action" value="delete_plant_photo">
+                            <input type="hidden" name="plant_id" value="{{ card.id }}">
+                            <input type="hidden" name="photo_variant" value="ground">
+                            <input type="hidden" name="filename" value="{{ photo.name }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger w-100">Удалить</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted small mb-4">Нет фото для грунта — карточка показывается без изображения.</p>
+        {% endif %}
+
+        <h6 class="text-primary small fw-semibold mb-2"><i class="fas fa-seedling me-1"></i>Фото — контейнерная площадка</h6>
+        <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end mb-3">
+            <input type="hidden" name="tab" value="photos">
+            <input type="hidden" name="action" value="upload_plant_photos">
+            <input type="hidden" name="plant_id" value="{{ card.id }}">
+            <input type="hidden" name="photo_variant" value="container">
+            <div class="col-md-8">
+                <input type="file" name="photos" class="form-control form-control-sm" accept="image/*" multiple>
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-primary btn-sm w-100">Добавить фото (контейнер)</button>
+            </div>
+        </form>
+        {% if card.container_photos %}
+        <div class="row g-2">
+            {% for photo in card.container_photos %}
+            <div class="col-6 col-md-3 col-lg-2">
+                <div class="border rounded overflow-hidden border-primary border-opacity-25">
+                    <img src="{{ photo.url }}" alt="" class="w-100" style="height:90px;object-fit:cover;">
+                    <div class="p-1 text-center">
+                        <form method="POST" onsubmit="return confirm('Удалить фото?');">
+                            <input type="hidden" name="tab" value="photos">
+                            <input type="hidden" name="action" value="delete_plant_photo">
+                            <input type="hidden" name="plant_id" value="{{ card.id }}">
+                            <input type="hidden" name="photo_variant" value="container">
+                            <input type="hidden" name="filename" value="{{ photo.name }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger w-100">Удалить</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted small mb-0">Нет фото для контейнерной площадки — не подставляются фото грунта.</p>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+<script>
+(function () {
+    const search = document.getElementById('photoFilterSearch');
+    if (!search) return;
+    const checkboxes = Array.from(document.querySelectorAll('.photo-filter-cb'));
+    const chips = Array.from(document.querySelectorAll('.photo-filter-chip'));
+    const cards = Array.from(document.querySelectorAll('.photo-plant-card'));
+    const countEl = document.getElementById('photoFilterCount');
+    const emptyEl = document.getElementById('photoEmptyFilter');
+
+    function selectedIds() {
+        return new Set(checkboxes.filter(cb => cb.checked).map(cb => cb.value));
+    }
+
+    function applyFilter() {
+        const q = search.value.trim().toLowerCase();
+        const sel = selectedIds();
+        let shown = 0;
+        cards.forEach(card => {
+            const id = card.dataset.plantId;
+            const name = card.dataset.plantName || '';
+            const matchSel = sel.size === 0 || sel.has(id);
+            const matchQ = !q || name.includes(q);
+            const visible = matchSel && matchQ;
+            card.style.display = visible ? '' : 'none';
+            if (visible) shown++;
+        });
+        chips.forEach(chip => {
+            const name = chip.dataset.name || '';
+            chip.style.display = (!q || name.includes(q)) ? '' : 'none';
+        });
+        if (countEl) {
+            countEl.textContent = sel.size > 0
+                ? `Выбрано: ${sel.size} · показано: ${shown}`
+                : `Показано: ${shown} из ${cards.length}`;
+        }
+        if (emptyEl) emptyEl.style.display = shown === 0 ? '' : 'none';
+    }
+
+    search.addEventListener('input', applyFilter);
+    checkboxes.forEach(cb => cb.addEventListener('change', applyFilter));
+    document.getElementById('photoSelectAll')?.addEventListener('click', () => {
+        const q = search.value.trim().toLowerCase();
+        checkboxes.forEach(cb => {
+            const chip = cb.closest('.photo-filter-chip');
+            const name = chip?.dataset.name || '';
+            if (!q || name.includes(q)) cb.checked = true;
+        });
+        applyFilter();
+    });
+    document.getElementById('photoResetSel')?.addEventListener('click', () => {
+        checkboxes.forEach(cb => cb.checked = false);
+        search.value = '';
+        applyFilter();
+    });
+
+    applyFilter();
+})();
+</script>
+{% else %}
+<div class="alert alert-info">В каталоге витрины пока нет позиций с остатком.</div>
+{% endif %}
+{% endif %}
+
+{% if tab == 'contacts' %}
+<p class="text-muted small mb-3">
+    Контакты с галочкой «На сайте» отображаются в подвале, на странице контактов и в шапке (телефон и первый Telegram).
+    Для Telegram укажите <code>@username</code> или ссылку <code>https://t.me/…</code>.
+    Доступны типы: телефон, e-mail, Telegram, WhatsApp, MAX, ВКонтакте, Instagram и произвольная ссылка.
+</p>
+<div class="row g-3">
+    <div class="col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light fw-semibold">Новый контакт</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="tab" value="contacts">
+                    <input type="hidden" name="action" value="add_contact">
+                    <div class="mb-2">
+                        <label class="form-label">Тип</label>
+                        <select name="contact_type" class="form-select form-select-sm">
+                            {% for key, label in contact_types %}
+                            <option value="{{ key }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Подпись (необязательно)</label>
+                        <input type="text" name="label" class="form-control form-control-sm" placeholder="Напр. Отдел продаж">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Значение</label>
+                        <input type="text" name="value" class="form-control form-control-sm" required placeholder="+7 … / email / @telegram">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Порядок</label>
+                        <input type="number" name="sort_order" class="form-control form-control-sm" value="0">
+                    </div>
+                    <div class="form-check mb-1">
+                        <input class="form-check-input" type="checkbox" name="show_on_site" value="1" id="add_site" checked>
+                        <label class="form-check-label" for="add_site">На сайте</label>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="show_in_kp" value="1" id="add_kp" checked>
+                        <label class="form-check-label" for="add_kp">В PDF КП</label>
+                    </div>
+                    <button type="submit" class="btn btn-success btn-sm w-100">Добавить</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light fw-semibold">Контакты ({{ contacts|length }})</div>
+            <div class="card-body p-0">
+                {% if contacts %}
+                <div class="list-group list-group-flush">
+                    {% for c in contacts %}
+                    <div class="list-group-item {% if not c.is_active %}bg-light{% endif %}">
+                        <form method="POST" class="row g-2 align-items-center">
+                            <input type="hidden" name="tab" value="contacts">
+                            <input type="hidden" name="action" value="edit_contact">
+                            <input type="hidden" name="contact_id" value="{{ c.id }}">
+                            <div class="col-md-2">
+                                <select name="contact_type" class="form-select form-select-sm">
+                                    {% for key, label in contact_types %}
+                                    <option value="{{ key }}" {% if c.contact_type == key %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <input type="text" name="label" class="form-control form-control-sm" value="{{ c.label or '' }}" placeholder="Подпись">
+                            </div>
+                            <div class="col-md-3">
+                                <input type="text" name="value" class="form-control form-control-sm" value="{{ c.value }}" required>
+                            </div>
+                            <div class="col-md-1">
+                                <input type="number" name="sort_order" class="form-control form-control-sm" value="{{ c.sort_order }}" title="Порядок">
+                            </div>
+                            <div class="col-md-4 d-flex flex-wrap gap-2 align-items-center justify-content-end">
+                                <div class="form-check form-check-inline mb-0">
+                                    <input class="form-check-input" type="checkbox" name="show_on_site" value="1" id="site_{{ c.id }}" {% if c.show_on_site %}checked{% endif %}>
+                                    <label class="form-check-label small" for="site_{{ c.id }}">Сайт</label>
+                                </div>
+                                <div class="form-check form-check-inline mb-0">
+                                    <input class="form-check-input" type="checkbox" name="show_in_kp" value="1" id="kp_{{ c.id }}" {% if c.show_in_kp %}checked{% endif %}>
+                                    <label class="form-check-label small" for="kp_{{ c.id }}">КП</label>
+                                </div>
+                                <div class="form-check form-check-inline mb-0">
+                                    <input class="form-check-input" type="checkbox" name="is_active" value="1" id="act_{{ c.id }}" {% if c.is_active %}checked{% endif %}>
+                                    <label class="form-check-label small" for="act_{{ c.id }}">Вкл</label>
+                                </div>
+                                <button type="submit" class="btn btn-sm btn-primary">Сохранить</button>
+                            </div>
+                        </form>
+                        <form method="POST" class="mt-1 text-end" onsubmit="return confirm('Удалить контакт?');">
+                            <input type="hidden" name="tab" value="contacts">
+                            <input type="hidden" name="action" value="delete_contact">
+                            <input type="hidden" name="contact_id" value="{{ c.id }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger"><i class="fas fa-trash me-1"></i>Удалить</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">Контакты не заданы — будут использованы значения по умолчанию после первого запуска.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if tab == 'prices' %}
+<div class="card shadow-sm mb-3">
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span>Цены на сайте</span>
+        <span class="badge bg-secondary">{{ price_rows|length }} поз.</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            «Оптовая» — из остатков ERP (история цен). «Розница» — цена по умолчанию на сайте.
+            «На сайте» можно изменить вручную, но не ниже оптовой. Пустое поле или совпадение с розницей по умолчанию — сброс переопределения.
+        </p>
+        {% if price_rows %}
+        <form method="POST">
+            <input type="hidden" name="tab" value="prices">
+            <input type="hidden" name="action" value="save_prices">
+            <div class="table-responsive" style="max-height:70vh;overflow:auto;">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light sticky-top">
+                        <tr>
+                            <th>Растение</th>
+                            <th>Размер</th>
+                            <th class="text-end">Оптовая, ₽</th>
+                            <th class="text-end">Розница, ₽</th>
+                            <th class="text-end" style="min-width:140px">На сайте, ₽</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in price_rows %}
+                        <tr class="{% if row.has_override %}table-warning{% endif %}">
+                            <td>{{ row.plant_name }}</td>
+                            <td>{{ row.size_name }}</td>
+                            <td class="text-end text-muted">{{ '{:,.0f}'.format(row.wholesale_price).replace(',', ' ') }}</td>
+                            <td class="text-end text-muted">{{ '{:,.0f}'.format(row.default_retail_price).replace(',', ' ') }}</td>
+                            <td class="text-end">
+                                <input type="number"
+                                    name="price_{{ row.plant_id }}_{{ row.size_id }}"
+                                    class="form-control form-control-sm text-end d-inline-block"
+                                    style="max-width:120px"
+                                    min="{{ row.wholesale_price|round(0)|int }}" step="1"
+                                    value="{{ row.site_price|round(0)|int }}"
+                                    title="Не ниже оптовой ({{ row.wholesale_price|round(0)|int }} ₽)">
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-3 d-flex justify-content-end">
+                <button type="submit" class="btn btn-success"><i class="fas fa-save me-1"></i>Сохранить цены</button>
+            </div>
+        </form>
+        {% else %}
+        <div class="alert alert-info mb-0">Нет позиций со свободным остатком для редактирования цен.</div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{% if tab == 'catalog' %}
+<div class="card shadow-sm mb-3">
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span>Товарные позиции на сайте</span>
+        <span class="badge bg-secondary">{{ catalog_rows|length }} растений</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            <strong>Корневая система / Стрижка</strong> — характеристики товарной позиции (свои, отдельно от саженцев).
+            <strong>Горячая позиция</strong> — карточка выше в каталоге и с премиальной рамкой.
+            <strong>Порядок</strong> — среди горячих (меньше число = выше).
+            <strong>Скрыть растение</strong> — убрать все размеры с витрины.
+            <strong>Показывать</strong> — размер на сайте (снимите, чтобы скрыть при наличии остатка).
+            <strong>По запросу</strong> — показывать без остатка с кнопкой заявки (в корзину не добавляется).
+        </p>
+        {% if catalog_rows %}
+        <form method="POST">
+            <input type="hidden" name="tab" value="catalog">
+            <input type="hidden" name="action" value="save_catalog">
+            <div class="table-responsive" style="max-height:70vh;overflow:auto;">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light sticky-top">
+                        <tr>
+                            <th>Растение</th>
+                            <th>Размер</th>
+                            <th class="text-end">Остаток</th>
+                            <th style="min-width:160px">Корневая система</th>
+                            <th style="min-width:140px">Стрижка</th>
+                            <th class="text-center" title="Горячая позиция">🔥</th>
+                            <th class="text-center" style="width:72px">Порядок</th>
+                            <th class="text-center" title="Скрыть растение целиком">Скрыть</th>
+                            <th class="text-center" title="Показывать размер на сайте">Показ.</th>
+                            <th class="text-center" title="Без остатка — «По запросу»">Запрос</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for group in catalog_rows %}
+                        {% for variant in group.variants %}
+                        <tr class="{% if group.is_hot %}table-warning{% elif not variant.is_visible %}table-secondary{% elif variant.show_on_request and variant.free_qty <= 0 %}table-info{% endif %}">
+                            <td class="fw-semibold">
+                                {% if loop.first %}
+                                {{ group.plant_name }}
+                                {% if group.is_hot %}<span class="badge bg-warning text-dark ms-1">hot</span>{% endif %}
+                                {% if group.is_hidden %}<span class="badge bg-secondary ms-1">скрыто</span>{% endif %}
+                                {% endif %}
+                            </td>
+                            <td>{{ variant.size_name }}</td>
+                            <td class="text-end text-muted">
+                                {% if variant.free_qty > 0 %}{{ variant.free_qty }}{% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if loop.first %}
+                                <input type="text" name="root_system_{{ group.plant_id }}" list="root-system-options"
+                                    class="form-control form-control-sm" value="{{ group.root_system }}" placeholder="Ком (WRB), Контейнер…">
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if loop.first %}
+                                <input type="text" name="pruning_{{ group.plant_id }}" list="pruning-options"
+                                    class="form-control form-control-sm" value="{{ group.pruning }}" placeholder="Шар, Ниваки…">
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if loop.first %}
+                                <input type="checkbox" class="form-check-input" name="hot_{{ group.plant_id }}" value="1"
+                                    {% if group.is_hot %}checked{% endif %}>
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if loop.first %}
+                                <input type="number" name="order_{{ group.plant_id }}" class="form-control form-control-sm text-center"
+                                    value="{{ group.display_order }}" min="0" step="1" style="width:64px;margin:0 auto">
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if loop.first %}
+                                <input type="checkbox" class="form-check-input" name="hidden_{{ group.plant_id }}" value="1"
+                                    {% if group.is_hidden %}checked{% endif %}>
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input" name="visible_{{ variant.plant_id }}_{{ variant.size_id }}" value="1"
+                                    {% if variant.is_visible %}checked{% endif %}>
+                            </td>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input" name="on_request_{{ variant.plant_id }}_{{ variant.size_id }}" value="1"
+                                    {% if variant.show_on_request %}checked{% endif %}
+                                    {% if variant.free_qty > 0 %}disabled title="Есть остаток — режим «По запросу» не нужен"{% endif %}>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <datalist id="root-system-options">
+                {% for opt in root_system_suggestions %}<option value="{{ opt }}">{% endfor %}
+            </datalist>
+            <datalist id="pruning-options">
+                {% for opt in pruning_suggestions %}<option value="{{ opt }}">{% endfor %}
+            </datalist>
+            <div class="mt-3 d-flex justify-content-end">
+                <button type="submit" class="btn btn-success"><i class="fas fa-save me-1"></i>Сохранить</button>
+            </div>
+        </form>
+        {% else %}
+        <div class="alert alert-info mb-0">Нет позиций для настройки. Появятся после появления остатков или записей в базе.</div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{% if tab == 'seedlings' %}
+<div class="card shadow-sm mb-3">
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span>Саженцы на сайте</span>
+        <span class="badge bg-secondary">{{ seedling_rows|length }} позиций</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            Позиции из группы размеров «Саженцы» и промеренные саженцы (Саженцы · контейнер · размер) в ERP.
+            На витрине карточка голых «Саженцы» отображается <strong>без выбора размера</strong>.
+            Настройки здесь <strong>не зависят</strong> от товарной позиции того же растения — у саженца своя корневая система, стрижка и «топ».
+            <strong>Показывать</strong> — разрешить карточку голых «Саженцы» на сайте (остаток или «По запросу»).
+            <strong>По запросу</strong> — показывать без остатка с кнопкой заявки.
+            <strong>Скрыть</strong> — принудительно убрать саженцы растения с сайта и из PDF товарных остатков (включая промеренные размеры), даже если есть остаток.
+            Фото контейнерной площадки — вкладка «Товары и фото» (блок «Контейнерная площадка»). «Топ», корневая система и стрижка для секции контейнеров — здесь. Цены — из «История цен» ERP / вкладка «Цены».
+        </p>
+        {% if seedling_rows %}
+        <form method="POST">
+            <input type="hidden" name="tab" value="seedlings">
+            <input type="hidden" name="action" value="save_seedlings">
+            <div class="table-responsive" style="max-height:70vh;overflow:auto;">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light sticky-top">
+                        <tr>
+                            <th>Растение</th>
+                            <th class="text-end">Остаток</th>
+                            <th class="text-end">Цена ERP</th>
+                            <th style="min-width:160px">Корневая система</th>
+                            <th style="min-width:140px">Стрижка</th>
+                            <th class="text-center" title="Горячая позиция">🔥</th>
+                            <th class="text-center" style="width:72px">Порядок</th>
+                            <th class="text-center" title="Показывать на сайте">Показ.</th>
+                            <th class="text-center" title="Без остатка — «По запросу»">Запрос</th>
+                            <th class="text-center" title="Принудительно скрыть с сайта и PDF">Скрыть</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in seedling_rows %}
+                        <tr class="{% if row.seedling_hidden %}table-secondary{% elif row.is_hot %}table-warning{% elif row.seedling_visible %}table-success{% elif row.seedling_on_request and row.free_qty <= 0 %}table-info{% endif %}">
+                            <td class="fw-semibold">
+                                {{ row.plant_name }}
+                                {% if row.is_hot %}<span class="badge bg-warning text-dark ms-1">hot</span>{% endif %}
+                                {% if row.seedling_hidden %}<span class="badge bg-secondary ms-1">скрыто</span>
+                                {% elif row.seedling_visible %}<span class="badge bg-success ms-1">на сайте</span>{% endif %}
+                            </td>
+                            <td class="text-end text-muted">
+                                {% if row.free_qty > 0 %}{{ row.free_qty }}{% else %}—{% endif %}
+                            </td>
+                            <td class="text-end text-muted">{{ row.base_price|round(0)|int }} ₽</td>
+                            <td>
+                                <input type="text" name="seedling_root_system_{{ row.plant_id }}" list="root-system-options"
+                                    class="form-control form-control-sm" value="{{ row.root_system }}" placeholder="С3, ОКС…">
+                            </td>
+                            <td>
+                                <input type="text" name="seedling_pruning_{{ row.plant_id }}" list="pruning-options"
+                                    class="form-control form-control-sm" value="{{ row.pruning }}" placeholder="Шар, Штамб…">
+                            </td>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input" name="seedling_hot_{{ row.plant_id }}" value="1"
+                                    {% if row.is_hot %}checked{% endif %}>
+                            </td>
+                            <td class="text-center">
+                                <input type="number" name="seedling_order_{{ row.plant_id }}" class="form-control form-control-sm text-center"
+                                    value="{{ row.display_order }}" min="0" step="1" style="width:64px;margin:0 auto">
+                            </td>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input" name="seedling_visible_{{ row.plant_id }}" value="1"
+                                    {% if row.seedling_visible %}checked{% endif %}>
+                            </td>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input" name="seedling_on_request_{{ row.plant_id }}" value="1"
+                                    {% if row.seedling_on_request %}checked{% endif %}
+                                    {% if row.free_qty > 0 %}disabled title="Есть остаток — режим «По запросу» не нужен"{% endif %}>
+                            </td>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input" name="seedling_hidden_{{ row.plant_id }}" value="1"
+                                    {% if row.seedling_hidden %}checked{% endif %}
+                                    title="Убрать с сайта и из PDF остатков">
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <datalist id="root-system-options">
+                {% for opt in root_system_suggestions %}<option value="{{ opt }}">{% endfor %}
+            </datalist>
+            <datalist id="pruning-options">
+                {% for opt in pruning_suggestions %}<option value="{{ opt }}">{% endfor %}
+            </datalist>
+            <div class="mt-3 d-flex justify-content-end">
+                <button type="submit" class="btn btn-success"><i class="fas fa-save me-1"></i>Сохранить саженцы</button>
+            </div>
+        </form>
+        {% else %}
+        <div class="alert alert-info mb-0">Нет позиций в группе «Саженцы». Появятся после появления остатков или цен в ERP.</div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{% if tab == 'contact_page' %}
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-light fw-semibold">Текст и карта</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="tab" value="contact_page">
+                    <input type="hidden" name="action" value="save_contact_page">
+                    <div class="mb-2">
+                        <label class="form-label">Заголовок страницы</label>
+                        <input type="text" name="page_heading" class="form-control form-control-sm" value="{{ contacts_page.page_heading or '' }}">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Заголовок блока «О питомнике»</label>
+                        <input type="text" name="about_heading" class="form-control form-control-sm" value="{{ contacts_page.about_heading or '' }}">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Текст о питомнике (абзац 1)</label>
+                        <textarea name="about_paragraph_1" rows="3" class="form-control form-control-sm">{{ contacts_page.about_paragraph_1 or '' }}</textarea>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Текст о питомнике (абзац 2)</label>
+                        <textarea name="about_paragraph_2" rows="3" class="form-control form-control-sm">{{ contacts_page.about_paragraph_2 or '' }}</textarea>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Адрес питомника (копируемый блок)</label>
+                        <textarea name="location_address" rows="2" class="form-control form-control-sm" placeholder="Тульская область, ...">{{ contacts_page.location_address or '' }}</textarea>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Координаты (копируемый блок)</label>
+                        <input type="text" name="location_coordinates" class="form-control form-control-sm" placeholder="54.2044, 37.6111" value="{{ contacts_page.location_coordinates or '' }}">
+                    </div>
+                    <hr>
+                    <p class="text-muted small">Координаты для карты Яндекс (широта / долгота). Можно скопировать из Яндекс.Карт → «Поделиться».</p>
+                    <div class="row g-2 mb-2">
+                        <div class="col-4">
+                            <label class="form-label">Широта</label>
+                            <input type="text" name="map_lat" class="form-control form-control-sm" value="{{ contacts_page.map_lat }}">
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label">Долгота</label>
+                            <input type="text" name="map_lng" class="form-control form-control-sm" value="{{ contacts_page.map_lng }}">
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label">Масштаб (5–18)</label>
+                            <input type="number" name="map_zoom" min="5" max="18" class="form-control form-control-sm" value="{{ contacts_page.map_zoom or 12 }}">
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Подпись на карте</label>
+                        <input type="text" name="map_pin_label" class="form-control form-control-sm" value="{{ contacts_page.map_pin_label or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Код карты (необязательно)</label>
+                        <textarea name="map_embed_html" rows="4" class="form-control form-control-sm font-monospace" placeholder="<iframe src=&quot;https://yandex.ru/map-widget/...&quot; ...></iframe>">{{ contacts_page.map_embed_html or '' }}</textarea>
+                        <div class="form-text">Если пусто — карта строится по координатам. Можно вставить iframe из конструктора Яндекс.Карт.</div>
+                    </div>
+                    <button type="submit" class="btn btn-success btn-sm">Сохранить страницу</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-light fw-semibold">Новый реквизит</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="tab" value="contact_page">
+                    <input type="hidden" name="action" value="add_requisite">
+                    <div class="mb-2">
+                        <label class="form-label">Название</label>
+                        <input type="text" name="label" class="form-control form-control-sm" placeholder="ИНН, Банк, Юр. адрес…" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Значение</label>
+                        <textarea name="value" rows="2" class="form-control form-control-sm" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Порядок</label>
+                        <input type="number" name="sort_order" class="form-control form-control-sm" value="0">
+                    </div>
+                    <button type="submit" class="btn btn-success btn-sm w-100">Добавить реквизит</button>
+                </form>
+            </div>
+        </div>
+        <div class="card shadow-sm">
+            <div class="card-header bg-light fw-semibold">Реквизиты ({{ company_requisites|length }})</div>
+            <div class="card-body p-0">
+                {% if company_requisites %}
+                <div class="list-group list-group-flush">
+                    {% for req in company_requisites %}
+                    <div class="list-group-item {% if not req.is_active %}bg-light{% endif %}">
+                        <form method="POST" class="row g-2">
+                            <input type="hidden" name="tab" value="contact_page">
+                            <input type="hidden" name="action" value="edit_requisite">
+                            <input type="hidden" name="requisite_id" value="{{ req.id }}">
+                            <div class="col-md-3">
+                                <input type="text" name="label" class="form-control form-control-sm" value="{{ req.label }}" required>
+                            </div>
+                            <div class="col-md-5">
+                                <textarea name="value" rows="2" class="form-control form-control-sm" required>{{ req.value }}</textarea>
+                            </div>
+                            <div class="col-md-1">
+                                <input type="number" name="sort_order" class="form-control form-control-sm" value="{{ req.sort_order }}" title="Порядок">
+                            </div>
+                            <div class="col-md-3 d-flex flex-wrap gap-2 align-items-start justify-content-end">
+                                <div class="form-check mb-0">
+                                    <input class="form-check-input" type="checkbox" name="is_active" value="1" id="req_act_{{ req.id }}" {% if req.is_active %}checked{% endif %}>
+                                    <label class="form-check-label small" for="req_act_{{ req.id }}">Вкл</label>
+                                </div>
+                                <button type="submit" class="btn btn-sm btn-primary">Сохранить</button>
+                            </div>
+                        </form>
+                        <form method="POST" class="mt-1 text-end" onsubmit="return confirm('Удалить реквизит?');">
+                            <input type="hidden" name="tab" value="contact_page">
+                            <input type="hidden" name="action" value="delete_requisite">
+                            <input type="hidden" name="requisite_id" value="{{ req.id }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger"><i class="fas fa-trash"></i></button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">Реквизиты не заданы.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if tab == 'landing' %}
+<div class="row g-3">
+    <div class="col-lg-8">
+        <div class="alert alert-info small mb-3">
+            <strong>Фон главной</strong> — те же слайды, что и в каталоге: вкладка
+            <a href="{{ url_for('shop_admin.shop_admin_index', tab='background') }}">«Фон витрины»</a>.
+            Тексты ниже сохраняются в базу и сразу отображаются на <code>knyajestvo.ru</code>.
+        </div>
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-light fw-semibold">Тексты главной страницы</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="tab" value="landing">
+                    <input type="hidden" name="action" value="save_landing_page">
+                    <div class="mb-2">
+                        <label class="form-label">SEO-описание (meta description)</label>
+                        <textarea name="meta_description" rows="2" class="form-control form-control-sm">{{ landing_page.meta_description or '' }}</textarea>
+                    </div>
+                    <hr>
+                    <h6 class="text-success">Первый экран</h6>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-6"><label class="form-label">Бейдж</label><input type="text" name="hero_badge" class="form-control form-control-sm" value="{{ landing_page.hero_badge or '' }}"></div>
+                        <div class="col-md-6"><label class="form-label">Кнопка «Прайс»</label><input type="text" name="hero_btn_catalog" class="form-control form-control-sm" value="{{ landing_page.hero_btn_catalog or '' }}"></div>
+                    </div>
+                    <div class="mb-2"><label class="form-label">Заголовок H1</label><input type="text" name="hero_title" class="form-control form-control-sm" value="{{ landing_page.hero_title or '' }}"></div>
+                    <div class="mb-2"><label class="form-label">Подзаголовок</label><textarea name="hero_subtitle" rows="2" class="form-control form-control-sm">{{ landing_page.hero_subtitle or '' }}</textarea></div>
+                    <div class="mb-3"><label class="form-label">Кнопка «Консультация»</label><input type="text" name="hero_btn_consult" class="form-control form-control-sm" value="{{ landing_page.hero_btn_consult or '' }}"></div>
+                    <hr>
+                    <h6 class="text-success">Ценовой блок в начале страницы</h6>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4"><label class="form-label">Подпись</label><input type="text" name="price_top_eyebrow" class="form-control form-control-sm" value="{{ landing_page.price_top_eyebrow or '' }}"></div>
+                        <div class="col-md-8"><label class="form-label">Заголовок</label><input type="text" name="price_top_title" class="form-control form-control-sm" value="{{ landing_page.price_top_title or '' }}"></div>
+                    </div>
+                    <div class="mb-2"><label class="form-label">Описание</label><textarea name="price_top_subtitle" rows="2" class="form-control form-control-sm">{{ landing_page.price_top_subtitle or '' }}</textarea></div>
+                    {% for n in range(1, 11) %}
+                    <div class="border rounded p-2 mb-2 bg-light">
+                        <div class="small fw-semibold mb-2">Пример {{ n }}</div>
+                        <div class="row g-2">
+                            <div class="col-md-4"><label class="form-label">Растение</label><input type="text" name="price_top{{ n }}_name" class="form-control form-control-sm" value="{{ (landing_page|attr('price_top' ~ n ~ '_name')) or '' }}"></div>
+                            <div class="col-md-4"><label class="form-label">Размер</label><input type="text" name="price_top{{ n }}_spec" class="form-control form-control-sm" value="{{ (landing_page|attr('price_top' ~ n ~ '_spec')) or '' }}"></div>
+                            <div class="col-md-4"><label class="form-label">Цена</label><input type="text" name="price_top{{ n }}_price" class="form-control form-control-sm" value="{{ (landing_page|attr('price_top' ~ n ~ '_price')) or '' }}"></div>
+                            <div class="col-12"><label class="form-label">За что эта цена</label><textarea name="price_top{{ n }}_note" rows="2" class="form-control form-control-sm">{{ (landing_page|attr('price_top' ~ n ~ '_note')) or '' }}</textarea></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    <div class="mb-3"><label class="form-label">Подпись под блоком</label><textarea name="price_top_footer" rows="2" class="form-control form-control-sm">{{ landing_page.price_top_footer or '' }}</textarea></div>
+                    <hr>
+                    <h6 class="text-success">Блок «Стандарт качества»</h6>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4"><label class="form-label">Подпись</label><input type="text" name="interest_eyebrow" class="form-control form-control-sm" value="{{ landing_page.interest_eyebrow or '' }}"></div>
+                        <div class="col-md-8"><label class="form-label">Заголовок</label><input type="text" name="interest_title" class="form-control form-control-sm" value="{{ landing_page.interest_title or '' }}"></div>
+                    </div>
+                    <div class="mb-3"><label class="form-label">Описание</label><textarea name="interest_subtitle" rows="2" class="form-control form-control-sm">{{ landing_page.interest_subtitle or '' }}</textarea></div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4"><label class="form-label">Карточка 1 — заголовок</label><input type="text" name="card1_title" class="form-control form-control-sm" value="{{ landing_page.card1_title or '' }}"></div>
+                        <div class="col-md-8"><label class="form-label">Карточка 1 — текст</label><textarea name="card1_text" rows="2" class="form-control form-control-sm">{{ landing_page.card1_text or '' }}</textarea></div>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4"><label class="form-label">Карточка 2 — заголовок</label><input type="text" name="card2_title" class="form-control form-control-sm" value="{{ landing_page.card2_title or '' }}"></div>
+                        <div class="col-md-8"><label class="form-label">Карточка 2 — текст</label><textarea name="card2_text" rows="2" class="form-control form-control-sm">{{ landing_page.card2_text or '' }}</textarea></div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-md-4"><label class="form-label">Карточка 3 — заголовок</label><input type="text" name="card3_title" class="form-control form-control-sm" value="{{ landing_page.card3_title or '' }}"></div>
+                        <div class="col-md-8"><label class="form-label">Карточка 3 — текст</label><textarea name="card3_text" rows="2" class="form-control form-control-sm">{{ landing_page.card3_text or '' }}</textarea></div>
+                    </div>
+                    <hr>
+                    <h6 class="text-success">Блок «Материал, за который…»</h6>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-6"><label class="form-label">Заголовок (строка 1)</label><input type="text" name="desire_title" class="form-control form-control-sm" value="{{ landing_page.desire_title or '' }}"></div>
+                        <div class="col-md-6"><label class="form-label">Акцент (строка 2, латунь)</label><input type="text" name="desire_title_accent" class="form-control form-control-sm" value="{{ landing_page.desire_title_accent or '' }}"></div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        {% for n in range(1, 7) %}
+                        <div class="col-md-6">
+                            <label class="form-label">Пункт {{ n }}</label>
+                            <input type="text" name="desire_check_{{ n }}" class="form-control form-control-sm" value="{{ (landing_page|attr('desire_check_' ~ n)) or '' }}" placeholder="Пункт {{ n }}">
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <hr>
+                    <h6 class="text-success">Ценовой блок в конце страницы</h6>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4"><label class="form-label">Подпись</label><input type="text" name="price_bottom_eyebrow" class="form-control form-control-sm" value="{{ landing_page.price_bottom_eyebrow or '' }}"></div>
+                        <div class="col-md-8"><label class="form-label">Заголовок</label><input type="text" name="price_bottom_title" class="form-control form-control-sm" value="{{ landing_page.price_bottom_title or '' }}"></div>
+                    </div>
+                    <div class="mb-2"><label class="form-label">Описание</label><textarea name="price_bottom_subtitle" rows="2" class="form-control form-control-sm">{{ landing_page.price_bottom_subtitle or '' }}</textarea></div>
+                    <div class="border rounded p-2 mb-2 bg-light">
+                        <div class="small fw-semibold mb-2">Пример 1</div>
+                        <div class="row g-2">
+                            <div class="col-md-4"><label class="form-label">Растение</label><input type="text" name="price_bottom1_name" class="form-control form-control-sm" value="{{ landing_page.price_bottom1_name or '' }}"></div>
+                            <div class="col-md-4"><label class="form-label">Размер</label><input type="text" name="price_bottom1_spec" class="form-control form-control-sm" value="{{ landing_page.price_bottom1_spec or '' }}"></div>
+                            <div class="col-md-4"><label class="form-label">Цена</label><input type="text" name="price_bottom1_price" class="form-control form-control-sm" value="{{ landing_page.price_bottom1_price or '' }}"></div>
+                            <div class="col-12"><label class="form-label">За что эта цена</label><textarea name="price_bottom1_note" rows="2" class="form-control form-control-sm">{{ landing_page.price_bottom1_note or '' }}</textarea></div>
+                        </div>
+                    </div>
+                    <div class="border rounded p-2 mb-2 bg-light">
+                        <div class="small fw-semibold mb-2">Пример 2</div>
+                        <div class="row g-2">
+                            <div class="col-md-4"><input type="text" name="price_bottom2_name" class="form-control form-control-sm" value="{{ landing_page.price_bottom2_name or '' }}" placeholder="Растение"></div>
+                            <div class="col-md-4"><input type="text" name="price_bottom2_spec" class="form-control form-control-sm" value="{{ landing_page.price_bottom2_spec or '' }}" placeholder="Размер"></div>
+                            <div class="col-md-4"><input type="text" name="price_bottom2_price" class="form-control form-control-sm" value="{{ landing_page.price_bottom2_price or '' }}" placeholder="Цена"></div>
+                            <div class="col-12"><textarea name="price_bottom2_note" rows="2" class="form-control form-control-sm" placeholder="За что эта цена">{{ landing_page.price_bottom2_note or '' }}</textarea></div>
+                        </div>
+                    </div>
+                    <div class="border rounded p-2 mb-2 bg-light">
+                        <div class="small fw-semibold mb-2">Пример 3</div>
+                        <div class="row g-2">
+                            <div class="col-md-4"><input type="text" name="price_bottom3_name" class="form-control form-control-sm" value="{{ landing_page.price_bottom3_name or '' }}" placeholder="Растение"></div>
+                            <div class="col-md-4"><input type="text" name="price_bottom3_spec" class="form-control form-control-sm" value="{{ landing_page.price_bottom3_spec or '' }}" placeholder="Размер"></div>
+                            <div class="col-md-4"><input type="text" name="price_bottom3_price" class="form-control form-control-sm" value="{{ landing_page.price_bottom3_price or '' }}" placeholder="Цена"></div>
+                            <div class="col-12"><textarea name="price_bottom3_note" rows="2" class="form-control form-control-sm" placeholder="За что эта цена">{{ landing_page.price_bottom3_note or '' }}</textarea></div>
+                        </div>
+                    </div>
+                    <div class="mb-3"><label class="form-label">Подпись под блоком</label><textarea name="price_bottom_footer" rows="2" class="form-control form-control-sm">{{ landing_page.price_bottom_footer or '' }}</textarea></div>
+                    <hr>
+                    <h6 class="text-success">Форма заявки</h6>
+                    <div class="mb-2"><label class="form-label">Заголовок формы</label><input type="text" name="form_title" class="form-control form-control-sm" value="{{ landing_page.form_title or '' }}"></div>
+                    <div class="mb-2"><label class="form-label">Описание</label><textarea name="form_subtitle" rows="2" class="form-control form-control-sm">{{ landing_page.form_subtitle or '' }}</textarea></div>
+                    <div class="mb-3"><label class="form-label">Текст кнопки</label><input type="text" name="form_btn" class="form-control form-control-sm" value="{{ landing_page.form_btn or '' }}"></div>
+                    <button type="submit" class="btn btn-success">Сохранить тексты</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-light fw-semibold">Фото примеров (верхний ценовой блок)</div>
+            <div class="card-body">
+                <p class="text-muted small">По одному фото на каждый пример 1–10. Форматы: {{ image_extensions }}.</p>
+                {% for n in range(1, 11) %}
+                <div class="border rounded p-2 mb-2{% if not loop.last %} mb-3{% endif %}">
+                    <div class="small fw-semibold mb-2">Пример {{ n }}</div>
+                    {% set photo_url = landing_price_top_photos[n|string] %}
+                    {% if photo_url %}
+                    <img src="{{ photo_url }}" alt="" class="img-fluid rounded border mb-2" style="aspect-ratio:4/3;object-fit:cover;width:100%;max-height:140px">
+                    {% else %}
+                    <div class="text-muted small mb-2">Фото не загружено</div>
+                    {% endif %}
+                    <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end mb-1">
+                        <input type="hidden" name="tab" value="landing">
+                        <input type="hidden" name="action" value="upload_landing_price_top">
+                        <input type="hidden" name="card" value="{{ n }}">
+                        <div class="col-8">
+                            <input type="file" name="photo" class="form-control form-control-sm" accept="image/*" required>
+                        </div>
+                        <div class="col-4">
+                            <button type="submit" class="btn btn-success btn-sm w-100">Загрузить</button>
+                        </div>
+                    </form>
+                    {% if photo_url %}
+                    <form method="POST" onsubmit="return confirm('Удалить фото примера {{ n }}?');">
+                        <input type="hidden" name="tab" value="landing">
+                        <input type="hidden" name="action" value="clear_landing_price_top">
+                        <input type="hidden" name="card" value="{{ n }}">
+                        <button type="submit" class="btn btn-outline-danger btn-sm w-100">Удалить фото</button>
+                    </form>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-light fw-semibold">Слайды «Материал, за который…»</div>
+            <div class="card-body">
+                <p class="text-muted small">Отдельное слайд-шоу справа от текста блока. Форматы: {{ image_extensions }}.</p>
+                <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end mb-3">
+                    <input type="hidden" name="tab" value="landing">
+                    <input type="hidden" name="action" value="upload_landing_desire_slides">
+                    <div class="col-12">
+                        <input type="file" name="photos" class="form-control form-control-sm" accept="image/*" multiple required>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-success btn-sm w-100"><i class="fas fa-upload me-1"></i>Загрузить слайды</button>
+                    </div>
+                </form>
+                {% if landing_desire_slide_items %}
+                <div class="row g-2">
+                    {% for item in landing_desire_slide_items %}
+                    <div class="col-6">
+                        <div class="border rounded overflow-hidden bg-light">
+                            <img src="{{ item.url }}" alt="" class="w-100" style="height:80px;object-fit:cover;">
+                            <div class="p-1 d-flex justify-content-between align-items-center gap-1">
+                                <span class="small text-truncate" title="{{ item.name }}">{{ item.name }}</span>
+                                <form method="POST" onsubmit="return confirm('Удалить {{ item.name }}?');">
+                                    <input type="hidden" name="tab" value="landing">
+                                    <input type="hidden" name="action" value="delete_landing_desire_slide">
+                                    <input type="hidden" name="filename" value="{{ item.name }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1"><i class="fas fa-trash"></i></button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted small mb-0">Слайды не загружены — блок покажет только текст.</p>
+                {% endif %}
+            </div>
+        </div>
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-light fw-semibold">Почтовые уведомления по заявкам сайта</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="tab" value="landing">
+                    <input type="hidden" name="action" value="save_shop_email_settings">
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="email_enabled" name="email_enabled" {% if email_settings.enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="email_enabled">Включить email-уведомления</label>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-8">
+                            <label class="form-label">SMTP host</label>
+                            <input type="text" name="email_smtp_host" class="form-control form-control-sm" value="{{ email_settings.smtp.host or '' }}" placeholder="smtp.domain.ru">
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label">Port</label>
+                            <input type="number" name="email_smtp_port" class="form-control form-control-sm" value="{{ email_settings.smtp.port or 587 }}" min="1">
+                        </div>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="email_smtp_tls" name="email_smtp_tls" {% if email_settings.smtp.tls %}checked{% endif %}>
+                        <label class="form-check-label small" for="email_smtp_tls">STARTTLS</label>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">SMTP login</label>
+                        <input type="text" name="email_smtp_username" class="form-control form-control-sm" value="{{ email_settings.smtp.username or '' }}">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">SMTP password</label>
+                        <input type="password" name="email_smtp_password" class="form-control form-control-sm" value="{{ email_settings.smtp.password or '' }}" autocomplete="new-password">
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-7">
+                            <label class="form-label">From e-mail</label>
+                            <input type="email" name="email_from_email" class="form-control form-control-sm" value="{{ email_settings.smtp.from_email or '' }}" placeholder="notify@domain.ru">
+                        </div>
+                        <div class="col-5">
+                            <label class="form-label">From name</label>
+                            <input type="text" name="email_from_name" class="form-control form-control-sm" value="{{ email_settings.smtp.from_name or 'Княжество' }}">
+                        </div>
+                    </div>
+
+                    <h6 class="text-success">Адресаты и категории</h6>
+                    <p class="text-muted small mb-2">Категории: <code>kp_draft</code> — КП, <code>on_request</code> — «По запросу», <code>landing_inquiry</code> — форма главной.</p>
+                    {% set rows = email_settings.recipients if email_settings.recipients else [] %}
+                    {% for rec in rows %}
+                    <div class="border rounded p-2 mb-2 bg-light">
+                        <div class="row g-2">
+                            <div class="col-7">
+                                <label class="form-label">E-mail</label>
+                                <input type="email" name="email_recipient_email_{{ loop.index0 }}" class="form-control form-control-sm" value="{{ rec.email or '' }}">
+                            </div>
+                            <div class="col-5">
+                                <label class="form-label">Имя (опционально)</label>
+                                <input type="text" name="email_recipient_name_{{ loop.index0 }}" class="form-control form-control-sm" value="{{ rec.name or '' }}">
+                            </div>
+                            <div class="col-12">
+                                <div class="form-check mb-1">
+                                    <input class="form-check-input" type="checkbox" id="email_recipient_enabled_{{ loop.index0 }}" name="email_recipient_enabled_{{ loop.index0 }}" {% if rec.enabled %}checked{% endif %}>
+                                    <label class="form-check-label small" for="email_recipient_enabled_{{ loop.index0 }}">Активен</label>
+                                </div>
+                                {% set rec_idx = loop.index0 %}
+                                <div class="d-flex flex-wrap gap-3">
+                                    {% for cat in email_categories %}
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="email_recipient_categories_{{ rec_idx }}_{{ cat }}" name="email_recipient_categories_{{ rec_idx }}" value="{{ cat }}" {% if cat in (rec.categories or []) %}checked{% endif %}>
+                                        <label class="form-check-label small" for="email_recipient_categories_{{ rec_idx }}_{{ cat }}">{{ cat }}</label>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% for idx in range(rows|length, rows|length + 3) %}
+                    <div class="border rounded p-2 mb-2">
+                        <div class="row g-2">
+                            <div class="col-7"><input type="email" name="email_recipient_email_{{ idx }}" class="form-control form-control-sm" placeholder="recipient@domain.ru"></div>
+                            <div class="col-5"><input type="text" name="email_recipient_name_{{ idx }}" class="form-control form-control-sm" placeholder="Имя"></div>
+                            <div class="col-12">
+                                <div class="form-check mb-1">
+                                    <input class="form-check-input" type="checkbox" id="email_recipient_enabled_{{ idx }}" name="email_recipient_enabled_{{ idx }}" checked>
+                                    <label class="form-check-label small" for="email_recipient_enabled_{{ idx }}">Активен</label>
+                                </div>
+                                <div class="d-flex flex-wrap gap-3">
+                                    {% for cat in email_categories %}
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="email_recipient_categories_{{ idx }}_{{ cat }}" name="email_recipient_categories_{{ idx }}" value="{{ cat }}" checked>
+                                        <label class="form-check-label small" for="email_recipient_categories_{{ idx }}_{{ cat }}">{{ cat }}</label>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    <button type="submit" class="btn btn-success btn-sm w-100">Сохранить email-настройки</button>
+                </form>
+                <form method="POST" class="mt-2">
+                    <input type="hidden" name="tab" value="landing">
+                    <input type="hidden" name="action" value="test_shop_email_settings">
+                    <button type="submit" class="btn btn-outline-primary btn-sm w-100">Отправить тестовое письмо</button>
+                </form>
+            </div>
+        </div>
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-light fw-semibold">Текущий фон (слайды)</div>
+            <div class="card-body">
+                {% if sidebar_items %}
+                <div class="row g-2">
+                    {% for item in sidebar_items %}
+                    <div class="col-6">
+                        <img src="{{ item.url }}" alt="" class="img-fluid rounded border" style="aspect-ratio:16/10;object-fit:cover;width:100%">
+                    </div>
+                    {% endfor %}
+                </div>
+                <a href="{{ url_for('shop_admin.shop_admin_index', tab='background') }}" class="btn btn-outline-secondary btn-sm w-100 mt-3">Изменить фон</a>
+                {% else %}
+                <p class="text-muted small mb-2">Слайды не загружены.</p>
+                <a href="{{ url_for('shop_admin.shop_admin_index', tab='background') }}" class="btn btn-success btn-sm w-100">Загрузить фон</a>
+                {% endif %}
+            </div>
+        </div>
+        <div class="alert alert-secondary small mb-0">
+            Заявки с формы → ERP → <strong>Заказы → По запросу</strong>.
+            Кнопка «Прайс» ведёт на <code>/shop</code>.
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

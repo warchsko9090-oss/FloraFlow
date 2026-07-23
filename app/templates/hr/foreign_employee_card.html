@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-id-card"></i>
+            Карточка иностранного сотрудника
+        </div>
+        <div class="page-subtitle">{{ employee.name }}</div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('hr.foreign_employees') }}" class="btn btn-outline-secondary btn-sm">Назад к списку</a>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="card section-card p-3">
+            <h6 class="mb-3">Личные данные</h6>
+            <form method="POST">
+                <input type="hidden" name="action" value="save_profile">
+                <div class="mb-2">
+                    <label class="form-label">Полное ФИО</label>
+                    <input type="text" class="form-control" name="full_name" value="{{ profile.full_name if profile else employee.name }}" required>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Телефон</label>
+                    <input type="text" class="form-control" name="phone" value="{{ profile.phone if profile else '' }}">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Гражданство</label>
+                    <input type="text" class="form-control" name="citizenship" value="{{ profile.citizenship if profile else '' }}">
+                </div>
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <label class="form-label">Дата рождения</label>
+                        <input type="date" class="form-control" name="date_of_birth" value="{{ profile.date_of_birth.strftime('%Y-%m-%d') if profile and profile.date_of_birth else '' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Паспорт №</label>
+                        <input type="text" class="form-control" name="passport_number" value="{{ profile.passport_number if profile else '' }}">
+                    </div>
+                </div>
+                <div class="mb-2 mt-2">
+                    <label class="form-label">Кем выдан паспорт</label>
+                    <input type="text" class="form-control" name="passport_issued_by" value="{{ profile.passport_issued_by if profile else '' }}">
+                </div>
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <label class="form-label">Миграционная карта №</label>
+                        <input type="text" class="form-control" name="migration_card_number" value="{{ profile.migration_card_number if profile else '' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">ИНН</label>
+                        <input type="text" class="form-control" name="inn" value="{{ profile.inn if profile else '' }}">
+                    </div>
+                </div>
+                <div class="mb-2 mt-2">
+                    <label class="form-label">СНИЛС</label>
+                    <input type="text" class="form-control" name="snils" value="{{ profile.snils if profile else '' }}">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Адрес регистрации</label>
+                    <input type="text" class="form-control" name="registration_address" value="{{ profile.registration_address if profile else '' }}">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Комментарий</label>
+                    <textarea class="form-control" rows="3" name="notes">{{ profile.notes if profile else '' }}</textarea>
+                </div>
+                <button class="btn btn-primary btn-sm">Сохранить карточку</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="card section-card p-3 mb-3">
+            <h6 class="mb-3">Документы</h6>
+            <form method="POST" enctype="multipart/form-data" class="mb-3">
+                <input type="hidden" name="action" value="upload_document">
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <select class="form-select" name="category">
+                            <option value="passport">Паспорт</option>
+                            <option value="migration_card">Миграционная карта</option>
+                            <option value="registration">Регистрация</option>
+                            <option value="patent">Патент</option>
+                            <option value="other">Прочее</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text" class="form-control" name="title" placeholder="Название">
+                    </div>
+                    <div class="col-md-4">
+                        <input type="file" class="form-control" name="document_file" required>
+                    </div>
+                </div>
+                <button class="btn btn-outline-primary btn-sm mt-2">Загрузить документ</button>
+            </form>
+
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead><tr><th>Категория</th><th>Файл</th><th>Дата</th><th></th></tr></thead>
+                    <tbody>
+                        {% for d in docs %}
+                        <tr>
+                            <td>{{ d.category }}</td>
+                            <td>{{ d.title or d.original_name }}</td>
+                            <td>{{ d.uploaded_at.strftime('%d.%m.%Y %H:%M') if d.uploaded_at else '-' }}</td>
+                            <td class="text-end">
+                                <a href="{{ url_for('hr.foreign_employee_document_download', employee_id=employee.id, doc_id=d.id) }}" class="btn btn-sm btn-outline-success">Скачать</a>
+                                <form method="POST" style="display:inline;" onsubmit="return confirm('Удалить документ?')">
+                                    <input type="hidden" name="action" value="delete_document">
+                                    <input type="hidden" name="document_id" value="{{ d.id }}">
+                                    <button class="btn btn-sm btn-outline-danger">Удалить</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-muted">Документы не загружены.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card section-card p-3 mb-3">
+            <h6 class="mb-3">Патент: период действия</h6>
+            {% if current_period %}
+            <div class="alert alert-light border">
+                Текущий период: <b>{{ current_period.start_date.strftime('%d.%m.%Y') }}</b> - <b>{{ current_period.end_date.strftime('%d.%m.%Y') }}</b>
+            </div>
+            {% endif %}
+            <form method="POST" class="row g-2">
+                <input type="hidden" name="action" value="create_patent_period">
+                <div class="col-md-4">
+                    <label class="form-label">Дата начала</label>
+                    <input type="date" name="patent_start_date" class="form-control" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Режим продления</label>
+                    <select name="months_mode" class="form-select">
+                        <option value="0">Ввести дату вручную</option>
+                        <option value="1">+1 месяц</option>
+                        <option value="2">+2 месяца</option>
+                        <option value="3">+3 месяца</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Дата окончания (если вручную)</label>
+                    <input type="date" name="patent_end_date" class="form-control">
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-outline-primary btn-sm">Сохранить период</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card section-card p-3">
+            <h6 class="mb-3">История оплат патента</h6>
+            {% if current_period %}
+            <form method="POST" enctype="multipart/form-data" class="row g-2 mb-3">
+                <input type="hidden" name="action" value="add_patent_payment">
+                <input type="hidden" name="period_id" value="{{ current_period.id }}">
+                <div class="col-md-3">
+                    <label class="form-label">Дата оплаты</label>
+                    <input type="date" class="form-control" name="payment_date" required>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Месяцев</label>
+                    <select name="months_paid" class="form-select">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Сумма</label>
+                    <input type="number" step="0.01" class="form-control" name="amount" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Чек</label>
+                    <input type="file" class="form-control" name="check_file">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Комментарий</label>
+                    <input type="text" class="form-control" name="comment">
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-success btn-sm">Добавить оплату</button>
+                </div>
+            </form>
+            {% endif %}
+
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead><tr><th>Дата</th><th>Мес.</th><th>Сумма</th><th>Срок после оплаты</th><th>Чек</th></tr></thead>
+                    <tbody>
+                        {% for p in payments %}
+                        <tr>
+                            <td>{{ p.payment_date.strftime('%d.%m.%Y') }}</td>
+                            <td>{{ p.months_paid }}</td>
+                            <td>{{ "{:,.2f}".format(p.amount|float).replace(',', ' ') }}</td>
+                            <td>{{ p.period_end_after_payment.strftime('%d.%m.%Y') if p.period_end_after_payment else '-' }}</td>
+                            <td>
+                                {% if p.check_file_rel_path %}
+                                <a href="{{ url_for('hr.foreign_employee_payment_check_download', employee_id=employee.id, payment_id=p.id) }}" class="btn btn-sm btn-outline-success">Скачать</a>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-muted">Оплат пока нет.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

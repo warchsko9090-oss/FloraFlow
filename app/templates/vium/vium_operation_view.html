@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1080px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; }
+  .vium-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; }
+  .vium-card .lbl { font-size: .76rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+  .vium-card .val { font-weight: 700; color: #0f172a; }
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px 18px; }
+
+  .kind-chip { display: inline-block; font-size: .76rem; font-weight: 700; padding: 4px 12px; border-radius: 999px; }
+  .kind-intake   { background: #DCFCE7; color: #166534; }
+  .kind-consume  { background: #FEF3C7; color: #92400E; }
+  .kind-writeoff { background: #FEE2E2; color: #991B1B; }
+  .kind-adjust   { background: #DBEAFE; color: #1E40AF; }
+
+  .vium-table th, .vium-table td { padding: 10px 14px; vertical-align: top; border-bottom: 1px solid #f1f5f9; }
+  .vium-table thead th { font-size: .74rem; text-transform: uppercase; color: #475569; background: #f8fafc; font-weight: 700; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .lot-pill { display: inline-block; background: #F0FDF4; color: #166534;
+    border: 1px solid #BBF7D0; border-radius: 999px; padding: 2px 8px;
+    font-size: .72rem; margin: 1px 2px; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4>
+        <i class="fas fa-receipt me-2 text-primary"></i>
+        Операция #{{ op.id }} · <span class="kind-chip kind-{{ op.kind }}">{{ kind_label }}</span>
+      </h4>
+      <span class="text-muted small">
+        {{ op.date.strftime('%d.%m.%Y') if op.date else '' }}
+        · автор: {{ op.created_by.username if op.created_by else '—' }}
+      </span>
+    </div>
+    <a class="btn btn-light" href="{{ url_for('vium.vium_operations') }}">
+      <i class="fas fa-arrow-left"></i> К журналу
+    </a>
+  </div>
+
+  <div class="vium-card">
+    <div class="meta-grid">
+      <div>
+        <div class="lbl">Тип</div>
+        <div class="val">{{ kind_label }}</div>
+      </div>
+      <div>
+        <div class="lbl">Дата</div>
+        <div class="val">{{ op.date.strftime('%d.%m.%Y') if op.date else '—' }}</div>
+      </div>
+      <div>
+        <div class="lbl">Создано</div>
+        <div class="val">{{ op.created_at.strftime('%d.%m.%Y %H:%M') if op.created_at else '—' }}</div>
+      </div>
+      {% if op.invoice %}
+      <div>
+        <div class="lbl">Счёт</div>
+        <div class="val">{{ op.invoice.original_name }}</div>
+      </div>
+      {% endif %}
+      {% if op.comment %}
+      <div style="grid-column: 1 / -1;">
+        <div class="lbl">Комментарий</div>
+        <div class="val" style="font-weight: 500;">{{ op.comment }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="vium-card p-0">
+    <table class="vium-table table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Материал</th>
+          <th class="num">Кол-во</th>
+          <th class="num">Цена</th>
+          <th>Партии (FIFO срез)</th>
+          <th>Прим.</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for v in lines_view %}
+        {% set ln = v.line %}
+        <tr>
+          <td>
+            {% if ln.material %}
+            <a href="{{ url_for('vium.vium_material_view', material_id=ln.material.id) }}">
+              {{ ln.material.name }}
+            </a>
+            <div class="small text-muted">{{ ln.material.unit }}</div>
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">{{ '{:,.3f}'.format(ln.qty|float).rstrip('0').rstrip('.') }}</td>
+          <td class="num">
+            {% if ln.unit_price is not none %}{{ '{:,.2f}'.format(ln.unit_price|float) }}{% else %}—{% endif %}
+          </td>
+          <td>
+            {% for c in v.consumption %}
+              <span class="lot-pill">
+                #{{ c.lot_id }} · {{ '{:,.3f}'.format(c.qty|float).rstrip('0').rstrip('.') }}
+                @ {{ '{:,.2f}'.format(c.unit_price|float) }}
+              </span>
+            {% else %}
+              <span class="text-muted small">—</span>
+            {% endfor %}
+          </td>
+          <td class="small text-muted">{{ ln.note or '' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

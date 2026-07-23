@@ -1,0 +1,17 @@
+{
+  "name": "Зелёный Фонд ERP",
+  "short_name": "FloraFlow",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#2E7D32",
+  "theme_color": "#2E7D32",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    }
+  ]
+}

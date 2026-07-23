@@ -1,0 +1,1454 @@
+{# Хаб посадки: саженцы. Поставка/ежедневный ввод убраны из UI (данные/документы сохранены). #}
+{% set can_edit_seedlings = can_edit_potting if can_edit_potting is defined else (current_user.role in ['admin', 'executive', 'user']) %}
+{% set seedling_form_url = url_for('production.project_detail', project_id=project.id) if production_view is defined and production_view else url_for('finance.project_detail', project_id=project.id) %}
+{% set dieback_export_url = url_for('production.seedling_dieback_export', project_id=project.id) if production_view is defined and production_view else url_for('finance.seedling_dieback_export', project_id=project.id) %}
+{% set dieback_summary_url = url_for('production.seedling_dieback_summary_export', project_id=project.id) if production_view is defined and production_view else url_for('finance.seedling_dieback_summary_export', project_id=project.id) %}
+{% set yard_stock_export_url = url_for('production.seedling_yard_stock_export', project_id=project.id) if production_view is defined and production_view else url_for('finance.seedling_yard_stock_export', project_id=project.id) %}
+{% set default_field_id = seedling_default_field_id if seedling_default_field_id is defined else none %}
+{% set yard = seedling_yard_stock if seedling_yard_stock is defined else {'groups': [], 'totals': {}, 'field_label': '—'} %}
+{% set events = seedling_events if seedling_events is defined else [] %}
+{% set dieback_docs = seedling_dieback_docs if seedling_dieback_docs is defined else [] %}
+{% set grade_sizes = seedling_grade_sizes if seedling_grade_sizes is defined else [] %}
+{% set all_sizes = seedling_all_sizes if seedling_all_sizes is defined else [] %}
+{% set seed_month_default = seedling_month_default if seedling_month_default is defined else 1 %}
+
+<div class="card shadow-sm border-0 mb-4" id="seedlingPipelineBlock"
+     data-default-field-id="{{ default_field_id or '' }}"
+     data-year-default="{{ seedling_year_default }}">
+    <style>
+        .seed-pipeline-panel .seed-pipe-wrap {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+        @media (max-width: 768px) {
+            .seed-pipeline-panel .seed-pipe-wrap { grid-template-columns: 1fr; }
+        }
+        .seed-pipeline-panel .seed-pipe-step {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: #fff;
+            padding: 10px 12px;
+            min-height: 96px;
+        }
+        .seed-pipeline-panel .seed-pipe-step.is-active {
+            border-color: #2E7D32;
+            box-shadow: 0 0 0 2px rgba(46,125,50,.15);
+            background: #F1F8E9;
+        }
+        .seed-pipeline-panel .seed-pipe-step.has-stock:not(.is-active) {
+            border-color: #81C784;
+            background: #FAFFF8;
+        }
+        .seed-pipeline-panel .seed-pipe-step.is-empty {
+            opacity: .72;
+            background: #f8f9fa;
+        }
+        .seed-pipeline-panel .seed-pipe-step .step-num {
+            display: inline-flex;
+            width: 22px; height: 22px;
+            align-items: center; justify-content: center;
+            border-radius: 50%;
+            background: #e9ecef;
+            font-size: 12px;
+            font-weight: 700;
+            margin-right: 6px;
+        }
+        .seed-pipeline-panel .seed-pipe-step.is-active .step-num {
+            background: #2E7D32;
+            color: #fff;
+        }
+        .seed-pipeline-panel .seed-pipe-lines {
+            max-height: 88px;
+            overflow: auto;
+            margin-top: 6px;
+        }
+        .seed-pipeline-panel .seed-pipe-line {
+            font-size: 12px;
+            padding: 2px 0;
+            border-top: 1px dashed #eee;
+        }
+    </style>
+    <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+        <div>
+            <span class="fw-bold">Посадка / саженцы</span>
+            <div class="text-muted small">
+                Пересадка → товарность → промер → выпад.
+                {% if yard.field_label %}Склад: <b>{{ yard.field_label }}</b>.{% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="card-body pt-2">
+        <ul class="nav nav-tabs flex-wrap mb-3" id="pottingHubTabs" role="tablist">
+            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#seedTabTransplant" type="button">Пересадка/посадка</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#seedTabQc" type="button">Товарность</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#seedTabMeasure" type="button">Промер</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#seedTabDieback" type="button">Выпад</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#seedTabYard" type="button">Остатки площадки</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#seedTabJournal" type="button">Журнал</button></li>
+            {% if current_user.role == 'admin' %}
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#seedTabContainers" type="button">Контейнеры</button></li>
+            {% endif %}
+        </ul>
+
+        <div class="tab-content">
+            {# ===== ПЕРЕСАДКА ===== #}
+            <div class="tab-pane fade show active" id="seedTabTransplant">
+                <p class="small text-muted">
+                    Несколько позиций. С поля «откуда» → <b>Нетов · контейнер</b> на поле «куда». Списать больше остатка нельзя.
+                    <br>Если в остатках видите <b>«Нетов»</b> или <b>«Саженцы»</b> <u>без контейнера</u> — это старый размер.
+                    Выберите его в «Из размера», укажите контейнер и проведите пересадку — получится <b>Нетов · C…</b>.
+                    Сменить контейнер у уже посаженного <b>Нетов · C2</b> → то же: «Из размера» = Нетов · C2, новый контейнер = C3.
+                </p>
+                <div id="seedPipelineTransplant" class="seed-pipeline-panel mb-3" style="display:none;"></div>
+                {% if can_edit_seedlings %}
+                <form method="POST" action="{{ seedling_form_url }}" id="seedTransplantForm">
+                    <input type="hidden" name="seedling_action" value="transplant">
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-3">
+                            <label class="form-label small mb-0">Дата документа</label>
+                            <input type="date" name="doc_date" class="form-control form-control-sm" value="{{ seedling_doc_date_default }}" required>
+                        </div>
+                        <div class="col-md-9 text-md-end">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="seedAddTransplantRow()">+ позиция</button>
+                            <button type="submit" class="btn btn-success btn-sm">Провести пересадку</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle bg-white mb-0">
+                            <thead class="table-light small">
+                                <tr>
+                                    <th>Растение</th>
+                                    <th>Из размера</th>
+                                    <th>Откуда</th>
+                                    <th>Куда</th>
+                                    <th style="width:95px">Год</th>
+                                    <th>Контейнер</th>
+                                    <th style="width:80px">Кол-во</th>
+                                    <th style="width:90px">Доступно</th>
+                                    <th style="width:36px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="seedTransplantBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="seedTxLocations" class="seed-locations border rounded bg-white p-2 mt-2 small" style="display:none;"></div>
+                </form>
+                {% endif %}
+            </div>
+
+            {# ===== ТОВАРНОСТЬ ===== #}
+            <div class="tab-pane fade" id="seedTabQc">
+                <p class="small text-muted"><b>Нетов · C</b> ↔ <b>Товарный · C</b>. Нельзя увести источник ниже 0.</p>
+                <div id="seedPipelineQc" class="seed-pipeline-panel mb-3" style="display:none;"></div>
+                {% if can_edit_seedlings %}
+                <form method="POST" action="{{ seedling_form_url }}" id="seedQcForm">
+                    <input type="hidden" name="seedling_action" value="split_commercial">
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-3">
+                            <label class="form-label small mb-0">Дата документа</label>
+                            <input type="date" name="doc_date" class="form-control form-control-sm" value="{{ seedling_doc_date_default }}" required>
+                        </div>
+                        <div class="col-md-9 text-md-end">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="seedAddQcRow()">+ позиция</button>
+                            <button type="submit" class="btn btn-warning btn-sm">Провести</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle bg-white mb-0">
+                            <thead class="table-light small">
+                                <tr>
+                                    <th>Растение</th>
+                                    <th>Контейнер</th>
+                                    <th>Поле</th>
+                                    <th style="width:95px">Год</th>
+                                    <th>Направление</th>
+                                    <th style="width:80px">Кол-во</th>
+                                    <th style="width:90px">Доступно</th>
+                                    <th style="width:36px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="seedQcBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="seedQcLocations" class="seed-locations border rounded bg-white p-2 mt-2 small" style="display:none;"></div>
+                </form>
+                {% endif %}
+            </div>
+
+            {# ===== ПРОМЕР ===== #}
+            <div class="tab-pane fade" id="seedTabMeasure">
+                <p class="small text-muted mb-2">
+                    Только товарные <b>Саженцы · контейнер</b> (и уже промеренные размеры). Нетов не трогаем.
+                    Сумма промеров ≤ доступного; остаток останется без промера.
+                </p>
+                <div id="seedPipelineMeasure" class="seed-pipeline-panel mb-3" style="display:none;"></div>
+                {% if can_edit_seedlings %}
+                <form method="POST" action="{{ seedling_form_url }}" id="seedMeasureForm" onsubmit="return seedSerializeMeasureGrades()">
+                    <input type="hidden" name="seedling_action" value="measure">
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-3">
+                            <label class="form-label small mb-0">Дата документа</label>
+                            <input type="date" name="doc_date" class="form-control form-control-sm" value="{{ seedling_doc_date_default }}" required>
+                        </div>
+                        <div class="col-md-9 text-md-end">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="seedAddMeasureCard()">+ позиция</button>
+                            <button type="submit" class="btn btn-primary btn-sm"
+                                    onclick="return confirm('Провести промер по всем позициям?');">Провести промер</button>
+                        </div>
+                    </div>
+                    <div id="seedMeasureCards" class="d-flex flex-column gap-3"></div>
+                </form>
+                {% endif %}
+            </div>
+
+            {# ===== ОСТАТКИ ===== #}
+            <div class="tab-pane fade" id="seedTabYard">
+                <style>
+                    #seedYardTable .yard-group-header {
+                        cursor: pointer;
+                        background: #F3F4F6;
+                        transition: background .15s;
+                    }
+                    #seedYardTable .yard-group-header:hover { background: #E5E7EB; }
+                    #seedYardTable .yard-group-header td { padding: 10px 8px; vertical-align: middle; }
+                    #seedYardTable .yard-rotate-icon { transition: transform .2s; display: inline-block; }
+                    #seedYardTable .yard-detail-row td { font-size: 12.5px; }
+                    #seedYardFilters .dropdown-menu { max-height: 280px; overflow-y: auto; min-width: 220px; }
+                </style>
+                <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
+                    <div class="small text-muted">Поле: <b>{{ yard.field_label or 'не задано' }}</b></div>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <div class="small">Итого: <b>{{ yard.totals.qty or 0 }}</b> · резерв {{ yard.totals.reserved or 0 }} · свободно <b>{{ yard.totals.free or 0 }}</b>
+                            {% if yard.totals.sum %} · сумма <b>{{ '%.0f'|format(yard.totals.sum) }} ₽</b>{% endif %}
+                        </div>
+                        <a class="btn btn-outline-success btn-sm" href="{{ yard_stock_export_url }}" id="seedYardExcelBtn"
+                           title="Excel остатков площадки (включая нетоварные)">
+                            <i class="fas fa-file-excel"></i> Excel
+                        </a>
+                    </div>
+                </div>
+                <div id="seedYardExportStatus" class="small text-muted mb-2" style="display:none;"></div>
+                {% if yard.groups %}
+                <div id="seedYardFilters" class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <input type="text" id="seedYardSearch" class="form-control form-control-sm" style="width:200px"
+                           placeholder="Поиск растения…" oninput="seedYardApplyFilters()">
+
+                    <div class="dropdown">
+                        <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Стадия</button>
+                        <div class="dropdown-menu shadow p-2">
+                            <div class="px-1 pb-1"><a href="javascript:void(0)" class="small" onclick="seedYardCheckAll('stage', false)">Сбросить</a></div>
+                            {% for st in yard.filter_stages or [] %}
+                            <div class="form-check ms-1">
+                                <input class="form-check-input seed-yard-flt-stage" type="checkbox" value="{{ st }}" id="yardStage{{ loop.index }}" checked onchange="seedYardApplyFilters()">
+                                <label class="form-check-label small" for="yardStage{{ loop.index }}">{% if st in ('Саженцы', 'Товарный') %}Товарный{% else %}{{ st }}{% endif %}</label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="dropdown">
+                        <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Контейнер</button>
+                        <div class="dropdown-menu shadow p-2">
+                            <div class="px-1 pb-1"><a href="javascript:void(0)" class="small" onclick="seedYardCheckAll('container', false)">Сбросить</a></div>
+                            {% for c in yard.filter_containers or [] %}
+                            <div class="form-check ms-1">
+                                <input class="form-check-input seed-yard-flt-container" type="checkbox" value="{{ c }}" id="yardCont{{ loop.index }}" checked onchange="seedYardApplyFilters()">
+                                <label class="form-check-label small" for="yardCont{{ loop.index }}">{{ c }}</label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="dropdown">
+                        <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Год</button>
+                        <div class="dropdown-menu shadow p-2">
+                            <div class="px-1 pb-1"><a href="javascript:void(0)" class="small" onclick="seedYardCheckAll('year', false)">Сбросить</a></div>
+                            {% for y in yard.filter_years or [] %}
+                            <div class="form-check ms-1">
+                                <input class="form-check-input seed-yard-flt-year" type="checkbox" value="{{ y }}" id="yardYear{{ loop.index }}" checked onchange="seedYardApplyFilters()">
+                                <label class="form-check-label small" for="yardYear{{ loop.index }}">{{ y }}</label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn btn-white border btn-sm" onclick="seedYardExpandAll()" title="Раскрыть все">
+                        <i class="fas fa-angle-double-down text-secondary"></i>
+                    </button>
+                    <button type="button" class="btn btn-white border btn-sm" onclick="seedYardCollapseAll()" title="Свернуть все">
+                        <i class="fas fa-angle-double-up text-secondary"></i>
+                    </button>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover table-1c bg-white mb-0" id="seedYardTable" style="font-size:13px;">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Растение / размер</th>
+                                <th>Стадия</th>
+                                <th>Контейнер</th>
+                                <th>Промер</th>
+                                <th class="text-center">Год</th>
+                                <th class="text-end">Факт</th>
+                                <th class="text-end">Резерв</th>
+                                <th class="text-end">Свободно</th>
+                                <th class="text-end">Цена</th>
+                                <th class="text-end">Сумма</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for g in yard.groups %}
+                            {% set yard_uid = loop.index %}
+                            <tr class="yard-group-header"
+                                data-bs-toggle="collapse"
+                                data-bs-target=".yard-collapse-{{ yard_uid }}"
+                                data-plant-name="{{ g.plant_name|e }}"
+                                id="yard-header-{{ yard_uid }}">
+                                <td class="ps-2">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <i class="fas fa-chevron-right yard-rotate-icon text-muted" id="yard-icon-{{ yard_uid }}"></i>
+                                        <span class="fw-bold">{{ g.plant_name }}</span>
+                                    </div>
+                                </td>
+                                <td colspan="4" class="text-muted small">{{ g.rows|length }} поз.</td>
+                                <td class="text-end fw-semibold yard-hdr-qty">{{ g.totals.qty }}</td>
+                                <td class="text-end text-muted">{{ g.totals.reserved }}</td>
+                                <td class="text-end fw-semibold">{{ g.totals.free }}</td>
+                                <td></td>
+                                <td class="text-end fw-bold pe-2">
+                                    {% if g.totals.sum %}{{ '%.0f'|format(g.totals.sum) }} ₽{% else %}—{% endif %}
+                                </td>
+                            </tr>
+                            {% for r in g.rows %}
+                            <tr class="collapse yard-collapse-{{ yard_uid }} yard-detail-row
+                                {% if r.container == '—' or 'без контейнера' in (r.label or '') %}table-warning{% endif %}"
+                                data-stage="{{ r.stage }}"
+                                data-container="{{ r.container }}"
+                                data-year="{{ r.year }}"
+                                data-qty="{{ r.qty }}"
+                                data-reserved="{{ r.reserved }}"
+                                data-free="{{ r.free }}"
+                                data-sum="{{ r.sum|round(2) }}">
+                                <td class="ps-4 small">{{ r.label }}</td>
+                                <td class="small">{{ r.stage_ui or r.stage or '—' }}</td>
+                                <td class="small">{{ r.container }}</td>
+                                <td class="small">{{ r.grade or '—' }}</td>
+                                <td class="text-center">{{ r.year }}</td>
+                                <td class="text-end">{{ r.qty }}</td>
+                                <td class="text-end text-muted">{{ r.reserved }}</td>
+                                <td class="text-end fw-semibold {% if r.free < 0 %}text-danger{% endif %}">{{ r.free }}</td>
+                                <td class="text-end small">{% if r.price %}{{ '%.0f'|format(r.price) }}{% else %}—{% endif %}</td>
+                                <td class="text-end small">{% if r.sum %}{{ '%.0f'|format(r.sum) }}{% else %}—{% endif %}</td>
+                            </tr>
+                            {% endfor %}
+                            {% endfor %}
+                        </tbody>
+                        <tfoot>
+                            <tr class="table-light fw-bold">
+                                <td colspan="5" class="ps-2">ИТОГО по площадке</td>
+                                <td class="text-end" id="seedYardFootQty">{{ yard.totals.qty or 0 }}</td>
+                                <td class="text-end text-muted" id="seedYardFootRes">{{ yard.totals.reserved or 0 }}</td>
+                                <td class="text-end" id="seedYardFootFree">{{ yard.totals.free or 0 }}</td>
+                                <td></td>
+                                <td class="text-end pe-2" id="seedYardFootSum">{% if yard.totals.sum %}{{ '%.0f'|format(yard.totals.sum) }} ₽{% else %}—{% endif %}</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-muted small py-3 text-center border rounded bg-light">Пусто</div>
+                {% endif %}
+            </div>
+
+            {# ===== ЖУРНАЛ ===== #}
+            <div class="tab-pane fade" id="seedTabJournal">
+                <h6 class="fw-bold mb-2">Лог операций</h6>
+                {% if events %}
+                <div class="table-responsive mb-3">
+                    <table class="table table-sm table-hover bg-white mb-0" style="font-size:13px;">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width:160px">Когда</th>
+                                <th style="width:120px">Кто</th>
+                                <th style="width:110px">Операция</th>
+                                <th>Сообщение</th>
+                                <th style="width:100px">Док.</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for e in events %}
+                            <tr>
+                                <td class="text-muted small">{{ e.created_at.strftime('%d.%m.%Y %H:%M') if e.created_at else '—' }}</td>
+                                <td class="small">{{ e.user.username if e.user else '—' }}</td>
+                                <td><span class="badge bg-light text-dark border">{{ e.action }}</span></td>
+                                <td class="small">{{ e.message }}</td>
+                                <td class="small">
+                                    {% if e.document_id %}
+                                        {% if current_user.role == 'admin' %}
+                                        <a href="{{ url_for('stock.document_edit', doc_id=e.document_id) }}">#{{ e.document_id }}</a>
+                                        {% else %}
+                                        <a href="{{ url_for('stock.documents', active_tab='regrading') }}">#{{ e.document_id }}</a>
+                                        {% endif %}
+                                    {% else %}—{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-muted small border rounded bg-light p-3 mb-3">Пока нет записей — они появятся после пересадки / товарности / промера / выпада.</div>
+                {% endif %}
+
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                    <h6 class="fw-bold mb-0">Выпад (списания)</h6>
+                    <a class="btn btn-outline-secondary btn-sm" href="{{ dieback_export_url }}">Excel</a>
+                </div>
+                {% if dieback_docs %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover bg-white mb-0" style="font-size:13px;">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width:80px">Док.</th>
+                                <th style="width:140px">Дата</th>
+                                <th>Комментарий</th>
+                                <th style="width:120px">Кто</th>
+                                {% if current_user.role == 'admin' %}<th style="width:90px"></th>{% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for d in dieback_docs %}
+                            <tr>
+                                <td class="small">
+                                    {% if current_user.role == 'admin' %}
+                                    <a href="{{ url_for('stock.document_edit', doc_id=d.id) }}">#{{ d.id }}</a>
+                                    {% else %}#{{ d.id }}{% endif %}
+                                </td>
+                                <td class="text-muted small">{{ d.date.strftime('%d.%m.%Y %H:%M') if d.date else '—' }}</td>
+                                <td class="small">{{ d.comment or '—' }}</td>
+                                <td class="small">{{ d.user.username if d.user else '—' }}</td>
+                                {% if current_user.role == 'admin' %}
+                                <td class="text-end">
+                                    <a href="{{ url_for('stock.document_edit', doc_id=d.id) }}" class="btn btn-link btn-sm p-0" title="Редактировать"><i class="fas fa-edit"></i></a>
+                                    <form method="POST" action="{{ url_for('stock.document_delete', doc_id=d.id) }}" class="d-inline">
+                                        <button class="btn btn-link btn-sm p-0 text-danger ms-1" title="Удалить" onclick="return confirm('Удалить документ #{{ d.id }}? Остатки будут откатены.');"><i class="fas fa-trash"></i></button>
+                                    </form>
+                                </td>
+                                {% endif %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-muted small border rounded bg-light p-3">Документов выпада пока нет.</div>
+                {% endif %}
+            </div>
+
+            {# ===== КОНТЕЙНЕРЫ (только admin) ===== #}
+            {% if current_user.role == 'admin' %}
+            <div class="tab-pane fade" id="seedTabContainers">
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-sm table-bordered bg-white mb-2">
+                            <thead><tr><th>Контейнер</th><th>Порядок</th><th></th></tr></thead>
+                            <tbody>
+                                {% for c in seedling_containers %}
+                                <tr>
+                                    <td>{{ c.name }}</td><td>{{ c.sort_order }}</td>
+                                    <td class="text-end">
+                                        {% if can_edit_seedlings %}
+                                        <form method="POST" action="{{ seedling_form_url }}" class="d-inline" onsubmit="return confirm('Деактивировать {{ c.name }}?');">
+                                            <input type="hidden" name="seedling_action" value="deactivate_container">
+                                            <input type="hidden" name="container_id" value="{{ c.id }}">
+                                            <button class="btn btn-outline-danger btn-xs border-0 py-0">выкл</button>
+                                        </form>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% else %}
+                                <tr><td colspan="3" class="text-muted">Пусто</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if can_edit_seedlings %}
+                    <div class="col-md-6">
+                        <form method="POST" action="{{ seedling_form_url }}" class="row g-2 align-items-end">
+                            <input type="hidden" name="seedling_action" value="add_container">
+                            <div class="col-6"><label class="form-label small mb-0">Новый</label><input type="text" name="container_name" class="form-control form-control-sm" placeholder="C30" required></div>
+                            <div class="col-3"><label class="form-label small mb-0">Порядок</label><input type="number" name="sort_order" class="form-control form-control-sm" value="100"></div>
+                            <div class="col-3"><button type="submit" class="btn btn-success btn-sm w-100">Добавить</button></div>
+                        </form>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            {# ===== ВЫПАД ===== #}
+            <div class="tab-pane fade" id="seedTabDieback">
+                <p class="small text-muted">Списание по факту. Свободные строки игнорируются. Больше остатка списать нельзя.</p>
+                <div class="border rounded bg-light p-2 mb-3">
+                    <div class="small fw-semibold mb-2">Сводный отчёт выпада (Excel)</div>
+                    <form class="row g-2 align-items-end" method="GET" action="{{ dieback_summary_url }}" id="seedDiebackSummaryForm">
+                        <div class="col-6 col-md-2">
+                            <label class="form-label small mb-0">Год</label>
+                            <input type="number" name="year" class="form-control form-control-sm" value="{{ seedling_year_default }}" min="2017" max="2100">
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <label class="form-label small mb-0">Период</label>
+                            <select name="period" class="form-select form-select-sm" id="seedDiebackPeriodType">
+                                <option value="month" selected>Месяц</option>
+                                <option value="quarter">Квартал</option>
+                                <option value="half">Полугодие</option>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <label class="form-label small mb-0">Номер</label>
+                            <select name="n" class="form-select form-select-sm" id="seedDiebackPeriodN"></select>
+                        </div>
+                        <div class="col-6 col-md-4">
+                            <button type="submit" class="btn btn-success btn-sm w-100" id="seedDiebackSummaryBtn">
+                                <i class="fas fa-file-excel"></i> Сводный Excel
+                            </button>
+                        </div>
+                    </form>
+                    <div class="text-muted small mt-1">Детальный лог: <a href="{{ dieback_export_url }}" id="seedDiebackDetailLink">подокументный Excel</a></div>
+                    <div id="seedDiebackExportStatus" class="small text-muted mt-1" style="display:none;"></div>
+                </div>
+                {% if can_edit_seedlings %}
+                <form method="POST" action="{{ seedling_form_url }}" id="seedDiebackForm">
+                    <input type="hidden" name="seedling_action" value="dieback">
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-3">
+                            <label class="form-label small mb-0">Дата документа</label>
+                            <input type="date" name="doc_date" class="form-control form-control-sm" value="{{ seedling_doc_date_default }}">
+                        </div>
+                        <div class="col-md-9 text-md-end">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="seedAddDiebackRow()">+ позиция</button>
+                            <button type="submit" class="btn btn-danger btn-sm"
+                                    onclick="return confirm('Провести выпад?');">Провести выпад</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle bg-white mb-0">
+                            <thead class="table-light small">
+                                <tr>
+                                    <th>Растение</th>
+                                    <th>Размер</th>
+                                    <th>Поле</th>
+                                    <th style="width:95px">Год</th>
+                                    <th style="width:80px">Кол-во</th>
+                                    <th style="width:90px">Доступно</th>
+                                    <th style="width:36px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="seedDiebackBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="seedDiebackLocations" class="seed-locations border rounded bg-white p-2 mt-2 small" style="display:none;"></div>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Панель доступных партий (как в заказе) #}
+<div id="seedStockPanel" class="card shadow-lg border-primary" style="display:none; position:fixed; bottom:20px; right:20px; width:360px; z-index:1050; max-height:420px; overflow-y:auto;">
+    <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 small"><i class="fas fa-search-location me-2"></i><span id="seedStockPanelTitle">Доступно</span></h6>
+        <button type="button" class="btn-close btn-close-white btn-sm" onclick="document.getElementById('seedStockPanel').style.display='none'"></button>
+    </div>
+    <div class="card-body p-0">
+        <div id="seedStockPanelContent" class="list-group list-group-flush small"></div>
+    </div>
+</div>
+
+<template id="tplSeedTransplantRow">
+    <tr class="seed-tx-row">
+        <td>
+            <select name="plant_id[]" class="form-select form-select-sm select-search seed-tx-plant" required>
+                <option value="" disabled selected>—</option>
+                        {% for p in seedling_plants %}<option value="{{ p.id }}" {% if p.latin_name %}data-latin="{{ p.latin_name }}"{% endif %}>{{ p.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="source_size_id[]" class="form-select form-select-sm select-search seed-tx-size" required>
+                {% for s in seedling_source_sizes %}
+                <option value="{{ s.id }}" {% if s.name in ('Саженцы', 'Товарный') %}selected{% endif %}>{{ s.label }}</option>
+                {% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="field_from_id[]" class="form-select form-select-sm select-search seed-tx-from" required>
+                {% for f in seedling_fields %}
+                <option value="{{ f.id }}" {% if default_field_id and f.id == default_field_id %}selected{% endif %}>{{ f.name }}</option>
+                {% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="field_to_id[]" class="form-select form-select-sm select-search seed-tx-to" required>
+                {% for f in seedling_fields %}
+                <option value="{{ f.id }}" {% if default_field_id and f.id == default_field_id %}selected{% endif %}>{{ f.name }}</option>
+                {% endfor %}
+            </select>
+        </td>
+        <td><select name="year[]" class="form-select form-select-sm seed-tx-year" required><option value="{{ seedling_year_default }}">{{ seedling_year_default }}</option></select></td>
+        <td>
+            <select name="container[]" class="form-select form-select-sm" required>
+                {% for c in seedling_containers %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td><input type="number" name="quantity[]" class="form-control form-control-sm seed-tx-qty" min="1" required></td>
+        <td class="text-center"><span class="badge bg-light text-dark border seed-tx-avail">—</span></td>
+        <td class="text-center"><button type="button" class="btn btn-link text-danger p-0" onclick="this.closest('tr').remove()">&times;</button></td>
+    </tr>
+</template>
+
+<template id="tplSeedQcRow">
+    <tr class="seed-qc-row">
+        <td>
+            <select name="plant_id[]" class="form-select form-select-sm select-search seed-qc-plant" required>
+                <option value="" disabled selected>—</option>
+                        {% for p in seedling_plants %}<option value="{{ p.id }}" {% if p.latin_name %}data-latin="{{ p.latin_name }}"{% endif %}>{{ p.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="container[]" class="form-select form-select-sm seed-qc-container" required>
+                {% for c in seedling_containers %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="field_id[]" class="form-select form-select-sm select-search seed-qc-field" required>
+                {% for f in seedling_fields %}
+                <option value="{{ f.id }}" {% if default_field_id and f.id == default_field_id %}selected{% endif %}>{{ f.name }}</option>
+                {% endfor %}
+            </select>
+        </td>
+        <td><input type="number" name="year[]" class="form-control form-control-sm seed-qc-year" value="{{ seedling_year_default }}" required></td>
+        <td>
+            <select name="to_commercial[]" class="form-select form-select-sm seed-qc-dir" required>
+                <option value="1">Нетов → Товарный</option>
+                <option value="0">Товарный → Нетов</option>
+            </select>
+        </td>
+        <td><input type="number" name="quantity[]" class="form-control form-control-sm" min="1" required></td>
+        <td class="text-center"><span class="badge bg-light text-dark border seed-qc-avail">—</span></td>
+        <td class="text-center"><button type="button" class="btn btn-link text-danger p-0" onclick="this.closest('tr').remove()">&times;</button></td>
+    </tr>
+</template>
+
+<template id="tplSeedMeasureCard">
+    <div class="border rounded p-3 bg-light seed-measure-card">
+        <div class="row g-2 align-items-end mb-2">
+            <div class="col-md-3">
+                <label class="form-label small mb-0">Растение</label>
+                <select name="plant_id[]" class="form-select form-select-sm select-search seed-ms-plant" required>
+                    <option value="" disabled selected>—</option>
+                        {% for p in seedling_plants %}<option value="{{ p.id }}" {% if p.latin_name %}data-latin="{{ p.latin_name }}"{% endif %}>{{ p.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-0">Контейнер</label>
+                <select name="container[]" class="form-select form-select-sm seed-ms-container" required>
+                    {% for c in seedling_containers %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-0">Поле</label>
+                <select name="field_id[]" class="form-select form-select-sm select-search seed-ms-field" required>
+                    {% for f in seedling_fields %}
+                    <option value="{{ f.id }}" {% if default_field_id and f.id == default_field_id %}selected{% endif %}>{{ f.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-0">Год</label>
+                <select name="year[]" class="form-select form-select-sm seed-ms-year" required>
+                    <option value="{{ seedling_year_default }}">{{ seedling_year_default }}</option>
+                </select>
+            </div>
+            <div class="col-md-2 text-end">
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="this.closest('.seed-measure-card').remove()">Удалить</button>
+            </div>
+        </div>
+        <div class="seed-ms-stock small mb-2 text-muted">Заполните поля — покажем товарный остаток.</div>
+        <div class="seed-ms-locations seed-locations border rounded bg-white p-2 mb-2 small" style="display:none;"></div>
+        <input type="hidden" name="measure_grades[]" class="seed-ms-grades-hidden" value="">
+        <label class="form-label small mb-1">Промеры (размер → кол-во)</label>
+        <div class="seed-ms-grades"></div>
+        <button type="button" class="btn btn-outline-secondary btn-sm mt-1" onclick="seedAddMeasureGrade(this.closest('.seed-measure-card'))">+ размер</button>
+    </div>
+</template>
+
+<template id="tplSeedDiebackRow">
+    <tr class="seed-db-row">
+        <td>
+            <select name="plant_id[]" class="form-select form-select-sm select-search seed-db-plant">
+                <option value="" disabled selected>—</option>
+                        {% for p in seedling_plants %}<option value="{{ p.id }}" {% if p.latin_name %}data-latin="{{ p.latin_name }}"{% endif %}>{{ p.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="size_id[]" class="form-select form-select-sm select-search seed-db-size">
+                <option value="">—</option>
+                {% for s in all_sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="field_id[]" class="form-select form-select-sm select-search seed-db-field">
+                {% for f in seedling_fields %}
+                <option value="{{ f.id }}" {% if default_field_id and f.id == default_field_id %}selected{% endif %}>{{ f.name }}</option>
+                {% endfor %}
+            </select>
+        </td>
+        <td><input type="number" name="year[]" class="form-control form-control-sm seed-db-year" value="{{ seedling_year_default }}"></td>
+        <td><input type="number" name="quantity[]" class="form-control form-control-sm seed-db-qty" min="1"></td>
+        <td class="text-center"><span class="badge bg-light text-dark border seed-db-avail">—</span></td>
+        <td class="text-center"><button type="button" class="btn btn-link text-danger p-0" onclick="this.closest('tr').remove()">&times;</button></td>
+    </tr>
+</template>
+
+<script type="application/json" id="seedGradeSizesJson">{{ grade_sizes | map(attribute='name') | list | tojson }}</script>
+
+<script>
+(function() {
+    const hub = document.getElementById('seedlingPipelineBlock');
+    if (!hub) return;
+    const defaultFieldId = hub.dataset.defaultFieldId || '';
+    const yearDefault = hub.dataset.yearDefault || String(new Date().getFullYear());
+    let activeTxRow = null;
+    let gradeSizeNames = [];
+    try {
+        gradeSizeNames = JSON.parse(document.getElementById('seedGradeSizesJson')?.textContent || '[]');
+    } catch (e) { gradeSizeNames = []; }
+
+    function initSelect2In(root) {
+        if (typeof window.initSelect2 === 'function') {
+            window.initSelect2(root);
+            return;
+        }
+        if (!window.jQuery || !jQuery.fn.select2) return;
+        $(root).find('select.select-search').each(function() {
+            const $s = $(this);
+            if ($s.hasClass('select2-hidden-accessible')) { try { $s.select2('destroy'); } catch (e) {} }
+            $s.select2({ width: '100%', dropdownParent: $(document.body) });
+        });
+    }
+
+    function showPanel(title, items, onPick) {
+        const panel = document.getElementById('seedStockPanel');
+        const content = document.getElementById('seedStockPanelContent');
+        document.getElementById('seedStockPanelTitle').textContent = title;
+        content.innerHTML = '';
+        if (!items.length) {
+            content.innerHTML = '<div class="p-3 text-muted">Нет остатков</div>';
+        } else {
+            items.forEach(item => {
+                const a = document.createElement('a');
+                a.href = '#';
+                a.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center';
+                a.innerHTML = `<div><div class="fw-bold text-primary">${item.field_name || ''}</div>
+                    <small class="text-muted">Партия ${item.year}</small></div>
+                    <span class="badge bg-success rounded-pill">${item.qty} шт</span>`;
+                a.onclick = (e) => { e.preventDefault(); onPick(item); };
+                content.appendChild(a);
+            });
+        }
+        panel.style.display = 'block';
+    }
+
+    function renderLocations(el, items, onPick) {
+        if (!el) return;
+        if (!items || !items.length) {
+            el.style.display = 'none';
+            el.innerHTML = '';
+            return;
+        }
+        el.style.display = 'block';
+        el.innerHTML = '<div class="text-muted mb-1">Где лежит:</div>' + items.map(it => {
+            const label = `${it.field_name} · ${it.size_name} · ${it.year} · ${it.qty} шт`;
+            const cls = onPick ? 'list-group-item list-group-item-action py-1 px-2' : 'list-group-item py-1 px-2';
+            return `<a href="#" class="${cls} seed-loc-item" data-json='${JSON.stringify(it).replace(/'/g, '&#39;')}'>${label}${it.free != null ? ` <span class="text-muted">(своб. ${it.free})</span>` : ''}</a>`;
+        }).join('');
+        if (onPick) {
+            el.querySelectorAll('.seed-loc-item').forEach(a => {
+                a.onclick = (e) => {
+                    e.preventDefault();
+                    try { onPick(JSON.parse(a.getAttribute('data-json'))); } catch (err) {}
+                };
+            });
+        }
+    }
+
+    async function loadPlantLocations(plantId) {
+        if (!plantId) return [];
+        try {
+            const res = await fetch(`/api/seedling_plant_locations?plant_id=${plantId}`);
+            const data = await res.json();
+            return data.items || [];
+        } catch (e) { return []; }
+    }
+
+    function seedPipelineEsc(s) {
+        return String(s || '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[c]));
+    }
+
+    async function refreshPipelinePanel(plantId, panelId) {
+        const el = document.getElementById(panelId);
+        if (!el) return;
+        if (!plantId) {
+            el.style.display = 'none';
+            el.innerHTML = '';
+            return;
+        }
+        try {
+            const res = await fetch(
+                `/api/seedling_pipeline?plant_id=${plantId}&preferred_field_id=${defaultFieldId || ''}`
+            );
+            const data = await res.json();
+            if (!data || !data.stages) {
+                el.style.display = 'none';
+                return;
+            }
+            const stagesHtml = data.stages.map(st => {
+                const cls = [
+                    'seed-pipe-step',
+                    st.active ? 'is-active' : '',
+                    st.has_stock ? 'has-stock' : 'is-empty',
+                ].filter(Boolean).join(' ');
+                const lines = (st.lines || []).slice(0, 6).map(ln => {
+                    const mark = ln.on_project_field ? '' : ' <span class="text-muted">· др. поле</span>';
+                    return `<div class="seed-pipe-line">
+                        <span class="fw-semibold">${seedPipelineEsc(ln.label)}</span>
+                        <span class="text-muted"> · ${seedPipelineEsc(ln.field_name)} · ${ln.year}</span>
+                        <span class="float-end">${ln.qty} шт${ln.free != null && ln.free !== ln.qty ? ` <span class="text-muted">(своб. ${ln.free})</span>` : ''}</span>${mark}
+                    </div>`;
+                }).join('') || '<div class="text-muted small mt-1">Нет остатка на этой стадии</div>';
+                return `<div class="${cls}">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div><span class="step-num">${st.step}</span><strong>${seedPipelineEsc(st.title)}</strong></div>
+                        <span class="badge ${st.has_stock ? 'bg-success' : 'bg-light text-muted border'}">${st.qty} шт</span>
+                    </div>
+                    <div class="small text-muted mt-1">${seedPipelineEsc(st.hint)}</div>
+                    <div class="small mt-1">${seedPipelineEsc(st.action)}</div>
+                    <div class="seed-pipe-lines">${lines}</div>
+                </div>`;
+            }).join('');
+            el.style.display = 'block';
+            el.innerHTML = `
+                <div class="border rounded bg-white p-2">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <div class="fw-semibold">${seedPipelineEsc(data.plant_name)}
+                            <span class="text-muted fw-normal small">— цепочка производства</span>
+                        </div>
+                        <div class="small text-muted">Всего по саженцам: <b>${data.total_qty || 0}</b> шт</div>
+                    </div>
+                    <div class="seed-pipe-wrap">${stagesHtml}</div>
+                </div>`;
+        } catch (e) {
+            el.style.display = 'none';
+        }
+    }
+
+    function seedActivePipelinePanelId() {
+        const tab = document.querySelector('#pottingHubTabs .nav-link.active');
+        const target = tab && tab.getAttribute('data-bs-target');
+        if (target === '#seedTabTransplant') return 'seedPipelineTransplant';
+        if (target === '#seedTabQc') return 'seedPipelineQc';
+        if (target === '#seedTabMeasure') return 'seedPipelineMeasure';
+        return null;
+    }
+
+    // --- Transplant ---
+    window.seedAddTransplantRow = function() {
+        const tpl = document.getElementById('tplSeedTransplantRow');
+        const body = document.getElementById('seedTransplantBody');
+        body.appendChild(tpl.content.cloneNode(true));
+        const row = body.lastElementChild;
+        bindTxRow(row);
+        initSelect2In(row);
+        refreshTxRow(row);
+    };
+
+    function bindTxRow(row) {
+        const refresh = () => refreshTxRow(row);
+        $(row).on('select2:select change', '.seed-tx-plant, .seed-tx-size, .seed-tx-from, .seed-tx-year', refresh);
+        $(row).on('select2:select change', '.seed-tx-plant', () => {
+            const plant = row.querySelector('.seed-tx-plant')?.value;
+            refreshPipelinePanel(plant, 'seedPipelineTransplant');
+            refreshLocationsForPlant(plant, 'seedTxLocations');
+        });
+        row.addEventListener('focusin', () => { activeTxRow = row; });
+        $(row).on('select2:open', '.seed-tx-plant, .seed-tx-size', function() { activeTxRow = row; });
+    }
+
+    async function refreshTxRow(row) {
+        const plant = row.querySelector('.seed-tx-plant')?.value;
+        const size = row.querySelector('.seed-tx-size')?.value;
+        const fromSel = row.querySelector('.seed-tx-from');
+        const yearSel = row.querySelector('.seed-tx-year');
+        const avail = row.querySelector('.seed-tx-avail');
+        if (!plant || !size) { avail.textContent = '—'; return; }
+        try {
+            const res = await fetch(`/api/seedling_source_batches?plant_id=${plant}&size_id=${size}&preferred_field_id=${defaultFieldId || ''}`);
+            const data = await res.json();
+            const items = data.items || [];
+            if (activeTxRow === row) {
+                showPanel('Откуда пересаживать', items, (item) => {
+                    $(fromSel).val(String(item.field_id)).trigger('change');
+                    yearSel.innerHTML = '';
+                    const opt = document.createElement('option');
+                    opt.value = item.year;
+                    opt.textContent = `${item.year} (${item.qty} шт)`;
+                    yearSel.appendChild(opt);
+                    avail.textContent = String(item.qty);
+                    avail.className = 'badge bg-success text-white seed-tx-avail';
+                    const qty = row.querySelector('.seed-tx-qty');
+                    if (qty && (!qty.value || Number(qty.value) > item.qty)) qty.value = item.qty;
+                });
+            }
+            const fieldId = fromSel.value;
+            const yearsMap = {};
+            items.filter(i => !fieldId || String(i.field_id) === String(fieldId)).forEach(i => {
+                yearsMap[i.year] = (yearsMap[i.year] || 0) + i.qty;
+            });
+            const years = Object.keys(yearsMap).map(Number).sort((a,b) => b-a);
+            const prev = yearSel.value;
+            yearSel.innerHTML = '';
+            if (!years.length) {
+                yearSel.innerHTML = `<option value="${yearDefault}">${yearDefault}</option>`;
+                avail.textContent = '0';
+                avail.className = 'badge bg-danger text-white seed-tx-avail';
+                return;
+            }
+            years.forEach(y => {
+                const opt = document.createElement('option');
+                opt.value = y;
+                opt.textContent = `${y} (${yearsMap[y]} шт)`;
+                yearSel.appendChild(opt);
+            });
+            yearSel.value = (prev && years.includes(Number(prev))) ? prev : String(years[0]);
+            const qtyAvail = yearsMap[Number(yearSel.value)] || 0;
+            avail.textContent = String(qtyAvail);
+            avail.className = qtyAvail > 0 ? 'badge bg-success text-white seed-tx-avail' : 'badge bg-danger text-white seed-tx-avail';
+        } catch (e) {
+            avail.textContent = '?';
+        }
+    }
+
+    // --- QC ---
+    window.seedAddQcRow = function() {
+        const body = document.getElementById('seedQcBody');
+        body.appendChild(document.getElementById('tplSeedQcRow').content.cloneNode(true));
+        const row = body.lastElementChild;
+        initSelect2In(row);
+        const refresh = () => refreshQcRow(row);
+        $(row).on('select2:select change', '.seed-qc-plant, .seed-qc-container, .seed-qc-field, .seed-qc-year, .seed-qc-dir', refresh);
+        $(row).on('select2:select change', '.seed-qc-plant', () => {
+            const plant = row.querySelector('.seed-qc-plant')?.value;
+            refreshLocationsForPlant(plant, 'seedQcLocations');
+            refreshPipelinePanel(plant, 'seedPipelineQc');
+        });
+        refresh();
+    };
+
+    async function refreshLocationsForPlant(plantId, targetId, onPick) {
+        const el = document.getElementById(targetId);
+        const items = await loadPlantLocations(plantId);
+        renderLocations(el, items, onPick);
+    }
+
+    async function refreshQcRow(row) {
+        const plant = row.querySelector('.seed-qc-plant')?.value;
+        const container = row.querySelector('.seed-qc-container')?.value;
+        const field = row.querySelector('.seed-qc-field')?.value;
+        const year = row.querySelector('.seed-qc-year')?.value;
+        const dir = row.querySelector('.seed-qc-dir')?.value;
+        const avail = row.querySelector('.seed-qc-avail');
+        refreshLocationsForPlant(plant, 'seedQcLocations', (it) => {
+            if (it.container) $(row.querySelector('.seed-qc-container')).val(it.container).trigger('change');
+            $(row.querySelector('.seed-qc-field')).val(String(it.field_id)).trigger('change');
+            row.querySelector('.seed-qc-year').value = it.year;
+            refreshQcRow(row);
+        });
+        if (!plant || !container || !field || !year) { avail.textContent = '—'; return; }
+        try {
+            const res = await fetch(`/api/seedling_snapshot?mode=full&plant_id=${plant}&container=${encodeURIComponent(container)}&field_id=${field}&year=${year}`);
+            const data = await res.json();
+            const qty = dir === '1' ? (data.netov?.quantity || 0) : (data.pool?.quantity || 0);
+            avail.textContent = String(qty);
+            avail.className = qty > 0 ? 'badge bg-success text-white seed-qc-avail' : 'badge bg-warning text-dark seed-qc-avail';
+        } catch (e) { avail.textContent = '?'; }
+    }
+
+    // --- Measure ---
+    function gradeSelectHtml(selected) {
+        const opts = ['<option value="">—</option>'].concat(
+            gradeSizeNames.map(n => `<option value="${n}" ${n === selected ? 'selected' : ''}>${n}</option>`)
+        );
+        return `<select class="form-select form-select-sm select-search seed-ms-g-name">${opts.join('')}</select>`;
+    }
+
+    window.seedAddMeasureCard = function() {
+        const wrap = document.getElementById('seedMeasureCards');
+        wrap.appendChild(document.getElementById('tplSeedMeasureCard').content.cloneNode(true));
+        const card = wrap.lastElementChild;
+        initSelect2In(card);
+        seedAddMeasureGrade(card);
+        const refresh = () => refreshMeasureCard(card);
+        $(card).on('select2:select change', '.seed-ms-plant, .seed-ms-container, .seed-ms-field, .seed-ms-year', refresh);
+        $(card).on('select2:select change', '.seed-ms-plant', async function() {
+            const plant = card.querySelector('.seed-ms-plant')?.value;
+            refreshPipelinePanel(plant, 'seedPipelineMeasure');
+            const items = await loadPlantLocations(plant);
+            renderLocations(card.querySelector('.seed-ms-locations'), items, (it) => {
+                if (it.container) $(card.querySelector('.seed-ms-container')).val(it.container).trigger('change');
+                $(card.querySelector('.seed-ms-field')).val(String(it.field_id)).trigger('change');
+                refreshMeasureCard(card);
+            });
+        });
+        refresh();
+    };
+
+    window.seedAddMeasureGrade = function(card, presetName, presetQty) {
+        const box = card.querySelector('.seed-ms-grades');
+        const row = document.createElement('div');
+        row.className = 'row g-1 mb-1 seed-ms-grade-row align-items-center';
+        row.innerHTML = `
+            <div class="col-5">${gradeSelectHtml(presetName || '')}</div>
+            <div class="col-4"><input type="number" class="form-control form-control-sm seed-ms-g-qty" min="0" placeholder="шт" value="${presetQty != null ? presetQty : ''}"></div>
+            <div class="col-3"><button type="button" class="btn btn-outline-danger btn-sm w-100" onclick="this.closest('.seed-ms-grade-row').remove()">−</button></div>`;
+        box.appendChild(row);
+        initSelect2In(row);
+    };
+
+    async function refreshMeasureCard(card) {
+        const plant = card.querySelector('.seed-ms-plant')?.value;
+        const container = card.querySelector('.seed-ms-container')?.value;
+        const field = card.querySelector('.seed-ms-field')?.value;
+        const yearSel = card.querySelector('.seed-ms-year');
+        const stockBox = card.querySelector('.seed-ms-stock');
+        if (plant) {
+            const items = await loadPlantLocations(plant);
+            renderLocations(card.querySelector('.seed-ms-locations'), items, (it) => {
+                if (it.container) $(card.querySelector('.seed-ms-container')).val(it.container).trigger('change');
+                $(card.querySelector('.seed-ms-field')).val(String(it.field_id)).trigger('change');
+                refreshMeasureCard(card);
+            });
+        }
+        if (!plant || !container || !field) {
+            stockBox.textContent = 'Заполните растение, контейнер и поле.';
+            return;
+        }
+        try {
+            const yRes = await fetch(`/api/seedling_measure_years?plant_id=${plant}&container=${encodeURIComponent(container)}&field_id=${field}`);
+            const yData = await yRes.json();
+            const years = yData.items || [];
+            const prev = yearSel.value;
+            yearSel.innerHTML = '';
+            if (!years.length) {
+                yearSel.innerHTML = `<option value="${yearDefault}">${yearDefault}</option>`;
+                stockBox.innerHTML = '<span class="text-warning">Нет товарных саженцев по этой связке.</span>';
+                return;
+            }
+            years.forEach(item => {
+                const opt = document.createElement('option');
+                opt.value = item.year;
+                opt.textContent = `${item.year} (${item.qty} шт)`;
+                yearSel.appendChild(opt);
+            });
+            if (years.length === 1) yearSel.value = String(years[0].year);
+            else if (prev && [...yearSel.options].some(o => o.value === prev)) yearSel.value = prev;
+            else yearSel.value = String(years[0].year);
+
+            const year = yearSel.value;
+            const res = await fetch(`/api/seedling_snapshot?plant_id=${plant}&container=${encodeURIComponent(container)}&field_id=${field}&year=${year}`);
+            const data = await res.json();
+            const total = data.commercial_total || 0;
+            const grades = (data.grades || []).filter(g => g.quantity > 0);
+            stockBox.innerHTML = `<div class="border rounded p-2 bg-white">
+                Товарных: <b>${total}</b> шт
+                · без промера: <b>${data.pool?.quantity || 0}</b>
+                · промеров: <b>${grades.length}</b>
+                ${data.netov ? `<span class="text-muted"> · нетов ${data.netov.quantity || 0} (не в промере)</span>` : ''}
+            </div>`;
+            if (grades.length) {
+                const box = card.querySelector('.seed-ms-grades');
+                box.innerHTML = '';
+                grades.forEach(g => seedAddMeasureGrade(card, g.grade, g.quantity));
+                if ((data.pool?.quantity || 0) > 0) seedAddMeasureGrade(card);
+            }
+        } catch (e) {
+            stockBox.textContent = 'Ошибка загрузки остатков';
+        }
+    }
+
+    window.seedSerializeMeasureGrades = function() {
+        document.querySelectorAll('.seed-measure-card').forEach(card => {
+            const parts = [];
+            card.querySelectorAll('.seed-ms-grade-row').forEach(row => {
+                const name = row.querySelector('.seed-ms-g-name')?.value?.trim();
+                const qty = row.querySelector('.seed-ms-g-qty')?.value;
+                if (name && qty && Number(qty) > 0) parts.push(`${name}:${qty}`);
+            });
+            card.querySelector('.seed-ms-grades-hidden').value = parts.join(';');
+        });
+        return true;
+    };
+
+    // --- Dieback ---
+    window.seedAddDiebackRow = function() {
+        const body = document.getElementById('seedDiebackBody');
+        body.appendChild(document.getElementById('tplSeedDiebackRow').content.cloneNode(true));
+        const row = body.lastElementChild;
+        initSelect2In(row);
+        const refresh = () => refreshDiebackRow(row);
+        $(row).on('select2:select change', '.seed-db-plant, .seed-db-size, .seed-db-field, .seed-db-year', refresh);
+        refresh();
+    };
+
+    async function refreshDiebackRow(row) {
+        const plant = row.querySelector('.seed-db-plant')?.value;
+        const sizeSel = row.querySelector('.seed-db-size');
+        const fieldSel = row.querySelector('.seed-db-field');
+        const yearInp = row.querySelector('.seed-db-year');
+        const avail = row.querySelector('.seed-db-avail');
+        const items = await loadPlantLocations(plant);
+        renderLocations(document.getElementById('seedDiebackLocations'), items, (it) => {
+            $(sizeSel).val(String(it.size_id)).trigger('change');
+            $(fieldSel).val(String(it.field_id)).trigger('change');
+            yearInp.value = it.year;
+            avail.textContent = String(it.qty);
+            avail.className = it.qty > 0 ? 'badge bg-success text-white seed-db-avail' : 'badge bg-danger text-white seed-db-avail';
+            const qty = row.querySelector('.seed-db-qty');
+            if (qty && (!qty.value || Number(qty.value) > it.qty)) qty.value = it.qty;
+        });
+        const size = sizeSel.value;
+        const field = fieldSel.value;
+        const year = yearInp.value;
+        if (!plant || !size || !field || !year) { avail.textContent = '—'; return; }
+        const match = items.find(i =>
+            String(i.size_id) === String(size) &&
+            String(i.field_id) === String(field) &&
+            String(i.year) === String(year)
+        );
+        const qty = match ? match.qty : 0;
+        avail.textContent = String(qty);
+        avail.className = qty > 0 ? 'badge bg-success text-white seed-db-avail' : 'badge bg-warning text-dark seed-db-avail';
+    }
+
+    function seedDiebackPeriodSync() {
+        const typeEl = document.getElementById('seedDiebackPeriodType');
+        const nEl = document.getElementById('seedDiebackPeriodN');
+        if (!typeEl || !nEl) return;
+        const type = typeEl.value || 'month';
+        const prev = parseInt(nEl.value || '0', 10) || 0;
+        const defaultMonth = {{ seed_month_default|int }};
+        let options = [];
+        if (type === 'quarter') {
+            options = [
+                {v: 1, t: 'I квартал'},
+                {v: 2, t: 'II квартал'},
+                {v: 3, t: 'III квартал'},
+                {v: 4, t: 'IV квартал'},
+            ];
+        } else if (type === 'half') {
+            options = [
+                {v: 1, t: '1 полугодие'},
+                {v: 2, t: '2 полугодие'},
+            ];
+        } else {
+            const months = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
+            options = months.map((name, i) => ({v: i + 1, t: name}));
+        }
+        nEl.innerHTML = options.map(o => `<option value="${o.v}">${o.t}</option>`).join('');
+        let pick = prev;
+        if (!options.some(o => o.v === pick)) {
+            if (type === 'month') pick = defaultMonth;
+            else if (type === 'quarter') pick = Math.ceil(defaultMonth / 3);
+            else pick = defaultMonth <= 6 ? 1 : 2;
+        }
+        nEl.value = String(pick);
+    }
+
+    function seedActivateTab(tabId) {
+        if (!tabId) return;
+        const btn = document.querySelector('#pottingHubTabs [data-bs-target="#' + tabId + '"]');
+        if (!btn) return;
+        if (window.bootstrap && bootstrap.Tab) {
+            bootstrap.Tab.getOrCreateInstance(btn).show();
+        } else {
+            btn.click();
+        }
+    }
+
+    function seedRememberTab(tabId) {
+        try { sessionStorage.setItem('seedActiveTab', tabId); } catch (e) {}
+        if (history.replaceState) {
+            const url = new URL(window.location.href);
+            url.searchParams.set('seed_tab', tabId);
+            history.replaceState(null, '', url.toString());
+        }
+    }
+
+    async function seedDownloadExcel(url, statusEl, btn, forcedFilename) {
+        if (statusEl) {
+            statusEl.style.display = '';
+            statusEl.textContent = 'Формирую Excel…';
+            statusEl.className = 'small text-muted mt-1';
+        }
+        if (btn) btn.disabled = true;
+        try {
+            const resp = await fetch(url, { credentials: 'same-origin' });
+            if (!resp.ok) {
+                throw new Error('Ошибка сервера: ' + resp.status);
+            }
+            let filename = forcedFilename || 'export.xlsx';
+            if (!forcedFilename) {
+                const cd = resp.headers.get('Content-Disposition') || '';
+                // Предпочитаем filename="..." (ASCII), не filename*=UTF-8''...
+                const mAscii = /filename="([^"]+)"/i.exec(cd) || /filename=([^;\s]+)/i.exec(cd);
+                if (mAscii && mAscii[1] && !/\*/.test(mAscii[0])) {
+                    filename = mAscii[1].replace(/['"]/g, '');
+                } else {
+                    const m = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(cd);
+                    if (m && m[1]) {
+                        try { filename = decodeURIComponent(m[1].replace(/"/g, '').trim()); }
+                        catch (e) { filename = m[1]; }
+                    }
+                }
+            }
+            // На всякий случай убираем не-ASCII из имени сохранения
+            if (/[^\x20-\x7E]/.test(filename)) {
+                filename = 'export_' + Date.now() + '.xlsx';
+            }
+            const blob = await resp.blob();
+            const objUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = objUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(objUrl), 2000);
+            if (statusEl) {
+                statusEl.textContent = 'Файл скачан';
+                statusEl.className = 'small text-success mt-1';
+            }
+        } catch (err) {
+            if (statusEl) {
+                statusEl.textContent = 'Не удалось скачать: ' + (err.message || err);
+                statusEl.className = 'small text-danger mt-1';
+            }
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        seedEnsureEmptyRows();
+        seedDiebackPeriodSync();
+
+        const typeEl = document.getElementById('seedDiebackPeriodType');
+        if (typeEl) typeEl.addEventListener('change', seedDiebackPeriodSync);
+
+        const tabs = document.getElementById('pottingHubTabs');
+        if (tabs) {
+            tabs.addEventListener('shown.bs.tab', function(ev) {
+                const target = ev.target && ev.target.getAttribute('data-bs-target');
+                if (target && target.startsWith('#')) seedRememberTab(target.slice(1));
+            });
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const tabFromUrl = params.get('seed_tab');
+        let tabFromStore = null;
+        try { tabFromStore = sessionStorage.getItem('seedActiveTab'); } catch (e) {}
+        seedActivateTab(tabFromUrl || tabFromStore || '');
+
+        const summaryForm = document.getElementById('seedDiebackSummaryForm');
+        if (summaryForm) {
+            summaryForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                seedRememberTab('seedTabDieback');
+                seedDiebackPeriodSync();
+                const fd = new FormData(summaryForm);
+                const qs = new URLSearchParams(fd).toString();
+                const url = summaryForm.action + (summaryForm.action.indexOf('?') >= 0 ? '&' : '?') + qs;
+                seedDownloadExcel(
+                    url,
+                    document.getElementById('seedDiebackExportStatus'),
+                    document.getElementById('seedDiebackSummaryBtn')
+                );
+            });
+        }
+
+        const detailLink = document.getElementById('seedDiebackDetailLink');
+        if (detailLink) {
+            detailLink.addEventListener('click', function(e) {
+                e.preventDefault();
+                seedRememberTab('seedTabDieback');
+                seedDownloadExcel(
+                    detailLink.href,
+                    document.getElementById('seedDiebackExportStatus'),
+                    null
+                );
+            });
+        }
+
+        const yardExcelBtn = document.getElementById('seedYardExcelBtn');
+        if (yardExcelBtn) {
+            yardExcelBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                seedRememberTab('seedTabYard');
+                seedDownloadExcel(
+                    yardExcelBtn.href,
+                    document.getElementById('seedYardExportStatus'),
+                    yardExcelBtn,
+                    'yard_stock_p{{ project.id }}.xlsx'
+                );
+            });
+        }
+    });
+    // Если скрипт подгрузился после DOMContentLoaded (htmx и т.п.)
+    if (document.readyState !== 'loading') {
+        setTimeout(function() {
+            seedEnsureEmptyRows();
+            seedDiebackPeriodSync();
+        }, 0);
+    }
+
+    function seedEnsureEmptyRows() {
+        if (document.getElementById('seedTransplantBody') && !document.getElementById('seedTransplantBody').children.length) {
+            seedAddTransplantRow();
+        }
+        if (document.getElementById('seedQcBody') && !document.getElementById('seedQcBody').children.length) {
+            seedAddQcRow();
+        }
+        if (document.getElementById('seedMeasureCards') && !document.getElementById('seedMeasureCards').children.length) {
+            seedAddMeasureCard();
+        }
+        if (document.getElementById('seedDiebackBody') && !document.getElementById('seedDiebackBody').children.length) {
+            seedAddDiebackRow();
+        }
+    }
+
+    function seedYardFmtMoney(n) {
+        const v = Math.round(Number(n) || 0);
+        return v ? (v.toLocaleString('ru-RU') + ' ₽') : '—';
+    }
+
+    function seedYardCheckedValues(cls) {
+        const boxes = Array.from(document.querySelectorAll('.' + cls));
+        const checked = boxes.filter(b => b.checked).map(b => b.value);
+        // Если все сняты — считаем «ничего не выбрано» (скрыть всё), не «все».
+        return { all: boxes.length === 0 || checked.length === boxes.length, values: new Set(checked), none: boxes.length > 0 && checked.length === 0 };
+    }
+
+    window.seedYardCheckAll = function(kind, check) {
+        document.querySelectorAll('.seed-yard-flt-' + kind).forEach(el => { el.checked = !!check; });
+        seedYardApplyFilters();
+    };
+
+    window.seedYardExpandAll = function() {
+        document.querySelectorAll('#seedYardTable .yard-detail-row.collapse:not(.show)').forEach(el => {
+            if (el.style.display === 'none') return;
+            bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).show();
+        });
+    };
+
+    window.seedYardCollapseAll = function() {
+        document.querySelectorAll('#seedYardTable .yard-detail-row.collapse.show').forEach(el => {
+            bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).hide();
+        });
+    };
+
+    window.seedYardApplyFilters = function() {
+        const q = (document.getElementById('seedYardSearch')?.value || '').trim().toLowerCase();
+        const stages = seedYardCheckedValues('seed-yard-flt-stage');
+        const containers = seedYardCheckedValues('seed-yard-flt-container');
+        const years = seedYardCheckedValues('seed-yard-flt-year');
+
+        let footQty = 0, footRes = 0, footFree = 0, footSum = 0;
+
+        document.querySelectorAll('#seedYardTable .yard-group-header').forEach(header => {
+            const plant = (header.getAttribute('data-plant-name') || '').toLowerCase();
+            const plantOk = !q || plant.includes(q);
+            const target = header.getAttribute('data-bs-target');
+            if (!target) return;
+            const details = document.querySelectorAll(target);
+            let visibleQty = 0, visibleRes = 0, visibleFree = 0, visibleSum = 0, anyVisible = false;
+
+            details.forEach(row => {
+                const st = row.getAttribute('data-stage') || '';
+                const ct = row.getAttribute('data-container') || '';
+                const yr = row.getAttribute('data-year') || '';
+                const stageOk = stages.all || stages.values.has(st);
+                const contOk = containers.all || containers.values.has(ct);
+                const yearOk = years.all || years.values.has(yr);
+                const ok = plantOk && stageOk && contOk && yearOk && !stages.none && !containers.none && !years.none;
+                row.style.display = ok ? '' : 'none';
+                if (ok) {
+                    anyVisible = true;
+                    visibleQty += parseInt(row.getAttribute('data-qty') || '0', 10) || 0;
+                    visibleRes += parseInt(row.getAttribute('data-reserved') || '0', 10) || 0;
+                    visibleFree += parseInt(row.getAttribute('data-free') || '0', 10) || 0;
+                    visibleSum += parseFloat(row.getAttribute('data-sum') || '0') || 0;
+                }
+            });
+
+            header.style.display = anyVisible ? '' : 'none';
+            if (anyVisible) {
+                const qtyCell = header.querySelector('.yard-hdr-qty');
+                if (qtyCell) qtyCell.textContent = String(visibleQty);
+                const sumCell = header.lastElementChild;
+                if (sumCell) sumCell.textContent = seedYardFmtMoney(visibleSum);
+                // Обновить «N поз.» во второй ячейке
+                const metaCell = header.children[1];
+                if (metaCell) {
+                    const n = Array.from(details).filter(r => r.style.display !== 'none').length;
+                    metaCell.textContent = n + ' поз.';
+                }
+                footQty += visibleQty;
+                footRes += visibleRes;
+                footFree += visibleFree;
+                footSum += visibleSum;
+            }
+        });
+
+        const fq = document.getElementById('seedYardFootQty');
+        const fr = document.getElementById('seedYardFootRes');
+        const ff = document.getElementById('seedYardFootFree');
+        const fs = document.getElementById('seedYardFootSum');
+        if (fq) fq.textContent = String(footQty);
+        if (fr) fr.textContent = String(footRes);
+        if (ff) ff.textContent = String(footFree);
+        if (fs) fs.textContent = seedYardFmtMoney(footSum);
+    };
+
+    function seedYardBindIcons() {
+        document.querySelectorAll('#seedYardTable .yard-detail-row.collapse').forEach(el => {
+            const m = (el.className.match(/yard-collapse-(\d+)/) || [])[1];
+            if (!m) return;
+            const icon = document.getElementById('yard-icon-' + m);
+            if (!icon || el.dataset.yardIconBound) return;
+            el.dataset.yardIconBound = '1';
+            el.addEventListener('show.bs.collapse', () => { icon.style.transform = 'rotate(90deg)'; });
+            el.addEventListener('hide.bs.collapse', () => { icon.style.transform = 'rotate(0deg)'; });
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        seedYardBindIcons();
+    });
+    if (document.readyState !== 'loading') {
+        setTimeout(seedYardBindIcons, 0);
+    }
+})();
+</script>

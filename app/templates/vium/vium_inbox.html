@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1180px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tabs a {
+    padding: 7px 14px; border-radius: 999px; background: #fff; border: 1px solid #e2e8f0;
+    color: #475569; font-weight: 600; font-size: .88rem; text-decoration: none;
+  }
+  .tabs a.active { background: #1B5E20; color: #fff; border-color: #1B5E20; }
+
+  .vium-table { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; }
+  .vium-table th, .vium-table td { padding: 10px 14px; vertical-align: middle; border-bottom: 1px solid #f1f5f9; }
+  .vium-table thead th { font-size: .74rem; text-transform: uppercase; color: #475569; background: #f8fafc; font-weight: 700; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .st-chip { display: inline-block; font-size: .72rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .st-new      { background: #DBEAFE; color: #1E40AF; }
+  .st-parsing  { background: #E0E7FF; color: #4338CA; }
+  .st-ready    { background: #DCFCE7; color: #166534; }
+  .st-done     { background: #F0FDF4; color: #15803D; }
+  .st-skipped  { background: #F3F4F6; color: #6B7280; }
+  .st-error    { background: #FEE2E2; color: #991B1B; }
+  .empty { text-align: center; color: #94a3b8; padding: 30px; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4><i class="fas fa-inbox me-2 text-primary"></i>Инбокс ВиУМ — оцифровка счетов</h4>
+      <span class="text-muted small">
+        Оплаченные PDF-счета по статьям-источникам или вручную помеченные.
+      </span>
+    </div>
+    <a class="btn btn-light" href="{{ url_for('vium.vium_report') }}">
+      <i class="fas fa-arrow-left"></i> К остаткам
+    </a>
+  </div>
+
+  <div class="tabs">
+    <a href="{{ url_for('vium.vium_inbox', status='open') }}"  class="{{ 'active' if f_status == 'open' }}">К обработке</a>
+    <a href="{{ url_for('vium.vium_inbox', status='done') }}"  class="{{ 'active' if f_status == 'done' }}">Проведённые</a>
+    <a href="{{ url_for('vium.vium_inbox', status='skipped') }}" class="{{ 'active' if f_status == 'skipped' }}">Пропущенные</a>
+  </div>
+
+  <div class="vium-table">
+    {% if items %}
+    <table class="table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Дата</th>
+          <th>Счёт</th>
+          <th>Статья бюджета</th>
+          <th class="num">Сумма</th>
+          <th>Статус</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for it in items %}
+        {% set inv = it.invoice %}
+        <tr>
+          <td>
+            <strong>{{ it.created_at.strftime('%d.%m.%Y') if it.created_at else '—' }}</strong>
+            <div class="small text-muted">#{{ it.id }}</div>
+          </td>
+          <td>
+            {% if inv %}{{ inv.original_name or 'счёт' }}{% else %}—{% endif %}
+          </td>
+          <td class="small text-muted">
+            {% if inv and inv.item %}{{ inv.item.name }}{% else %}—{% endif %}
+          </td>
+          <td class="num">{% if inv %}{{ inv.amount|money_int }}{% else %}—{% endif %}</td>
+          <td>
+            <span class="st-chip st-{{ it.status }}">
+              {% if it.status == 'new'      %}В очереди
+              {% elif it.status == 'parsing' %}Парсится
+              {% elif it.status == 'ready'   %}Готов к проверке
+              {% elif it.status == 'done'    %}Проведено
+              {% elif it.status == 'skipped' %}Пропущено
+              {% elif it.status == 'error'   %}Ошибка
+              {% else %}{{ it.status }}{% endif %}
+            </span>
+            {% if it.error %}
+              <div class="small text-danger" style="max-width:300px;">{{ it.error }}</div>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('vium.vium_inbox_view', item_id=it.id) }}">
+              <i class="fas fa-arrow-right"></i> Открыть
+            </a>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="empty">
+        Пока пусто. Счета по статьям-источникам появятся здесь после оплаты.
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

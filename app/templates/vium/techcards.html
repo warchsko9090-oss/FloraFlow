@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1100px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+  .vium-head .btn-sec, .vium-head .btn-prim {
+    border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: .9rem;
+    text-decoration: none !important; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .vium-head .btn-sec { background: #fff; border: 1px solid #e2e8f0; color: #0f172a; }
+  .vium-head .btn-sec:hover { background: #f1f5f9; }
+  .vium-head .btn-prim { background: #2E7D32; color: #fff; border: 1px solid #2E7D32; }
+  .vium-head .btn-prim:hover { background: #1B5E20; }
+
+  .vium-table {
+    width: 100%; background: #fff; border: 1px solid #e2e8f0;
+    border-radius: 14px; overflow: hidden;
+  }
+  .vium-table table { width: 100%; margin: 0; }
+  .vium-table th, .vium-table td {
+    padding: 10px 14px; vertical-align: middle; border-bottom: 1px solid #f1f5f9;
+  }
+  .vium-table thead th {
+    font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+    color: #475569; background: #f8fafc; font-weight: 700;
+  }
+  .vium-table tbody tr:hover { background: #fafbff; }
+  .vium-table a { color: #0f172a; font-weight: 600; text-decoration: none; }
+  .vium-table a:hover { color: #1B5E20; }
+  .empty { text-align: center; color: #94a3b8; padding: 30px; font-size: .9rem; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <h4><i class="fas fa-clipboard-list me-2"></i>Тех.карты ВиУМ</h4>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="{{ url_for('vium.vium_report') }}" class="btn-sec">
+        <i class="fas fa-warehouse"></i> К ВиУМ-учёту
+      </a>
+      <a href="{{ url_for('vium.vium_plan_report') }}" class="btn-sec">
+        <i class="fas fa-chart-line"></i> Плановый отчёт
+      </a>
+      <button class="btn-prim" data-bs-toggle="modal" data-bs-target="#newPairModal">
+        <i class="fas fa-plus"></i> Новая связка
+      </button>
+    </div>
+  </div>
+
+  <div class="alert alert-info py-2 px-3" style="border-radius: 10px;">
+    Тех.карта связывает пару «растение × размер» с одним или несколькими материалами
+    ВиУМ и нормой расхода на 1 куст. После ввода ежедневной выкопки бригадиром
+    плановый расход обновляется автоматически. Поле и год не учитываются.
+  </div>
+
+  <div class="vium-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Растение</th>
+          <th>Размер</th>
+          <th class="text-center">Материалов в карте</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in pairs %}
+        <tr>
+          <td><a href="{{ url_for('vium.vium_techcard_edit', plant_id=p.plant_id, size_id=p.size_id) }}">{{ p.plant_name }}</a></td>
+          <td>{{ p.size_name }}</td>
+          <td class="text-center">{{ p.lines_count }}</td>
+          <td class="text-end">
+            <a href="{{ url_for('vium.vium_techcard_edit', plant_id=p.plant_id, size_id=p.size_id) }}" class="btn btn-sm btn-outline-secondary">
+              <i class="fas fa-edit"></i> Редактировать
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">Тех.карт пока нет. Нажмите «Новая связка», чтобы создать первую.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal: новая связка -->
+<div class="modal fade" id="newPairModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form id="newPairForm" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Новая связка «растение × размер»</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2">
+          <label class="form-label fw-semibold">Растение</label>
+          <select name="plant_id" class="form-select" required>
+            <option value="">— выбрать —</option>
+            {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label fw-semibold">Размер</label>
+          <select name="size_id" class="form-select" required>
+            <option value="">— выбрать —</option>
+            {% for s in sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="text-muted small">После создания вы попадёте в редактор, где сможете добавить материалы и нормы.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-success">Открыть редактор</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+document.getElementById('newPairForm').addEventListener('submit', function(e){
+  e.preventDefault();
+  var fd = new FormData(this);
+  var p = fd.get('plant_id'); var s = fd.get('size_id');
+  if (!p || !s) return;
+  window.location.href = "/vium/techcards/" + p + "/" + s;
+});
+</script>
+{% endblock %}

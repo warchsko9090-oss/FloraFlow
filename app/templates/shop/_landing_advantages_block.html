@@ -1,0 +1,40 @@
+<section id="interest" class="px-4 py-14 sm:py-20 shop-page-glow">
+    <div class="max-w-6xl mx-auto">
+        <div class="mb-10 sm:mb-12 reveal">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="ornament-line w-8 inline-block"></span>
+                <p class="text-brand-brass text-xs sm:text-sm uppercase tracking-[0.28em] font-medium">{{ landing.interest_eyebrow or 'Качество' }}</p>
+            </div>
+            <h2 class="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-brand-cream">{{ landing.interest_title }}</h2>
+            {% if landing.interest_subtitle %}
+            <p class="text-base sm:text-lg text-brand-graphite mt-2 font-serif italic leading-relaxed">{{ landing.interest_subtitle }}</p>
+            {% endif %}
+        </div>
+        <div class="grid md:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
+            <article class="shop-panel reveal">
+                <div class="shop-panel-accent"></div>
+                <div class="shop-panel-inner">
+                    <p class="shop-section-num mb-3">01</p>
+                    <h3 class="shop-section-title mb-3">{{ landing.card1_title }}</h3>
+                    <p class="text-base text-brand-graphite leading-relaxed">{{ landing.card1_text }}</p>
+                </div>
+            </article>
+            <article class="shop-panel reveal">
+                <div class="shop-panel-accent"></div>
+                <div class="shop-panel-inner">
+                    <p class="shop-section-num mb-3">02</p>
+                    <h3 class="shop-section-title mb-3">{{ landing.card2_title }}</h3>
+                    <p class="text-base text-brand-graphite leading-relaxed">{{ landing.card2_text }}</p>
+                </div>
+            </article>
+            <article class="shop-panel reveal">
+                <div class="shop-panel-accent"></div>
+                <div class="shop-panel-inner">
+                    <p class="shop-section-num mb-3">03</p>
+                    <h3 class="shop-section-title mb-3">{{ landing.card3_title }}</h3>
+                    <p class="text-base text-brand-graphite leading-relaxed">{{ landing.card3_text }}</p>
+                </div>
+            </article>
+        </div>
+    </div>
+</section>

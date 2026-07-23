@@ -1,0 +1,52 @@
+{# Фрагмент «Передать задачу» для HTMX-модалки (#reassignModal). #}
+<form hx-post="{{ url_for('main.api_tg_task_reassign', task_id=task.id) }}"
+      hx-swap="none"
+      class="p-3">
+    <div class="mb-3 pb-2 border-bottom">
+        <div class="small text-muted text-uppercase">Задача</div>
+        <div class="fw-bold">{{ task.title or 'Без названия' }}</div>
+        {% if task.details %}
+            <div class="small text-muted mt-1">{{ task.details[:200] }}{% if task.details|length > 200 %}…{% endif %}</div>
+        {% endif %}
+        <div class="small text-muted mt-2">
+            Сейчас:
+            {% if task.assignee %}
+                <span class="badge bg-info text-white">@{{ task.assignee.username }}</span>
+            {% elif task.assignee_role %}
+                <span class="badge bg-light text-dark border">отдел {{ task.assignee_role }}</span>
+            {% else %}
+                <span class="badge bg-light text-dark border">не назначена</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row g-2 mb-3">
+        <div class="col-12 col-md-7">
+            <label class="form-label fw-bold">Новый исполнитель</label>
+            <select name="assignee_id" class="form-select">
+                <option value="">— без конкретного —</option>
+                {% for u in users %}
+                    <option value="{{ u.id }}" {% if u.id == task.assignee_id %}selected{% endif %}>
+                        {{ u.username }} ({{ u.role }})
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-5">
+            <label class="form-label fw-bold">или отдел</label>
+            <select name="assignee_role" class="form-select">
+                <option value="">— любой —</option>
+                {% for r in roles %}
+                    <option value="{{ r }}" {% if r == task.assignee_role %}selected{% endif %}>{{ r }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="d-flex justify-content-end gap-2 pt-2 border-top">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-primary fw-bold">
+            <i class="fas fa-share me-1"></i> Передать
+        </button>
+    </div>
+</form>

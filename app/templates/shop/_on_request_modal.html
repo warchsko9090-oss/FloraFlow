@@ -1,0 +1,36 @@
+<div id="on-request-modal" class="fixed inset-0 bg-brand-bg/80 backdrop-blur-sm hidden flex justify-center items-center p-4 overflow-y-auto z-[180]">
+    <div class="shop-modal-panel shop-panel w-full max-w-lg rounded-sm relative my-4">
+        <div class="shop-panel-accent"></div>
+        <button type="button" id="on-request-modal-close" class="absolute top-3 right-3 text-brand-muted hover:text-brand-cream w-8 h-8 flex items-center justify-center rounded-sm hover:bg-brand-bgSoft transition-colors z-10">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+
+        <div class="p-7">
+            <h2 class="font-serif text-xl font-bold mb-1 text-brand-cream">Заявка по запросу</h2>
+            <p id="on-request-modal-subtitle" class="text-brand-muted text-sm mb-5"></p>
+
+            <form id="on-request-form" class="space-y-3">
+                <input type="hidden" id="on-request-plant-id" name="plant_id" value="">
+                <input type="hidden" id="on-request-size-id" name="size_id" value="">
+                <input type="text" id="on-request-name" name="customer_name" required maxlength="200"
+                    placeholder="ФИО или компания"
+                    class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft">
+                <input type="tel" id="on-request-phone" name="phone" required maxlength="80"
+                    placeholder="Телефон"
+                    class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft">
+                <textarea id="on-request-message" name="message" required rows="4" maxlength="2000"
+                    placeholder="Сообщение менеджеру: нужное количество, сроки, комментарии…"
+                    class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft resize-y min-h-[110px]"></textarea>
+                <label class="shop-consent">
+                    <input type="checkbox" id="on-request-consent" name="pd_consent" value="1" required class="shop-consent-checkbox">
+                    <span class="shop-consent-text">Согласен на <a href="{{ url_for('public_client_api.public_consent') }}" target="_blank" rel="noopener">обработку персональных данных</a></span>
+                </label>
+                <p id="on-request-error" class="hidden text-sm text-brand-low"></p>
+                <p id="on-request-success" class="hidden text-sm text-brand-brass"></p>
+                <button type="submit" id="on-request-submit" class="shop-btn-primary w-full mt-1">
+                    Отправить заявку
+                </button>
+            </form>
+        </div>
+    </div>
+</div>

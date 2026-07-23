@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">Заявка «По запросу» #{{ req.id }}</div>
+        <div class="page-subtitle">{{ req.created_at|dateru }} · {% if req.plant %}{{ req.plant.name }} · {{ req.size.name if req.size else '—' }}{% else %}Главная страница · прайс / консультация{% endif %}</div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('orders.shop_on_requests_list') }}" class="btn btn-outline-secondary btn-sm">К списку</a>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-7">
+        <div class="card section-card mb-3">
+            <div class="card-header bg-light fw-semibold">Данные клиента</div>
+            <div class="card-body">
+                <dl class="row mb-0 small">
+                    <dt class="col-sm-3">Имя / компания</dt>
+                    <dd class="col-sm-9">{{ req.customer_name }}</dd>
+                    <dt class="col-sm-3">Телефон</dt>
+                    <dd class="col-sm-9"><a href="tel:{{ req.phone }}">{{ req.phone }}</a></dd>
+                    <dt class="col-sm-3">Позиция</dt>
+                    <dd class="col-sm-9">{% if req.plant %}{{ req.plant.name }} · {{ req.size.name if req.size else '—' }}{% else %}Главная страница · прайс / консультация{% endif %}</dd>
+                    <dt class="col-sm-3">Сообщение</dt>
+                    <dd class="col-sm-9"><pre class="mb-0 text-wrap" style="white-space: pre-wrap; font-family: inherit;">{{ req.message }}</pre></dd>
+                </dl>
+            </div>
+        </div>
+
+        {% if req.status == 'new' %}
+        <div class="card section-card border-success">
+            <div class="card-header bg-light fw-semibold">Решение менеджера</div>
+            <div class="card-body">
+                <form method="POST" class="mb-3">
+                    <input type="hidden" name="action" value="approve">
+                    <label class="form-label small">Комментарий (необязательно)</label>
+                    <textarea name="manager_comment" rows="2" class="form-control form-control-sm mb-2" placeholder="Например: перезвоним, уточним срок поставки…"></textarea>
+                    <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Согласовать заявку?');">
+                        <i class="fas fa-check me-1"></i>Согласовать
+                    </button>
+                </form>
+                <form method="POST">
+                    <input type="hidden" name="action" value="reject">
+                    <label class="form-label small">Причина отказа <span class="text-danger">*</span></label>
+                    <textarea name="manager_comment" rows="2" class="form-control form-control-sm mb-2" required placeholder="Укажите причину для клиента и руководителя"></textarea>
+                    <button type="submit" class="btn btn-outline-danger btn-sm" onclick="return confirm('Отклонить заявку?');">
+                        <i class="fas fa-times me-1"></i>Отклонить
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% else %}
+        <div class="card section-card">
+            <div class="card-header bg-light fw-semibold">Решение</div>
+            <div class="card-body small">
+                <p class="mb-2">
+                    {% if req.status == 'approved' %}
+                    <span class="badge bg-success">Согласована</span>
+                    {% else %}
+                    <span class="badge bg-secondary">Отклонена</span>
+                    {% endif %}
+                    {% if req.reviewed_at %}· {{ req.reviewed_at|dateru }}{% endif %}
+                    {% if req.reviewed_by %}· {{ req.reviewed_by.username }}{% endif %}
+                </p>
+                {% if req.manager_comment %}
+                <p class="mb-0 text-muted">{{ req.manager_comment }}</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card section-card">
+            <div class="card-header bg-light fw-semibold">Журнал (для руководителя)</div>
+            <div class="card-body p-0">
+                {% if req.logs %}
+                <ul class="list-group list-group-flush small">
+                    {% for log in req.logs %}
+                    <li class="list-group-item">
+                        <div class="d-flex justify-content-between gap-2">
+                            <strong>
+                                {% if log.action == 'created' %}Создана
+                                {% elif log.action == 'approved' %}Согласована
+                                {% elif log.action == 'rejected' %}Отклонена
+                                {% else %}{{ log.action }}{% endif %}
+                            </strong>
+                            <span class="text-muted">{{ log.created_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                        </div>
+                        <div class="text-muted">
+                            {% if log.old_status %}{{ log.old_status }} → {% endif %}{{ log.new_status }}
+                            {% if log.user %}· {{ log.user.username }}{% endif %}
+                        </div>
+                        {% if log.comment %}
+                        <div class="mt-1">{{ log.comment }}</div>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <div class="p-3 text-muted">Записей нет</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

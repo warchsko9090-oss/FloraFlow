@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        @page { size: portrait; margin: 1cm; }
+        
+        @font-face {
+            font-family: 'DejaVuSans';
+            src: url('{{ font_path }}');
+        }
+
+        body { 
+            font-family: 'DejaVuSans', sans-serif; 
+            font-size: 11px; 
+        }
+        
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 0.5pt solid #555; padding: 4px; }
+        th { background-color: #f0f0f0; }
+        .text-end { text-align: right; }
+    </style>
+</head>
+<body>
+    <h3>Реестр расходов</h3>
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 15%;">Дата</th>
+                <th style="width: 10%;">Код</th>
+                <th style="width: 25%;">Статья</th>
+                <th style="width: 25%;">Описание</th>
+                <th style="width: 10%;">Тип</th>
+                <th style="width: 15%;" class="text-end">Сумма</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in expenses %}
+            <tr>
+                <td>{{ e.date.strftime('%d.%m.%Y') }}</td>
+                <td>{{ e.item.code }}</td>
+                <td>{{ e.item.name }}</td>
+                <td>{{ e.description }}</td>
+                <td>{{ 'Нал' if e.payment_type == 'cash' else 'Безнал' }}</td>
+                <td class="text-end">{{ "{:,.2f}".format(e.amount) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>

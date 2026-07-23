@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4><i class="fas fa-graduation-cap text-success"></i> Обучение Ассистента</h4>
+</div>
+
+<ul class="nav nav-tabs mb-3" id="chatTabs" role="tablist">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#training">🚩 Проблемные вопросы ({{ bad_logs|length }})</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#base">📚 База Знаний (Статика)</button></li>
+</ul>
+
+<div class="tab-content">
+    
+    <!-- Вкладка ОБУЧЕНИЕ -->
+    <div class="tab-pane fade show active" id="training">
+        {% if bad_logs %}
+        <div class="alert alert-warning small">
+            <i class="fas fa-info-circle"></i> Пользователи пометили эти ответы как <b>бесполезные</b>. 
+            Нажмите "Исправить", чтобы научить бота (текстом или SQL).
+        </div>
+        <div class="row">
+            {% for log in bad_logs %}
+            <div class="col-md-6 mb-3">
+                <div class="card h-100 border-danger shadow-sm">
+                    <div class="card-header bg-danger bg-opacity-10 d-flex justify-content-between align-items-center">
+                        <small class="text-danger fw-bold">{{ log.user.username }} ({{ log.date.strftime('%d.%m %H:%M') }})</small>
+                        <button class="btn btn-sm btn-success" onclick="teachBot('{{ log.id }}', `{{ log.user_message }}`)">
+                            <i class="fas fa-check-circle"></i> Исправить
+                        </button>
+                    </div>
+                    <div class="card-body small">
+                        <div class="mb-2"><strong>Вопрос:</strong><br>{{ log.user_message }}</div>
+                        <div class="text-muted border-top pt-2"><strong>Ответ AI:</strong><br>{{ log.ai_response | striptags }}</div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-5 text-muted"><i class="fas fa-check-double fa-3x mb-3 text-success"></i><br>Нет жалоб. Бот молодец!</div>
+        {% endif %}
+    </div>
+
+    <!-- Вкладка СПИСОК ЗНАНИЙ -->
+    <div class="tab-pane fade" id="base">
+        <div class="card shadow-sm">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm align-middle" style="font-size: 13px;">
+                    <thead class="table-light"><tr><th>Вопрос / Теги</th><th>Ответ</th><th></th></tr></thead>
+                    <tbody>
+                        {% for item in items %}
+                        <tr>
+                            <td><div class="fw-bold">{{ item.question }}</div><small class="text-muted">{{ item.keywords }}</small></td>
+                            <td>{{ item.answer }}</td>
+                            <td class="text-end">
+                                <form method="POST" onsubmit="return confirm('Удалить?');">
+                                    <input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="{{ item.id }}">
+                                    <button class="btn btn-link text-danger p-0"><i class="fas fa-trash"></i></button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="text-center p-3 text-muted">База пуста</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно ОБУЧЕНИЯ -->
+<div class="modal fade" id="teachModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST">
+          <input type="hidden" name="action" value="add">
+          <input type="hidden" name="log_id_source" id="teachLogId">
+          <div class="modal-header bg-success text-white py-2"><h6 class="modal-title">Исправление ошибки</h6><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+          <div class="modal-body">
+            <div class="mb-3">
+                <label class="form-label fw-bold">Вопрос</label>
+                <input type="text" name="question" id="teachQuestion" class="form-control" readonly>
+            </div>
+
+            <ul class="nav nav-pills mb-3 nav-fill gap-2" id="teachTabs">
+                <li class="nav-item"><button class="nav-link active btn-sm border" id="tab-text" data-bs-toggle="pill" data-bs-target="#content-text" type="button" onclick="setType('text')">📝 Текст (Статика)</button></li>
+                <li class="nav-item"><button class="nav-link btn-sm border" id="tab-sql" data-bs-toggle="pill" data-bs-target="#content-sql" type="button" onclick="setType('sql')">🤖 SQL (Динамика)</button></li>
+            </ul>
+            <input type="hidden" name="type_add" id="teachType" value="text">
+
+            <div class="tab-content">
+                <!-- ВАРИАНТ 1: ТЕКСТ -->
+                <div class="tab-pane fade show active" id="content-text">
+                    <div class="mb-2"><label class="small text-muted">Правильный ответ</label><textarea name="answer" class="form-control" rows="3"></textarea></div>
+                    <div class="mb-2"><label class="small text-muted">Ключевые слова</label><input type="text" name="keywords" id="teachKeywords" class="form-control form-control-sm"></div>
+                </div>
+                <!-- ВАРИАНТ 2: SQL -->
+                <div class="tab-pane fade" id="content-sql">
+                    <div class="alert alert-info py-2 small mb-2">Если не знаете SQL, опишите логику словами ниже и нажмите кнопку волшебной палочки.</div>
+                    
+                    <div class="input-group input-group-sm mb-3">
+                        <input type="text" id="magicInput" class="form-control" placeholder="Например: Остатки всех туй, кроме размера С3">
+                        <button class="btn btn-warning" type="button" onclick="magicGenerate()" title="Сгенерировать код">
+                            <i class="fas fa-magic"></i> Авто-SQL
+                        </button>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="small fw-bold">SQL Результат (Этот код сохранится в память):</label>
+                        <textarea name="sql_query" id="sqlArea" class="form-control font-monospace bg-dark text-white small" rows="5" placeholder="SELECT ..."></textarea>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="testSQL()">
+                            <i class="fas fa-play"></i> Проверить (Запуск)
+                        </button>
+                        <small class="text-muted">Нажми, чтобы увидеть, что возвращает этот код</small>
+                    </div>
+                    
+                    <!-- Сюда прилетит результат теста -->
+                    <div id="sqlTestResult" class="p-2 border rounded bg-white mb-2" style="display:none; overflow-x:auto;"></div>
+                </div>
+            </div>
+          </div>
+          <div class="modal-footer py-2"><button type="submit" class="btn btn-success w-100">Сохранить и Обучить</button></div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+    function teachBot(logId, question) {
+        document.getElementById('teachLogId').value = logId;
+        document.getElementById('teachQuestion').value = question;
+        const words = question.split(' ').filter(w => w.length > 3).map(w => w.replace(/[?,.!]/g, '').toLowerCase()).join(', ');
+        document.getElementById('teachKeywords').value = words;
+        new bootstrap.Modal(document.getElementById('teachModal')).show();
+    }
+    function setType(t) { document.getElementById('teachType').value = t; }
+
+    async function magicGenerate() {
+        const desc = document.getElementById('magicInput').value;
+        if(!desc) { alert('Напишите словами, что нужно найти'); return; }
+        
+        const area = document.getElementById('sqlArea');
+        area.value = "-- Думаю...";
+        
+        try {
+            const res = await fetch('/chat/generate_sql_helper', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({description: desc})
+            });
+            const data = await res.json();
+            area.value = data.sql;
+        } catch(e) {
+            area.value = "-- Ошибка сети";
+        }
+    }
+
+async function testSQL() {
+        const sql = document.getElementById('sqlArea').value;
+        if (!sql || sql.startsWith('--')) { alert('Сначала сгенерируйте код'); return; }
+        
+        const resBox = document.getElementById('sqlTestResult');
+        resBox.style.display = 'block';
+        resBox.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> Выполняю...</span>';
+        
+        try {
+            const res = await fetch('/chat/test_sql_execution', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({sql: sql})
+            });
+            const data = await res.json();
+            
+            if (data.error) {
+                resBox.innerHTML = `<div class="text-danger fw-bold"><i class="fas fa-exclamation-triangle"></i> Ошибка:</div><div class="small text-danger">${data.error}</div>`;
+            } else {
+                resBox.innerHTML = `<div class="text-success small fw-bold mb-1"><i class="fas fa-check"></i> Результат:</div>` + data.html;
+            }
+        } catch(e) {
+            resBox.innerHTML = 'Ошибка соединения';
+        }
+    }
+
+</script>
+{% endblock %}

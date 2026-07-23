@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    {% set shop_page_title = 'Княжество — архитектурный питомник' %}
+    {% set shop_meta_description = landing.meta_description or 'Премиальный архитектурный питомник в Тульской области. Взрослые деревья, хвойные и формованные растения для частных резиденций, ландшафтных бюро и B2B-проектов.' %}
+    {% set shop_og_type = 'website' %}
+    {% if sidebar_slides and sidebar_slides[0] %}
+    {% set shop_og_image = sidebar_slides[0] %}
+    {% endif %}
+    {% if sidebar_slides and sidebar_slides[0] %}
+    <link rel="preload" as="image" href="{{ sidebar_slides[0] }}" fetchpriority="high">
+    {% endif %}
+    {% include 'shop/_shop_head.html' %}
+</head>
+<body class="bg-brand-bg text-brand-cream font-sans antialiased selection:bg-brand-brass/30 min-h-screen">
+
+    <div id="bg-slideshow" aria-hidden="true">
+        <div id="bg-slides">
+            {% if sidebar_slides and sidebar_slides[0] %}
+            <div class="bg-slide active" style="background-image:url('{{ sidebar_slides[0] }}')"></div>
+            {% endif %}
+        </div>
+        <div class="bg-slideshow-overlay"></div>
+    </div>
+
+    <div class="relative z-10 min-h-screen flex flex-col">
+        {% include 'shop/_header.html' %}
+
+        <main class="flex-1">
+            <section class="px-4 py-16 sm:py-24 shop-page-glow">
+                <div class="max-w-6xl mx-auto">
+                    <div class="reveal max-w-2xl">
+                        {% if landing.hero_badge %}
+                        <p class="text-brand-brass text-xs sm:text-sm uppercase tracking-[0.24em] font-medium mb-4 border border-brand-brass/35 inline-block px-3 py-1">{{ landing.hero_badge }}</p>
+                        {% endif %}
+                        <h1 class="font-serif text-4xl sm:text-5xl lg:text-6xl font-bold text-brand-cream leading-tight mb-6">{{ landing.hero_title }}</h1>
+                        {% if landing.hero_subtitle %}
+                        <p class="font-serif italic text-brand-muted text-lg sm:text-xl mb-8 leading-relaxed">{{ landing.hero_subtitle }}</p>
+                        {% endif %}
+                        <div class="flex flex-col sm:flex-row gap-3">
+                            <a href="{{ url_for('public_client_api.public_shop') }}" class="shop-btn-primary">
+                                {{ landing.hero_btn_catalog or 'Получить прайс и наличие' }}
+                            </a>
+                            <a href="#action" class="inline-flex items-center justify-center h-11 px-6 rounded-sm border border-brand-brass/55 bg-brand-brass/10 text-brand-brass hover:bg-brand-brass/20 hover:border-brand-brass transition-colors text-sm font-semibold tracking-wide">
+                                {{ landing.hero_btn_consult or 'Консультация менеджера' }}
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            {% with block=price_top, section_id='prices-top' %}
+            {% include 'shop/_landing_price_block.html' %}
+            {% endwith %}
+
+            {% include 'shop/_landing_advantages_block.html' %}
+
+            {% include 'shop/_landing_desire_block.html' %}
+
+            {% with block=price_bottom, section_id='prices-bottom' %}
+            {% include 'shop/_landing_price_block.html' %}
+            {% endwith %}
+
+            <section id="action" class="px-4 py-16 sm:py-20 shop-page-glow">
+                <div class="max-w-xl mx-auto">
+                    <div class="shop-panel reveal">
+                        <div class="shop-panel-accent"></div>
+                        <div class="shop-panel-inner">
+                            <div class="text-center mb-8">
+                                <h2 class="font-serif text-2xl sm:text-3xl font-bold text-brand-cream">{{ landing.form_title }}</h2>
+                                {% if landing.form_subtitle %}
+                                <p class="text-sm text-brand-muted mt-2 font-serif italic">{{ landing.form_subtitle }}</p>
+                                {% endif %}
+                            </div>
+
+                            {% if form_error %}
+                            <div class="mb-5 p-4 rounded-sm border border-brand-low/50 bg-brand-low/10 text-sm text-brand-cream">
+                                {% if form_error == 'consent' %}Необходимо согласие на обработку персональных данных.
+                                {% elif form_error == 'server' %}Не удалось отправить заявку. Попробуйте позже.
+                                {% else %}{{ form_error }}{% endif %}
+                            </div>
+                            {% endif %}
+
+                            <form method="POST" action="{{ url_for('public_client_api.public_landing') }}#action" class="space-y-3">
+                                <div>
+                                    <label class="block text-[10px] uppercase tracking-[0.14em] text-brand-muted mb-1.5" for="landing-name">Ваше имя</label>
+                                    <input class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft" type="text" id="landing-name" name="customer_name" required maxlength="200" placeholder="Как к вам обращаться?" autocomplete="name">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] uppercase tracking-[0.14em] text-brand-muted mb-1.5" for="landing-phone">Телефон</label>
+                                    <input class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft" type="tel" id="landing-phone" name="phone" required maxlength="80" placeholder="+7 (___) ___-__-__" autocomplete="tel">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] uppercase tracking-[0.14em] text-brand-muted mb-1.5" for="landing-message">Комментарий <span class="normal-case tracking-normal">(необязательно)</span></label>
+                                    <textarea class="w-full px-4 py-3 border border-brand-border rounded-sm text-sm text-brand-cream placeholder:text-brand-muted/60 focus:outline-none focus:border-brand-brass/60 focus:ring-1 focus:ring-brand-brass/30 bg-brand-bgSoft resize-y min-h-[5rem]" id="landing-message" name="message" rows="3" maxlength="2000" placeholder="Какие растения и объёмы интересуют?"></textarea>
+                                </div>
+                                <label class="shop-consent">
+                                    <input type="checkbox" name="pd_consent" value="1" required class="shop-consent-checkbox">
+                                    <span class="shop-consent-text">Согласен на <a href="{{ url_for('public_client_api.public_consent') }}" target="_blank" rel="noopener">обработку персональных данных</a></span>
+                                </label>
+                                <button type="submit" class="shop-btn-primary w-full mt-1">{{ landing.form_btn or 'Получить прайс и консультацию' }}</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        {% include 'shop/_footer.html' %}
+    </div>
+
+    {% include 'shop/_scroll_top.html' %}
+    {% include 'shop/_cookie_consent.html' %}
+
+    {% if form_sent %}
+    <div id="landing-success-modal" class="fixed inset-0 z-[210] flex items-center justify-center p-4 sm:p-6">
+        <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" data-close-landing-success></div>
+        <div class="relative w-full max-w-md shop-panel">
+            <div class="shop-panel-accent"></div>
+            <div class="shop-panel-inner text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <span class="ornament-line w-10 inline-block"></span>
+                    <span class="ornament-diamond flex-shrink-0"></span>
+                    <span class="ornament-line w-10 inline-block"></span>
+                </div>
+                <h3 class="font-serif text-2xl sm:text-3xl font-bold text-brand-cream mb-3">Заявка принята</h3>
+                <p class="text-brand-graphite text-sm sm:text-base mb-6">Спасибо! Мы свяжемся с вами в ближайшее время.</p>
+                <button type="button" id="landing-success-ok" class="shop-btn-primary w-full sm:w-auto sm:min-w-[9rem]">Ок</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=8"></script>
+    <script src="{{ url_for('static', filename='js/landing-bg.js') }}?v=3" defer></script>
+    <script>
+        let scrollObserver = null;
+
+        function initScrollReveal() {
+            scrollObserver = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('visible');
+                        scrollObserver.unobserve(entry.target);
+                    }
+                });
+            }, { threshold: 0.08, rootMargin: '0px 0px -20px 0px' });
+        }
+
+        function attachReveal(el) {
+            const rect = el.getBoundingClientRect();
+            if (rect.top < window.innerHeight * 0.95 && rect.bottom > 0) {
+                el.classList.add('visible');
+                return;
+            }
+            scrollObserver.observe(el);
+        }
+
+        function closeLandingSuccessModal() {
+            const modal = document.getElementById('landing-success-modal');
+            if (!modal) return;
+            modal.remove();
+            document.body.style.overflow = '';
+            const url = new URL(window.location.href);
+            if (url.searchParams.has('sent')) {
+                url.searchParams.delete('sent');
+                history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+            }
+        }
+
+        window.onload = () => {
+            Shop.deferBgSlideshow();
+            Shop.initScrollTopButton();
+            initScrollReveal();
+            document.querySelectorAll('.reveal').forEach(attachReveal);
+            if (window.LandingBg) {
+                LandingBg.deferInlineSlideshow('desire-slides', '/public/client/landing-desire-slides');
+            }
+            const successModal = document.getElementById('landing-success-modal');
+            if (successModal) {
+                document.body.style.overflow = 'hidden';
+                document.getElementById('landing-success-ok')?.addEventListener('click', closeLandingSuccessModal);
+                successModal.querySelector('[data-close-landing-success]')?.addEventListener('click', closeLandingSuccessModal);
+            }
+        };
+    </script>
+</body>
+</html>

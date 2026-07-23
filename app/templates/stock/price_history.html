@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h4 class="mb-0 text-success fw-bold"><i class="fas fa-history me-2"></i>История цен продаж</h4>
+        <div class="small text-muted">Слева — товарные остатки для правки цен; справа — журнал истории.</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+        <a href="{{ url_for('stock.price_history_download_template') }}" class="btn btn-outline-success btn-sm">
+            <i class="fas fa-download"></i> Excel из остатков
+        </a>
+        <a href="{{ url_for('stock.price_history_download_template', all=1) }}" class="btn btn-outline-secondary btn-sm" title="Все партии, включая нулевые">
+            Excel все
+        </a>
+        <form method="POST" action="{{ url_for('stock.price_history_import') }}" enctype="multipart/form-data" class="d-flex gap-1">
+            <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx" required style="max-width:180px">
+            <button class="btn btn-primary btn-sm" title="Загрузить Excel"><i class="fas fa-upload"></i></button>
+        </form>
+        <a href="{{ url_for('directory.directory') }}" class="btn btn-secondary btn-sm">Назад</a>
+    </div>
+</div>
+
+<div class="row g-3">
+    {# ===== ЛЕВАЯ ПАНЕЛЬ: остатки ===== #}
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white py-2 d-flex flex-wrap align-items-center gap-2 justify-content-between">
+                <div class="fw-semibold small">
+                    Товарные позиции
+                    <span class="text-muted fw-normal">({{ stock_positions|length }})</span>
+                </div>
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <input type="text" id="phStockSearch" class="form-control form-control-sm" style="width:180px"
+                           placeholder="Поиск…" oninput="phFilterStock()">
+                    <button type="button" class="btn btn-success btn-sm" id="phSaveDirty" onclick="phSaveDirty()" disabled>
+                        <i class="fas fa-save me-1"></i>Сохранить изменённые
+                        <span class="badge bg-light text-dark ms-1 d-none" id="phDirtyCount">0</span>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 72vh;">
+                    <table class="table table-sm table-hover mb-0 align-middle" style="font-size:12.5px;" id="phStockTable">
+                        <thead class="table-light sticky-top">
+                            <tr>
+                                <th class="ps-2">Растение</th>
+                                <th>Размер</th>
+                                <th>Поля</th>
+                                <th class="text-end">Кол-во</th>
+                                <th class="text-end">Старая цена</th>
+                                <th class="text-end pe-2" style="min-width:110px;">Новая цена</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stock_positions %}
+                            <tr class="ph-stock-row"
+                                data-plant-id="{{ row.plant_id }}"
+                                data-size-id="{{ row.size_id }}"
+                                data-plant-name="{{ row.plant_name|e }}"
+                                data-size-name="{{ row.size_name|e }}"
+                                data-old-price="{{ row.old_price if row.old_price is not none else '' }}"
+                                role="button"
+                                title="Подсветить историю справа">
+                                <td class="ps-2 fw-semibold">{{ row.plant_name }}</td>
+                                <td class="small">{{ row.size_name }}</td>
+                                <td class="small text-muted" style="max-width:180px;" title="{{ row.fields_str }}">
+                                    {{ row.fields_str or '—' }}
+                                </td>
+                                <td class="text-end">{{ row.quantity }}</td>
+                                <td class="text-end text-muted">
+                                    {% if row.mixed_prices %}
+                                    <span class="text-warning" title="{{ row.unique_prices|join(', ') }}">разные</span>
+                                    {% elif row.old_price is not none %}
+                                    {{ '%.0f'|format(row.old_price) }}
+                                    {% else %}
+                                    —
+                                    {% endif %}
+                                </td>
+                                <td class="pe-2" onclick="event.stopPropagation();">
+                                    <input type="number" step="0.01" min="0"
+                                           class="form-control form-control-sm text-end ph-new-price"
+                                           placeholder="{% if row.mixed_prices %}единая{% else %}новая{% endif %}"
+                                           value=""
+                                           data-plant-id="{{ row.plant_id }}"
+                                           data-size-id="{{ row.size_id }}"
+                                           oninput="phMarkDirty(this)">
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="6" class="text-center text-muted py-4">Нет товарных позиций с остатком.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-footer bg-white py-2 small text-muted">
+                Одна строка = растение + размер. Цена применяется ко всем полям/годам этой позиции.
+                Заполните «Новая цена» у нужных строк и нажмите «Сохранить изменённые».
+            </div>
+        </div>
+    </div>
+
+    {# ===== ПРАВАЯ ПАНЕЛЬ: журнал изменений ===== #}
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center">
+                <div class="fw-semibold small">Журнал изменений цен</div>
+                <div class="small text-muted" id="phHistHint">последние 500 записей</div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 72vh;">
+                    <table class="table table-sm table-bordered table-striped bg-white mb-0" style="font-size: 12px;" id="ph-table">
+                        <thead class="table-light sticky-top">
+                            <tr>
+                                <th>Когда</th>
+                                <th>Растение</th>
+                                <th>Размер</th>
+                                <th>Поле / год</th>
+                                <th class="text-end">Было</th>
+                                <th class="text-end">Стало</th>
+                                <th>Кто</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in change_log %}
+                            <tr class="ph-row"
+                                data-plant-id="{{ item.plant_id }}"
+                                data-size-id="{{ item.size_id }}">
+                                <td class="small text-nowrap">
+                                    {{ item.changed_at.strftime('%d.%m.%Y %H:%M') if item.changed_at else '—' }}
+                                </td>
+                                <td>{{ item.plant.name if item.plant else '—' }}</td>
+                                <td class="small">{{ item.size.name if item.size else '—' }}</td>
+                                <td class="small">
+                                    {% if item.field %}{{ item.field.name }}{% else %}все поля{% endif %}
+                                    {% if item.year %} · {{ item.year }}{% endif %}
+                                </td>
+                                <td class="text-end text-muted">
+                                    {% if item.old_price is not none %}{{ item.old_price|money }}{% else %}—{% endif %}
+                                </td>
+                                <td class="text-end fw-semibold">{{ item.new_price|money }}</td>
+                                <td class="small text-muted">
+                                    {% if item.user %}{{ item.user.username }}{% else %}—{% endif %}
+                                    {% if item.source and item.source != 'ui' %}
+                                    <span class="badge bg-light text-muted border">{{ item.source }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="7" class="text-center text-muted py-4">Журнал пуст — записи появятся после смены цен.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-footer bg-white py-2 small text-muted">
+                Каждое изменение — новая строка. Текущая цена партии при этом обновляется в остатках и PriceHistory.
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .ph-stock-row { cursor: pointer; }
+    .ph-stock-row:hover { background-color: rgba(25, 135, 84, 0.06); }
+    .ph-stock-row.ph-stock-active { background-color: rgba(25, 135, 84, 0.12); }
+    .ph-stock-row.ph-row-dirty .ph-new-price { border-color: #198754; background: #ecfdf5; }
+    .ph-row.ph-row-active { outline: 2px solid rgba(25, 135, 84, 0.35); outline-offset: -2px; }
+</style>
+
+<script>
+(function () {
+    var saveUrl = {{ url_for('stock.price_history')|tojson }};
+    var saveBtn = document.getElementById('phSaveDirty');
+    var dirtyBadge = document.getElementById('phDirtyCount');
+    var histHint = document.getElementById('phHistHint');
+    var activePlant = null;
+    var activeSize = null;
+
+    function normPrice(v) {
+        var s = String(v || '').replace(',', '.').replace(/[\s\u00A0]/g, '').replace('₽', '').trim();
+        if (!s) return '';
+        var n = parseFloat(s);
+        return isNaN(n) ? '' : String(n);
+    }
+
+    function collectDirty() {
+        var items = [];
+        document.querySelectorAll('#phStockTable .ph-stock-row').forEach(function (tr) {
+            var inp = tr.querySelector('.ph-new-price');
+            if (!inp) return;
+            var val = normPrice(inp.value);
+            if (!val) {
+                tr.classList.remove('ph-row-dirty');
+                return;
+            }
+            var old = normPrice(tr.dataset.oldPrice);
+            if (old && parseFloat(val) === parseFloat(old)) {
+                tr.classList.remove('ph-row-dirty');
+                return;
+            }
+            tr.classList.add('ph-row-dirty');
+            items.push({
+                plant_id: parseInt(inp.dataset.plantId, 10),
+                size_id: parseInt(inp.dataset.sizeId, 10),
+                price: val,
+            });
+        });
+        return items;
+    }
+
+    window.phMarkDirty = function () {
+        var items = collectDirty();
+        var n = items.length;
+        if (dirtyBadge) {
+            dirtyBadge.textContent = String(n);
+            dirtyBadge.classList.toggle('d-none', n === 0);
+        }
+        if (saveBtn) saveBtn.disabled = n === 0;
+    };
+
+    window.phFilterStock = function () {
+        var q = (document.getElementById('phStockSearch').value || '').trim().toLowerCase();
+        document.querySelectorAll('#phStockTable .ph-stock-row').forEach(function (tr) {
+            var hay = ((tr.dataset.plantName || '') + ' ' + (tr.dataset.sizeName || '')).toLowerCase();
+            tr.style.display = (!q || hay.indexOf(q) !== -1) ? '' : 'none';
+        });
+    };
+
+    function highlightHistory(plantId, sizeId) {
+        activePlant = plantId;
+        activeSize = sizeId;
+        var any = false;
+        document.querySelectorAll('#ph-table .ph-row').forEach(function (row) {
+            var match = String(row.dataset.plantId) === String(plantId)
+                     && String(row.dataset.sizeId) === String(sizeId);
+            row.classList.toggle('ph-row-active', match);
+            if (match) {
+                any = true;
+                row.style.opacity = '';
+                row.style.display = '';
+            } else if (plantId && sizeId) {
+                row.style.opacity = '0.35';
+            } else {
+                row.style.opacity = '';
+            }
+        });
+        document.querySelectorAll('#phStockTable .ph-stock-row').forEach(function (tr) {
+            var match = String(tr.dataset.plantId) === String(plantId)
+                     && String(tr.dataset.sizeId) === String(sizeId);
+            tr.classList.toggle('ph-stock-active', match);
+        });
+        if (histHint) {
+            histHint.textContent = (plantId && sizeId)
+                ? (any ? 'фильтр по выбранной позиции' : 'записей по позиции нет')
+                : 'последние 500 записей';
+        }
+    }
+
+    window.phSaveDirty = async function () {
+        var items = collectDirty();
+        if (!items.length) return;
+        if (saveBtn) saveBtn.disabled = true;
+        try {
+            var resp = await fetch(saveUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({ action: 'bulk_add', items: items }),
+            });
+            var data = await resp.json().catch(function () { return {}; });
+            if (!resp.ok || data.status === 'error') {
+                alert('Ошибка сохранения: ' + ((data.messages || []).join('; ') || resp.status));
+                phMarkDirty();
+                return;
+            }
+            // Обновляем «старую» цену и очищаем инпуты сохранявшихся строк
+            items.forEach(function (it) {
+                var tr = document.querySelector(
+                    '#phStockTable .ph-stock-row[data-plant-id="' + it.plant_id + '"][data-size-id="' + it.size_id + '"]'
+                );
+                if (!tr) return;
+                tr.dataset.oldPrice = it.price;
+                var oldCell = tr.cells[4];
+                if (oldCell) oldCell.textContent = Math.round(parseFloat(it.price)).toLocaleString('ru-RU');
+                var inp = tr.querySelector('.ph-new-price');
+                if (inp) inp.value = '';
+                tr.classList.remove('ph-row-dirty');
+            });
+            phMarkDirty();
+            // Проще перезагрузить историю — актуальные записи
+            window.location.reload();
+        } catch (e) {
+            alert('Не удалось сохранить: ' + (e.message || e));
+            phMarkDirty();
+        }
+    };
+
+    document.querySelectorAll('#phStockTable .ph-stock-row').forEach(function (tr) {
+        tr.addEventListener('click', function () {
+            highlightHistory(tr.dataset.plantId, tr.dataset.sizeId);
+        });
+    });
+
+    phMarkDirty();
+})();
+</script>
+{% endblock %}

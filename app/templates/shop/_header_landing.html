@@ -1,0 +1,29 @@
+<header class="site-header">
+    <div class="site-header-inner">
+        <div class="site-header-top">
+            <a href="{{ url_for('public_client_api.public_landing') }}" class="site-brand">
+                <p class="site-brand-title">Княжество</p>
+                <p class="site-brand-sub">Архитектурный питомник</p>
+            </a>
+            <nav class="site-header-nav" aria-label="Навигация">
+                <a href="{{ url_for('public_client_api.public_shop') }}"
+                   class="site-nav-link{% if request.endpoint == 'public_client_api.public_shop' %} is-active{% endif %}">Каталог</a>
+                <a href="{{ url_for('public_client_api.public_shop_contacts') }}"
+                   class="site-nav-link{% if request.endpoint == 'public_client_api.public_shop_contacts' %} is-active{% endif %}">Контакты</a>
+            </nav>
+        </div>
+        <div class="site-header-cta">
+            <a href="{{ url_for('public_client_api.public_shop_stock_pdf') }}" target="_blank" rel="noopener" class="site-stock-btn" title="Скачать прайс-лист в PDF">
+                <span aria-hidden="true">PDF</span>
+                <span class="hidden sm:inline">Прайс-лист</span>
+                <span class="sm:hidden">Прайс</span>
+            </a>
+            {% set header_phone = shop_contacts|selectattr('contact_type', 'equalto', 'phone')|list|first if shop_contacts else none %}
+            {% if header_phone %}
+            <a href="{{ contact_href(header_phone) }}" class="site-phone-link">{{ header_phone.value }}</a>
+            {% endif %}
+            <span class="site-header-sep site-header-sep-inline" aria-hidden="true"></span>
+            <p class="site-b2b">B2B</p>
+        </div>
+    </div>
+</header>

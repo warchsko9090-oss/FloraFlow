@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>КП №{{ doc_id }}</title>
+    <style>
+        @page {
+            size: A4 portrait;
+            margin: 0;
+        }
+
+        * { margin: 0; padding: 0; }
+
+        body {
+            font-family: DejaVuSans, sans-serif;
+            font-size: 9pt;
+            color: #F7F5F0;
+            background-color: #111814;
+        }
+
+        .sheet {
+            width: 595pt;
+            background-color: #111814;
+        }
+
+        .inset {
+            padding-left: 44pt;
+            padding-right: 44pt;
+        }
+
+        .top-bar {
+            background-color: #B69A6D;
+            height: 2.5pt;
+            font-size: 1pt;
+            line-height: 1pt;
+        }
+
+        .header {
+            padding-top: 22pt;
+            padding-bottom: 4pt;
+            background-color: #111814;
+        }
+
+        .brand {
+            font-size: 24pt;
+            font-weight: bold;
+            color: #FAFAF8;
+            letter-spacing: 2pt;
+            line-height: 1.05;
+        }
+
+        .brand-tag {
+            font-size: 6.5pt;
+            color: #B69A6D;
+            letter-spacing: 1.6pt;
+            text-transform: uppercase;
+            margin-top: 6pt;
+        }
+
+        .meta-num {
+            font-size: 10pt;
+            font-weight: bold;
+            color: #B69A6D;
+            letter-spacing: 0.8pt;
+            text-align: right;
+        }
+
+        .meta-date {
+            font-size: 7.5pt;
+            color: #8A9088;
+            margin-top: 4pt;
+            line-height: 1.45;
+            text-align: right;
+        }
+
+        .meta-pos {
+            font-size: 7pt;
+            color: #6B726C;
+            margin-top: 3pt;
+            text-align: right;
+        }
+
+        .ornament {
+            padding-top: 10pt;
+            padding-bottom: 10pt;
+            background-color: #111814;
+        }
+
+        .ornament-tight {
+            padding-top: 6pt;
+            padding-bottom: 6pt;
+        }
+
+        .ornament-wide {
+            padding-top: 12pt;
+            padding-bottom: 12pt;
+        }
+
+        .orn-line {
+            background-color: #3D4741;
+            height: 0.5pt;
+            font-size: 1pt;
+            line-height: 1pt;
+        }
+
+        .orn-line-brass {
+            background-color: #B69A6D;
+            height: 0.5pt;
+        }
+
+        .orn-gem {
+            width: 5pt;
+            height: 5pt;
+            background-color: #B69A6D;
+        }
+
+        .orn-gap {
+            width: 7pt;
+            font-size: 1pt;
+        }
+
+        .rule-row {
+            padding-top: 8pt;
+            padding-bottom: 8pt;
+            background-color: #111814;
+        }
+
+        .rule-line {
+            background-color: #2E3632;
+            height: 0.5pt;
+            font-size: 1pt;
+            line-height: 1pt;
+        }
+
+        .main {
+            padding-bottom: 4pt;
+            background-color: #111814;
+        }
+
+        .eyebrow {
+            font-size: 6.5pt;
+            letter-spacing: 1.6pt;
+            text-transform: uppercase;
+            color: #B69A6D;
+            margin-bottom: 4pt;
+        }
+
+        .title {
+            font-size: 15pt;
+            font-weight: bold;
+            color: #FAFAF8;
+            margin-bottom: 0;
+            text-align: center;
+        }
+
+        .client-block {
+            padding-bottom: 0;
+        }
+
+        .client-name {
+            font-size: 11pt;
+            font-weight: bold;
+            color: #F7F5F0;
+            margin-top: 2pt;
+        }
+
+        .client-meta {
+            font-size: 8pt;
+            color: #C8C5BE;
+            margin-top: 3pt;
+            line-height: 1.45;
+            text-align: right;
+        }
+
+        .items-head td {
+            font-size: 6pt;
+            letter-spacing: 1pt;
+            text-transform: uppercase;
+            color: #8A7555;
+            padding: 0 0 6pt;
+            border-bottom: 0.75pt solid #B69A6D;
+            vertical-align: bottom;
+        }
+
+        .item td {
+            padding: 8pt 0 7pt;
+            border-bottom: 0.5pt solid #252C28;
+            vertical-align: top;
+        }
+
+        .col-num {
+            width: 22pt;
+            text-align: center;
+            font-size: 8pt;
+            color: #6B726C;
+        }
+
+        .col-name {
+            width: 228pt;
+        }
+
+        .col-qty {
+            width: 58pt;
+            text-align: center;
+            font-size: 8.5pt;
+            color: #C8C5BE;
+        }
+
+        .col-price {
+            width: 72pt;
+            text-align: right;
+            font-size: 8.5pt;
+            color: #8A9088;
+        }
+
+        .col-sum {
+            width: 78pt;
+            text-align: right;
+            font-size: 9pt;
+            font-weight: bold;
+            color: #F7F5F0;
+        }
+
+        .plant {
+            font-size: 9.5pt;
+            font-weight: bold;
+            color: #FAFAF8;
+        }
+
+        .size {
+            font-size: 7.5pt;
+            color: #8A9088;
+            margin-top: 2pt;
+        }
+
+        .attrs {
+            font-size: 7pt;
+            color: #A7A59E;
+            margin-top: 3pt;
+            line-height: 1.4;
+        }
+
+        .attr-key {
+            color: #8A7555;
+        }
+
+        .total-wrap {
+            margin-top: 4pt;
+        }
+
+        .total-box td {
+            background-color: #1C2420;
+            padding: 11pt 14pt 10pt;
+            border-left: 2.5pt solid #B69A6D;
+            vertical-align: middle;
+        }
+
+        .total-label {
+            width: 110pt;
+            font-size: 6.5pt;
+            letter-spacing: 1.4pt;
+            text-transform: uppercase;
+            color: #B69A6D;
+        }
+
+        .total-value {
+            width: 118pt;
+            text-align: right;
+            font-size: 17pt;
+            font-weight: bold;
+            color: #FAFAF8;
+        }
+
+        .total-currency {
+            font-size: 10pt;
+            color: #B69A6D;
+            font-weight: bold;
+        }
+
+        .contacts-block {
+            padding-top: 4pt;
+            padding-bottom: 4pt;
+            background-color: #111814;
+        }
+
+        .contacts-title {
+            font-size: 6.5pt;
+            letter-spacing: 1.6pt;
+            text-transform: uppercase;
+            color: #B69A6D;
+            margin-bottom: 8pt;
+            text-align: center;
+        }
+
+        .contact-line {
+            font-size: 8pt;
+            color: #C8C5BE;
+            line-height: 1.65;
+            text-align: center;
+        }
+
+        .contact-label {
+            color: #8A7555;
+        }
+
+        .footer {
+            padding-top: 10pt;
+            padding-bottom: 16pt;
+            background-color: #111814;
+        }
+
+        .footer td {
+            font-size: 6.5pt;
+            color: #6B726C;
+            vertical-align: middle;
+        }
+
+        .footer-brand {
+            color: #8A9088;
+            letter-spacing: 0.8pt;
+            text-transform: uppercase;
+        }
+
+        .footer-right {
+            text-align: right;
+        }
+
+        .validity-note {
+            padding-top: 2pt;
+            padding-bottom: 6pt;
+            background-color: #111814;
+        }
+
+        .validity-note-text {
+            font-size: 7pt;
+            color: #8A9088;
+            font-style: italic;
+            line-height: 1.45;
+            text-align: center;
+        }
+
+        .page-tail {
+            height: 28pt;
+            background-color: #111814;
+            font-size: 1pt;
+            line-height: 1pt;
+        }
+    </style>
+</head>
+<body>
+
+{% macro divider_gem(extra_class='') %}
+<tr>
+    <td class="ornament {{ extra_class }}">
+        <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+                <td width="50%">&nbsp;</td>
+                <td align="center" width="120pt">
+                    <table width="120pt" cellpadding="0" cellspacing="0">
+                        <tr>
+                            <td class="orn-line" width="45%">&nbsp;</td>
+                            <td class="orn-gap" width="7pt">&nbsp;</td>
+                            <td class="orn-gem" width="5pt">&nbsp;</td>
+                            <td class="orn-gap" width="7pt">&nbsp;</td>
+                            <td class="orn-line" width="45%">&nbsp;</td>
+                        </tr>
+                    </table>
+                </td>
+                <td width="50%">&nbsp;</td>
+            </tr>
+        </table>
+    </td>
+</tr>
+{% endmacro %}
+
+<table class="sheet" cellpadding="0" cellspacing="0">
+    <tr>
+        <td class="top-bar">&nbsp;</td>
+    </tr>
+
+    <tr>
+        <td class="header inset">
+            <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td style="width: 58%; vertical-align: top;">
+                        <div class="brand">Княжество</div>
+                        <div class="brand-tag">Архитектурный питомник · Тульская область</div>
+                    </td>
+                    <td style="width: 42%; vertical-align: top;">
+                        <div class="meta-num">КП № {{ doc_id }}</div>
+                        <div class="meta-date">{{ doc_date.strftime('%d.%m.%Y') }}</div>
+                        <div class="meta-pos">{{ positions_count }} поз.</div>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+
+    {{ divider_gem('ornament-wide') }}
+
+    <tr>
+        <td class="main inset">
+            <div class="title">Коммерческое предложение</div>
+        </td>
+    </tr>
+
+    {{ divider_gem('ornament-tight') }}
+
+    <tr>
+        <td class="main inset">
+            <table class="client-block" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td style="width: 50%; vertical-align: top;">
+                        <div class="eyebrow">Клиент</div>
+                        <div class="client-name">{{ customer_name }}</div>
+                    </td>
+                    <td style="width: 50%; vertical-align: top;">
+                        {% if phone or email %}
+                        <div class="eyebrow" style="text-align: right;">Контакт</div>
+                        {% if phone %}<div class="client-meta">{{ phone }}</div>{% endif %}
+                        {% if email %}<div class="client-meta">{{ email }}</div>{% endif %}
+                        {% endif %}
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+
+    {{ divider_gem('ornament-tight') }}
+
+    <tr>
+        <td class="main inset">
+            <table class="items-head" width="458pt" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td class="col-num">№</td>
+                    <td class="col-name">Наименование</td>
+                    <td class="col-qty">Кол-во</td>
+                    <td class="col-price">Цена, ₽</td>
+                    <td class="col-sum">Сумма, ₽</td>
+                </tr>
+            </table>
+
+            <table width="458pt" cellpadding="0" cellspacing="0">
+                {% for item in details %}
+                <tr class="item">
+                    <td class="col-num">{{ loop.index }}</td>
+                    <td class="col-name">
+                        <div class="plant">{{ item.plant }}</div>
+                        <div class="size">{{ item.size }}</div>
+                        {% if item.root_system or item.pruning %}
+                        <div class="attrs">
+                            {% if item.root_system %}<span class="attr-key">Корневая:</span> {{ item.root_system }}{% endif %}
+                            {% if item.root_system and item.pruning %} · {% endif %}
+                            {% if item.pruning %}<span class="attr-key">Стрижка:</span> {{ item.pruning }}{% endif %}
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td class="col-qty">{{ item.qty }} шт</td>
+                    <td class="col-price">{{ fmt(item.price) }}</td>
+                    <td class="col-sum">{{ fmt(item.sum) }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </td>
+    </tr>
+
+    {{ divider_gem('ornament-tight') }}
+
+    <tr>
+        <td class="main inset">
+            <table class="total-wrap" width="458pt" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td style="width: 228pt;">&nbsp;</td>
+                    <td style="width: 230pt;">
+                        <table width="230pt" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td class="total-box total-label">Итого к оплате</td>
+                                <td class="total-box total-value">{{ fmt(total_sum) }} <span class="total-currency">₽</span></td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+
+    {% if shop_contacts %}
+    {{ divider_gem('ornament-tight') }}
+
+    <tr>
+        <td class="contacts-block inset">
+            <div class="contacts-title">Связаться с нами</div>
+            {% for c in shop_contacts %}
+            <div class="contact-line">
+                <span class="contact-label">{{ contact_display_label(c) }}:</span> {{ c.value }}
+            </div>
+            {% endfor %}
+        </td>
+    </tr>
+    {% endif %}
+
+    {{ divider_gem('ornament-wide') }}
+
+    <tr>
+        <td class="validity-note inset">
+            <div class="validity-note-text">
+                Коммерческое предложение актуально только на дату выставления КП ({{ doc_date.strftime('%d.%m.%Y') }}).
+            </div>
+        </td>
+    </tr>
+
+    <tr>
+        <td class="footer inset">
+            <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td class="footer-brand">Княжество · питомник для ландшафтной архитектуры</td>
+                    <td class="footer-right">Сформировано {{ generated_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+
+    <tr>
+        <td class="page-tail">&nbsp;</td>
+    </tr>
+</table>
+
+</body>
+</html>

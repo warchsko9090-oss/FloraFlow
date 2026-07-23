@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">=O65AB2></title>
+  <desc id="desc">@5<80;L=K9 0@E8B5:BC@=K9 ?8B><=8: B2B</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#111814"/>
+      <stop offset="100%" stop-color="#1d2822"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6f5f46" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#b69a6d"/>
+      <stop offset="100%" stop-color="#6f5f46" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="34" y="34" width="1132" height="562" rx="28" fill="none" stroke="#b69a6d" stroke-width="2"/>
+  <g opacity=".16">
+    <circle cx="1040" cy="124" r="150" fill="none" stroke="#b69a6d" stroke-width="1.5"/>
+    <circle cx="1040" cy="124" r="112" fill="none" stroke="#b69a6d" stroke-width="1.5"/>
+    <circle cx="1040" cy="124" r="74" fill="none" stroke="#b69a6d" stroke-width="1.5"/>
+  </g>
+  <g opacity=".12">
+    <circle cx="160" cy="520" r="170" fill="none" stroke="#b69a6d" stroke-width="1.5"/>
+    <circle cx="160" cy="520" r="124" fill="none" stroke="#b69a6d" stroke-width="1.5"/>
+  </g>
+  <rect x="96" y="108" width="220" height="46" rx="23" fill="#b69a6d" fill-opacity=".12" stroke="#b69a6d" stroke-opacity=".35"/>
+  <text x="206" y="138" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" letter-spacing="4" fill="#b69a6d">B2B "</text>
+  <text x="96" y="286" font-family="Georgia, 'Times New Roman', serif" font-size="104" font-weight="700" fill="#f7f5f0">=O65AB2></text>
+  <rect x="96" y="320" width="560" height="2" fill="url(#line)"/>
+  <text x="96" y="388" font-family="Arial, sans-serif" font-size="34" fill="#d8d2c7">@E8B5:BC@=K9 ?8B><=8: 2 "C;LA:>9 >1;0AB8</text>
+  <text x="96" y="444" font-family="Arial, sans-serif" font-size="32" fill="#c8c5be">7@>A;K5 45@52LO, E2>9=K5 8 D>@<>20==K5 @0AB5=8O</text>
+  <text x="96" y="492" font-family="Arial, sans-serif" font-size="32" fill="#c8c5be">4;O G0AB=KE @57845=F89, ;0=4H0DB=KE 1N@> 8 4525;>?5@>2</text>
+  <text x="96" y="554" font-family="Arial, sans-serif" font-size="24" letter-spacing="3" fill="#b69a6d">PREMIUM LANDSCAPE PLANTS</text>
+</svg>

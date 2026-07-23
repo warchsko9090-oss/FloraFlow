@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1180px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; }
+  .vium-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; }
+  .meta-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px 18px; }
+  .meta-row .lbl { font-size: .74rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+  .meta-row .val { font-weight: 700; color: #0f172a; font-size: 1.1rem; }
+  .meta-row .val.brand { color: #1B5E20; font-size: 1.4rem; }
+
+  .vium-table th, .vium-table td { padding: 10px 14px; vertical-align: top; border-bottom: 1px solid #f1f5f9; }
+  .vium-table thead th { font-size: .74rem; text-transform: uppercase; color: #475569; background: #f8fafc; font-weight: 700; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty { text-align: center; color: #94a3b8; padding: 24px; }
+
+  .kind-chip { display: inline-block; font-size: .68rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .kind-intake   { background: #DCFCE7; color: #166534; }
+  .kind-consume  { background: #FEF3C7; color: #92400E; }
+  .kind-writeoff { background: #FEE2E2; color: #991B1B; }
+  .kind-adjust   { background: #DBEAFE; color: #1E40AF; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4><i class="fas fa-cube me-2 text-success"></i>{{ m.name }}
+        {% if m.is_archived %}<span class="badge bg-secondary">архив</span>{% endif %}
+      </h4>
+      <span class="text-muted small">{{ m.description or '' }}</span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-light" href="{{ url_for('vium.vium_report') }}">
+        <i class="fas fa-arrow-left"></i> К остаткам
+      </a>
+      <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editMatModal">
+        <i class="fas fa-pen"></i> Редактировать
+      </button>
+      <form method="POST"
+            action="{{ url_for('vium.vium_material_archive', material_id=m.id) }}"
+            class="m-0">
+        <button class="btn btn-outline-secondary">
+          <i class="fas fa-box-archive"></i>
+          {% if m.is_archived %}Вернуть из архива{% else %}В архив{% endif %}
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="vium-card">
+    <div class="meta-row">
+      <div>
+        <div class="lbl">Остаток</div>
+        <div class="val brand">
+          {{ '{:,.3f}'.format(balance.qty|float).rstrip('0').rstrip('.') }} {{ m.unit }}
+        </div>
+      </div>
+      <div>
+        <div class="lbl">Партий</div>
+        <div class="val">{{ balance.lots }}</div>
+      </div>
+      <div>
+        <div class="lbl">Ср. цена, ₽</div>
+        <div class="val">
+          {% if balance.avg_price %}{{ '{:,.2f}'.format(balance.avg_price|float) }}{% else %}—{% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="lbl">Стоимость остатка</div>
+        <div class="val">{{ balance.value|money_int }}</div>
+      </div>
+      <div>
+        <div class="lbl">Ед. изм.</div>
+        <div class="val">{{ m.unit }}</div>
+      </div>
+    </div>
+  </div>
+
+  <h6 class="text-muted text-uppercase fw-bold mt-4 mb-2" style="letter-spacing:.04em;font-size:.78rem;">
+    Партии в наличии
+  </h6>
+  <div class="vium-card p-0">
+    {% if lots %}
+    <table class="vium-table table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Дата прихода</th>
+          <th class="num">Принято</th>
+          <th class="num">Остаток</th>
+          <th class="num">Цена</th>
+          <th class="num">Стоимость</th>
+          <th>Источник</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for lot in lots %}
+        <tr>
+          <td>#{{ lot.id }}</td>
+          <td>{{ lot.received_at.strftime('%d.%m.%Y') if lot.received_at else '—' }}</td>
+          <td class="num">{{ '{:,.3f}'.format(lot.qty_received|float).rstrip('0').rstrip('.') }}</td>
+          <td class="num"><b>{{ '{:,.3f}'.format(lot.qty_remaining|float).rstrip('0').rstrip('.') }}</b></td>
+          <td class="num">{{ '{:,.2f}'.format(lot.unit_price|float) }}</td>
+          <td class="num">{{ '{:,.2f}'.format((lot.qty_remaining|float) * (lot.unit_price|float)) }}</td>
+          <td class="small text-muted">
+            {% if lot.source_invoice %}
+              сч. {{ lot.source_invoice.original_name }}
+            {% elif lot.source_operation %}
+              операция #{{ lot.source_operation.id }}
+            {% else %}—{% endif %}
+            {% if lot.note %}<div>{{ lot.note }}</div>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="empty">Партий в наличии нет.</div>
+    {% endif %}
+  </div>
+
+  <h6 class="text-muted text-uppercase fw-bold mt-4 mb-2" style="letter-spacing:.04em;font-size:.78rem;">
+    История операций
+  </h6>
+  <div class="vium-card p-0">
+    {% if history_lines %}
+    <table class="vium-table table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Дата</th>
+          <th>Тип</th>
+          <th class="num">Кол-во</th>
+          <th class="num">Цена</th>
+          <th>Прим.</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for ln in history_lines %}
+        {% set op = ln.operation %}
+        <tr>
+          <td>{{ op.date.strftime('%d.%m.%Y') if op and op.date else '—' }}</td>
+          <td>
+            <span class="kind-chip kind-{{ op.kind if op else '' }}">
+              {% if op and op.kind == 'intake' %}Поступление
+              {% elif op and op.kind == 'consume' %}Расход
+              {% elif op and op.kind == 'writeoff' %}Списание
+              {% elif op and op.kind == 'adjust' %}Коррект.
+              {% else %}—{% endif %}
+            </span>
+          </td>
+          <td class="num">{{ '{:,.3f}'.format(ln.qty|float).rstrip('0').rstrip('.') }}</td>
+          <td class="num">
+            {% if ln.unit_price is not none %}{{ '{:,.2f}'.format(ln.unit_price|float) }}{% else %}—{% endif %}
+          </td>
+          <td class="small text-muted">{{ ln.note or '' }}</td>
+          <td class="text-end">
+            {% if op %}
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('vium.vium_operation_view', op_id=op.id) }}">
+              <i class="fas fa-eye"></i>
+            </a>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="empty">Операций по материалу не было.</div>
+    {% endif %}
+  </div>
+</div>
+
+{# Модалка: редактирование материала #}
+<div class="modal fade" id="editMatModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content" method="POST"
+          action="{{ url_for('vium.vium_material_edit', material_id=m.id) }}">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-pen me-2 text-primary"></i>Редактировать материал</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Название</label>
+          <input class="form-control" name="name" value="{{ m.name }}" required maxlength="200">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Единица измерения</label>
+          <input class="form-control" name="unit" value="{{ m.unit }}" list="vium-units2" maxlength="20">
+          <datalist id="vium-units2">
+            {% for u in unit_choices %}<option value="{{ u }}">{% endfor %}
+          </datalist>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Описание</label>
+          <textarea class="form-control" name="description" rows="2" maxlength="500">{{ m.description or '' }}</textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-success">Сохранить</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

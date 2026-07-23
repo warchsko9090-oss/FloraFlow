@@ -1,0 +1,187 @@
+<script>
+(function () {
+    var cfgEl = document.getElementById('potting-analytics-data');
+    var canvas = document.getElementById('pottingChart');
+    if (!cfgEl || !canvas || typeof Chart === 'undefined') return;
+
+    var cfg;
+    try { cfg = JSON.parse(cfgEl.textContent); } catch (e) { return; }
+
+    var plantSeries = (cfg.plantSeries || []).map(function (s) {
+        return Object.assign({}, s, { hidden: true });
+    });
+
+    function buildDatasets(showAll, selectedIds) {
+        var base = [
+            {
+                label: 'Посажено всего (шт)',
+                data: cfg.potted,
+                backgroundColor: 'rgba(54, 162, 235, 0.55)',
+                borderColor: 'rgba(54, 162, 235, 1)',
+                borderWidth: 1,
+                yAxisID: 'y1',
+                order: 2,
+                hidden: !showAll
+            },
+            {
+                label: 'Работали (чел.)',
+                data: cfg.workers,
+                type: 'line',
+                borderColor: 'rgba(40, 167, 69, 1)',
+                backgroundColor: 'rgba(40, 167, 69, 0.25)',
+                borderWidth: 2,
+                tension: 0.2,
+                pointRadius: 3,
+                yAxisID: 'y',
+                order: 1
+            },
+            {
+                label: 'КПД (шт/чел)',
+                data: cfg.efficiency || [],
+                type: 'line',
+                borderColor: 'rgba(123, 31, 162, 1)',
+                backgroundColor: 'rgba(123, 31, 162, 0.12)',
+                borderWidth: 2.5,
+                borderDash: [6, 4],
+                tension: 0.25,
+                pointRadius: 3,
+                pointStyle: 'rectRot',
+                yAxisID: 'y2',
+                spanGaps: false,
+                order: 0
+            }
+        ];
+        plantSeries.forEach(function (s) {
+            var id = String(s.itemId);
+            base.push(Object.assign({}, s, { hidden: selectedIds.indexOf(id) < 0 }));
+        });
+        return base;
+    }
+
+    function getPlantSelectEl() {
+        return document.getElementById('pottingChartPlantSelect');
+    }
+
+    function readSelectedValues() {
+        var sel = getPlantSelectEl();
+        if (!sel) return ['all'];
+        if (typeof jQuery !== 'undefined') {
+            var $sel = jQuery(sel);
+            if ($sel.data('select2')) {
+                var v = $sel.val();
+                return v ? (Array.isArray(v) ? v : [v]).map(String) : [];
+            }
+        }
+        return Array.from(sel.selectedOptions).map(function (o) { return String(o.value); });
+    }
+
+    function getSelection() {
+        var vals = readSelectedValues();
+        var showAll = vals.indexOf('all') >= 0;
+        var ids = vals.filter(function (v) { return v !== 'all'; });
+        if (!showAll && !ids.length) showAll = true;
+        return { showAll: showAll, ids: ids };
+    }
+
+    function applyAllExclusive($sel, selectedId) {
+        if (!$sel || !$sel.length) return;
+        if (selectedId === 'all') {
+            $sel.val(['all']);
+            return;
+        }
+        var vals = ($sel.val() || []).map(String).filter(function (v) { return v !== 'all'; });
+        $sel.val(vals.length ? vals : ['all']);
+    }
+
+    function mountChart() {
+        var sel = getSelection();
+        var datasets = buildDatasets(sel.showAll, sel.ids);
+        var existing = Chart.getChart(canvas);
+        if (existing) existing.destroy();
+        new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: { labels: cfg.labels, datasets: datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: {
+                    y: {
+                        type: 'linear', display: true, position: 'left',
+                        title: { display: true, text: 'Сотрудников' },
+                        beginAtZero: true
+                    },
+                    y1: {
+                        type: 'linear', display: true, position: 'right',
+                        title: { display: true, text: 'Посажено (шт)' },
+                        grid: { drawOnChartArea: false },
+                        beginAtZero: true
+                    },
+                    y2: {
+                        type: 'linear', display: true, position: 'right',
+                        title: { display: true, text: 'КПД (шт/чел)', color: '#7b1fa2' },
+                        ticks: { color: '#7b1fa2' },
+                        grid: { drawOnChartArea: false },
+                        beginAtZero: true,
+                        offset: true
+                    }
+                }
+            }
+        });
+    }
+
+    function bindPlantSelect() {
+        var sel = getPlantSelectEl();
+        if (!sel || typeof jQuery === 'undefined') return;
+
+        var $sel = jQuery(sel);
+        var block = document.getElementById('pottingBlock');
+        if (typeof initSelect2 === 'function' && block) {
+            initSelect2(block);
+        }
+
+        $sel.off('.pottingChart');
+        $sel.on('select2:select.pottingChart', function (e) {
+            var id = String(e.params.data.id);
+            applyAllExclusive($sel, id);
+            $sel.trigger('change.pottingChart');
+        });
+        $sel.on('select2:unselect.pottingChart', function () {
+            window.setTimeout(function () {
+                var vals = $sel.val() || [];
+                if (!vals.length) $sel.val(['all']);
+                mountChart();
+            }, 0);
+        });
+        $sel.on('change.pottingChart', mountChart);
+    }
+
+    function isChartPanelVisible() {
+        var panel = document.getElementById('pottingSecChart');
+        return !!(panel && panel.classList.contains('show'));
+    }
+
+    function boot() {
+        bindPlantSelect();
+        if (isChartPanelVisible()) {
+            mountChart();
+        }
+        var panel = document.getElementById('pottingSecChart');
+        if (panel) {
+            panel.addEventListener('shown.bs.collapse', function () {
+                mountChart();
+            });
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot);
+    } else {
+        boot();
+    }
+})();
+</script>

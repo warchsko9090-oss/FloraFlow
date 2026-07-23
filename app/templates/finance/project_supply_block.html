@@ -1,0 +1,142 @@
+{# Поставка (приход) — фрагмент для вкладки #}
+<div class="mb-0" id="projectSupplyBlock">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                <span class="fw-semibold small"><i class="fas fa-truck-loading text-success me-2"></i> Поставка (приход)</span>
+                {% if potting_stock_field_label and potting_stock_field_label != 'не задано' %}
+                <span class="small text-muted fw-normal">Склад посадки: <b>{{ potting_stock_field_label }}</b></span>
+                {% endif %}
+                {% if can_edit_supply %}
+                <div class="btn-group btn-group-sm" role="group">
+                    <button class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#addItemModal">
+                        <i class="fas fa-plus"></i> Добавить
+                    </button>
+                    <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#bulkAddItemsModal">
+                        <i class="fas fa-list"></i> Массово
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+            <!-- ПК ВЕРСИЯ -->
+            <div class="table-responsive d-none d-md-block">
+                <table class="table table-hover align-middle mb-0" style="font-size: 13px;">
+                    <thead class="bg-light">
+                        <tr>
+                            <th>Растение</th>
+                            <th>Размер</th>
+                            <th class="text-center">Поставка</th>
+                            <th class="text-center">Посажено</th>
+                            <th class="text-center">Откл.</th>
+                            {% if can_receipt_stock and potting_stock_field_label != 'не задано' %}
+                            <th class="text-center" title="Остаток на «{{ potting_stock_field_label }}»">На складе</th>
+                            <th class="text-center" width="90">Приход</th>
+                            {% endif %}
+                            {% if can_delete_supply %}<th></th>{% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in supply_rows %}
+                        {% set item = row.item %}
+                        <tr>
+                            <td class="fw-bold">{{ item.plant.name }}</td>
+                            <td>{{ item.size.name }}</td>
+                            <td class="text-center fw-bold">{{ item.quantity }}</td>
+                            <td class="text-center">{{ row.potted }}</td>
+                            <td class="text-center fw-bold {% if row.deviation > 0 %}text-warning{% elif row.deviation < 0 %}text-danger{% else %}text-success{% endif %}">
+                                {% if row.deviation > 0 %}+{% endif %}{{ row.deviation }}
+                            </td>
+                            {% if can_receipt_stock and potting_stock_field_label != 'не задано' %}
+                            <td class="text-center text-muted">
+                                {% if row.stock_qty is not none %}{{ row.stock_qty }}{% else %}—{% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if row.potted > 0 %}
+                                <form method="POST" class="m-0" hx-boost="false"
+                                      onsubmit="return confirm('Записать на «{{ potting_stock_field_label }}» {{ row.potted }} шт (посажено)?\n\nТекущий остаток будет перезаписан, а не прибавлен.');">
+                                    <input type="hidden" name="receipt_item_stock" value="1">
+                                    <input type="hidden" name="item_id" value="{{ item.id }}">
+                                    <button type="submit" class="btn btn-outline-success btn-sm py-0 px-1" title="Приход на склад (перезапись)">
+                                        <i class="fas fa-dolly"></i>
+                                    </button>
+                                </form>
+                                {% else %}
+                                <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            {% endif %}
+                            {% if can_delete_supply %}
+                            <td class="text-end">
+                                {% if project.status == 'active' %}
+                                <form method="POST" onsubmit="return confirm('Удалить из проекта?');" class="m-0">
+                                    <input type="hidden" name="delete_item" value="1">
+                                    <input type="hidden" name="item_id" value="{{ item.id }}">
+                                    <button class="btn btn-link text-danger p-0 btn-sm"><i class="fas fa-times"></i></button>
+                                </form>
+                                {% endif %}
+                            </td>
+                            {% endif %}
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="{% if can_receipt_stock and potting_stock_field_label != 'не задано' %}8{% elif can_delete_supply %}6{% else %}5{% endif %}" class="text-center text-muted py-3">Список пуст. Добавьте позиции поставки.</td></tr>
+                        {% endfor %}
+                        {% if supply_rows %}
+                        <tr class="table-light fw-bold">
+                            <td colspan="2" class="text-end">Итого:</td>
+                            <td class="text-center">{{ potting_totals.supply }}</td>
+                            <td class="text-center">{{ potting_totals.potted }}</td>
+                            <td class="text-center {% if potting_totals.deviation > 0 %}text-warning{% elif potting_totals.deviation < 0 %}text-danger{% else %}text-success{% endif %}">
+                                {% if potting_totals.deviation > 0 %}+{% endif %}{{ potting_totals.deviation }}
+                            </td>
+                            {% if can_receipt_stock and potting_stock_field_label != 'не задано' %}
+                            <td colspan="2"></td>
+                            {% endif %}
+                            {% if can_delete_supply %}<td></td>{% endif %}
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- МОБИЛЬНАЯ ВЕРСИЯ -->
+            <div class="d-md-none bg-light p-2">
+                {% for row in supply_rows %}
+                {% set item = row.item %}
+                <div class="card shadow-sm mb-2 border-0">
+                    <div class="card-body p-3 d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="fw-bold text-dark">{{ item.plant.name }}</div>
+                            <div class="small text-muted">{{ item.size.name }}</div>
+                        </div>
+                        <div class="d-flex flex-column align-items-end gap-1">
+                            <div class="d-flex flex-wrap gap-1 justify-content-end">
+                                <span class="badge bg-secondary" title="Поставка">{{ item.quantity }} поставка</span>
+                                <span class="badge bg-success" title="Посажено">{{ row.potted }} посаж.</span>
+                                <span class="badge {% if row.deviation > 0 %}bg-warning text-dark{% elif row.deviation < 0 %}bg-danger{% else %}bg-light text-dark border{% endif %}" title="Отклонение">
+                                    {% if row.deviation > 0 %}+{% endif %}{{ row.deviation }} откл.
+                                </span>
+                                {% if can_receipt_stock and row.potted > 0 and potting_stock_field_label != 'не задано' %}
+                                <form method="POST" class="m-0" hx-boost="false"
+                                      onsubmit="return confirm('Записать {{ row.potted }} шт на «{{ potting_stock_field_label }}»? Остаток перезапишется.');">
+                                    <input type="hidden" name="receipt_item_stock" value="1">
+                                    <input type="hidden" name="item_id" value="{{ item.id }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-success py-0">
+                                        <i class="fas fa-dolly me-1"></i>Приход {{ row.potted }}
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
+                            {% if can_delete_supply %}
+                            <form method="POST" onsubmit="return confirm('Удалить?');" class="m-0">
+                                <input type="hidden" name="delete_item" value="1">
+                                <input type="hidden" name="item_id" value="{{ item.id }}">
+                                <button class="btn btn-link text-danger p-0"><i class="fas fa-trash-alt"></i></button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-3 border rounded bg-white">Список пуст</div>
+                {% endfor %}
+            </div>
+        </div>
+

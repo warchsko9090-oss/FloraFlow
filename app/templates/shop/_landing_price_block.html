@@ -1,0 +1,56 @@
+{% if block.show %}
+<section class="px-4 py-14 sm:py-20 shop-page-glow"{% if section_id %} id="{{ section_id }}"{% endif %}>
+    <div class="max-w-6xl mx-auto">
+        <div class="mb-10 sm:mb-12 reveal">
+            {% if block.eyebrow %}
+            <div class="flex items-center gap-3 mb-3">
+                <span class="ornament-line w-8 inline-block"></span>
+                <p class="text-brand-brass text-xs sm:text-sm uppercase tracking-[0.28em] font-medium">{{ block.eyebrow }}</p>
+            </div>
+            {% endif %}
+            {% if block.title %}
+            <h2 class="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-brand-cream">{{ block.title }}</h2>
+            {% endif %}
+            {% if block.subtitle %}
+            <p class="text-base sm:text-lg text-brand-graphite mt-2 font-serif italic leading-relaxed">{{ block.subtitle }}</p>
+            {% endif %}
+        </div>
+        {% if block.cards %}
+        <div class="landing-showcase-grid flex flex-col gap-3 sm:gap-4 md:grid md:grid-cols-3 md:gap-5 lg:gap-6">
+            {% for item in block.cards %}
+            <article class="landing-showcase-card catalog-tile shop-panel reveal overflow-hidden relative flex flex-row md:flex-col">
+                <div class="shop-panel-accent"></div>
+                {% if block.show_photos and item.photo %}
+                <div class="landing-showcase-media relative w-[36%] sm:w-[38%] shrink-0 self-stretch min-h-[9rem] sm:min-h-[9.5rem] md:w-full md:min-h-0 md:aspect-square overflow-hidden bg-brand-bgSoft">
+                    <img class="catalog-tile-photo absolute inset-0 w-full h-full object-cover object-center" src="{{ item.photo }}" alt="{{ item.name or 'Пример растения' }}" loading="lazy" decoding="async">
+                </div>
+                {% endif %}
+                <div class="landing-showcase-body flex-1 min-w-0 p-3.5 sm:p-4 md:p-5 border-l md:border-l-0 md:border-t border-brand-border/60 flex flex-col justify-center">
+                    {% if item.name %}
+                    <h3 class="font-serif font-semibold leading-snug text-brand-cream text-base sm:text-lg line-clamp-2">{{ item.name }}</h3>
+                    {% endif %}
+                    {% if item.spec %}
+                    <p class="catalog-tile-meta text-xs sm:text-sm uppercase tracking-wider text-brand-graphite mt-1.5 sm:mt-2">{{ item.spec }}</p>
+                    {% endif %}
+                    {% if item.price %}
+                    <p class="catalog-tile-price text-brand-brass font-semibold text-base sm:text-lg mt-1.5 sm:mt-2 tabular-nums">{{ item.price }}</p>
+                    {% endif %}
+                    {% if item.note %}
+                    <p class="catalog-tile-note font-serif italic text-sm sm:text-base text-brand-graphite mt-1.5 sm:mt-2 leading-snug line-clamp-3 md:line-clamp-none">{{ item.note }}</p>
+                    {% endif %}
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <div class="mt-10 sm:mt-12 text-center reveal">
+            {% if block.footer %}
+            <p class="text-base sm:text-lg text-brand-graphite font-serif italic mb-5 max-w-lg mx-auto leading-relaxed">{{ block.footer }}</p>
+            {% endif %}
+            <a href="{{ url_for('public_client_api.public_shop') }}" class="shop-stock-pdf-btn inline-flex items-center gap-2 px-4 py-2.5 rounded-sm border border-brand-brass/55 bg-brand-brass/10 text-brand-brass hover:bg-brand-brass/20 hover:border-brand-brass transition-colors text-xs sm:text-sm uppercase tracking-[0.12em] font-semibold">
+                Смотреть прайс и наличие
+            </a>
+        </div>
+    </div>
+</section>
+{% endif %}

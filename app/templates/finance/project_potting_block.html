@@ -1,0 +1,262 @@
+<!-- Посадка в горшки: аналитика и журнал (ежедневный ввод — в project_potting_daily_input.html) -->
+{% set can_edit_potting = can_edit_potting if can_edit_potting is defined else (current_user.role == 'admin' and project.status == 'active') %}
+{% set can_admin_potting = current_user.role in ['admin', 'executive'] %}
+{% set potting_form_url = url_for('production.project_detail', project_id=project.id) if production_view is defined and production_view else url_for('finance.project_detail', project_id=project.id) %}
+{% set potting_recount_url = url_for('production.project_potting_recount', project_id=project.id) if production_view is defined and production_view else url_for('finance.project_potting_recount', project_id=project.id) %}
+<div class="card shadow-sm border-0 mb-4" id="pottingBlock">
+    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center flex-wrap gap-2 py-2">
+        <span><i class="fas fa-seedling text-success me-2"></i> Посадка в горшки</span>
+        <div class="d-flex gap-2 small flex-wrap align-items-center">
+            <span class="badge bg-light text-dark border">Поставка: <b>{{ potting_totals.supply }}</b></span>
+            <span class="badge bg-light text-dark border">Посажено: <b>{{ potting_totals.potted }}</b></span>
+            <span class="badge {% if potting_totals.deviation < 0 %}bg-danger{% elif potting_totals.deviation > 0 %}bg-warning text-dark{% else %}bg-success{% endif %}">
+                Откл.: {% if potting_totals.deviation > 0 %}+{% endif %}{{ potting_totals.deviation }}
+            </span>
+            {% if current_user.role in ['admin', 'executive'] %}
+            {% if potting_stock_field_label and potting_stock_field_label != 'не задано' %}
+            <span class="badge bg-light text-dark border">Склад: <b>{{ potting_stock_field_label }}</b></span>
+            {% endif %}
+            <form method="POST" action="{{ potting_recount_url }}" class="m-0 ms-1"
+                  onsubmit="return confirm('Обновить остатки на «{{ potting_stock_field_label|default('склад') }}»?\n\n• При нулевом остатке — приход «Посажено» (как кнопка тележки у позиции).\n• Иначе — добавить отклонение (посажено − поставка).');">
+                <button type="submit" class="btn btn-sm btn-outline-warning fw-bold">
+                    <i class="fas fa-balance-scale me-1"></i>
+                    {% if potting_recount_doc %}Обновить пересчёт{% else %}Пересчёт на склад{% endif %}
+                </button>
+            </form>
+            {% if potting_recount_doc %}
+            <a href="{{ url_for('stock.documents', active_tab='regrading') }}" class="small text-muted text-decoration-none" title="Карточка #{{ potting_recount_doc.id }}">
+                док. #{{ potting_recount_doc.id }}
+            </a>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card-body p-2 p-md-3">
+
+        <div class="accordion accordion-flush" id="pottingMainAccordion">
+
+            {% set show_potting_chart = has_data is defined and has_data and chart_data is defined and chart_data %}
+            <div class="accordion-item border rounded mb-2 overflow-hidden">
+                <h2 class="accordion-header" id="pottingHeadChart">
+                    <button class="accordion-button {% if not show_potting_chart %}collapsed{% endif %} py-2 small fw-bold" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#pottingSecChart"
+                            aria-expanded="{{ 'true' if show_potting_chart else 'false' }}" aria-controls="pottingSecChart">
+                        <i class="fas fa-chart-area text-success me-2"></i> График и аналитика
+                        {% if show_potting_chart %}
+                        <span class="badge bg-light text-muted border ms-2 fw-normal">{{ chart_start_fmt }} — {{ chart_end_fmt }}</span>
+                        {% endif %}
+                    </button>
+                </h2>
+                <div id="pottingSecChart" class="accordion-collapse collapse{% if show_potting_chart %} show{% endif %}"
+                     aria-labelledby="pottingHeadChart" data-bs-parent="#pottingMainAccordion">
+                    <div class="accordion-body pt-2 pb-3" id="pottingAnalytics">
+
+                        {% if show_potting_chart %}
+
+                        {% if summary %}
+                        <div class="row g-2 mb-3">
+                            <div class="col-6 col-md-4 col-xl">
+                                <div class="card border-0 shadow-sm h-100 border-start border-4 border-primary">
+                                    <div class="card-body py-2 px-2">
+                                        <div class="text-muted text-uppercase mb-0" style="font-size: 10px;">Дней</div>
+                                        <div class="fw-bold fs-6 mb-0">{{ summary.days }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-4 col-xl">
+                                <div class="card border-0 shadow-sm h-100 border-start border-4 border-success">
+                                    <div class="card-body py-2 px-2">
+                                        <div class="text-muted text-uppercase mb-0" style="font-size: 10px;">Работали</div>
+                                        <div class="fw-bold fs-6 mb-0">{{ summary.total_workers }} <span class="text-muted fw-normal" style="font-size:10px;">чел.-дн.</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-4 col-xl">
+                                <div class="card border-0 shadow-sm h-100 border-start border-4 border-warning">
+                                    <div class="card-body py-2 px-2">
+                                        <div class="text-muted text-uppercase mb-0" style="font-size: 10px;">Посажено</div>
+                                        <div class="fw-bold fs-6 mb-0">{{ summary.total_potted }} <span class="text-muted fw-normal" style="font-size:10px;">шт</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-6 col-xl">
+                                <div class="card border-0 shadow-sm h-100 border-start border-4 border-info">
+                                    <div class="card-body py-2 px-2">
+                                        <div class="text-muted text-uppercase mb-0" style="font-size: 10px;">Среднее / день</div>
+                                        <div class="fw-bold fs-6 mb-0">{{ summary.avg_potted_per_day }}</div>
+                                        <div class="text-muted" style="font-size: 10px;">{{ summary.days_with_potting }} дн. с посадкой</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-12 col-md-6 col-xl">
+                                <div class="card border-0 shadow-sm h-100 border-start border-4" style="border-color:#7b1fa2 !important;">
+                                    <div class="card-body py-2 px-2">
+                                        <div class="text-muted text-uppercase mb-0 d-flex justify-content-between flex-wrap gap-1" style="font-size: 10px;">
+                                            <span><i class="fas fa-gauge-high me-1"></i> КПД (шт/чел)</span>
+                                            {% if summary.peak_efficiency %}
+                                            <span class="badge rounded-pill" style="background:#f3e5f5;color:#6a1b9a;">пик {{ summary.peak_efficiency }}</span>
+                                            {% endif %}
+                                        </div>
+                                        <div class="fw-bold fs-6 mb-0" style="color:#7b1fa2;">{{ summary.avg_potted_per_worker }}</div>
+                                        <div class="text-muted" style="font-size: 10px;">по дням: <b>{{ summary.avg_efficiency_by_day }}</b></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {% if plant_options %}
+                        <div class="row g-2 align-items-end mb-2">
+                            <div class="col-12 col-lg-8">
+                                <label for="pottingChartPlantSelect" class="form-label small fw-bold text-muted text-uppercase mb-1">
+                                    Позиции на графике
+                                </label>
+                                <select id="pottingChartPlantSelect"
+                                        class="form-select form-select-sm select-search potting-chart-plant-select"
+                                        multiple="multiple" style="width: 100%;">
+                                    <option value="all" selected>Всего за день</option>
+                                    {% for opt in plant_options %}
+                                    <option value="{{ opt.id }}">{{ opt.label }} ({{ opt.total }})</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-12 col-lg-4">
+                                <p class="small text-muted mb-0">
+                                    Выберите одну или несколько позиций. «Всего за день» — сводные столбцы и КПД.
+                                </p>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <div class="card border-0 shadow-sm mb-0">
+                            <div class="card-body pt-1 pb-1 px-2">
+                                <div style="height: 280px;">
+                                    <canvas id="pottingChart"></canvas>
+                                </div>
+                                <p class="text-center text-muted small fst-italic mt-2 mb-0">
+                                    <span style="color:#28a745">зелёная</span> — работники,
+                                    <span style="color:#36a2eb">синяя</span> — посажено (шт),
+                                    <span style="color:#7b1fa2">фиолетовая</span> — КПД (шт/чел), цветные линии — по позициям.
+                                </p>
+                            </div>
+                        </div>
+                        <script type="application/json" id="potting-analytics-data">{{ chart_data|tojson }}</script>
+                        {% else %}
+                        <p class="text-muted small mb-0">
+                            График появится после первой записи посадки в «Ежедневный ввод».
+                            {% if potting_daily %}
+                            В журнале уже есть записи — обновите страницу или проверьте, что в «Поставке» есть позиции.
+                            {% endif %}
+                        </p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="accordion-item border rounded mb-0 overflow-hidden">
+                <h2 class="accordion-header" id="pottingHeadJournal">
+                    <button class="accordion-button collapsed py-2 small fw-bold" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#pottingSecJournal"
+                            aria-expanded="false" aria-controls="pottingSecJournal">
+                        <i class="fas fa-list text-secondary me-2"></i> Журнал посадки по дням
+                        {% if potting_daily %}
+                        <span class="badge bg-secondary ms-2 fw-normal">{{ potting_daily|length }} дн.</span>
+                        {% endif %}
+                    </button>
+                </h2>
+                <div id="pottingSecJournal" class="accordion-collapse collapse"
+                     aria-labelledby="pottingHeadJournal" data-bs-parent="#pottingMainAccordion">
+                    <div class="accordion-body pt-2 pb-2">
+                        {% if potting_daily %}
+                        {% if can_admin_potting %}
+                        <p class="small text-muted mb-2 mb-md-2">
+                            <i class="fas fa-pen-to-square me-1"></i>
+                            Редактор записей: измените количество и нажите <i class="fas fa-check fa-xs"></i> или удалите строку. Доступно admin/executive.
+                        </p>
+                        {% endif %}
+                        <div class="accordion accordion-flush" id="pottingDailyAccordion">
+                            {% for day in potting_daily %}
+                            <div class="accordion-item border mb-1 rounded">
+                                <h2 class="accordion-header">
+                                    <button class="accordion-button collapsed py-2 small fw-bold"
+                                            type="button" data-bs-toggle="collapse"
+                                            data-bs-target="#potDay{{ loop.index }}">
+                                        {{ day.date.strftime('%d.%m.%Y') }}
+                                        <span class="badge bg-success ms-2">{{ day.total }} шт</span>
+                                        {% if day.workers %}
+                                        <span class="badge bg-light text-dark border ms-1" title="Работников">
+                                            <i class="fas fa-users fa-xs"></i> {{ day.workers }}
+                                        </span>
+                                        {% if day.total and day.workers %}
+                                        <span class="badge ms-1" style="background:#f3e5f5;color:#6a1b9a;" title="КПД">
+                                            {{ (day.total / day.workers)|round(1) }} шт/чел
+                                        </span>
+                                        {% endif %}
+                                        {% endif %}
+                                    </button>
+                                </h2>
+                                <div id="potDay{{ loop.index }}" class="accordion-collapse collapse"
+                                     data-bs-parent="#pottingDailyAccordion">
+                                    <div class="accordion-body p-0">
+                                        <table class="table table-sm mb-0" style="font-size: 12px;">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>Растение</th>
+                                                    <th>Размер</th>
+                                                    <th class="text-end">Кол-во</th>
+                                                    {% if can_admin_potting %}
+                                                    <th class="text-end" style="width: 120px;">Редактор</th>
+                                                    {% endif %}
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for log in day.entries %}
+                                                <tr>
+                                                    <td>{{ log.project_item.plant.name }}</td>
+                                                    <td class="text-muted">{{ log.project_item.size.name }}</td>
+                                                    <td class="text-end fw-bold">{{ log.quantity }}</td>
+                                                    {% if can_admin_potting %}
+                                                    <td class="text-end">
+                                                        <div class="d-flex justify-content-end align-items-center gap-1">
+                                                            <form method="POST" action="{{ potting_form_url }}" class="d-flex align-items-center gap-1 m-0" hx-boost="false">
+                                                                <input type="hidden" name="edit_potting_log" value="1">
+                                                                <input type="hidden" name="potting_log_id" value="{{ log.id }}">
+                                                                <input type="number" name="potting_log_qty" min="0" step="1"
+                                                                       class="form-control form-control-sm text-center"
+                                                                       style="width: 72px;" value="{{ log.quantity }}"
+                                                                       title="Новое количество за день (0 — удалить)">
+                                                                <button type="submit" class="btn btn-link text-success p-0 btn-sm" title="Сохранить">
+                                                                    <i class="fas fa-check"></i>
+                                                                </button>
+                                                            </form>
+                                                            <form method="POST" action="{{ potting_form_url }}" class="m-0"
+                                                                  onsubmit="return confirm('Удалить запись?');" hx-boost="false">
+                                                                <input type="hidden" name="delete_potting_log" value="1">
+                                                                <input type="hidden" name="potting_log_id" value="{{ log.id }}">
+                                                                <button type="submit" class="btn btn-link text-danger p-0 btn-sm" title="Удалить">
+                                                                    <i class="fas fa-times"></i>
+                                                                </button>
+                                                            </form>
+                                                        </div>
+                                                    </td>
+                                                    {% endif %}
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p class="text-muted small mb-0">Посадка ещё не вносилась.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>

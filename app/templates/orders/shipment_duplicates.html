@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title"><i class="fas fa-exclamation-triangle text-warning"></i> Дубли частичных отгрузок</div>
+        <div class="page-subtitle">Диагностика + чистка. Призрачные заказы исключены.</div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm">К заказам</a>
+    </div>
+</div>
+
+<div class="card section-card mb-3">
+    <div class="card-body">
+        <form method="GET" class="d-flex align-items-center gap-2 flex-wrap" hx-boost="false">
+            <label class="mb-0">Окно кластеризации, сек:</label>
+            <input type="number" name="window" value="{{ summary.window_seconds }}" min="5" max="3600" class="form-control form-control-sm" style="width:120px;">
+            <button class="btn btn-success btn-sm">Пересчитать</button>
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('orders.admin_shipment_duplicates') }}?format=json&window={{ summary.window_seconds }}">JSON</a>
+            <div class="ms-auto d-flex gap-2 align-items-center">
+                <span class="badge bg-warning text-dark">Групп дублей: {{ summary.groups_found }}</span>
+                <span class="badge bg-danger">Лишние списания: {{ summary.total_extra_qty }} шт</span>
+                {% if duplicates %}
+                <button type="button" id="cleanupAllBtn" class="btn btn-danger btn-sm">
+                    <i class="fas fa-broom"></i> Удалить ВСЕ лишние копии
+                </button>
+                {% endif %}
+            </div>
+        </form>
+        <div class="mt-2 small text-muted">
+            «Удалить копию» — удаляет выбранный Document+DocumentRow и возвращает qty на склад.
+            <strong>OrderItem.shipped_quantity и статус заказа не трогаются</strong> — как отображалось в редакторе заказа, так и останется.
+            Удаление разрешено только если существует другой Document с теми же параметрами (twin-check). Операция логируется в ActionLog.
+        </div>
+    </div>
+</div>
+
+<div id="cleanupResult"></div>
+
+{% if duplicates %}
+<div class="card section-card">
+    <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th>Заказ</th>
+                <th>Клиент</th>
+                <th>Пользователь</th>
+                <th>Растение</th>
+                <th>Размер</th>
+                <th>Поле</th>
+                <th>Год</th>
+                <th class="text-end">Кол-во×коп.</th>
+                <th class="text-end">Лишние шт</th>
+                <th>Документы (1-й оставляем)</th>
+                <th>OrderItem shipped/plan</th>
+                <th>Статус</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for g in duplicates %}
+            <tr data-group-index="{{ loop.index0 }}">
+                <td>
+                    <a href="{{ url_for('orders.order_detail', order_id=g.order_id) }}" target="_blank">#{{ g.order_id }}</a>
+                </td>
+                <td>{{ g.client }}</td>
+                <td>{{ g.user or '-' }}</td>
+                <td>{{ g.plant or '-' }}</td>
+                <td>{{ g.size or '-' }}</td>
+                <td>{{ g.field or '-' }}</td>
+                <td>{{ g.year }}</td>
+                <td class="text-end"><strong>{{ g.qty_each }}</strong> × {{ g.count }}</td>
+                <td class="text-end text-danger"><strong>+{{ g.extra_qty }}</strong></td>
+                <td>
+                    {% for d in g.docs %}
+                        <div class="small d-flex align-items-center gap-2 mb-1">
+                            {% if loop.index0 == 0 %}
+                                <span class="badge bg-success">оставить</span>
+                                <code>doc #{{ d.doc_id }}</code>
+                                <span class="text-muted">{{ d.date }}</span>
+                            {% else %}
+                                <span class="badge bg-danger">дубль</span>
+                                <code>doc #{{ d.doc_id }}</code>
+                                <span class="text-muted">{{ d.date }}</span>
+                                <button type="button"
+                                        class="btn btn-outline-danger btn-xs js-cleanup-one"
+                                        data-doc-id="{{ d.doc_id }}"
+                                        data-qty="{{ g.qty_each }}"
+                                        data-order="{{ g.order_id }}"
+                                        style="padding:1px 6px; font-size:11px;">
+                                    удалить
+                                </button>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </td>
+                <td>
+                    {% if g.item_id %}
+                        {{ g.item_shipped_quantity }} / {{ g.item_quantity }}
+                    {% else %}
+                        <span class="text-muted">—</span>
+                    {% endif %}
+                </td>
+                <td><span class="badge bg-secondary">{{ g.order_status }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-success">
+    Дублей не найдено. Ничего чистить не нужно.
+</div>
+{% endif %}
+
+<script>
+(function(){
+    const endpoint = "{{ url_for('orders.admin_shipment_duplicates_cleanup') }}";
+    const resultBox = document.getElementById('cleanupResult');
+
+    async function cleanup(docIds) {
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                body: JSON.stringify({ doc_ids: docIds })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                resultBox.innerHTML = '<div class="alert alert-danger">Ошибка: ' + (data.error || res.status) + ' ' + (data.message || '') + '</div>';
+                return;
+            }
+            const s = data.summary || {};
+            let html = '<div class="alert alert-success">';
+            html += 'Запрошено: ' + s.requested + ', удалено: ' + s.deleted + ', пропущено: ' + s.skipped + '. ';
+            html += 'Возвращено на склад всего: <strong>' + s.qty_returned_total + ' шт</strong>.';
+            html += '</div>';
+            const skipped = (data.results || []).filter(r => r.status === 'skip');
+            if (skipped.length) {
+                html += '<div class="alert alert-warning"><strong>Пропущенные документы:</strong><ul class="mb-0">';
+                skipped.forEach(r => {
+                    html += '<li>doc #' + r.doc_id + ' — ' + r.reason + '</li>';
+                });
+                html += '</ul></div>';
+            }
+            resultBox.innerHTML = html;
+            setTimeout(function(){ window.location.reload(); }, 1500);
+        } catch (err) {
+            resultBox.innerHTML = '<div class="alert alert-danger">Сеть: ' + err + '</div>';
+        }
+    }
+
+    document.addEventListener('click', function(e){
+        const one = e.target.closest('.js-cleanup-one');
+        if (one) {
+            const docId = one.getAttribute('data-doc-id');
+            const qty = one.getAttribute('data-qty');
+            const ord = one.getAttribute('data-order');
+            if (confirm('Удалить дубль doc #' + docId + ' (вернёт ' + qty + ' шт на склад, заказ #' + ord + ' и его shipped не меняются)?')) {
+                one.disabled = true;
+                one.textContent = 'удаляю...';
+                cleanup([parseInt(docId, 10)]);
+            }
+            return;
+        }
+        if (e.target.closest('#cleanupAllBtn')) {
+            const ids = Array.from(document.querySelectorAll('.js-cleanup-one')).map(b => parseInt(b.getAttribute('data-doc-id'), 10));
+            if (!ids.length) return;
+            if (confirm('Удалить ВСЕ ' + ids.length + ' лишних копий? Это необратимо (есть ActionLog).')) {
+                cleanup(ids);
+            }
+        }
+    });
+})();
+</script>
+{% endblock %}

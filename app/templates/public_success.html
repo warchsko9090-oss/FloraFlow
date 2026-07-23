@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Заявка принята — Княжество</title>
+    {% set shop_meta_description = 'Заявка принята. Архитектурный питомник Княжество подготовит коммерческое предложение и свяжется с вами в ближайшее время.' %}
+    {% set shop_og_type = 'website' %}
+    <meta name="description" content="{{ shop_meta_description }}">
+    {% include 'shop/_favicon_links.html' %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            bg: '#111814', bgSoft: '#161D19', card: '#1C2420', cardHover: '#232B27',
+                            cream: '#F7F5F0', pine: '#111814', brass: '#B69A6D', brassHover: '#C4AB7E',
+                            brassDim: '#8A7555', graphite: '#C8C5BE', muted: '#7A7E78',
+                            border: '#2E3632', borderLight: '#3D4741', low: '#D47A45'
+                        }
+                    },
+                    fontFamily: { sans: ['Golos Text', 'sans-serif'], serif: ['Cormorant', 'serif'] }
+                }
+            }
+        }
+    </script>
+    {% include 'shop/_styles.html' %}
+    {% include 'shop/_seo_meta.html' %}
+    {% include 'shop/_metrika.html' %}
+    <style>
+        .success-icon {
+            width: 3.5rem;
+            height: 3.5rem;
+            border: 1px solid rgba(182, 154, 109, 0.45);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            color: #B69A6D;
+            font-size: 1.35rem;
+            background: rgba(182, 154, 109, 0.08);
+        }
+        .success-item-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.85rem 0;
+            border-bottom: 1px solid rgba(46, 54, 50, 0.75);
+        }
+        .success-item-row:last-child { border-bottom: none; }
+        .shop-btn-secondary {
+            display: block;
+            width: 100%;
+            padding: 0.875rem 1rem;
+            margin-top: 0.75rem;
+            border-radius: 2px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-align: center;
+            text-decoration: none;
+            background: transparent;
+            color: #C8C5BE;
+            border: 1px solid rgba(46, 54, 50, 0.9);
+            transition: border-color 0.2s, color 0.2s, background 0.2s;
+        }
+        .shop-btn-secondary:hover {
+            border-color: rgba(182, 154, 109, 0.45);
+            color: #F7F5F0;
+            background: rgba(182, 154, 109, 0.06);
+        }
+    </style>
+</head>
+<body class="bg-brand-bg text-brand-cream font-sans antialiased selection:bg-brand-brass/30 min-h-screen">
+
+    <div id="bg-slideshow" aria-hidden="true"><div id="bg-slides"></div><div class="bg-slideshow-overlay"></div></div>
+
+    <div class="relative z-10 min-h-screen flex flex-col">
+        {% include 'shop/_header.html' %}
+
+        <main class="flex-1 px-4 py-10 sm:py-14 pb-20 shop-page-glow flex items-center">
+            <div class="max-w-lg w-full mx-auto">
+                <article class="shop-panel reveal">
+                    <div class="shop-panel-accent"></div>
+                    <div class="shop-panel-inner text-center">
+                        <div class="success-icon"><i class="fa-solid fa-check"></i></div>
+                        <p class="shop-section-eyebrow mb-2">Заявка №{{ doc_id }}</p>
+                        <h1 class="font-serif text-3xl sm:text-4xl font-bold text-brand-cream mb-3">Заявка принята</h1>
+                        <p class="font-serif italic text-brand-graphite/90 text-lg mb-8 leading-relaxed">
+                            Спасибо, {{ customer_name }}! Менеджер свяжется с вами для подтверждения и уточнения логистики.
+                        </p>
+
+                        <div class="text-left">
+                            <div class="shop-section-head shop-section-head-sm">
+                                <span class="shop-section-num">01</span>
+                                <div>
+                                    <p class="shop-section-eyebrow">Коммерческое предложение</p>
+                                    <h2 class="shop-section-title">Ваш заказ</h2>
+                                </div>
+                            </div>
+
+                            {% for item in details %}
+                            <div class="success-item-row">
+                                <div>
+                                    <div class="font-serif text-base font-semibold text-brand-cream leading-snug">{{ item.plant }}</div>
+                                    <div class="text-xs text-brand-muted mt-1">{{ item.size }} × {{ item.qty }} шт</div>
+                                </div>
+                                <div class="font-semibold text-brand-graphite whitespace-nowrap">{{ "{:,.0f}".format(item.sum).replace(',', ' ') }} ₽</div>
+                            </div>
+                            {% endfor %}
+
+                            <div class="flex items-center justify-between mt-5 pt-5 border-t border-brand-brass/25">
+                                <span class="text-[10px] uppercase tracking-[0.2em] text-brand-muted">Итого</span>
+                                <span class="font-serif text-3xl font-bold text-brand-brass">{{ "{:,.0f}".format(total_sum).replace(',', ' ') }} ₽</span>
+                            </div>
+                        </div>
+
+                        <div class="mt-8">
+                            <a href="{{ url_for('public_client_api.shop_kp_pdf', doc_id=doc_id, token=kp_pdf_token) }}"
+                               class="shop-btn-primary w-full" target="_blank" rel="noopener" data-metrika-goal="kp_step_3_finish">
+                                <i class="fa-solid fa-file-pdf"></i> Скачать КП (PDF)
+                            </a>
+                            <p class="text-[11px] text-brand-muted mt-3 leading-relaxed">
+                                Оформленное коммерческое предложение в фирменном стиле «Княжество»
+                            </p>
+                            <a href="{{ url_for('public_client_api.public_shop') }}" class="shop-btn-secondary" data-metrika-goal="kp_step_3_finish">Вернуться в каталог</a>
+                        </div>
+                    </div>
+                </article>
+            </div>
+        </main>
+
+        {% include 'shop/_footer.html' %}
+    </div>
+
+    {% include 'shop/_cookie_consent.html' %}
+
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=3"></script>
+    <script>
+        window.onload = () => {
+            Shop.init([], {});
+            Shop.deferBgSlideshow();
+            document.querySelectorAll('.reveal').forEach(el => el.classList.add('visible'));
+            document.querySelectorAll('[data-metrika-goal]').forEach(el => {
+                el.addEventListener('click', () => {
+                    const goalId = el.getAttribute('data-metrika-goal');
+                    if (typeof window.ym === 'function' && goalId) {
+                        window.ym(110500921, 'reachGoal', goalId);
+                    }
+                });
+            });
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+# Shop — отдельный Git-репозиторий (knyajestvo-code/)
+knyajestvo-code/
+
+# Monorepo-конфиг shop (не нужен при двух репо)
+amvera-knyajestvo.yml
+
+# Секреты и локальные данные
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+.venv/
+venv/
+
+# БД и загрузки локально
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+instance/
+uploads/
+/data/
+
+# IDE / OS
+.cursor/
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Временные PDF-тесты
+_test_*.pdf

@@ -1,0 +1,83 @@
+{% set potting_form_url = url_for('production.project_detail', project_id=project.id) if production_view else url_for('finance.project_detail', project_id=project.id) %}
+{% set can_edit_potting = can_edit_potting if can_edit_potting is defined else (current_user.role == 'admin' and project.status == 'active') %}
+{% set hide_potting_workers_ui = production_view is defined and production_view and current_user.role == 'user' %}
+
+{% if can_edit_potting and supply_rows %}
+<div class="card border border-primary border-2 shadow-sm mb-4" id="pottingDailyInput">
+    <div class="card-header bg-primary bg-opacity-10 py-2">
+        <span class="fw-bold small text-uppercase">
+            <i class="fas fa-calendar-day text-primary me-2"></i> Ежедневный ввод
+        </span>
+    </div>
+    <div class="card-body pt-2 pb-3">
+        <form method="POST"
+              action="{{ potting_form_url }}"
+              class="mb-0"
+              hx-boost="false" data-hx-boost="false">
+            <input type="hidden" name="save_daily_potting" value="1">
+            <div class="d-flex flex-wrap align-items-end gap-3 mb-3">
+                <div>
+                    <label class="small fw-bold text-muted text-uppercase">Дата посадки</label>
+                    <input type="date" name="potting_date" class="form-control form-control-sm"
+                           value="{{ potting_view_date }}" required>
+                </div>
+                {% if not hide_potting_workers_ui %}
+                <div>
+                    <label class="small fw-bold text-muted text-uppercase">Работников</label>
+                    <input type="number" name="potting_workers" class="form-control form-control-sm text-center"
+                           min="0" step="1" style="width: 88px;"
+                           value="{{ potting_day_workers }}"
+                           placeholder="0" title="Для расчёта КПД на графике (по умолчанию из табеля)">
+                    {% if potting_timesheet_workers is defined and potting_timesheet_workers > 0 %}
+                    <div class="small text-muted" style="font-size: 10px;">из табеля: {{ potting_timesheet_workers }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                <button type="submit" class="btn btn-success btn-sm">
+                    <i class="fas fa-save me-1"></i> Сохранить день
+                </button>
+            </div>
+            <p class="small text-muted mb-2">
+                <b>Посажено</b> — всего пересажено по позиции (сумма всех дней). <b>За этот день</b> — сколько <b>добавить</b> к уже сохранённому за выбранную дату (пустое = 0, строка не меняется);
+                после «Сохранить день» поля обнуляются, в «Посажено» отразится новый итог. Исправить или удалить запись за день можно в журнале (admin/executive).
+                {% if not hide_potting_workers_ui %}
+                Укажите число работников — на графике посчитается КПД (посажено ÷ работники). Если не сохраняли вручную, для графика берётся табель (часы &gt; 1).
+                {% endif %}
+            </p>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0 bg-white border">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Растение</th>
+                            <th>Размер</th>
+                            <th class="text-center">Поставка</th>
+                            <th class="text-center">Посажено</th>
+                            <th class="text-center" style="width: 120px;">За этот день</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in supply_rows %}
+                        {% set item = row.item %}
+                        <tr>
+                            <td class="fw-bold">{{ item.plant.name }}</td>
+                            <td>{{ item.size.name }}</td>
+                            <td class="text-center text-muted">{{ item.quantity }}</td>
+                            <td class="text-center fw-bold text-success">{{ row.potted }}</td>
+                            <td class="text-center">
+                                <input type="hidden" name="potting_item_id[]" value="{{ item.id }}">
+                                <input type="number" min="0" step="1" name="potting_qty[]"
+                                       class="form-control form-control-sm text-center"
+                                       value="{{ potting_day_qty.get(item.id, '') }}"
+                                       placeholder="0">
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </form>
+    </div>
+</div>
+{% elif not supply_rows %}
+<p class="text-muted small mb-4 px-1">Сначала добавьте позиции в блок «Поставка (приход)» ниже.</p>
+{% endif %}

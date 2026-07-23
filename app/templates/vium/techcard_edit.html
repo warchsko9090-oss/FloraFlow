@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 900px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+  .vium-head .btn-sec {
+    border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: .9rem;
+    text-decoration: none !important; display: inline-flex; align-items: center; gap: 6px;
+    background: #fff; border: 1px solid #e2e8f0; color: #0f172a;
+  }
+  .vium-head .btn-sec:hover { background: #f1f5f9; }
+
+  .vium-table {
+    width: 100%; background: #fff; border: 1px solid #e2e8f0;
+    border-radius: 14px; overflow: hidden;
+  }
+  .vium-table table { width: 100%; margin: 0; }
+  .vium-table th, .vium-table td {
+    padding: 8px 10px; vertical-align: middle; border-bottom: 1px solid #f1f5f9;
+  }
+  .vium-table thead th {
+    font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+    color: #475569; background: #f8fafc; font-weight: 700;
+  }
+  .empty { text-align: center; color: #94a3b8; padding: 30px; font-size: .9rem; }
+  .form-control, .form-select { border-radius: 8px; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <h4><i class="fas fa-clipboard-list me-2"></i>{{ plant.name }} · {{ size.name }}</h4>
+    <a href="{{ url_for('vium.vium_techcards') }}" class="btn-sec">
+      <i class="fas fa-arrow-left"></i> К списку тех.карт
+    </a>
+  </div>
+
+  <form method="POST" action="{{ url_for('vium.vium_techcard_save', plant_id=plant.id, size_id=size.id) }}">
+    <div class="vium-table mb-3">
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 36%;">Материал</th>
+            <th style="width: 18%;" class="text-end">шт ВиУМ на 1 куст</th>
+            <th>Примечание</th>
+            <th style="width: 56px;"></th>
+          </tr>
+        </thead>
+        <tbody id="lines">
+          {% for ln in lines %}
+          <tr>
+            <td>
+              <select name="mat_{{ ln.id }}" class="form-select form-select-sm">
+                {% for m in materials %}
+                  <option value="{{ m.id }}" {% if m.id == ln.material_id %}selected{% endif %}>{{ m.name }} ({{ m.unit }})</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="text-end">
+              <input type="number" step="0.0001" min="0" class="form-control form-control-sm text-end"
+                     name="qty_{{ ln.id }}" value="{{ '%.4f' % (ln.qty_per_bush|float) }}" required>
+            </td>
+            <td>
+              <input type="text" maxlength="300" class="form-control form-control-sm"
+                     name="note_{{ ln.id }}" value="{{ ln.note or '' }}">
+            </td>
+            <td class="text-center">
+              <label class="d-inline-flex align-items-center gap-1 small text-danger" title="Удалить строку">
+                <input type="checkbox" name="delete_line_{{ ln.id }}" value="1">
+                <i class="fas fa-trash"></i>
+              </label>
+            </td>
+          </tr>
+          {% else %}
+          <tr id="emptyRow"><td colspan="4" class="empty">Пока нет ни одной строки. Добавьте материал ниже.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="d-flex gap-2 mb-3">
+      <button type="button" class="btn btn-outline-success btn-sm" id="addLineBtn">
+        <i class="fas fa-plus"></i> Добавить материал
+      </button>
+    </div>
+
+    <button type="submit" class="btn btn-success">
+      <i class="fas fa-save"></i> Сохранить тех.карту
+    </button>
+  </form>
+</div>
+
+<template id="rowTpl">
+  <tr>
+    <td>
+      <select name="new_mat___NID__" class="form-select form-select-sm">
+        <option value="">— материал —</option>
+        {% for m in materials %}
+          <option value="{{ m.id }}">{{ m.name }} ({{ m.unit }})</option>
+        {% endfor %}
+      </select>
+    </td>
+    <td class="text-end">
+      <input type="number" step="0.0001" min="0" class="form-control form-control-sm text-end"
+             name="new_qty___NID__" placeholder="0.0000">
+    </td>
+    <td>
+      <input type="text" maxlength="300" class="form-control form-control-sm"
+             name="new_note___NID__" placeholder="Примечание">
+    </td>
+    <td class="text-center">
+      <button type="button" class="btn btn-sm btn-outline-danger removeRowBtn">
+        <i class="fas fa-times"></i>
+      </button>
+    </td>
+  </tr>
+</template>
+
+<script>
+(function(){
+  let nidCounter = 1;
+  const tpl = document.getElementById('rowTpl');
+  const linesBody = document.getElementById('lines');
+  const emptyRow = document.getElementById('emptyRow');
+
+  function addRow() {
+    if (emptyRow) emptyRow.remove();
+    const html = tpl.innerHTML.replaceAll('__NID__', String(nidCounter++));
+    const tr = document.createElement('tbody');
+    tr.innerHTML = '<table>' + html + '</table>';
+    const newRow = tr.querySelector('tr');
+    linesBody.appendChild(newRow);
+  }
+
+  document.getElementById('addLineBtn').addEventListener('click', addRow);
+  linesBody.addEventListener('click', function(e){
+    const btn = e.target.closest('.removeRowBtn');
+    if (btn) btn.closest('tr').remove();
+  });
+})();
+</script>
+{% endblock %}

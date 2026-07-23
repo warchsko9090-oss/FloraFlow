@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0 text-success fw-bold"><i class="fas fa-edit me-2"></i>Редактирование документа №{{ doc.id }} ({{ doc.doc_type }})</h4>
+    <a href="{{ url_for('stock.logs') }}" class="btn btn-secondary btn-sm">Отмена</a>
+</div>
+
+<form method="POST">
+    <input type="hidden" name="return_to" value="{{ return_to or url_for('stock.documents', active_tab='shipments') }}" />
+    <!-- Блок редактирования даты (Только Админ) -->
+    <div class="card mb-3 p-2 bg-light border-warning">
+        <div class="d-flex align-items-center gap-2">
+            <label class="fw-bold">Дата операции:</label>
+            <input type="date" name="date" value="{{ doc.date.strftime('%Y-%m-%d') }}" class="form-control form-control-sm" style="width: auto;" required>
+            <small class="text-muted ms-2"><i class="fas fa-info-circle"></i> Изменение даты может повлиять на отчеты за периоды.</small>
+        </div>
+    </div>
+
+    {% if doc.doc_type == 'field_recount' %}
+    {% set default_field_id = doc.rows[0].field_to_id if doc.rows else None %}
+    <div class="alert alert-info py-2">
+        Режим карточки пересчета: можно менять дельты по каждой позиции. Тип операции задается в колонке «Операция».
+    </div>
+    <div class="table-responsive">
+        <table class="table table-bordered table-sm bg-white" id="docTable">
+            <thead class="bg-light">
+                <tr>
+                    <th>Растение</th>
+                    <th>Размер</th>
+                    <th>Год</th>
+                    <th>Операция</th>
+                    <th width="120">Кол-во</th>
+                    <th width="30"></th>
+                </tr>
+            </thead>
+            <tbody id="rowsContainer">
+                {% for row in doc.rows %}
+                <tr class="doc-row">
+                    <td>
+                        <input type="hidden" name="field_to[]" value="{{ default_field_id or '' }}">
+                        <select name="plant[]" class="form-select form-select-sm select-search" required>
+                            {% for p in plants %}<option value="{{ p.id }}" {% if p.id==row.plant_id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+                        </select>
+                    </td>
+                    <td>
+                        <select name="size[]" class="form-select form-select-sm select-search" required>
+                            {% for s in sizes %}<option value="{{ s.id }}" {% if s.id==row.size_id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+                        </select>
+                    </td>
+                    <td><input type="number" name="year[]" value="{{ row.year }}" class="form-control form-control-sm" required></td>
+                    <td>
+                        <select name="operation_type[]" class="form-select form-select-sm">
+                            <option value="income" {% if row.quantity >= 0 %}selected{% endif %}>Приход</option>
+                            <option value="writeoff" {% if row.quantity < 0 %}selected{% endif %}>Списание</option>
+                        </select>
+                    </td>
+                    <td><input type="number" name="quantity[]" value="{{ row.quantity|abs }}" class="form-control form-control-sm" required min="0"></td>
+                    <td class="text-center align-middle"><i class="fas fa-times text-danger" style="cursor:pointer;" onclick="removeRow(this)"></i></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <!-- Таблица строк -->
+    <div class="table-responsive">
+        <table class="table table-bordered table-sm bg-white" id="docTable">
+            <thead class="bg-light">
+                <tr>
+                    <th>Растение</th>
+                    <th>Размер</th>
+                    {% if doc.doc_type in ['income', 'move'] %}<th>Куда (Поле)</th>{% endif %}
+                    {% if doc.doc_type == 'regrading' %}<th>Новый размер</th>{% endif %}
+                    {% if doc.doc_type in ['writeoff', 'move', 'shipment', 'regrading'] %}<th>Откуда (Поле)</th>{% endif %}
+                    <th width="100">Год</th>
+                    <th width="100">Кол-во</th>
+                    <th width="30"></th>
+                </tr>
+            </thead>
+            <tbody id="rowsContainer">
+                {% for row in doc.rows %}
+                <tr class="doc-row">
+                    <td>
+                        <select name="plant[]" class="form-select form-select-sm select-search" required>
+                            {% for p in plants %}<option value="{{ p.id }}" {% if p.id==row.plant_id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+                        </select>
+                    </td>
+                    <td>
+                        <select name="size[]" class="form-select form-select-sm select-search" required>
+                            {% for s in sizes %}<option value="{{ s.id }}" {% if s.id==row.size_id %}selected{% endif %} {% if s.name == 'Саженцы' %}class="seedling-option"{% endif %}>{{ s.name }}</option>{% endfor %}
+                        </select>
+                    </td>
+                    
+                    {% if doc.doc_type in ['income', 'move'] %}
+                    <td>
+                        <select name="field_to[]" class="form-select form-select-sm select-search" required>
+                            {% for f in fields %}<option value="{{ f.id }}" {% if f.id==row.field_to_id %}selected{% endif %}>{{ f.name }}</option>{% endfor %}
+                        </select>
+                    </td>
+                    {% endif %}
+                    
+                    {% if doc.doc_type == 'regrading' %}
+                    <td>
+                        <select name="field_to[]" class="form-select form-select-sm border-primary fw-bold select-search" required>
+                            {% for s in sizes %}<option value="{{ s.id }}" {% if s.id==row.size_to_id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+                        </select>
+                    </td>
+                    {% endif %}
+                    
+                    {% if doc.doc_type in ['writeoff', 'move', 'shipment', 'regrading'] %}
+                    <td>
+                        <select name="field_from[]" class="form-select form-select-sm select-search" required>
+                            {% for f in fields %}<option value="{{ f.id }}" {% if f.id==row.field_from_id %}selected{% endif %}>{{ f.name }}</option>{% endfor %}
+                        </select>
+                    </td>
+                    {% endif %}
+                    
+                    <td><input type="number" name="year[]" value="{{ row.year }}" class="form-control form-control-sm" required placeholder="2025"></td>
+                    <td><input type="number" name="quantity[]" value="{{ row.quantity }}" class="form-control form-control-sm" required min="1"></td>
+                    <td class="text-center align-middle"><i class="fas fa-times text-danger" style="cursor:pointer;" onclick="removeRow(this)"></i></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    
+    <div class="d-flex gap-2 mt-2">
+        <button type="button" class="btn btn-outline-primary btn-sm" onclick="addRow()">+ Добавить строку</button>
+        <button type="submit" class="btn btn-success btn-sm">Сохранить изменения</button>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function addRow() {
+        const table = document.getElementById('docTable');
+        const tbody = table.querySelector('tbody');
+        const firstRow = tbody.querySelector('tr');
+        
+        if (firstRow) {
+            const newRow = firstRow.cloneNode(true);
+            newRow.querySelectorAll('input').forEach(i => i.value = '');
+            {% if doc.doc_type == 'field_recount' %}
+            const hiddenField = newRow.querySelector('input[name="field_to[]"]');
+            if (hiddenField) hiddenField.value = "{{ default_field_id or '' }}";
+            {% endif %}
+            const yearInput = newRow.querySelector('input[name="year[]"]');
+            if(yearInput) yearInput.value = new Date().getFullYear();
+            
+            $(newRow).find('.select2-container').remove();
+            $(newRow).find('select').removeClass('select2-hidden-accessible').removeAttr('data-select2-id').removeAttr('aria-hidden').removeAttr('tabindex');
+
+            tbody.appendChild(newRow);
+            initSelect2(newRow);
+        } else {
+            alert('Невозможно добавить строку, так как таблица пуста.');
+        }
+    }
+
+    function removeRow(btn) {
+        const row = btn.closest('tr');
+        const tbody = row.closest('tbody');
+        if(tbody.rows.length > 1) {
+            $(row).find('select').select2('destroy');
+            row.remove();
+        } else {
+            alert('Документ должен содержать хотя бы одну строку.');
+        }
+    }
+</script>
+{% endblock %}

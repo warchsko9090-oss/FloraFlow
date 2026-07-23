@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    .success-card {
+        background: #fff;
+        border-radius: 20px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+        overflow: hidden;
+        max-width: 400px;
+        margin: 40px auto;
+        text-align: center;
+        padding: 40px 20px;
+    }
+    .success-icon-wrapper {
+        width: 80px;
+        height: 80px;
+        background: #E8F5E9;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 20px;
+    }
+    .success-icon {
+        font-size: 40px;
+        color: #2E7D32;
+        animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+    @keyframes popIn {
+        0% { transform: scale(0); opacity: 0; }
+        100% { transform: scale(1); opacity: 1; }
+    }
+    .btn-back-hr {
+        background: #2E7D32;
+        color: white;
+        border-radius: 12px;
+        padding: 15px;
+        font-weight: bold;
+        width: 100%;
+        margin-top: 20px;
+        transition: 0.2s;
+    }
+    .btn-back-hr:active {
+        transform: scale(0.95);
+    }
+</style>
+
+<div class="success-card">
+    <div class="success-icon-wrapper">
+        <i class="fas fa-check success-icon"></i>
+    </div>
+    
+    <h3 class="fw-bold mb-2">Отчет отправлен!</h3>
+    <p class="text-muted small mb-4">Данные успешно сохранены в базу и отправлены в рабочую группу Telegram.</p>
+    
+    <a href="{{ url_for('hr.personnel', tab='timesheet') }}" class="btn btn-back-hr d-block text-decoration-none">
+        <i class="fas fa-arrow-left me-2"></i> Вернуться к табелю
+    </a>
+</div>
+{% endblock %}

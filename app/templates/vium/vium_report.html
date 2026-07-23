@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1240px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+  .vium-head .btn-sec, .vium-head .btn-prim {
+    border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: .9rem;
+    text-decoration: none !important; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .vium-head .btn-sec { background: #fff; border: 1px solid #e2e8f0; color: #0f172a; }
+  .vium-head .btn-sec:hover { background: #f1f5f9; }
+  .vium-head .btn-prim { background: #2E7D32; color: #fff; border: 1px solid #2E7D32; }
+  .vium-head .btn-prim:hover { background: #1B5E20; }
+
+  .vium-summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px; margin-bottom: 16px;
+  }
+  .vium-card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+    padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.03);
+  }
+  .vium-card .lbl { font-size: .76rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+  .vium-card .val { font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 2px; }
+  .vium-card.brand .val { color: #1B5E20; }
+
+  .vium-table {
+    width: 100%; background: #fff; border: 1px solid #e2e8f0;
+    border-radius: 14px; overflow: hidden;
+  }
+  .vium-table table { width: 100%; margin: 0; }
+  .vium-table th, .vium-table td {
+    padding: 10px 14px; vertical-align: middle; border-bottom: 1px solid #f1f5f9;
+  }
+  .vium-table thead th {
+    font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+    color: #475569; background: #f8fafc; font-weight: 700;
+  }
+  .vium-table tbody tr:hover { background: #fafbff; }
+  .vium-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .vium-table .archived { color: #94a3b8; }
+  .vium-table a { color: #0f172a; font-weight: 600; text-decoration: none; }
+  .vium-table a:hover { color: #1B5E20; }
+  .empty { text-align: center; color: #94a3b8; padding: 30px; font-size: .9rem; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4><i class="fas fa-boxes-stacked me-2 text-success"></i>Учет ВиУМ — остатки</h4>
+      <span class="text-muted small">Вспомогательные и упаковочные материалы. Доступ: admin / executive.</span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn-sec" href="{{ url_for('vium.vium_inbox') }}">
+        <i class="fas fa-inbox"></i> Инбокс счетов
+      </a>
+      <a class="btn-sec" href="{{ url_for('vium.vium_techcards') }}">
+        <i class="fas fa-clipboard-list"></i> Тех.карты
+      </a>
+      <a class="btn-sec" href="{{ url_for('vium.vium_plan_report') }}">
+        <i class="fas fa-chart-line"></i> Плановый отчёт
+      </a>
+      <a class="btn-sec" href="{{ url_for('vium.vium_operations') }}">
+        <i class="fas fa-list"></i> Журнал
+      </a>
+      <a class="btn-sec" href="{{ url_for('vium.vium_export', show_archived=1 if show_archived else 0) }}">
+        <i class="fas fa-file-excel"></i> Excel
+      </a>
+      <a class="btn-prim" href="{{ url_for('vium.vium_operation_new', kind='intake') }}">
+        <i class="fas fa-plus"></i> Новая операция
+      </a>
+    </div>
+  </div>
+
+  <div class="vium-summary">
+    <div class="vium-card brand">
+      <div class="lbl">Стоимость остатков</div>
+      <div class="val">{{ total_value|money_int }}</div>
+    </div>
+    <div class="vium-card">
+      <div class="lbl">Позиций</div>
+      <div class="val">{{ rows|length }}</div>
+    </div>
+    <div class="vium-card">
+      <div class="lbl">С остатком &gt; 0</div>
+      <div class="val">{{ rows | selectattr('qty', 'gt', 0) | list | length }}</div>
+    </div>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    {# Кнопка добавить материал — модалка #}
+    <button class="btn-sec" data-bs-toggle="modal" data-bs-target="#newMaterialModal">
+      <i class="fas fa-plus"></i> Новый материал
+    </button>
+    <div class="form-check form-switch m-0">
+      <input class="form-check-input" type="checkbox" role="switch" id="archSwitch"
+             onchange="window.location='{{ url_for('vium.vium_report') }}' + (this.checked ? '?show_archived=1' : '')"
+             {% if show_archived %}checked{% endif %}>
+      <label class="form-check-label small" for="archSwitch">Показывать архивные</label>
+    </div>
+  </div>
+
+  <div class="vium-table">
+    {% if rows %}
+    <table class="table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Материал</th>
+          <th>Ед. изм.</th>
+          <th class="num">Остаток</th>
+          <th class="num">Партий</th>
+          <th class="num">Ср. цена</th>
+          <th class="num">Стоимость</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="{% if r.material.is_archived %}archived{% endif %}">
+          <td>
+            <a href="{{ url_for('vium.vium_material_view', material_id=r.material.id) }}">
+              {{ r.material.name }}
+            </a>
+            {% if r.material.is_archived %}
+              <span class="badge bg-secondary ms-1">архив</span>
+            {% endif %}
+            {% if r.material.description %}
+              <div class="small text-muted">{{ r.material.description }}</div>
+            {% endif %}
+          </td>
+          <td>{{ r.material.unit }}</td>
+          <td class="num">{{ '{:,.3f}'.format(r.qty|float).rstrip('0').rstrip('.') if r.qty else '0' }}</td>
+          <td class="num">{{ r.lots }}</td>
+          <td class="num">{{ '{:,.2f}'.format(r.avg_price|float) if r.avg_price else '—' }}</td>
+          <td class="num">{{ r.value|money_int }}</td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{{ url_for('vium.vium_material_view', material_id=r.material.id) }}">
+              <i class="fas fa-eye"></i>
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      Пока ничего нет. Создайте материал и проведите первое поступление.
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{# ----- Модалка: новый материал ----- #}
+<div class="modal fade" id="newMaterialModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content" method="POST" action="{{ url_for('vium.vium_material_create') }}">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-plus me-2 text-success"></i>Новый материал ВиУМ</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Название</label>
+          <input class="form-control" name="name" required maxlength="200"
+                 placeholder="Например: Мешковина джут 50×80">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Единица измерения</label>
+          <input class="form-control" name="unit" value="шт" list="vium-units" maxlength="20">
+          <datalist id="vium-units">
+            <option value="шт"><option value="кг"><option value="м">
+            <option value="м2"><option value="рулон"><option value="упак"><option value="л">
+          </datalist>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Описание (необязательно)</label>
+          <textarea class="form-control" name="description" rows="2" maxlength="500"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-success">Сохранить</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

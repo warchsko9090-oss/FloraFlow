@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1240px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+  .vium-head .btn-sec, .vium-head .btn-prim {
+    border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: .9rem;
+    text-decoration: none !important; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .vium-head .btn-sec { background: #fff; border: 1px solid #e2e8f0; color: #0f172a; }
+  .vium-head .btn-sec:hover { background: #f1f5f9; }
+  .vium-head .btn-prim { background: #2E7D32; color: #fff; border: 1px solid #2E7D32; }
+  .vium-head .btn-prim:hover { background: #1B5E20; }
+
+  .vium-summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px; margin-bottom: 16px;
+  }
+  .vium-card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+    padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.03);
+  }
+  .vium-card .lbl { font-size: .76rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+  .vium-card .val { font-size: 1.3rem; font-weight: 800; color: #0f172a; margin-top: 2px; }
+  .vium-card.brand .val { color: #1B5E20; }
+  .vium-card.warn .val { color: #b45309; }
+
+  .filter-bar {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+    padding: 12px 14px; margin-bottom: 16px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  }
+
+  .vium-table {
+    width: 100%; background: #fff; border: 1px solid #e2e8f0;
+    border-radius: 14px; overflow: hidden; margin-bottom: 18px;
+  }
+  .vium-table table { width: 100%; margin: 0; }
+  .vium-table th, .vium-table td {
+    padding: 9px 12px; vertical-align: middle; border-bottom: 1px solid #f1f5f9;
+  }
+  .vium-table thead th {
+    font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+    color: #475569; background: #f8fafc; font-weight: 700;
+  }
+  .vium-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .vium-table .neg { color: #b91c1c; font-weight: 700; }
+  .empty { text-align: center; color: #94a3b8; padding: 30px; font-size: .9rem; }
+  .section-title {
+    font-weight: 800; color: #0f172a; margin: 18px 0 10px; font-size: 1.05rem;
+  }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <h4><i class="fas fa-chart-line me-2"></i>Плановый отчёт ВиУМ</h4>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="{{ url_for('vium.vium_report') }}" class="btn-sec">
+        <i class="fas fa-warehouse"></i> К ВиУМ-учёту
+      </a>
+      <a href="{{ url_for('vium.vium_techcards') }}" class="btn-sec">
+        <i class="fas fa-clipboard-list"></i> Тех.карты
+      </a>
+      <a href="{{ url_for('vium.vium_plan_report_export', start=start, end=end) }}" class="btn-prim">
+        <i class="fas fa-file-excel"></i> Excel
+      </a>
+    </div>
+  </div>
+
+  <form method="GET" class="filter-bar">
+    <label class="fw-semibold">Период:</label>
+    <input type="date" name="start" value="{{ start.strftime('%Y-%m-%d') }}" class="form-control" style="max-width: 170px;">
+    <input type="date" name="end" value="{{ end.strftime('%Y-%m-%d') }}" class="form-control" style="max-width: 170px;">
+    <button class="btn btn-outline-success btn-sm">Применить</button>
+  </form>
+
+  {% if missing_dates %}
+  <div class="alert alert-warning py-2 px-3" style="border-radius: 10px;">
+    <i class="fas fa-triangle-exclamation me-1"></i>
+    За даты
+    <strong>
+      {% for d in missing_dates -%}
+        {{ d.strftime('%d.%m') }}{% if not loop.last %}, {% endif %}
+      {%- endfor %}
+    </strong>
+    выкопки есть, а часов нет — ФОТ за эти дни пока считается как 0. Когда бригадир введёт часы, отчёт пересчитается автоматически.
+  </div>
+  {% endif %}
+
+  <div class="vium-summary">
+    <div class="vium-card">
+      <div class="lbl">Выкопано за период</div>
+      <div class="val">{{ '{:,}'.format(dug_qty).replace(',', ' ') }} шт</div>
+    </div>
+    <div class="vium-card brand">
+      <div class="lbl">ФОТ за период</div>
+      <div class="val">{{ '{:,.0f}'.format(fot_amount|float).replace(',', ' ') }} ₽</div>
+    </div>
+    <div class="vium-card {% if not fot_per_unit %}warn{% endif %}">
+      <div class="lbl">ФОТ ₽/шт (период)</div>
+      <div class="val">
+        {% if fot_per_unit %}{{ '{:,.2f}'.format(fot_per_unit|float).replace(',', ' ') }} ₽{% else %}—{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">По материалам</div>
+  <div class="vium-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Материал</th>
+          <th>Ед.</th>
+          <th class="num">Приход за период</th>
+          <th class="num">Факт-расход за период</th>
+          <th class="num">План-расход за период</th>
+          <th class="num">План-остаток (накопл.)</th>
+          <th class="num">Факт-остаток (партии)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in materials %}
+        <tr>
+          <td><a href="{{ url_for('vium.vium_material_view', material_id=m.material.id) }}">{{ m.material.name }}</a></td>
+          <td>{{ m.material.unit }}</td>
+          <td class="num">{{ '{:,.4f}'.format(m.intake_period|float).rstrip('0').rstrip('.') if m.intake_period else 0 }}</td>
+          <td class="num">{{ '{:,.4f}'.format(m.real_consume_period|float).rstrip('0').rstrip('.') if m.real_consume_period else 0 }}</td>
+          <td class="num">{{ '{:,.4f}'.format(m.planned_consume_period|float).rstrip('0').rstrip('.') if m.planned_consume_period else 0 }}</td>
+          <td class="num {% if m.plan_balance < 0 %}neg{% endif %}">
+            {{ '{:,.4f}'.format(m.plan_balance|float).rstrip('0').rstrip('.') if m.plan_balance else 0 }}
+          </td>
+          <td class="num">{{ '{:,.4f}'.format(m.fact_balance|float).rstrip('0').rstrip('.') if m.fact_balance else 0 }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">Нет данных по материалам.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-title">По парам растение-размер</div>
+  <div class="vium-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Растение</th>
+          <th>Размер</th>
+          <th class="num">Выкопано за период, шт</th>
+          <th>Материалы тех.карты (план × средняя цена)</th>
+          <th class="num">ВиУМ, ₽</th>
+          <th class="num" style="color:#7c3aed;" title="dug_qty × ФОТ ₽/шт за период">ФОТ, ₽</th>
+          <th class="num" style="color:#0f172a;">Итого с ФОТ, ₽</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in pairs %}
+        <tr>
+          <td><strong>{{ p.plant_name }}</strong></td>
+          <td>{{ p.size_name }}</td>
+          <td class="num">{{ '{:,}'.format(p.dug_qty).replace(',', ' ') }}</td>
+          <td>
+            {% for line in p.lines %}
+              <span class="badge bg-light text-dark border me-1 mb-1">
+                {{ line.material.name }}: {{ '{:,.2f}'.format(line.qty_planned|float).replace(',', ' ') }} {{ line.material.unit }}
+                × {{ '{:,.2f}'.format(line.avg_price|float).replace(',', ' ') }} ₽
+              </span>
+            {% endfor %}
+          </td>
+          <td class="num">{{ '{:,.0f}'.format(p.total_value|float).replace(',', ' ') }} ₽</td>
+          <td class="num" style="color:#7c3aed;">
+            {% if p.fot_value %}{{ '{:,.0f}'.format(p.fot_value|float).replace(',', ' ') }} ₽{% else %}—{% endif %}
+          </td>
+          <td class="num" style="font-weight:700;">{{ '{:,.0f}'.format(p.total_with_fot|float).replace(',', ' ') }} ₽</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">За период нет плановых расходов по парам.</td></tr>
+        {% endfor %}
+      </tbody>
+      {% if pairs %}
+      <tfoot>
+        <tr style="background:#f8fafc; font-weight:700;">
+          <td colspan="2" class="text-end">ИТОГО:</td>
+          <td class="num">{{ '{:,}'.format(pairs|sum(attribute='dug_qty')).replace(',', ' ') }}</td>
+          <td></td>
+          <td class="num">{{ '{:,.0f}'.format(pairs|sum(attribute='total_value')|float).replace(',', ' ') }} ₽</td>
+          <td class="num" style="color:#7c3aed;">{{ '{:,.0f}'.format(pairs|sum(attribute='fot_value')|float).replace(',', ' ') }} ₽</td>
+          <td class="num">{{ '{:,.0f}'.format(pairs|sum(attribute='total_with_fot')|float).replace(',', ' ') }} ₽</td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+
+  {% if fot_per_unit %}
+  <div class="text-muted small mt-1">
+    ФОТ ₽/шт за период: <b>{{ '{:,.2f}'.format(fot_per_unit|float).replace(',', ' ') }} ₽</b> ·
+    распределяется на все выкопки дня без разбивки по парам (этот же показатель — в верхней плашке).
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

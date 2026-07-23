@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title"><i class="fas fa-inbox"></i> Заявки «По запросу»</div>
+        <div class="page-subtitle">Запросы с витрины /shop и главной страницы сайта.</div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm">К заказам</a>
+        <a href="{{ url_for('orders.client_drafts_list') }}" class="btn btn-outline-primary btn-sm">
+            Заказы на согласование
+            {% if site_badges and (site_badges.drafts.new or site_badges.drafts.overdue) %}
+            <span class="dash-badge ms-1" aria-label="Черновики: {{ site_badges.drafts.new }} новых, {{ site_badges.drafts.overdue }} просрочено">
+                {% if site_badges.drafts.new %}<span class="dash-pill today" title="Новые">{{ site_badges.drafts.new }}</span>{% endif %}
+                {% if site_badges.drafts.overdue %}<span class="dash-pill overdue" title="Не согласовано более 24 часов">{{ site_badges.drafts.overdue }}</span>{% endif %}
+            </span>
+            {% endif %}
+        </a>
+    </div>
+</div>
+
+<div class="filter-panel mb-3">
+    <form method="GET" class="d-flex gap-2" hx-boost="false">
+        <select class="form-select form-select-sm" name="mode" style="max-width: 240px;">
+            <option value="new" {% if mode == 'new' %}selected{% endif %}>Новые</option>
+            <option value="approved" {% if mode == 'approved' %}selected{% endif %}>Согласованные</option>
+            <option value="rejected" {% if mode == 'rejected' %}selected{% endif %}>Отклонённые</option>
+            <option value="all" {% if mode == 'all' %}selected{% endif %}>Все</option>
+        </select>
+        <button class="btn btn-success btn-sm">Показать</button>
+    </form>
+</div>
+
+<div class="card section-card">
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Дата</th>
+                    <th>Клиент</th>
+                    <th>Телефон</th>
+                    <th>Растение</th>
+                    <th>Размер</th>
+                    <th>Статус</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in requests %}
+                <tr>
+                    <td>#{{ r.id }}</td>
+                    <td>{{ r.created_at|dateru }}</td>
+                    <td>{{ r.customer_name }}</td>
+                    <td>{{ r.phone }}</td>
+                    <td>{{ r.plant.name if r.plant else 'Главная страница' }}</td>
+                    <td>{{ r.size.name if r.size else 'Прайс / консультация' }}</td>
+                    <td>
+                        {% if r.status == 'new' %}
+                        <span class="badge bg-warning text-dark">новая</span>
+                        {% elif r.status == 'approved' %}
+                        <span class="badge bg-success">согласована</span>
+                        {% else %}
+                        <span class="badge bg-secondary">отклонена</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('orders.shop_on_request_detail', req_id=r.id) }}">Открыть</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center text-muted py-4">Нет заявок</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

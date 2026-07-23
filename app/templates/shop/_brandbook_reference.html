@@ -1,0 +1,166 @@
+{# Справочник цветов и шрифтов витрины — синхронизирован с shop/_landing_styles.html :root #}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light fw-semibold">Палитра «Княжество»</div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            Актуальные коды для брендбука, макетов и печати. На сайте заданы в
+            <code>shop/_landing_styles.html</code> и Tailwind <code>brand.*</code> в шаблонах каталога.
+        </p>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered align-middle mb-0" style="font-size:13px">
+                <thead class="table-light">
+                    <tr>
+                        <th>Название</th>
+                        <th>CSS / Tailwind</th>
+                        <th>HEX</th>
+                        <th>RGB</th>
+                        <th width="48"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="5" class="fw-semibold text-muted small">Фоны</td></tr>
+                    <tr>
+                        <td>Сосна (основной фон)</td>
+                        <td><code>--bg</code> · <code>brand.bg</code></td>
+                        <td><code>#111814</code></td>
+                        <td>17, 24, 20</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#111814"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Фон мягкий</td>
+                        <td><code>--bg-soft</code> · <code>brand.bgSoft</code></td>
+                        <td><code>#161D19</code></td>
+                        <td>22, 29, 25</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#161D19"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Карточка / панель</td>
+                        <td><code>--card</code> · <code>brand.card</code></td>
+                        <td><code>#1C2420</code></td>
+                        <td>28, 36, 32</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#1C2420"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Карточка hover</td>
+                        <td><code>brand.cardHover</code></td>
+                        <td><code>#232B27</code></td>
+                        <td>35, 43, 39</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#232B27"></span></td>
+                    </tr>
+                    <tr><td colspan="5" class="fw-semibold text-muted small">Акцент — латунь</td></tr>
+                    <tr>
+                        <td>Латунь (основной акцент)</td>
+                        <td><code>--brass</code> · <code>brand.brass</code></td>
+                        <td><code>#B69A6D</code></td>
+                        <td>182, 154, 109</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#B69A6D"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Латунь hover</td>
+                        <td><code>--brass-hover</code> · <code>brand.brassHover</code></td>
+                        <td><code>#C4AB7E</code></td>
+                        <td>196, 171, 126</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#C4AB7E"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Латунь приглушённая</td>
+                        <td><code>--brass-dim</code> · <code>brand.brassDim</code></td>
+                        <td><code>#8A7555</code></td>
+                        <td>138, 117, 85</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#8A7555"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Латунь светлая (блики)</td>
+                        <td><code>--brass-light</code></td>
+                        <td><code>#E8D4A8</code></td>
+                        <td>232, 212, 168</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#E8D4A8"></span></td>
+                    </tr>
+                    <tr><td colspan="5" class="fw-semibold text-muted small">Текст и линии</td></tr>
+                    <tr>
+                        <td>Крем (основной текст)</td>
+                        <td><code>--cream</code> · <code>brand.cream</code></td>
+                        <td><code>#F7F5F0</code></td>
+                        <td>247, 245, 240</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#F7F5F0"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Графит (вторичный текст)</td>
+                        <td><code>--graphite</code> · <code>brand.graphite</code></td>
+                        <td><code>#C8C5BE</code></td>
+                        <td>200, 197, 190</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#C8C5BE"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Приглушённый</td>
+                        <td><code>--muted</code> · <code>brand.muted</code></td>
+                        <td><code>#7A7E78</code></td>
+                        <td>122, 126, 120</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#7A7E78"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Рамка</td>
+                        <td><code>--border</code> · <code>brand.border</code></td>
+                        <td><code>#2E3632</code></td>
+                        <td>46, 54, 50</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#2E3632"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Рамка светлая</td>
+                        <td><code>brand.borderLight</code></td>
+                        <td><code>#3D4741</code></td>
+                        <td>61, 71, 65</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#3D4741"></span></td>
+                    </tr>
+                    <tr>
+                        <td>Акцент «мало на складе»</td>
+                        <td><code>brand.low</code></td>
+                        <td><code>#D47A45</code></td>
+                        <td>212, 122, 69</td>
+                        <td><span class="d-inline-block rounded border" style="width:28px;height:20px;background:#D47A45"></span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light fw-semibold">Шрифты</div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0" style="font-size:13px">
+                <thead class="table-light">
+                    <tr><th>Роль</th><th>Шрифт</th><th>Начертания</th><th>Где на сайте</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Основной (UI, текст)</td>
+                        <td><strong>Golos Text</strong></td>
+                        <td>400, 500, 600, 700</td>
+                        <td>body, кнопки, таблицы, навигация</td>
+                    </tr>
+                    <tr>
+                        <td>Заголовки, логотип</td>
+                        <td><strong>Cormorant</strong></td>
+                        <td>400–700, курсив 400/500</td>
+                        <td>hero, названия, футер, цены крупно</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted small mt-3 mb-1">Google Fonts (каталог / карточка):</p>
+        <code class="small d-block text-break user-select-all">https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Golos+Text:wght@400;500;600;700&display=swap</code>
+        <p class="text-muted small mt-3 mb-1">Google Fonts (главная, облегчённый набор):</p>
+        <code class="small d-block text-break user-select-all">https://fonts.googleapis.com/css2?family=Cormorant:wght@600;700&family=Golos+Text:wght@400;500;600&display=swap</code>
+        <p class="text-muted small mt-3 mb-0">
+            Fallback: Golos Text → system-ui; Cormorant → Times New Roman.
+            Метки и кнопки: <code>letter-spacing: 0.12em–0.35em</code>, uppercase для eyebrow.
+        </p>
+    </div>
+</div>
+
+<div class="alert alert-secondary small mb-0">
+    <strong>RGBA для наложений:</strong> латунь полупрозрачная — <code>rgba(182, 154, 109, …)</code>
+    (<code>--brass-rgb: 182, 154, 109</code>). Пример рамки: <code>rgba(182, 154, 109, 0.45)</code>.
+</div>

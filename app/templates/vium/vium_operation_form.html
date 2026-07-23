@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1080px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; }
+  .vium-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; }
+
+  .kind-pick { display: flex; flex-wrap: wrap; gap: 8px; }
+  .kind-pick label {
+    border: 1px solid #e2e8f0; border-radius: 999px; padding: 6px 14px;
+    font-weight: 600; font-size: .88rem; cursor: pointer; background: #fff;
+  }
+  .kind-pick input { display: none; }
+  .kind-pick input:checked + span { color: #fff; }
+  .kind-pick label.kp-intake   input:checked + span { background: #16a34a; }
+  .kind-pick label.kp-consume  input:checked + span { background: #d97706; }
+  .kind-pick label.kp-writeoff input:checked + span { background: #dc2626; }
+  .kind-pick label.kp-adjust   input:checked + span { background: #2563eb; }
+  .kind-pick label span { display: inline-block; padding: 2px 6px; border-radius: 999px; }
+
+  .vium-table th, .vium-table td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+  .vium-table thead th { font-size: .74rem; text-transform: uppercase; color: #475569; background: #f8fafc; font-weight: 700; }
+  .vium-table input.form-control, .vium-table select.form-select { font-size: .9rem; }
+
+  .price-col.hidden, .price-head.hidden { display: none; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4><i class="fas fa-plus-circle me-2 text-success"></i>Новая операция ВиУМ</h4>
+      <span class="text-muted small">Поступление, расход, списание или корректировка.</span>
+    </div>
+    <a class="btn btn-light" href="{{ url_for('vium.vium_operations') }}">
+      <i class="fas fa-arrow-left"></i> Отмена
+    </a>
+  </div>
+
+  <form method="POST" action="{{ url_for('vium.vium_operation_new') }}" id="opForm">
+    <div class="vium-card">
+      <div class="row g-3 align-items-end">
+        <div class="col-md-7">
+          <label class="form-label fw-bold">Тип операции</label>
+          <div class="kind-pick" id="kindPicker">
+            {% for k, l in kind_choices %}
+            <label class="kp-{{ k }}">
+              <input type="radio" name="kind" value="{{ k }}"
+                     {% if prefill_kind == k %}checked{% endif %} required>
+              <span>{{ l }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small text-muted m-0">Дата</label>
+          <input type="date" class="form-control" name="date"
+                 value="{{ today.strftime('%Y-%m-%d') }}" required>
+        </div>
+        <div class="col-md-2 text-md-end">
+          <button type="submit" class="btn btn-success w-100"><i class="fas fa-save"></i> Провести</button>
+        </div>
+        <div class="col-12">
+          <label class="form-label small text-muted m-0">Комментарий</label>
+          <input type="text" class="form-control" name="comment" maxlength="500"
+                 placeholder="Например: поступление по счёту № 123 от 01.05.2026">
+        </div>
+      </div>
+    </div>
+
+    <div class="vium-card p-0">
+      <table class="vium-table table mb-0">
+        <thead>
+          <tr>
+            <th style="width: 40%;">Материал</th>
+            <th style="width: 15%;" class="text-end">Кол-во</th>
+            <th style="width: 15%;" class="text-end price-head">Цена за ед.</th>
+            <th>Примечание</th>
+            <th style="width: 60px;"></th>
+          </tr>
+        </thead>
+        <tbody id="opLines">
+          <!-- строки добавляются JS -->
+        </tbody>
+      </table>
+      <div class="p-3">
+        <button type="button" class="btn btn-outline-secondary" id="addLineBtn">
+          <i class="fas fa-plus"></i> Добавить позицию
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<template id="lineTpl">
+  <tr class="op-line">
+    <td>
+      <select class="form-select form-select-sm material-pick" name="material_id[]" required>
+        <option value="">— выберите —</option>
+        {% for m in materials %}
+        <option value="{{ m.id }}" data-unit="{{ m.unit }}">{{ m.name }} ({{ m.unit }})</option>
+        {% endfor %}
+      </select>
+    </td>
+    <td><input type="number" step="0.001" min="0" class="form-control form-control-sm text-end" name="qty[]" required></td>
+    <td class="price-col"><input type="number" step="0.01" min="0" class="form-control form-control-sm text-end" name="unit_price[]"></td>
+    <td><input type="text" class="form-control form-control-sm" name="note[]" maxlength="500"></td>
+    <td class="text-end">
+      <button type="button" class="btn btn-sm btn-outline-danger remove-line"><i class="fas fa-times"></i></button>
+    </td>
+  </tr>
+</template>
+
+<script>
+(function() {
+  const linesBox = document.getElementById('opLines');
+  const tpl = document.getElementById('lineTpl');
+  const addBtn = document.getElementById('addLineBtn');
+
+  function addLine() {
+    const node = tpl.content.cloneNode(true);
+    linesBox.appendChild(node);
+    syncPriceVisibility();
+  }
+  addBtn.addEventListener('click', addLine);
+  linesBox.addEventListener('click', (e) => {
+    const rm = e.target.closest('.remove-line');
+    if (rm) rm.closest('tr').remove();
+  });
+
+  // Скрываем колонку «Цена» для consume/writeoff (там цена считается из FIFO).
+  function syncPriceVisibility() {
+    const k = (document.querySelector('input[name="kind"]:checked') || {}).value;
+    const hide = (k === 'consume' || k === 'writeoff');
+    document.querySelectorAll('.price-col, .price-head').forEach(el => el.classList.toggle('hidden', hide));
+  }
+  document.querySelectorAll('input[name="kind"]').forEach(r => r.addEventListener('change', syncPriceVisibility));
+
+  addLine();
+  syncPriceVisibility();
+})();
+</script>
+{% endblock %}

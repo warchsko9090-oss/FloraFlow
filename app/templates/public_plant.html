@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{{ plant.name }} — Княжество</title>
+    {% set shop_meta_description = ('Купить ' ~ plant.name ~ ' в архитектурном питомнике Княжество. Свободные остатки, размеры, цены, фото и наличие для частных и B2B-проектов.') %}
+    {% set shop_og_type = 'product' %}
+    {% if plant.img %}
+    {% set shop_og_image = plant.img %}
+    {% endif %}
+    <meta name="description" content="{{ shop_meta_description }}">
+    {% include 'shop/_favicon_links.html' %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            bg: '#111814', bgSoft: '#161D19', card: '#1C2420', cardHover: '#232B27',
+                            cream: '#F7F5F0', pine: '#111814', brass: '#B69A6D', brassHover: '#C4AB7E',
+                            brassDim: '#8A7555', graphite: '#C8C5BE', muted: '#7A7E78',
+                            border: '#2E3632', borderLight: '#3D4741', low: '#D47A45'
+                        }
+                    },
+                    fontFamily: { sans: ['Golos Text', 'sans-serif'], serif: ['Cormorant', 'serif'] }
+                }
+            }
+        }
+    </script>
+    {% include 'shop/_styles.html' %}
+    {% include 'shop/_seo_meta.html' %}
+    {% include 'shop/_metrika.html' %}
+    <style>
+        #photo-modal { touch-action: none; }
+        #photo-modal-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.88);
+            backdrop-filter: blur(10px);
+        }
+        #photo-modal.is-open #photo-modal-backdrop { animation: photo-backdrop-in 0.28s ease forwards; }
+        @keyframes photo-backdrop-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        #photo-modal-img {
+            max-width: calc(100vw - 2rem);
+            max-height: calc(100dvh - 6rem);
+            object-fit: contain;
+            cursor: zoom-out;
+        }
+        #photo-modal-stage { cursor: zoom-out; }
+        .plant-gallery-col { display: flex; flex-direction: column; gap: 1rem; }
+        @media (min-width: 640px) { .plant-gallery-col { gap: 1.25rem; } }
+        .plant-thumbs-panel {
+            border: 1px solid rgba(182, 154, 109, 0.16);
+            border-radius: 2px;
+            background: rgba(17, 24, 20, 0.55);
+            padding: 0.85rem 0.9rem 0.95rem;
+        }
+        @media (min-width: 640px) {
+            .plant-thumbs-panel { padding: 1rem 1.1rem 1.1rem; }
+        }
+    </style>
+</head>
+<body class="bg-brand-bg text-brand-cream font-sans antialiased selection:bg-brand-brass/30 min-h-screen">
+
+    <div id="bg-slideshow" aria-hidden="true"><div id="bg-slides"></div><div class="bg-slideshow-overlay"></div></div>
+
+    <div class="relative z-10 min-h-screen flex flex-col">
+        {% include 'shop/_header.html' %}
+
+        <main class="flex-1 px-4 py-10 sm:py-14 pb-32 shop-page-glow shop-main-with-cart">
+            <div class="max-w-6xl mx-auto">
+                <a href="{{ url_for('public_client_api.public_shop') }}" class="shop-page-back reveal inline-flex items-center gap-2 text-sm text-brand-muted hover:text-brand-brass transition-colors mb-8 sm:mb-10">
+                    <i class="fa-solid fa-arrow-left text-[10px]"></i>
+                    <span>Каталог</span>
+                </a>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-10 xl:gap-12 items-start reveal reveal-delay-1">
+                    <div class="plant-gallery-col">
+                        <article class="shop-panel shop-panel-flush plant-photo-panel">
+                            <div class="shop-panel-accent"></div>
+                            <button type="button" id="plant-main-photo" class="w-full aspect-square bg-brand-bgSoft overflow-hidden cursor-zoom-in group block" title="Увеличить">
+                                {% if plant.img %}
+                                <img id="plant-main-img" src="{{ plant.img }}" alt="{{ plant.name }}" class="w-full h-full object-cover object-center group-hover:opacity-95 transition-opacity" fetchpriority="high" decoding="async">
+                                {% else %}
+                                <div id="plant-main-img" class="w-full h-full flex items-center justify-center"><i class="fa-solid fa-seedling text-brand-muted/25 text-6xl"></i></div>
+                                {% endif %}
+                            </button>
+                        </article>
+
+                        <div class="plant-thumbs-panel">
+                            <div id="plant-thumbs" class="flex flex-wrap gap-2 mb-3"></div>
+                            <p class="text-[10px] uppercase tracking-[0.2em] text-brand-muted"><i class="fa-solid fa-camera text-brand-brass mr-2"></i>Фото с площадки</p>
+                        </div>
+                    </div>
+
+                    <div class="min-w-0">
+                        <header class="mb-6 sm:mb-8">
+                            <div class="flex items-center gap-3 mb-4">
+                                <span class="ornament-line w-8 inline-block"></span>
+                                <span class="ornament-diamond flex-shrink-0"></span>
+                            </div>
+                            <h1 class="font-serif text-3xl sm:text-4xl lg:text-[2.75rem] font-bold text-brand-cream leading-tight mb-2">{{ plant.name }}</h1>
+                            {% if plant.latin %}
+                            <p class="font-serif italic text-brand-muted text-lg sm:text-xl mb-3">{{ plant.latin }}</p>
+                            {% endif %}
+                            {% if plant.root_system or plant.pruning %}
+                            <div class="flex flex-wrap gap-2 mb-4">
+                                {% if plant.root_system %}
+                                <span class="spec-chip"><i class="fa-solid fa-seedling"></i><span class="spec-chip-key">Корневая система:</span> <b>{{ plant.root_system }}</b></span>
+                                {% endif %}
+                                {% if plant.pruning %}
+                                <span class="spec-chip"><i class="fa-solid fa-scissors"></i><span class="spec-chip-key">Стрижка:</span> <b>{{ plant.pruning }}</b></span>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            {% if plant.is_seedling %}
+                            <p class="text-[10px] uppercase tracking-[0.22em] text-brand-brassDim">Саженец · свободный остаток</p>
+                            {% elif plant.is_container %}
+                            <p class="text-[10px] uppercase tracking-[0.22em] text-brand-brassDim">Контейнерная площадка · выберите размер</p>
+                            {% else %}
+                            <p class="text-[10px] uppercase tracking-[0.22em] text-brand-brassDim">Свободный остаток · выберите размер</p>
+                            {% endif %}
+                        </header>
+
+                        <article class="shop-panel">
+                            <div class="shop-panel-accent"></div>
+                            <div class="shop-panel-inner">
+                                <div class="shop-section-head shop-section-head-sm mb-5">
+                                    <span class="shop-section-num">01</span>
+                                    <div>
+                                        {% if plant.is_seedling %}
+                                        <h2 class="shop-section-title">Наличие и цена</h2>
+                                        {% else %}
+                                        <h2 class="shop-section-title">Размеры и наличие</h2>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            {% if plant.is_seedling %}
+                            <div id="seedling-panel" class="space-y-4">
+                                <div class="flex flex-wrap items-center justify-between gap-4 py-3 border-t border-brand-border/60">
+                                    <div>
+                                        <p class="text-xs uppercase tracking-wider text-brand-muted mb-1">Цена</p>
+                                        <p id="seedling-price" class="text-xl font-semibold text-brand-brass tabular-nums">—</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs uppercase tracking-wider text-brand-muted mb-1">Остаток</p>
+                                        <p id="seedling-stock" class="text-sm text-brand-graphite">—</p>
+                                    </div>
+                                    <div class="ml-auto w-full sm:w-auto sm:min-w-[7rem]">
+                                        <div class="h-9" id="seedling-controls"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% else %}
+                            <div class="plant-size-wrap">
+                                <table class="plant-size-table">
+                                    <thead id="size-table-head"></thead>
+                                    <tbody id="size-table-body"></tbody>
+                                </table>
+                            </div>
+                            {% endif %}
+
+                            <div class="mt-6 pt-5 border-t border-brand-border/70 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shop-open-checkout">
+                                <p id="plant-cart-summary" class="text-sm text-brand-graphite font-medium">0 поз. · 0 ₽</p>
+                                <button type="button" data-open-checkout class="shop-btn-primary shrink-0">
+                                    Запросить КП
+                                </button>
+                            </div>
+                            </div>
+                        </article>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        {% include 'shop/_footer.html' %}
+    </div>
+
+    {% include 'shop/_scroll_top.html' %}
+    {% include 'shop/_cart.html' %}
+    {% include 'shop/_checkout.html' %}
+    {% include 'shop/_on_request_modal.html' %}
+    {% include 'shop/_cookie_consent.html' %}
+
+    <div id="photo-modal" class="fixed inset-0 z-[200] hidden opacity-0 transition-opacity duration-300" role="dialog" aria-modal="true" aria-label="Просмотр фото">
+        <div id="photo-modal-backdrop" aria-hidden="true"></div>
+        <div class="relative z-10 flex flex-col min-h-full">
+            <button type="button" onclick="closePhotoModal()" class="absolute top-5 right-5 text-brand-cream/70 hover:text-brand-cream w-10 h-10 flex items-center justify-center rounded-sm border border-brand-border/50 hover:border-brand-brass/50 z-20 transition-colors">
+                <i class="fa-solid fa-xmark text-xl"></i>
+            </button>
+            <button type="button" id="photo-prev" class="hidden absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 w-10 h-10 text-brand-cream/80 hover:text-brand-cream border border-brand-border/50 hover:border-brand-brass/50 rounded-sm z-20 transition-colors">
+                <i class="fa-solid fa-chevron-left"></i>
+            </button>
+            <button type="button" id="photo-next" class="hidden absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 w-10 h-10 text-brand-cream/80 hover:text-brand-cream border border-brand-border/50 hover:border-brand-brass/50 rounded-sm z-20 transition-colors">
+                <i class="fa-solid fa-chevron-right"></i>
+            </button>
+            <div id="photo-modal-stage" class="flex-1 flex items-center justify-center p-4 pt-16 pb-8 min-h-0">
+                <img id="photo-modal-img" src="" alt="">
+            </div>
+            <p id="photo-modal-counter" class="relative z-10 text-center text-[10px] uppercase tracking-widest text-brand-muted/90 pb-8 hidden pointer-events-none"></p>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=8"></script>
+    <script>
+        const plantMeta = {{ plant | tojson }};
+        const variants = Shop.sortVariants({{ variants_json|safe }});
+        let galleryItems = plantMeta.img ? [{ thumb: plantMeta.img, preview: plantMeta.img, full: plantMeta.img }] : [];
+        let galleryIndex = 0;
+
+        function galleryPreview(i) {
+            return galleryItems[i]?.preview || galleryItems[i]?.full || '';
+        }
+
+        function galleryFull(i) {
+            return galleryItems[i]?.full || galleryPreview(i);
+        }
+
+        function sizeTableHead(tableMode) {
+            if (tableMode === 'dual') return '<tr><th>Ширина, см</th><th>Высота, см</th><th>Цена</th><th>Ост.</th><th></th></tr>';
+            if (tableMode === 'width') return '<tr><th>Ширина, см</th><th>Цена</th><th>Ост.</th><th></th></tr>';
+            if (tableMode === 'height') return '<tr><th>Высота, см</th><th>Цена</th><th>Ост.</th><th></th></tr>';
+            return '<tr><th>Размер</th><th>Цена</th><th>Ост.</th><th></th></tr>';
+        }
+
+        function renderSizeRow(item, tableMode) {
+            const d = Shop.sizeDimensions(item);
+            const onRequest = Shop.isOnRequest(item);
+            let dimCells = '';
+            if (d.mode === 'label') {
+                const colspan = tableMode === 'dual' ? 2 : 1;
+                dimCells = `<td colspan="${colspan}" class="py-2.5 pr-2 text-brand-graphite">${Shop.esc(d.label)}</td>`;
+            } else if (tableMode === 'dual') {
+                dimCells = `<td class="py-2.5 pr-2 text-brand-cream tabular-nums">${Shop.esc(d.width)}</td><td class="py-2.5 pr-2 text-brand-cream tabular-nums">${Shop.esc(d.height)}</td>`;
+            } else if (tableMode === 'width') {
+                dimCells = `<td class="py-2.5 pr-2 text-brand-cream tabular-nums">${Shop.esc(d.width)}</td>`;
+            } else if (tableMode === 'height') {
+                dimCells = `<td class="py-2.5 pr-2 text-brand-cream tabular-nums">${Shop.esc(d.height)}</td>`;
+            } else {
+                dimCells = `<td class="py-2.5 pr-2 text-brand-graphite">${Shop.esc(d.label)}</td>`;
+            }
+            const cartCell = onRequest
+                ? `<td class="py-2.5 pl-1"><div class="h-9 w-28 ml-auto" id="controls-${Shop.esc(item.id)}"></div></td>`
+                : `<td class="py-2.5 pl-1"><div class="h-9 w-24 ml-auto" id="controls-${Shop.esc(item.id)}"></div></td>`;
+            return `<tr class="size-row border-t border-brand-border/60">
+                ${dimCells}
+                <td class="py-2.5 pr-2 text-brand-brass font-semibold whitespace-nowrap">${Shop.formatPrice(item.price)} ₽</td>
+                <td class="py-2.5 pr-2">${Shop.stockLabel(item)}</td>
+                ${cartCell}
+            </tr>`;
+        }
+
+        function renderSizeTable() {
+            if (plantMeta.is_seedling) {
+                renderSeedlingPanel();
+                return;
+            }
+            const tableMode = Shop.resolveTableMode(variants, plantMeta.name);
+            document.getElementById('size-table-head').innerHTML = sizeTableHead(tableMode);
+            document.getElementById('size-table-body').innerHTML = variants.map(v => renderSizeRow(v, tableMode)).join('');
+            Shop.updateUI({ plantId: plantMeta.plant_id, isSeedling: false });
+        }
+
+        function renderSeedlingPanel() {
+            const item = variants[0];
+            if (!item) return;
+            const priceEl = document.getElementById('seedling-price');
+            const stockEl = document.getElementById('seedling-stock');
+            const controlsEl = document.getElementById('seedling-controls');
+            if (priceEl) priceEl.textContent = `${Shop.formatPrice(item.price)} ₽`;
+            if (stockEl) stockEl.innerHTML = Shop.stockLabel(item);
+            if (controlsEl) {
+                controlsEl.id = `controls-${item.id}`;
+                controlsEl.innerHTML = Shop.renderControls(item);
+            }
+            Shop.updateUI({ plantId: plantMeta.plant_id, isSeedling: true });
+        }
+
+        function setMainPhoto(url, index) {
+            galleryIndex = index;
+            const main = document.getElementById('plant-main-img');
+            if (main && main.tagName === 'IMG' && url) main.src = url;
+            document.querySelectorAll('.plant-thumb').forEach((el, i) => el.classList.toggle('active', i === index));
+        }
+
+        function renderThumbs() {
+            const wrap = document.getElementById('plant-thumbs');
+            const panel = document.querySelector('.plant-thumbs-panel');
+            wrap.innerHTML = '';
+            if (galleryItems.length < 2) {
+                wrap.classList.add('hidden');
+                panel?.classList.add('hidden');
+                return;
+            }
+            wrap.classList.remove('hidden');
+            panel?.classList.remove('hidden');
+            galleryItems.forEach((item, i) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'plant-thumb' + (i === galleryIndex ? ' active' : '');
+                btn.innerHTML = `<img src="${Shop.esc(item.thumb)}" alt="" class="w-full h-full object-cover" loading="lazy" decoding="async">`;
+                btn.onclick = () => setMainPhoto(galleryPreview(i), i);
+                wrap.appendChild(btn);
+            });
+        }
+
+        async function loadGallery() {
+            if (!plantMeta.has_photos) {
+                renderThumbs();
+                return;
+            }
+            try {
+                const photoQuery = plantMeta.is_container ? '?seedling=1' : '';
+                const res = await fetch(`/public/client/photos/${plantMeta.plant_id}${photoQuery}`);
+                const data = await res.json();
+                if (data.items && data.items.length) {
+                    galleryItems = data.items.map(p => ({
+                        thumb: p.thumb_url || p.preview_url || p.image_url,
+                        preview: p.preview_url || p.image_url,
+                        full: p.image_url,
+                    }));
+                    galleryIndex = 0;
+                    setMainPhoto(galleryPreview(0), 0);
+                }
+            } catch (e) { /* keep preview */ }
+            renderThumbs();
+        }
+
+        function openPhotoModal() {
+            if (!galleryItems.length) return;
+            const modal = document.getElementById('photo-modal');
+            document.getElementById('photo-modal-img').src = galleryFull(galleryIndex);
+            const multi = galleryItems.length > 1;
+            document.getElementById('photo-prev').classList.toggle('hidden', !multi);
+            document.getElementById('photo-next').classList.toggle('hidden', !multi);
+            const counter = document.getElementById('photo-modal-counter');
+            counter.classList.toggle('hidden', !multi);
+            counter.textContent = `${galleryIndex + 1} / ${galleryItems.length}`;
+            modal.classList.remove('hidden');
+            modal.classList.add('is-open');
+            setTimeout(() => modal.classList.add('opacity-100'), 10);
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closePhotoModal() {
+            const modal = document.getElementById('photo-modal');
+            modal.classList.remove('opacity-100', 'is-open');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                document.body.style.overflow = '';
+            }, 280);
+        }
+
+        function photoStep(delta) {
+            if (galleryItems.length < 2) return;
+            galleryIndex = (galleryIndex + delta + galleryItems.length) % galleryItems.length;
+            document.getElementById('photo-modal-img').src = galleryFull(galleryIndex);
+            document.getElementById('photo-modal-counter').textContent = `${galleryIndex + 1} / ${galleryItems.length}`;
+            setMainPhoto(galleryPreview(galleryIndex), galleryIndex);
+        }
+
+        window.onload = () => {
+            Shop.init({{ catalog_json|safe }}, { plantId: plantMeta.plant_id, isSeedling: !!plantMeta.is_seedling });
+            Shop.deferBgSlideshow();
+            Shop.initScrollTopButton();
+            renderSizeTable();
+            requestAnimationFrame(() => loadGallery());
+            document.getElementById('plant-main-photo')?.addEventListener('click', openPhotoModal);
+            document.getElementById('photo-modal-backdrop')?.addEventListener('click', closePhotoModal);
+            document.getElementById('photo-modal-stage')?.addEventListener('click', closePhotoModal);
+            document.getElementById('photo-modal-img')?.addEventListener('click', e => e.stopPropagation());
+            document.getElementById('photo-prev')?.addEventListener('click', e => { e.stopPropagation(); photoStep(-1); });
+            document.getElementById('photo-next')?.addEventListener('click', e => { e.stopPropagation(); photoStep(1); });
+            document.addEventListener('keydown', e => {
+                if (e.key === 'Escape') {
+                    if (!document.getElementById('photo-modal').classList.contains('hidden')) closePhotoModal();
+                    else Shop.closeCheckoutModal();
+                }
+                if (!document.getElementById('photo-modal').classList.contains('hidden')) {
+                    if (e.key === 'ArrowLeft') photoStep(-1);
+                    if (e.key === 'ArrowRight') photoStep(1);
+                }
+            });
+            document.querySelectorAll('.reveal').forEach(el => {
+                const rect = el.getBoundingClientRect();
+                if (rect.top < window.innerHeight) el.classList.add('visible');
+            });
+        };
+    </script>
+</body>
+</html>

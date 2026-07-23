@@ -1,0 +1,16 @@
+<div id="cart-panel" class="fixed bottom-0 left-0 right-0 bg-brand-card/95 backdrop-blur-md border-t border-brand-border shadow-[0_-12px_40px_rgba(0,0,0,0.4)] transform translate-y-full transition-transform duration-300 z-40 pb-safe">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+        <button type="button" onclick="Shop.clearCart()" class="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-sm border border-brand-border text-brand-muted hover:text-brand-low hover:border-brand-low/40 transition-colors" title="Очистить">
+            <i class="fa-solid fa-trash-can text-sm"></i>
+        </button>
+        <div class="flex-1 text-right">
+            <p class="text-[10px] text-brand-muted uppercase tracking-[0.2em]">КП</p>
+            <p id="cart-total" class="font-serif font-bold text-2xl text-brand-cream">0 ₽</p>
+        </div>
+        <button type="button" data-open-checkout class="shop-btn-primary shrink-0">
+            <span class="hidden sm:inline">Запросить КП</span>
+            <span class="sm:hidden">КП</span>
+            <i class="fa-solid fa-arrow-right text-xs"></i>
+        </button>
+    </div>
+</div>
