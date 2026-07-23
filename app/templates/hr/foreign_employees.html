@@ -6,7 +6,17 @@
             <i class="fas fa-passport"></i>
             Иностранные сотрудники и патенты
         </div>
-        <div class="page-subtitle">Карточки сотрудников, документы, сроки патента и регистрации.</div>
+        <div class="page-subtitle">Карточки сотрудников, документы, сроки патента и регистрации. Авто-напоминания в Telegram — ежедневно в 9:00 МСК.</div>
+    </div>
+    <div class="page-actions">
+        {% if current_user.role in ('admin', 'executive', 'user2') %}
+        <form method="POST" action="{{ url_for('hr.foreign_registration_digest') }}" class="d-inline"
+              onsubmit="return confirm('Отправить актуальную сводку по регистрациям в Telegram-чат патентов?');">
+            <button type="submit" class="btn btn-outline-primary btn-sm">
+                <i class="fab fa-telegram-plane me-1"></i>Сводка регистраций в TG
+            </button>
+        </form>
+        {% endif %}
     </div>
 </div>
 

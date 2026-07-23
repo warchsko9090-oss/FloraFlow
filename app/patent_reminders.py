@@ -216,8 +216,79 @@ def run_registration_reminders_job():
     return len(notify_rows), "sent"
 
 
+def send_registration_status_digest():
+    """Ручная сводка: все активные сотрудники с датой регистрации → чат patents.
+
+    Не пишет в RegistrationReminderLog (не мешает ежедневным напоминаниям за 7 дней).
+    """
+    today = msk_today()
+    profiles = (
+        ForeignEmployeeProfile.query
+        .join(Employee, Employee.id == ForeignEmployeeProfile.employee_id)
+        .filter(Employee.is_active.is_(True))
+        .all()
+    )
+
+    with_date = []
+    without_date = []
+    for profile in profiles:
+        if profile.registration_end_date:
+            delta = (profile.registration_end_date - today).days
+            patent = _current_patent_for_employee(profile.employee_id)
+            with_date.append((profile, delta, patent))
+        else:
+            without_date.append(profile)
+
+    with_date.sort(key=lambda row: row[1])
+
+    if not with_date and not without_date:
+        return 0, "no_foreign_employees"
+
+    lines = [
+        "<b>Сводка по регистрации</b>",
+        f"на {today.strftime('%d.%m.%Y')} (ручная проверка)",
+        "",
+    ]
+
+    if with_date:
+        for profile, delta, patent in with_date:
+            name = _profile_name(profile)
+            end_str = profile.registration_end_date.strftime('%d.%m.%Y')
+            if delta < 0:
+                status = f"просрочена на {abs(delta)} дн. (была до {end_str})"
+            elif delta == 0:
+                status = f"истекает сегодня ({end_str})"
+            else:
+                status = f"осталось {delta} дн. (до {end_str})"
+            lines.append(f"• {name} — {status}")
+            lines.append(_patent_status_line(patent, today))
+            lines.append("")
+    else:
+        lines.append("Нет сотрудников с указанной датой регистрации.")
+        lines.append("")
+
+    if without_date:
+        lines.append(f"<i>Без даты регистрации: {len(without_date)}</i>")
+        for profile in without_date[:15]:
+            lines.append(f"  — {_profile_name(profile)}")
+        if len(without_date) > 15:
+            lines.append(f"  — … и ещё {len(without_date) - 15}")
+
+    lines.append("")
+    lines.append(
+        f"Итого с датой: {len(with_date)}. "
+        "Авто-напоминания — ежедневно в 9:00 МСК (окно 4–7 дн. до срока)."
+    )
+    message_text = "\n".join(lines).rstrip()
+
+    ok, send_result = _send_tg_message(message_text)
+    if not ok:
+        return 0, f"send_failed: {send_result}"
+    return len(with_date), "digest_sent"
+
+
 def run_all_foreign_reminders_job():
-    """Патенты + регистрация (один запуск ежедневного джоба)."""
+    """Патенты + регистрация (один запуск ежедневного джоба в 9:00 МСК)."""
     patent_count, patent_msg = run_patent_reminders_job()
     reg_count, reg_msg = run_registration_reminders_job()
     return {

@@ -873,6 +873,24 @@ def foreign_employees():
     return render_template('hr/foreign_employees.html', rows=rows, today=today)
 
 
+@bp.route('/personnel/foreign/registration-digest', methods=['POST'])
+@login_required
+def foreign_registration_digest():
+    """Ручная сводка регистраций в Telegram (чат patents) — для проверки."""
+    if current_user.role not in ('admin', 'executive', 'user2'):
+        flash('Недостаточно прав')
+        return redirect(url_for('hr.foreign_employees'))
+    from app.patent_reminders import send_registration_status_digest
+    count, msg = send_registration_status_digest()
+    if msg == 'digest_sent':
+        flash(f'Сводка отправлена в Telegram ({count} с датой регистрации).')
+    elif msg == 'no_foreign_employees':
+        flash('Нет активных иностранных сотрудников для сводки.')
+    else:
+        flash(f'Не удалось отправить: {msg}')
+    return redirect(url_for('hr.foreign_employees'))
+
+
 @bp.route('/personnel/foreign/<int:employee_id>', methods=['GET', 'POST'])
 @login_required
 def foreign_employee_card(employee_id):
