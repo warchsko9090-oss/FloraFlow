@@ -65,9 +65,11 @@
                 </div>
                 <div class="mb-2">
                     <label class="form-label">Регистрация действует до</label>
-                    <input type="date" class="form-control" name="registration_end_date"
-                           value="{{ profile.registration_end_date.strftime('%Y-%m-%d') if profile and profile.registration_end_date else '' }}">
-                    <div class="form-text">Уведомление в Telegram за 7 дней до этой даты (тот же чат, что и по патентам).</div>
+                    <input type="date" class="form-control" value="{{ profile.registration_end_date.strftime('%Y-%m-%d') if profile and profile.registration_end_date else '' }}" readonly disabled>
+                    <div class="form-text">
+                        Меняется через блоки «Период регистрации» / «История продлений» справа.
+                        Уведомление в Telegram за 7 дней (тот же чат, что и по патентам).
+                    </div>
                 </div>
                 <div class="mb-2">
                     <label class="form-label">Комментарий</label>
@@ -123,6 +125,99 @@
                         </tr>
                         {% else %}
                         <tr><td colspan="4" class="text-muted">Документы не загружены.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card section-card p-3 mb-3">
+            <h6 class="mb-3">Регистрация: период действия</h6>
+            {% if current_reg_period %}
+            <div class="alert alert-light border">
+                Текущий период: <b>{{ current_reg_period.start_date.strftime('%d.%m.%Y') }}</b> — <b>{{ current_reg_period.end_date.strftime('%d.%m.%Y') }}</b>
+            </div>
+            {% else %}
+            <div class="alert alert-warning py-2 small">Периода ещё нет — создайте его ниже (дата из профиля подтянется автоматически при наличии).</div>
+            {% endif %}
+            <form method="POST" class="row g-2">
+                <input type="hidden" name="action" value="create_registration_period">
+                <div class="col-md-4">
+                    <label class="form-label">Дата начала</label>
+                    <input type="date" name="registration_start_date" class="form-control" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Режим срока</label>
+                    <select name="reg_months_mode" class="form-select">
+                        <option value="0">Ввести дату вручную</option>
+                        <option value="1">+1 месяц</option>
+                        <option value="2">+2 месяца</option>
+                        <option value="3">+3 месяца</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Дата окончания (если вручную)</label>
+                    <input type="date" name="registration_end_date_manual" class="form-control">
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-outline-primary btn-sm">Сохранить период регистрации</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card section-card p-3 mb-3">
+            <h6 class="mb-3">История продлений регистрации</h6>
+            {% if current_reg_period %}
+            <form method="POST" enctype="multipart/form-data" class="row g-2 mb-3">
+                <input type="hidden" name="action" value="add_registration_renewal">
+                <input type="hidden" name="reg_period_id" value="{{ current_reg_period.id }}">
+                <div class="col-md-3">
+                    <label class="form-label">Дата продления</label>
+                    <input type="date" class="form-control" name="renewal_date" required>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Месяцев</label>
+                    <select name="months_extended" class="form-select">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Документ</label>
+                    <input type="file" class="form-control" name="renewal_file">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Комментарий</label>
+                    <input type="text" class="form-control" name="comment">
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-success btn-sm">Добавить продление</button>
+                </div>
+            </form>
+            {% else %}
+            <div class="text-muted small mb-2">Сначала создайте период регистрации.</div>
+            {% endif %}
+
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead><tr><th>Дата</th><th>Мес.</th><th>Срок после продления</th><th>Документ</th></tr></thead>
+                    <tbody>
+                        {% for r in reg_renewals %}
+                        <tr>
+                            <td>{{ r.renewal_date.strftime('%d.%m.%Y') }}</td>
+                            <td>{{ r.months_extended }}</td>
+                            <td>{{ r.period_end_after_renewal.strftime('%d.%m.%Y') if r.period_end_after_renewal else '-' }}</td>
+                            <td>
+                                {% if r.doc_file_rel_path %}
+                                <a href="{{ url_for('hr.foreign_employee_renewal_document_download', employee_id=employee.id, renewal_id=r.id) }}" class="btn btn-sm btn-outline-success">Скачать</a>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-muted">Продлений пока нет.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>

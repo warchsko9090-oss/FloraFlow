@@ -13,7 +13,7 @@ from sqlalchemy.orm import joinedload
 from app.models import (
     db, Employee, SalaryRate, TimeLog, Expense, EmployeePayment, AppSetting, BudgetItem,
     ForeignEmployeeProfile, ForeignEmployeeDocument, PatentPeriod, PatentPayment, ActionLog,
-    TgTask
+    TgTask, RegistrationPeriod, RegistrationRenewal,
 )
 from app.utils import msk_today, msk_now, MONTH_NAMES, RATE_TYPES_LABELS, EMPLOYEE_ROLES, natural_key, log_action
 import os
@@ -154,6 +154,41 @@ def _add_months(src_date, months):
     month = month % 12 + 1
     day = min(src_date.day, calendar.monthrange(year, month)[1])
     return date(year, month, day)
+
+
+def _sync_profile_registration_end(employee_id, end_date):
+    """Денормализует текущий срок регистрации в профиль (список + TG-напоминания)."""
+    profile = ForeignEmployeeProfile.query.filter_by(employee_id=employee_id).first()
+    if not profile:
+        employee = Employee.query.get(employee_id)
+        profile = ForeignEmployeeProfile(
+            employee_id=employee_id,
+            full_name=(employee.name if employee else f'#{employee_id}'),
+        )
+        db.session.add(profile)
+    profile.registration_end_date = end_date
+
+
+def _ensure_registration_period_from_profile(employee, profile):
+    """Если есть дата в профиле, а периодов нет — создать текущий (для старых карточек)."""
+    if not profile or not profile.registration_end_date:
+        return None
+    existing = RegistrationPeriod.query.filter_by(employee_id=employee.id).first()
+    if existing:
+        return RegistrationPeriod.query.filter_by(
+            employee_id=employee.id, is_current=True
+        ).first() or existing
+    period = RegistrationPeriod(
+        employee_id=employee.id,
+        start_date=profile.registration_end_date,
+        end_date=profile.registration_end_date,
+        status='active',
+        is_current=True,
+        created_by_user_id=getattr(current_user, 'id', None),
+    )
+    db.session.add(period)
+    db.session.commit()
+    return period
 
 @bp.route('/personnel', methods=['GET', 'POST'])
 @login_required
@@ -863,10 +898,7 @@ def foreign_employee_card(employee_id):
                 profile.passport_issued_by = request.form.get('passport_issued_by', '').strip()
                 profile.migration_card_number = request.form.get('migration_card_number', '').strip()
                 profile.registration_address = request.form.get('registration_address', '').strip()
-                reg_end_raw = request.form.get('registration_end_date')
-                profile.registration_end_date = (
-                    datetime.strptime(reg_end_raw, '%Y-%m-%d').date() if reg_end_raw else None
-                )
+                # Дата окончания регистрации меняется только через периоды/продления
                 profile.inn = request.form.get('inn', '').strip()
                 profile.snils = request.form.get('snils', '').strip()
                 profile.notes = request.form.get('notes', '').strip()
@@ -1000,6 +1032,93 @@ def foreign_employee_card(employee_id):
                 db.session.add(payment)
                 db.session.commit()
                 flash('Оплата патента сохранена')
+
+            elif action == 'create_registration_period':
+                start_raw = request.form.get('registration_start_date')
+                end_raw = request.form.get('registration_end_date_manual')
+                months_mode = int(request.form.get('reg_months_mode') or 0)
+                if not start_raw:
+                    raise ValueError('Укажите дату начала регистрации')
+                start_date = datetime.strptime(start_raw, '%Y-%m-%d').date()
+                if months_mode in [1, 2, 3]:
+                    end_date = _add_months(start_date, months_mode)
+                else:
+                    if not end_raw:
+                        raise ValueError('Укажите дату окончания регистрации')
+                    end_date = datetime.strptime(end_raw, '%Y-%m-%d').date()
+                if end_date < start_date:
+                    raise ValueError('Дата окончания не может быть раньше даты начала')
+
+                RegistrationPeriod.query.filter_by(employee_id=employee.id, is_current=True).update(
+                    {RegistrationPeriod.is_current: False, RegistrationPeriod.status: 'archived'},
+                    synchronize_session=False
+                )
+                db.session.add(RegistrationPeriod(
+                    employee_id=employee.id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    status='active',
+                    is_current=True,
+                    created_by_user_id=current_user.id
+                ))
+                _sync_profile_registration_end(employee.id, end_date)
+                db.session.commit()
+                flash('Период регистрации создан')
+
+            elif action == 'add_registration_renewal':
+                period_id = int(request.form.get('reg_period_id'))
+                period = RegistrationPeriod.query.get(period_id)
+                if not period or period.employee_id != employee.id:
+                    raise ValueError('Период регистрации не найден')
+                renewal_date_raw = request.form.get('renewal_date')
+                if not renewal_date_raw:
+                    raise ValueError('Укажите дату продления')
+                renewal_date = datetime.strptime(renewal_date_raw, '%Y-%m-%d').date()
+                months_extended = int(request.form.get('months_extended') or 1)
+                if months_extended not in [1, 2, 3]:
+                    raise ValueError('Продление может быть только на 1, 2 или 3 месяца')
+
+                next_base_date = (
+                    period.end_date
+                    if period.end_date and period.end_date >= renewal_date
+                    else renewal_date
+                )
+                new_end_date = _add_months(next_base_date, months_extended)
+
+                doc_rel_path = None
+                doc_original_name = None
+                doc_file = request.files.get('renewal_file')
+                if doc_file and doc_file.filename:
+                    allowed_ext = {'pdf', 'jpg', 'jpeg', 'png', 'webp'}
+                    ext = doc_file.filename.rsplit('.', 1)[1].lower() if '.' in doc_file.filename else ''
+                    if ext not in allowed_ext:
+                        raise ValueError('Недопустимый формат документа')
+                    base_dir = _employee_storage_dir(employee)
+                    renewals_dir = os.path.join(base_dir, 'registration_renewals')
+                    os.makedirs(renewals_dir, exist_ok=True)
+                    safe_name = secure_filename(doc_file.filename)
+                    unique_name = f"reg_{int(msk_now().timestamp())}_{safe_name}"
+                    doc_abs = os.path.join(renewals_dir, unique_name)
+                    doc_file.save(doc_abs)
+                    doc_rel_path = _safe_rel_path(doc_abs)
+                    doc_original_name = doc_file.filename
+
+                renewal = RegistrationRenewal(
+                    employee_id=employee.id,
+                    registration_period_id=period.id,
+                    renewal_date=renewal_date,
+                    months_extended=months_extended,
+                    period_end_after_renewal=new_end_date,
+                    doc_file_rel_path=doc_rel_path,
+                    doc_original_name=doc_original_name,
+                    comment=(request.form.get('comment') or '').strip(),
+                    created_by_user_id=current_user.id
+                )
+                period.end_date = new_end_date
+                _sync_profile_registration_end(employee.id, new_end_date)
+                db.session.add(renewal)
+                db.session.commit()
+                flash('Продление регистрации сохранено')
             else:
                 flash('Неизвестное действие')
         except Exception as e:
@@ -1008,12 +1127,28 @@ def foreign_employee_card(employee_id):
         return redirect(url_for('hr.foreign_employee_card', employee_id=employee.id))
 
     profile = ForeignEmployeeProfile.query.filter_by(employee_id=employee.id).first()
+    _ensure_registration_period_from_profile(employee, profile)
+    profile = ForeignEmployeeProfile.query.filter_by(employee_id=employee.id).first()
     docs = ForeignEmployeeDocument.query.filter_by(employee_id=employee.id).order_by(ForeignEmployeeDocument.uploaded_at.desc()).all()
     periods = PatentPeriod.query.filter_by(employee_id=employee.id).order_by(PatentPeriod.start_date.desc()).all()
     current_period = next((p for p in periods if p.is_current), periods[0] if periods else None)
     payments = []
     if current_period:
         payments = PatentPayment.query.filter_by(patent_period_id=current_period.id).order_by(PatentPayment.payment_date.desc(), PatentPayment.id.desc()).all()
+
+    reg_periods = RegistrationPeriod.query.filter_by(employee_id=employee.id).order_by(
+        RegistrationPeriod.start_date.desc()
+    ).all()
+    current_reg_period = next(
+        (p for p in reg_periods if p.is_current),
+        reg_periods[0] if reg_periods else None,
+    )
+    reg_renewals = []
+    if current_reg_period:
+        reg_renewals = RegistrationRenewal.query.filter_by(
+            registration_period_id=current_reg_period.id
+        ).order_by(RegistrationRenewal.renewal_date.desc(), RegistrationRenewal.id.desc()).all()
+
     return render_template(
         'hr/foreign_employee_card.html',
         employee=employee,
@@ -1021,7 +1156,9 @@ def foreign_employee_card(employee_id):
         docs=docs,
         periods=periods,
         current_period=current_period,
-        payments=payments
+        payments=payments,
+        current_reg_period=current_reg_period,
+        reg_renewals=reg_renewals,
     )
 
 
@@ -1054,6 +1191,23 @@ def foreign_employee_payment_check_download(employee_id, payment_id):
         flash('Файл чека не найден')
         return redirect(url_for('hr.foreign_employee_card', employee_id=employee_id))
     filename = payment.check_original_name or os.path.basename(abs_path)
+    return send_file(abs_path, as_attachment=True, download_name=filename)
+
+
+@bp.route('/personnel/foreign/<int:employee_id>/renewal/<int:renewal_id>/document', methods=['GET'])
+@login_required
+def foreign_employee_renewal_document_download(employee_id, renewal_id):
+    if not _ensure_hr_access():
+        return redirect(url_for('main.index'))
+    renewal = RegistrationRenewal.query.get_or_404(renewal_id)
+    if renewal.employee_id != employee_id or not renewal.doc_file_rel_path:
+        flash('Документ продления не найден')
+        return redirect(url_for('hr.foreign_employee_card', employee_id=employee_id))
+    abs_path = os.path.join(current_app.config['UPLOAD_FOLDER'], renewal.doc_file_rel_path)
+    if not os.path.exists(abs_path):
+        flash('Файл документа не найден')
+        return redirect(url_for('hr.foreign_employee_card', employee_id=employee_id))
+    filename = renewal.doc_original_name or os.path.basename(abs_path)
     return send_file(abs_path, as_attachment=True, download_name=filename)
 
 

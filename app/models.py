@@ -504,6 +504,8 @@ class Employee(db.Model):
     foreign_documents = db.relationship('ForeignEmployeeDocument', backref='employee', cascade="all, delete-orphan")
     patent_periods = db.relationship('PatentPeriod', backref='employee', cascade="all, delete-orphan")
     patent_payments = db.relationship('PatentPayment', backref='employee', cascade="all, delete-orphan")
+    registration_periods = db.relationship('RegistrationPeriod', backref='employee', cascade="all, delete-orphan")
+    registration_renewals = db.relationship('RegistrationRenewal', backref='employee', cascade="all, delete-orphan")
 
 
 class ForeignEmployeeProfile(db.Model):
@@ -611,6 +613,45 @@ class RegistrationReminderLog(db.Model):
         ),
         db.Index('idx_registration_reminder_target', 'target_date'),
         db.Index('idx_registration_reminder_employee', 'employee_id'),
+    )
+
+
+class RegistrationPeriod(db.Model):
+    """Период действия регистрации (текущий / архив), зеркало PatentPeriod."""
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=False)
+    start_date = db.Column(db.Date, nullable=False)
+    end_date = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), default='active')  # active, archived, canceled
+    is_current = db.Column(db.Boolean, default=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+    created_by = db.relationship('User', foreign_keys=[created_by_user_id])
+    renewals = db.relationship('RegistrationRenewal', backref='period', cascade="all, delete-orphan")
+    __table_args__ = (
+        db.Index('idx_registration_period_employee', 'employee_id'),
+        db.Index('idx_registration_period_end_date', 'end_date'),
+    )
+
+
+class RegistrationRenewal(db.Model):
+    """Продление регистрации с опциональным документом (без суммы — в отличие от PatentPayment)."""
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=False)
+    registration_period_id = db.Column(db.Integer, db.ForeignKey('registration_period.id'), nullable=False)
+    renewal_date = db.Column(db.Date, nullable=False)
+    months_extended = db.Column(db.Integer, nullable=False, default=1)  # 1/2/3
+    period_end_after_renewal = db.Column(db.Date, nullable=True)
+    doc_file_rel_path = db.Column(db.String(500), nullable=True)
+    doc_original_name = db.Column(db.String(255), nullable=True)
+    comment = db.Column(db.String(500))
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    created_by = db.relationship('User', foreign_keys=[created_by_user_id])
+    __table_args__ = (
+        db.Index('idx_registration_renewal_employee', 'employee_id'),
+        db.Index('idx_registration_renewal_date', 'renewal_date'),
     )
 
 

@@ -154,3 +154,41 @@ def ensure_legacy_schema(logger=None) -> None:
             if logger:
                 logger.warning('legacy schema: skip index — %s', exc)
             db.session.rollback()
+
+    _backfill_registration_periods(logger)
+
+
+def _backfill_registration_periods(logger=None) -> None:
+    """Один раз: если у профиля есть registration_end_date, а периодов нет — создать текущий."""
+    try:
+        from app.models import ForeignEmployeeProfile, RegistrationPeriod
+        insp = inspect(db.engine)
+        if not insp.has_table('registration_period'):
+            return
+        profiles = ForeignEmployeeProfile.query.filter(
+            ForeignEmployeeProfile.registration_end_date.isnot(None)
+        ).all()
+        created = 0
+        for profile in profiles:
+            has_period = RegistrationPeriod.query.filter_by(
+                employee_id=profile.employee_id
+            ).first()
+            if has_period:
+                continue
+            end_date = profile.registration_end_date
+            db.session.add(RegistrationPeriod(
+                employee_id=profile.employee_id,
+                start_date=end_date,
+                end_date=end_date,
+                status='active',
+                is_current=True,
+            ))
+            created += 1
+        if created:
+            db.session.commit()
+            if logger:
+                logger.info('legacy schema: backfilled %s registration_period row(s)', created)
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: registration_period backfill skipped — %s', exc)
+        db.session.rollback()
