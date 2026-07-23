@@ -2054,7 +2054,7 @@ def save_cost_override():
     return redirect(url_for('finance.cost_report', tab='summary', filter_year=request.form.get('return_year', msk_now().year)))
 
 # --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СВЕРКИ ---
-def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False):
+def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False, zero_opening=False):
     rows = []
     opening_balance = Decimal(0)
     current_bal = Decimal(0)
@@ -2063,8 +2063,8 @@ def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False)
     fixed_balance = Decimal(str(client.fixed_balance)) if client and client.fixed_balance is not None else None
     fixed_balance_date = client.fixed_balance_date if client else None
     
-    # 1. РАСЧЕТ ВХОДЯЩЕГО САЛЬДО
-    if f_start:
+    # 1. РАСЧЕТ ВХОДЯЩЕГО САЛЬДО (пропуск при zero_opening — только обороты периода)
+    if not zero_opening and f_start:
         f_start_date = datetime.strptime(f_start, '%Y-%m-%d').date()
         
         if use_fixed_balance and fixed_balance is not None and fixed_balance_date is not None and fixed_balance_date < f_start_date:
@@ -2107,7 +2107,7 @@ def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False)
             'is_balance': True, 'doc_items': [], 'invoice_info': '', 'balance': opening_balance,
             'has_payments': False
         })
-    elif use_fixed_balance and fixed_balance is not None and fixed_balance_date is not None:
+    elif not zero_opening and use_fixed_balance and fixed_balance is not None and fixed_balance_date is not None:
         opening_balance = fixed_balance
         dt = datetime.combine(fixed_balance_date, datetime.min.time())
         rows.append({
@@ -2219,7 +2219,8 @@ def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False)
             'qty': 1,
             'price': Decimal(str(p.amount)),
             'sum': Decimal(str(p.amount)),
-            'type': 'payment' # Метка типа строки
+            'type': 'payment',
+            'comment': (p.comment or '').strip(),
         }
 
         raw_rows.append({
@@ -2304,6 +2305,129 @@ def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False)
         
     return rows, current_bal, total_debit, total_credit
 
+
+def _parse_zero_opening_arg():
+    return request.args.get('zero_opening') in ('1', 'true', 'on', 'yes')
+
+
+def build_reconciliation_detail_rows(c_id, f_start, f_end):
+    """Плоские строки позиций отгрузки + оплаты по заказам для детального Excel."""
+    ship_query = db.session.query(Document).join(Order).filter(
+        Order.client_id == c_id, Document.doc_type == 'shipment'
+    )
+    if f_start:
+        ship_query = ship_query.filter(func.date(Document.date) >= f_start)
+    if f_end:
+        ship_query = ship_query.filter(func.date(Document.date) <= f_end)
+
+    ship_docs = ship_query.order_by(Document.date).all()
+    ship_order_ids = list({d.order_id for d in ship_docs if d.order_id})
+
+    oi_price_map = {}
+    if ship_order_ids:
+        for oi in OrderItem.query.filter(OrderItem.order_id.in_(ship_order_ids)).all():
+            oi_price_map[(oi.order_id, oi.plant_id, oi.size_id, oi.field_id)] = oi.price
+
+    pay_query = db.session.query(Payment, Order).join(Order).filter(Order.client_id == c_id)
+    if f_start:
+        pay_query = pay_query.filter(func.date(Payment.date) >= f_start)
+    if f_end:
+        pay_query = pay_query.filter(func.date(Payment.date) <= f_end)
+    payments = pay_query.order_by(Payment.date).all()
+
+    payments_by_order = {}
+    for p, o in payments:
+        payments_by_order.setdefault(p.order_id, []).append(p)
+
+    def _invoice_number(order):
+        if not order:
+            return ''
+        if order.invoice_number and order.invoice_date:
+            return f"№ {order.invoice_number} от {order.invoice_date.strftime('%d.%m.%Y')}"
+        if order.invoice_number:
+            return f"№ {order.invoice_number}"
+        return ''
+
+    def _payment_cols(order_id):
+        pays = payments_by_order.get(order_id) or []
+        dates = '; '.join(p.date.strftime('%d.%m.%Y') for p in pays if p.date)
+        comments = '; '.join((p.comment or '').strip() for p in pays if (p.comment or '').strip())
+        return dates, comments
+
+    detail_rows = []
+    orders_with_ship_lines = set()
+
+    for doc in ship_docs:
+        inv = _invoice_number(doc.order)
+        pay_dates, pay_comments = _payment_cols(doc.order_id)
+        for r in doc.rows:
+            orders_with_ship_lines.add(doc.order_id)
+            raw_price = oi_price_map.get((doc.order_id, r.plant_id, r.size_id, r.field_from_id))
+            price = Decimal(str(raw_price)) if raw_price is not None else Decimal(0)
+            qty = Decimal(r.quantity)
+            detail_rows.append({
+                'name': r.plant.name if r.plant else '-',
+                'size': r.size.name if r.size else '-',
+                'field': r.field_from.name if r.field_from else '-',
+                'qty': float(qty),
+                'price': float(price),
+                'sum': float(price * qty),
+                'ship_date': doc.date.strftime('%d.%m.%Y') if doc.date else '',
+                'invoice': inv,
+                'payment_dates': pay_dates,
+                'payment_comments': pay_comments,
+                'order_id': doc.order_id,
+            })
+
+    ghost_query = Order.query.filter(Order.client_id == c_id, Order.status == 'ghost')
+    if f_start:
+        ghost_query = ghost_query.filter(func.date(Order.date) >= f_start)
+    if f_end:
+        ghost_query = ghost_query.filter(func.date(Order.date) <= f_end)
+    for o in ghost_query.order_by(Order.date).all():
+        inv = _invoice_number(o)
+        pay_dates, pay_comments = _payment_cols(o.id)
+        for i in o.items:
+            orders_with_ship_lines.add(o.id)
+            price = Decimal(str(i.price)) if i.price else Decimal(0)
+            qty = Decimal(i.quantity)
+            detail_rows.append({
+                'name': i.plant.name if i.plant else '-',
+                'size': i.size.name if i.size else '-',
+                'field': i.field.name if i.field else '-',
+                'qty': float(qty),
+                'price': float(price),
+                'sum': float(price * qty),
+                'ship_date': o.date.strftime('%d.%m.%Y') if o.date else '',
+                'invoice': inv,
+                'payment_dates': pay_dates,
+                'payment_comments': pay_comments,
+                'order_id': o.id,
+            })
+
+    # Оплаты по заказам без отгрузки в периоде — отдельная служебная строка
+    for order_id, pays in payments_by_order.items():
+        if order_id in orders_with_ship_lines:
+            continue
+        order = pays[0].order if hasattr(pays[0], 'order') and pays[0].order else Order.query.get(order_id)
+        pay_dates, pay_comments = _payment_cols(order_id)
+        detail_rows.append({
+            'name': f'Оплаты без отгрузки (заказ #{order_id})',
+            'size': '',
+            'field': '',
+            'qty': '',
+            'price': '',
+            'sum': float(sum(Decimal(str(p.amount)) for p in pays)),
+            'ship_date': '',
+            'invoice': _invoice_number(order),
+            'payment_dates': pay_dates,
+            'payment_comments': pay_comments,
+            'order_id': order_id,
+        })
+
+    return detail_rows
+
+
 @bp.route('/reports/reconciliation')
 @login_required
 def reports_reconciliation():
@@ -2312,6 +2436,7 @@ def reports_reconciliation():
     f_start = request.args.get('start_date')
     f_end = request.args.get('end_date')
     mode = request.args.get('mode', 'grouped')
+    zero_opening = _parse_zero_opening_arg()
     
     rows = []
     total_bal = Decimal(0)
@@ -2326,7 +2451,9 @@ def reports_reconciliation():
         try:
             client_obj = Client.query.get(int(cid))
             client_name = client_obj.name if client_obj else "Неизвестный"
-            rows, total_bal, t_debit, t_credit = get_reconciliation_data(int(cid), f_start, f_end, mode)
+            rows, total_bal, t_debit, t_credit = get_reconciliation_data(
+                int(cid), f_start, f_end, mode, zero_opening=zero_opening
+            )
             
             # Получаем бартерные заказы клиента
             b_orders = Order.query.filter(Order.client_id == int(cid), Order.is_barter == True, Order.status != 'canceled', Order.is_deleted == False).all()
@@ -2346,8 +2473,9 @@ def reports_reconciliation():
     # Передаем debit и credit в totals
     return render_template('finance/reports.html', active_tab='reconciliation', clients=clients, rows=rows, 
                            totals={'balance': total_bal, 'debit': t_debit, 'credit': t_credit}, 
-                           filters={'client_id': cid, 'start': f_start, 'end': f_end},
+                           filters={'client_id': cid, 'start': f_start, 'end': f_end, 'zero_opening': zero_opening},
                            client_name=client_name, mode=mode,
+                           zero_opening=zero_opening,
                            current_url=current_url,
                            barter_orders=barter_orders)
 
@@ -2360,6 +2488,7 @@ def reports_reconciliation_export():
     f_start = request.args.get('start_date')
     f_end = request.args.get('end_date')
     mode = request.args.get('mode', 'grouped')
+    zero_opening = _parse_zero_opening_arg()
     
     if not cid: return redirect(url_for('finance.reports_reconciliation'))
     
@@ -2367,7 +2496,9 @@ def reports_reconciliation_export():
     client_name = client_obj.name if client_obj else "Неизвестный"
     
     # Получаем данные (ИСПРАВЛЕНО: принимаем 4 значения)
-    rows, final_balance, t_debit, t_credit = get_reconciliation_data(int(cid), f_start, f_end, mode)
+    rows, final_balance, t_debit, t_credit = get_reconciliation_data(
+        int(cid), f_start, f_end, mode, zero_opening=zero_opening
+    )
     
     wb = Workbook()
     ws = wb.active
@@ -2390,6 +2521,8 @@ def reports_reconciliation_export():
     
     ws.merge_cells('A2:F2')
     period_str = f"Период: {datetime.strptime(f_start, '%Y-%m-%d').strftime('%d.%m.%Y') if f_start else '...'} - {datetime.strptime(f_end, '%Y-%m-%d').strftime('%d.%m.%Y') if f_end else '...'}"
+    if zero_opening:
+        period_str += " · без входящего сальдо"
     ws['A2'] = period_str
     ws['A2'].alignment = align_center
     
@@ -2436,22 +2569,24 @@ def reports_reconciliation_export():
         # ДЕТАЛИЗАЦИЯ (ГАРМОШКА) В EXCEL
         if r.get('is_grouped') and r.get('doc_items'):
             for item in r['doc_items']:
-                # Формируем строку детализации
-                # Смещаем данные: 
-                # A: Дата отгрузки
-                # B: Название + Размер + Поле
-                # C: Пусто
-                # D: Сумма (в дебет)
-                # E-F: Пусто
-                
-                item_desc = f"   ↳ {item['name']} ({item['size']}) / {item['field']} / {item['qty']} шт x {float(item['price'])}"
-                
+                is_payment = item.get('type') == 'payment'
+                if is_payment:
+                    item_desc = f"   ↳ {item['name']}"
+                    if item.get('comment'):
+                        item_desc += f" ({item['comment']})"
+                    debit_val = ""
+                    credit_val = float(item['sum'])
+                else:
+                    item_desc = f"   ↳ {item['name']} ({item['size']}) / {item['field']} / {item['qty']} шт x {float(item['price'])}"
+                    debit_val = float(item['sum'])
+                    credit_val = ""
+
                 detail_cells = [
-                    item['date'].strftime('%d.%m.%Y'), # Дата конкретной отгрузки
+                    item['date'].strftime('%d.%m.%Y'),
                     item_desc,
                     "",
-                    float(item['sum']),
-                    "",
+                    debit_val,
+                    credit_val,
                     ""
                 ]
                 ws.append(detail_cells)
@@ -2462,16 +2597,17 @@ def reports_reconciliation_export():
                     cell = ws.cell(row=det_row, column=i)
                     cell.font = italic_font
                     cell.fill = detail_fill
-                    cell.border = border_style # Можно убрать border, если хочется "воздуха"
+                    cell.border = border_style
                     
-                    if i == 4: # Сумма
+                    if i in (4, 5) and cell.value not in ("", None):
                         cell.number_format = '#,##0.00'
                         cell.alignment = align_right
 
     # Итоги
     ws.append([])
     # ИСПРАВЛЕНО: Добавляем t_debit и t_credit в строку итогов
-    ws.append(["", "", "ИТОГО ОБОРОТЫ И САЛЬДО:", float(t_debit), float(t_credit), float(final_balance)])
+    total_label = "ИТОГО ОБОРОТЫ И САЛЬДО ПЕРИОДА:" if zero_opening else "ИТОГО ОБОРОТЫ И САЛЬДО:"
+    ws.append(["", "", total_label, float(t_debit), float(t_credit), float(final_balance)])
     last_row = ws.max_row
     
     ws.cell(row=last_row, column=3).alignment = align_right
@@ -2503,6 +2639,96 @@ def reports_reconciliation_export():
     buf.seek(0)
     
     filename = f"Act_{client_name}_{f_start or ''}_{f_end or ''}.xlsx"
+    return send_file(buf, download_name=filename, as_attachment=True)
+
+
+@bp.route('/reports/reconciliation/export-detail')
+@login_required
+def reports_reconciliation_export_detail():
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+
+    cid = request.args.get('client_id')
+    f_start = request.args.get('start_date')
+    f_end = request.args.get('end_date')
+
+    if not cid:
+        return redirect(url_for('finance.reports_reconciliation'))
+
+    client_obj = Client.query.get(int(cid))
+    client_name = client_obj.name if client_obj else "Неизвестный"
+    detail_rows = build_reconciliation_detail_rows(int(cid), f_start, f_end)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Детальная сверка"
+
+    bold_font = Font(bold=True)
+    header_fill = PatternFill(start_color="E0F2F1", end_color="E0F2F1", fill_type="solid")
+    border_style = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin'),
+    )
+    align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    align_right = Alignment(horizontal='right', vertical='center')
+
+    ws.merge_cells('A1:J1')
+    ws['A1'] = f"Детальная сверка с {client_name}"
+    ws['A1'].font = Font(size=14, bold=True, color="2E7D32")
+    ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.merge_cells('A2:J2')
+    period_str = (
+        f"Период: {datetime.strptime(f_start, '%Y-%m-%d').strftime('%d.%m.%Y') if f_start else '...'} - "
+        f"{datetime.strptime(f_end, '%Y-%m-%d').strftime('%d.%m.%Y') if f_end else '...'}"
+    )
+    ws['A2'] = period_str
+    ws['A2'].alignment = Alignment(horizontal='center')
+
+    headers = [
+        "Наименование", "Размер", "Поле", "Кол-во", "Цена", "Сумма",
+        "Дата отгрузки", "Номер счета", "Даты оплаты", "Комментарии к оплатам",
+    ]
+    ws.append([])
+    ws.append(headers)
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=4, column=col_num)
+        cell.font = bold_font
+        cell.fill = header_fill
+        cell.border = border_style
+        cell.alignment = align_center
+
+    for row in detail_rows:
+        ws.append([
+            row['name'],
+            row['size'],
+            row['field'],
+            row['qty'] if row['qty'] != '' else None,
+            row['price'] if row['price'] != '' else None,
+            row['sum'] if row['sum'] != '' else None,
+            row['ship_date'],
+            row['invoice'],
+            row['payment_dates'],
+            row['payment_comments'],
+        ])
+        curr = ws.max_row
+        for i in range(1, 11):
+            cell = ws.cell(row=curr, column=i)
+            cell.border = border_style
+            if i in (4, 5, 6) and cell.value is not None:
+                cell.number_format = '#,##0.00' if i != 4 else '0'
+                cell.alignment = align_right
+
+    widths = {
+        'A': 36, 'B': 14, 'C': 16, 'D': 10, 'E': 12, 'F': 14,
+        'G': 14, 'H': 28, 'I': 28, 'J': 36,
+    }
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"Act_detail_{client_name}_{f_start or ''}_{f_end or ''}.xlsx"
     return send_file(buf, download_name=filename, as_attachment=True)
 
 @bp.route('/reports/turnover')

@@ -83,12 +83,20 @@
                         <input type="date" name="end_date" value="{{ filters.get('end') or '' }}" class="form-control">
                     </div>
                 </div>
+                <div class="form-check mb-1">
+                    <input class="form-check-input" type="checkbox" name="zero_opening" value="1" id="zero_opening"
+                           {% if zero_opening|default(false) or filters.get('zero_opening') %}checked{% endif %}
+                           onchange="this.form.submit()">
+                    <label class="form-check-label small" for="zero_opening" title="Сальдо считается только по оборотам выбранного периода">
+                        Без входящего сальдо
+                    </label>
+                </div>
                 <button class="btn btn-primary btn-sm px-4"><i class="fas fa-sync-alt"></i></button>
             </div>
             
             <!-- Правая часть: Режим, Excel и Управление гармошкой -->
             <div class="d-flex flex-column align-items-end gap-2">
-                <div class="d-flex gap-2">
+                <div class="d-flex gap-2 flex-wrap justify-content-end">
                     <div class="btn-group btn-group-sm bg-white shadow-sm" role="group">
                         <input type="radio" class="btn-check" name="mode" id="mode_grouped" value="grouped" {% if mode == 'grouped' %}checked{% endif %} onchange="this.form.submit()">
                         <label class="btn btn-outline-secondary" for="mode_grouped"><i class="fas fa-layer-group"></i> По счетам</label>
@@ -98,11 +106,16 @@
                     </div>
                     
                     {% if filters.get('client_id') %}
-                    <!-- ИСПРАВЛЕНИЕ: Добавлено hx-boost="false" -->
-                    <a href="{{ url_for('finance.reports_reconciliation_export', client_id=filters.get('client_id'), start_date=filters.get('start'), end_date=filters.get('end'), mode=mode) }}" 
+                    <a href="{{ url_for('finance.reports_reconciliation_export', client_id=filters.get('client_id'), start_date=filters.get('start'), end_date=filters.get('end'), mode=mode, zero_opening=(1 if (zero_opening|default(false) or filters.get('zero_opening')) else 0)) }}" 
                        class="btn btn-success btn-sm shadow-sm fw-bold" 
                        hx-boost="false">
                         <i class="fas fa-file-excel me-1"></i> Excel
+                    </a>
+                    <a href="{{ url_for('finance.reports_reconciliation_export_detail', client_id=filters.get('client_id'), start_date=filters.get('start'), end_date=filters.get('end')) }}" 
+                       class="btn btn-outline-success btn-sm shadow-sm fw-bold" 
+                       hx-boost="false"
+                       title="Позиции отгрузки: наименование, размер, поле, цена, оплаты">
+                        <i class="fas fa-table me-1"></i> Детальная сверка
                     </a>
                     {% endif %}
                 </div>
@@ -129,7 +142,7 @@
         <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center py-3">
             <span><i class="fas fa-file-contract text-primary me-2"></i> Акт сверки: {{ client_name }}</span>
             <span class="badge {% if totals.balance > 0 %}bg-danger{% else %}bg-success{% endif %} fs-6">
-                Итого долг: {{ totals.balance|money }}
+                {% if zero_opening|default(false) or filters.get('zero_opening') %}Сальдо периода{% else %}Итого долг{% endif %}: {{ totals.balance|money }}
             </span>
         </div>
         <div class="card-body p-0">
@@ -207,42 +220,42 @@
                                         <thead class="text-muted bg-light">
                                             <tr>
                                                 <th style="width: 90px;" class="text-center">Дата</th>
-                                                <!-- ПУСТАЯ КОЛОНКА-РАСПОРКА (22% ширины) -->
-                                                <th style="width: 22%;"></th> 
+                                                <th style="width: 18%;"></th>
                                                 <th>Наименование</th>
-                                                <th style="width: 12%;">Размер</th>
-                                                <th style="width: 12%;">Поле</th>
-                                                <th style="width: 90px;" class="text-end">Цена</th>
-                                                <th style="width: 60px;" class="text-center">Кол-во</th>
-                                                <th style="width: 110px;" class="text-end">Сумма</th>
+                                                <th style="width: 11%;">Размер</th>
+                                                <th style="width: 11%;">Поле</th>
+                                                <th style="width: 80px;" class="text-end">Цена</th>
+                                                <th style="width: 55px;" class="text-center">Кол-во</th>
+                                                <th style="width: 95px;" class="text-end text-danger">Дебет</th>
+                                                <th style="width: 95px;" class="text-end text-success">Кредит</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {% for item in row.doc_items %}
                                             {% if item.type == 'payment' %}
-                                            <!-- СТРОКА ОПЛАТЫ ВНУТРИ ГРУППЫ -->
                                             <tr style="background-color: #f0fff4;">
                                                 <td class="text-center text-success fw-bold">{{ item.date.strftime('%d.%m.%Y') }}</td>
-                                                <td style="background-color: #f0fff4;"></td> 
+                                                <td style="background-color: #f0fff4;"></td>
                                                 <td class="text-success fw-bold" colspan="3">
                                                     <i class="fas fa-check-circle me-1"></i> {{ item.name }}
+                                                    {% if item.comment %}<span class="text-muted fw-normal ms-1">({{ item.comment }})</span>{% endif %}
                                                 </td>
                                                 <td class="text-end text-muted">-</td>
                                                 <td class="text-center text-muted">-</td>
+                                                <td class="text-end text-muted">-</td>
                                                 <td class="text-end fw-bold text-success">{{ item.sum|money_int }}</td>
                                             </tr>
                                             {% else %}
-                                            <!-- СТРОКА ОТГРУЗКИ -->
                                             <tr>
                                                 <td class="text-center text-muted">{{ item.date.strftime('%d.%m.%Y') }}</td>
-                                                <!-- ПУСТАЯ ЯЧЕЙКА -->
-                                                <td style="background-color: #fcfcfc;"></td> 
+                                                <td style="background-color: #fcfcfc;"></td>
                                                 <td class="text-truncate" title="{{ item.name }}">{{ item.name }}</td>
                                                 <td class="text-truncate">{{ item.size }}</td>
                                                 <td class="text-muted text-truncate">{{ item.field }}</td>
                                                 <td class="text-end text-muted">{{ item.price|money_int }}</td>
                                                 <td class="text-center fw-bold">{{ item.qty }}</td>
                                                 <td class="text-end fw-bold text-danger">{{ item.sum|money_int }}</td>
+                                                <td class="text-end text-muted">-</td>
                                             </tr>
                                             {% endif %}
                                             {% endfor %}
@@ -311,15 +324,16 @@
                                 <div class="p-2 border rounded mb-2 bg-white small shadow-sm">
                                     {% if item.type == 'payment' %}
                                         <div class="text-success fw-bold"><i class="fas fa-check-circle"></i> {{ item.name }}</div>
+                                        {% if item.comment %}<div class="text-muted small">{{ item.comment }}</div>{% endif %}
                                         <div class="d-flex justify-content-between mt-1 border-top pt-1">
-                                            <span class="text-muted">{{ item.date.strftime('%d.%m.%Y') }}</span>
-                                            <span class="fw-bold text-success">+{{ item.sum|money_int }}</span>
+                                            <span class="text-muted">{{ item.date.strftime('%d.%m.%Y') }} · Кредит</span>
+                                            <span class="fw-bold text-success">{{ item.sum|money_int }}</span>
                                         </div>
                                     {% else %}
                                         <div class="fw-bold text-dark">{{ item.name }}</div>
                                         <div class="text-muted">{{ item.size }} | {{ item.field }}</div>
                                         <div class="d-flex justify-content-between mt-1 border-top pt-1 align-items-center">
-                                            <span class="text-muted">{{ item.qty }} шт x {{ item.price|money_int }}</span>
+                                            <span class="text-muted">{{ item.qty }} шт x {{ item.price|money_int }} · Дебет</span>
                                             <span class="fw-bold text-danger fs-6">{{ item.sum|money_int }}</span>
                                         </div>
                                     {% endif %}
