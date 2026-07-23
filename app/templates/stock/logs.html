@@ -17,8 +17,10 @@
         <input type="text" id="docSearchInput" class="form-control form-control-sm" style="width: 250px;" placeholder="🔍 Поиск (№, тип)...">
         {% if current_user.role == 'admin' %}
         <a href="{{ url_for('stock.recalc_stock_balances') }}" class="btn btn-danger btn-sm" onclick="return confirm('Вы уверены? Это пересчитает все остатки с нуля на основе документов.')"><i class="fas fa-tools me-2"></i>Пересчет склада</a>
+        <a href="{{ url_for('main.db_health') }}" class="btn btn-outline-danger btn-sm"><i class="fas fa-hdd me-2"></i>Место в БД</a>
         <a href="{{ url_for('main.backup_db') }}" class="btn btn-dark btn-sm"><i class="fas fa-database me-2"></i>Бэкап БД</a>
         {% endif %}
+
     </div>
 </div>
 

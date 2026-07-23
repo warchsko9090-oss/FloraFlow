@@ -6,7 +6,7 @@ from calendar import monthrange
 from flask import Blueprint, redirect, url_for, send_file, send_from_directory, current_app, render_template, jsonify, request, make_response
 from flask_login import current_user, login_required
 from datetime import timedelta, date, datetime
-from sqlalchemy import func, and_, or_
+from sqlalchemy import func, and_, or_, text
 from app.models import (
     db, Order, OrderItem, Payment, PaymentInvoice, Document,
     DiggingTask, DiggingLog, ActionLog, TgTask, Client, Plant, Size, Field,
@@ -2561,6 +2561,183 @@ def backup_db():
     
     db_path = current_app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
     return send_file(db_path, as_attachment=True, download_name="backup.db")
+
+
+@bp.route('/admin/db-health')
+@login_required
+def db_health():
+    """Диагностика места в БД: топ таблиц, «толстые» TEXT-поля, подсказки по очистке.
+
+    Нужна, когда Amvera показывает диск БД ~100% и нет встроенной SQL-консоли.
+    Только admin. Работает на PostgreSQL (Amvera) и SQLite (локально).
+    """
+    if current_user.role != 'admin':
+        return redirect(url_for('main.index'))
+
+    uri = (current_app.config.get('SQLALCHEMY_DATABASE_URI') or '')
+    is_pg = uri.startswith('postgresql') or uri.startswith('postgres')
+    error = None
+    db_total = None
+    tables = []
+    fat_columns = []
+    row_counts = []
+    tips = []
+
+    # Кандидаты на «раздувание» — большие TEXT/JSON, которые копятся со временем
+    # и обычно не нужны для операционной работы.
+    fat_specs = [
+        ('competitor_snapshot', 'raw_ai_response', 'Сырой ответ ИИ по мониторингу конкурентов'),
+        ('competitor_row', 'source_excerpt', 'Цитаты со сайтов конкурентов'),
+        ('competitor_row', 'reject_reasons', 'Причины отбраковки строк мониторинга'),
+        ('chat_log', 'ai_response', 'История ответов AI-чата'),
+        ('tg_task', 'raw_text', 'Сырые тексты задач из Telegram'),
+        ('tg_task', 'details', 'Детали задач (AI)'),
+        ('tg_task', 'action_payload', 'JSON-параметры задач/аномалий'),
+        ('weekly_digest', 'content_html', 'HTML еженедельных дайджестов'),
+        ('weekly_digest', 'summary_json', 'JSON метрик дайджестов'),
+        ('order_item_history', 'snapshot_payload', 'Снимки позиций заказа при правках'),
+        ('chat_expense_message', 'raw_text', 'Сообщения чата расходов'),
+        ('vium_invoice_queue', 'parsed_payload', 'Распознанные счета ВиУМ'),
+        ('action_log', 'action', 'Журнал действий пользователей'),
+    ]
+    count_tables = [
+        'action_log', 'tg_task', 'chat_log', 'competitor_snapshot', 'competitor_row',
+        'order_item_history', 'weekly_digest', 'chat_expense_message',
+        'order', 'order_item', 'document', 'document_row', 'expense',
+    ]
+
+    try:
+        if is_pg:
+            db_total = db.session.execute(
+                text('SELECT pg_size_pretty(pg_database_size(current_database()))')
+            ).scalar()
+
+            tables = [
+                dict(r) for r in db.session.execute(text("""
+                    SELECT c.relname AS name,
+                           pg_size_pretty(pg_total_relation_size(c.oid)) AS total,
+                           pg_total_relation_size(c.oid) AS bytes,
+                           pg_size_pretty(pg_relation_size(c.oid)) AS heap,
+                           pg_size_pretty(pg_indexes_size(c.oid)) AS indexes,
+                           COALESCE(c.reltuples, 0)::bigint AS approx_rows
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relkind = 'r'
+                    ORDER BY pg_total_relation_size(c.oid) DESC
+                    LIMIT 30
+                """)).mappings()
+            ]
+
+            for table, col, note in fat_specs:
+                try:
+                    row = db.session.execute(text(f"""
+                        SELECT
+                            COUNT(*) FILTER (WHERE "{col}" IS NOT NULL AND "{col}" <> '') AS filled,
+                            COALESCE(SUM(pg_column_size("{col}")), 0) AS bytes,
+                            pg_size_pretty(COALESCE(SUM(pg_column_size("{col}")), 0)) AS pretty
+                        FROM "{table}"
+                    """)).mappings().first()
+                    if row and (row['bytes'] or 0) > 0:
+                        fat_columns.append({
+                            'table': table, 'column': col, 'note': note,
+                            'filled': row['filled'], 'bytes': row['bytes'],
+                            'pretty': row['pretty'],
+                        })
+                except Exception:
+                    db.session.rollback()
+                    continue
+            fat_columns.sort(key=lambda x: x['bytes'], reverse=True)
+
+            for tname in count_tables:
+                try:
+                    n = db.session.execute(
+                        text(f'SELECT COUNT(*) FROM "{tname}"')
+                    ).scalar()
+                    row_counts.append({'name': tname, 'count': int(n or 0)})
+                except Exception:
+                    db.session.rollback()
+
+            # Подсказки по самым частым виновникам в этом ERP
+            tip_map = {
+                'competitor_snapshot': 'Можно обнулить raw_ai_response у старых снимков — цены в строках останутся.',
+                'competitor_row': 'Старые source_excerpt / reject_reasons можно очистить без потери цен.',
+                'chat_log': 'История AI-чата — кандидаты на удаление старше 90 дней.',
+                'tg_task': 'Закрытые задачи (status=done) старше нескольких месяцев можно архивировать/удалять.',
+                'weekly_digest': 'Старые дайджесты можно удалить — они только для просмотра.',
+                'order_item_history': 'История правок позиций: обычно нужна 3–12 мес., старше — можно чистить.',
+                'action_log': 'Журнал действий растёт постоянно; старше 6–12 мес. обычно безопасно удалять.',
+                'chat_expense_message': 'Сырые сообщения чата расходов — после обработки часто не нужны.',
+            }
+            for t in tables[:8]:
+                tip = tip_map.get(t['name'])
+                if tip:
+                    tips.append(f"{t['name']} ({t['total']}): {tip}")
+
+            tips.append(
+                'После удаления данных место на диске Amvera освобождается не сразу: '
+                'нужен VACUUM (на managed PG часто достаточно обычного VACUUM; '
+                'полный VACUUM FULL требует окно обслуживания). '
+                'Если диск уже 100% — сначала увеличьте тариф диска, иначе VACUUM может не пройти.'
+            )
+            tips.append(
+                'Диск БД ≠ только «ваши таблицы»: туда входят индексы, WAL, bloat. '
+                'Если топ-таблицы малы, а диск полный — смотрите bloat/WAL у поддержки Amvera.'
+            )
+        else:
+            # SQLite (локальная разработка)
+            try:
+                page_count = db.session.execute(text('PRAGMA page_count')).scalar()
+                page_size = db.session.execute(text('PRAGMA page_size')).scalar()
+                total_bytes = int(page_count or 0) * int(page_size or 0)
+                db_total = f'{total_bytes / (1024 * 1024):.1f} MB'
+            except Exception:
+                db_total = 'неизвестно'
+
+            try:
+                tables = [
+                    dict(r) for r in db.session.execute(text("""
+                        SELECT name,
+                               CAST(SUM(pgsize) AS INTEGER) AS bytes
+                        FROM dbstat
+                        WHERE name NOT LIKE 'sqlite_%'
+                        GROUP BY name
+                        ORDER BY bytes DESC
+                        LIMIT 30
+                    """)).mappings()
+                ]
+                for t in tables:
+                    t['total'] = f"{(t['bytes'] or 0) / (1024 * 1024):.2f} MB"
+                    t['heap'] = t['total']
+                    t['indexes'] = '—'
+                    t['approx_rows'] = '—'
+            except Exception:
+                db.session.rollback()
+                tables = []
+                tips.append('SQLite dbstat недоступен — смотрите только COUNT строк ниже.')
+
+            for tname in count_tables:
+                try:
+                    n = db.session.execute(text(f'SELECT COUNT(*) FROM "{tname}"')).scalar()
+                    row_counts.append({'name': tname, 'count': int(n or 0)})
+                except Exception:
+                    db.session.rollback()
+
+            tips.append('Локально SQLite: на Amvera картина будет по PostgreSQL — откройте эту же страницу после деплоя.')
+    except Exception as exc:
+        db.session.rollback()
+        error = str(exc)
+
+    return render_template(
+        'admin_db_health.html',
+        is_pg=is_pg,
+        db_total=db_total,
+        tables=tables,
+        fat_columns=fat_columns,
+        row_counts=row_counts,
+        tips=tips,
+        error=error,
+    )
+
 
 @bp.route('/sw.js')
 def service_worker():
