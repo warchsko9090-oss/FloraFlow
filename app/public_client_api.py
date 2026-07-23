@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, request, url_for, render_template, abort, redirect, make_response
+from flask import Blueprint, current_app, jsonify, request, url_for, render_template, abort, redirect, make_response, send_from_directory
 from sqlalchemy.orm import joinedload
 
 from app.models import AppSetting, Document, DocumentRow, Field, Plant, Size, StockBalance, db
@@ -293,6 +293,78 @@ def public_landing():
 def landing_preview():
     """Локальный предпросмотр главной на ERP (корневой ``/`` → дашборд)."""
     return _render_landing_page("public_client_api.landing_preview")
+
+
+@bp.get("/yandex_779ccc68e1d1e3fd.html")
+def yandex_webmaster_verify():
+    """Файл подтверждения прав Яндекс.Вебмастер для knyajestvo.ru."""
+    return send_from_directory(
+        current_app.static_folder,
+        "yandex_779ccc68e1d1e3fd.html",
+        mimetype="text/html; charset=utf-8",
+    )
+
+
+@bp.get("/robots.txt")
+def public_robots_txt():
+    base = (request.url_root or "https://knyajestvo.ru/").rstrip("/")
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /public/\n"
+        "Disallow: /shop/kp/\n"
+        "Disallow: /shop/on-request\n"
+        f"Sitemap: {base}/sitemap.xml\n"
+    )
+    resp = make_response(body)
+    resp.headers["Content-Type"] = "text/plain; charset=utf-8"
+    return resp
+
+
+@bp.get("/sitemap.xml")
+def public_sitemap_xml():
+    """Карта основных публичных страниц для Яндекс/Google."""
+    from datetime import timezone
+
+    base = (request.url_root or "https://knyajestvo.ru/").rstrip("/")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    urls = [
+        ("/", "1.0", "weekly"),
+        ("/shop", "0.9", "daily"),
+        ("/shop/contacts", "0.7", "monthly"),
+        ("/shop/privacy", "0.3", "yearly"),
+        ("/shop/consent", "0.3", "yearly"),
+        ("/shop/stock.pdf", "0.6", "daily"),
+    ]
+    try:
+        for item in get_aggregated_catalog(apply_shop_prices=False):
+            pid = item.get("plant_id")
+            if pid:
+                urls.append((f"/shop/plant/{int(pid)}", "0.8", "weekly"))
+    except Exception:
+        current_app.logger.exception("sitemap: catalog plants skipped")
+
+    # уникальные пути с сохранением порядка
+    seen = set()
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+    for path, priority, changefreq in urls:
+        if path in seen:
+            continue
+        seen.add(path)
+        loc = f"{base}{path}"
+        lines.append("  <url>")
+        lines.append(f"    <loc>{loc}</loc>")
+        lines.append(f"    <lastmod>{today}</lastmod>")
+        lines.append(f"    <changefreq>{changefreq}</changefreq>")
+        lines.append(f"    <priority>{priority}</priority>")
+        lines.append("  </url>")
+    lines.append("</urlset>")
+    resp = make_response("\n".join(lines) + "\n")
+    resp.headers["Content-Type"] = "application/xml; charset=utf-8"
+    return resp
 
 
 @bp.get("/public/client/image/<int:width>/<path:filename>")
@@ -747,8 +819,7 @@ def public_shop_stock_pdf():
         ) if print_settings.get(k)
     ]
 
-    html = render_template(
-        "shop_stock_pdf.html",
+    template_ctx = dict(
         groups=groups,
         ground_groups=ground_groups,
         container_groups=container_groups,
@@ -761,12 +832,28 @@ def public_shop_stock_pdf():
         contact_display_label=contact_display_label,
     )
     filename = f"Tovarnye_ostatki_{end_date.strftime('%d.%m.%Y')}.pdf"
-    return create_pdf_response(
-        html,
-        filename,
-        page_bg="#111814",
-        page_margin="0",
-    )
+    pdf_kwargs = dict(page_bg="#111814", page_margin="0")
+
+    if ground_groups and container_groups:
+        html_ground = render_template(
+            "shop_stock_pdf.html",
+            pdf_part="ground",
+            **template_ctx,
+        )
+        html_containers = render_template(
+            "shop_stock_pdf.html",
+            pdf_part="containers",
+            **template_ctx,
+        )
+        return create_pdf_response(
+            "",
+            filename,
+            pdf_parts=[html_ground, html_containers],
+            **pdf_kwargs,
+        )
+
+    html = render_template("shop_stock_pdf.html", pdf_part="full", **template_ctx)
+    return create_pdf_response(html, filename, **pdf_kwargs)
 
 
 @bp.route("/shop/contacts")

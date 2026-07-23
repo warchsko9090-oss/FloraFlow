@@ -187,7 +187,6 @@
             border: 1pt solid #B69A6D;
             page-break-inside: avoid;
         }
-        .pdf-break-after { page-break-after: always; break-after: page; }
         .section-bar {
             background-color: #B69A6D;
             height: 3pt;
@@ -258,48 +257,27 @@
 
 <body>
 
-<table class="sheet" cellpadding="0" cellspacing="0">
+{% set pdf_part = pdf_part|default('full') %}
 
+{% macro render_doc_header() %}
     <tr><td class="top-bar">&nbsp;</td></tr>
-
-
-
     <tr>
-
         <td class="header inset">
-
             <table width="100%" cellpadding="0" cellspacing="0">
-
                 <tr>
-
                     <td style="width: 55%; vertical-align: top;">
-
                         <div class="brand">Княжество</div>
-
                         <div class="brand-tag">Архитектурный питомник · Тульская область</div>
-
                     </td>
-
                     <td style="width: 45%; vertical-align: top;">
-
                         <div class="meta-date">от {{ doc_date.strftime('%d.%m.%Y') }}</div>
-
                         <div class="meta-note">Сформировано {{ generated_at.strftime('%d.%m.%Y %H:%M') }}</div>
-
                     </td>
-
                 </tr>
-
             </table>
-
         </td>
-
     </tr>
-
-
-
     <tr>
-
         <td class="ornament">
             <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
@@ -319,30 +297,60 @@
                 </tr>
             </table>
         </td>
-
     </tr>
-
-
-
     <tr>
-
         <td class="inset" style="padding-bottom: 10pt;">
-
             <div class="doc-title">Товарные остатки</div>
-
-            <div class="doc-sub">Позиции каталога на сайте · цены розничные</div>
-
+            <div class="doc-sub">Позиции каталога на сайте</div>
         </td>
-
     </tr>
+{% endmacro %}
 
+{% macro render_doc_footer() %}
+    <tr>
+        <td class="ornament">
+            <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td width="50%">&nbsp;</td>
+                    <td align="center" width="120pt">
+                        <table width="120pt" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td class="orn-line" width="45%">&nbsp;</td>
+                                <td class="orn-gap">&nbsp;</td>
+                                <td class="orn-gem">&nbsp;</td>
+                                <td class="orn-gap">&nbsp;</td>
+                                <td class="orn-line" width="45%">&nbsp;</td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td width="50%">&nbsp;</td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+    <tr>
+        <td class="footer-block inset">
+            <div class="footer-validity">Цены актуальны на {{ doc_date.strftime('%d.%m.%Y') }} — дата формирования прайса.</div>
+            {% if shop_contacts %}
+            <div class="footer-contact">
+                {% for c in shop_contacts %}
+                    {% if not loop.first %} · {% endif %}
+                    {% if c.label %}{{ c.label }}: {% endif %}{{ c.value }}
+                {% endfor %}
+            </div>
+            {% endif %}
+            <div class="footer-note">B2B · Архитектурный питомник «Княжество»</div>
+        </td>
+    </tr>
+{% endmacro %}
 
+<table class="sheet" cellpadding="0" cellspacing="0">
+
+    {{ render_doc_header() }}
 
     {% set ns = namespace(has_any=false) %}
-    {# force_on_request: секция «Саженцы» — как в ERP, наличие только «по запросу» у размера #}
-    {% macro render_group_block(block_groups, force_on_request=false, break_after=false) %}
+    {% macro render_group_block(block_groups, force_on_request=false) %}
         {% for group in block_groups %}
-            {% set is_last_group = loop.revindex == 1 %}
             {% set ns.has_any = true %}
             {% set all_on_request = force_on_request or (group.rows|length > 0 and group.rows|selectattr('pdf_on_request')|list|length == group.rows|length) %}
             <tr>
@@ -361,7 +369,6 @@
             {% for row in group.rows %}
             <tr>
                 <td class="inset">
-                    {% if break_after and is_last_group and loop.last %}<div class="pdf-break-after">{% endif %}
                     <table width="100%" cellpadding="0" cellspacing="0" class="detail" style="table-layout: fixed;">
                         <tr>
                             <td class="c-name" style="width: 42%;">&nbsp;</td>
@@ -370,7 +377,6 @@
                             <td class="c-free" style="width: 20%;">{% if force_on_request or row.pdf_on_request %}по запросу{% else %}{{ row.free }}{% endif %}</td>
                         </tr>
                     </table>
-                    {% if break_after and is_last_group and loop.last %}</div>{% endif %}
                 </td>
             </tr>
             {% endfor %}
@@ -408,15 +414,14 @@
     {% endmacro %}
 
     {% set has_gallery = promo_photos and ground_groups and container_groups %}
-    {% if ground_groups %}
+    {% if pdf_part in ('full', 'ground') and ground_groups %}
     {{ render_section_header('Растения в грунте', 'Товарные позиции открытого грунта') }}
-    {{ render_group_block(ground_groups, break_after=container_groups|length > 0 and not has_gallery) }}
+    {{ render_group_block(ground_groups) }}
     {% endif %}
 
-    {% if has_gallery %}
+    {% if pdf_part in ('full', 'ground') and has_gallery %}
     <tr>
         <td class="inset gallery-wrap">
-            <div class="pdf-break-after">
             <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
                     {% for url in promo_photos %}
@@ -431,12 +436,11 @@
                 {{ print_settings.get('footer_text') }}
             </div>
             {% endif %}
-            </div>
         </td>
     </tr>
     {% endif %}
 
-    {% if container_groups %}
+    {% if pdf_part in ('full', 'containers') and container_groups %}
     {{ render_section_header('Саженцы', 'Саженцы · контейнер', qty_label='Наличие') }}
     {{ render_group_block(container_groups, force_on_request=true) }}
     <tr>
@@ -446,7 +450,7 @@
     </tr>
     {% endif %}
 
-    {% if not ground_groups and not container_groups %}
+    {% if pdf_part == 'full' and not ground_groups and not container_groups %}
     <tr>
         <td class="inset" style="padding: 24pt 0; text-align: center; color: #7A7E78; font-style: italic;">
             Нет позиций, включённых в отображение на сайте
@@ -454,62 +458,7 @@
     </tr>
     {% endif %}
 
-
-
-    <tr>
-
-        <td class="ornament">
-            <table width="100%" cellpadding="0" cellspacing="0">
-                <tr>
-                    <td width="50%">&nbsp;</td>
-                    <td align="center" width="120pt">
-                        <table width="120pt" cellpadding="0" cellspacing="0">
-                            <tr>
-                                <td class="orn-line" width="45%">&nbsp;</td>
-                                <td class="orn-gap">&nbsp;</td>
-                                <td class="orn-gem">&nbsp;</td>
-                                <td class="orn-gap">&nbsp;</td>
-                                <td class="orn-line" width="45%">&nbsp;</td>
-                            </tr>
-                        </table>
-                    </td>
-                    <td width="50%">&nbsp;</td>
-                </tr>
-            </table>
-        </td>
-
-    </tr>
-
-
-
-    <tr>
-
-        <td class="footer-block inset">
-
-            <div class="footer-validity">Цены актуальны на {{ doc_date.strftime('%d.%m.%Y') }} — дата формирования прайса.</div>
-
-            {% if shop_contacts %}
-
-
-            <div class="footer-contact">
-
-                {% for c in shop_contacts %}
-
-                    {% if not loop.first %} · {% endif %}
-
-                    {% if c.label %}{{ c.label }}: {% endif %}{{ c.value }}
-
-                {% endfor %}
-
-            </div>
-
-            {% endif %}
-
-            <div class="footer-note">B2B · Архитектурный питомник «Княжество»</div>
-
-        </td>
-
-    </tr>
+    {{ render_doc_footer() }}
 
 </table>
 

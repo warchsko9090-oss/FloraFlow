@@ -28,6 +28,12 @@ instance/
 uploads/
 /data/
 
+# Дампы миграции Amvera (секреты/данные)
+backups/
+*.dump
+floraflow.dump
+floraflow.sql
+
 # IDE / OS
 .cursor/
 .vscode/

@@ -218,8 +218,8 @@ def pdf_resource_callback(uri, rel):
     return uri
 
 
-def create_pdf_response(html_content, filename, *, page_bg=None, page_margin='1cm'):
-    """PDF через xhtml2pdf; DejaVu регистрируется напрямую (без @font-face — Windows)."""
+def build_pdf_bytes(html_content, *, page_bg=None, page_margin='1cm'):
+    """Собирает PDF в bytes через xhtml2pdf."""
     from reportlab.lib.colors import HexColor
     from reportlab.platypus.frames import Frame
     from xhtml2pdf.context import pisaContext
@@ -245,7 +245,7 @@ def create_pdf_response(html_content, filename, *, page_bg=None, page_margin='1c
     )
     if ctx.err:
         cleanFiles()
-        return 'Error generating PDF'
+        return None
 
     out = io.BytesIO()
     doc = PmlBaseDoc(
@@ -299,7 +299,37 @@ def create_pdf_response(html_content, filename, *, page_bg=None, page_margin='1c
         doc.build(ctx.story)
 
     cleanFiles()
-    response = make_response(out.getvalue())
+    return out.getvalue()
+
+
+def merge_pdf_bytes(chunks):
+    """Склеивает несколько PDF без пустых страниц между частями."""
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    for chunk in chunks:
+        if not chunk:
+            continue
+        reader = PdfReader(io.BytesIO(chunk))
+        for page in reader.pages:
+            writer.add_page(page)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def create_pdf_response(html_content, filename, *, page_bg=None, page_margin='1cm', pdf_parts=None):
+    """PDF через xhtml2pdf. pdf_parts — список HTML-фрагментов для склейки в один файл."""
+    parts = pdf_parts if pdf_parts else [html_content]
+    blobs = []
+    for part in parts:
+        blob = build_pdf_bytes(part, page_bg=page_bg, page_margin=page_margin)
+        if not blob:
+            return 'Error generating PDF'
+        blobs.append(blob)
+
+    data = merge_pdf_bytes(blobs) if len(blobs) > 1 else blobs[0]
+    response = make_response(data)
     response.headers['Content-Type'] = 'application/pdf'
     response.headers['Content-Disposition'] = f'attachment; filename={filename}'
     return response
