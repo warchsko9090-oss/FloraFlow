@@ -439,7 +439,7 @@ class Payment(db.Model):
     order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False)
     date = db.Column(db.Date, default=datetime.now)
     amount = db.Column(db.Numeric(10, 2), nullable=False)
-    payment_type = db.Column(db.String(20), default='cashless') # cashless, cash, barter
+    payment_type = db.Column(db.String(20), default='cashless') # cashless, cash, barter, writeoff
     comment = db.Column(db.String(200))
     file_path = db.Column(db.String(255), nullable=True) # Путь к файлу платежки
 

@@ -404,6 +404,9 @@
                             <a href="{{ url_for('orders.download_payment_file', payment_id=p.id) }}" class="text-success" title="Скачать платежку" target="_blank"><i class="fas fa-file-invoice-dollar"></i></a>
                             {% endif %}
                             <span class="fw-bold">{{ p.amount|money }}</span>
+                            {% if p.payment_type == 'writeoff' %}
+                            <span class="badge bg-secondary" title="{{ p.comment or '' }}">списание</span>
+                            {% endif %}
                             {% if current_user.role in ['admin', 'executive', 'user'] and order.status != 'canceled' %}
                             <button type="button" class="btn btn-link text-primary p-0 btn-sm d-none d-md-inline-block" onclick="showEditPaymentModal({{ p.id }}, '{{ p.date }}', {{ p.amount }}, '{{ p.comment or '' }}', '{{ p.payment_type }}')" title="Редактировать">
                                 <i class="fas fa-edit"></i>
@@ -457,6 +460,13 @@
                         <button class="btn btn-success btn-sm w-100">Сохранить</button>
                     </form>
                 </div>
+                {% set _paid = order.payments|sum(attribute='amount') %}
+                {% set _debt = (order.total_sum or 0) - (_paid or 0) %}
+                {% if current_user.role == 'admin' and _debt > 0 %}
+                <button class="btn btn-outline-danger btn-sm w-100 d-none d-md-block mt-2" type="button" data-bs-toggle="modal" data-bs-target="#writeoffOrderModal">
+                    <i class="fas fa-eraser me-1"></i> Списать долг ({{ _debt|money_int }})
+                </button>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
@@ -1228,6 +1238,9 @@
                     {% if current_user.role in ['admin', 'executive'] %}
                     <option value="barter">Взаимозачет</option>
                     {% endif %}
+                    {% if current_user.role == 'admin' %}
+                    <option value="writeoff">Списание долга</option>
+                    {% endif %}
                 </select>
             </div>
             <div class="mb-2">
@@ -1242,6 +1255,44 @@
     </div>
   </div>
 </div>
+{% endif %}
+
+{% if current_user.role == 'admin' and order.status != 'canceled' %}
+{% set _paid_m = order.payments|sum(attribute='amount') %}
+{% set _debt_m = (order.total_sum or 0) - (_paid_m or 0) %}
+{% if _debt_m > 0 %}
+<div class="modal fade" id="writeoffOrderModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="POST" action="{{ url_for('finance.reports_reconciliation_writeoff') }}" class="modal-content" hx-boost="false">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title fw-bold"><i class="fas fa-eraser me-2"></i>Списать долг по заказу #{{ order.id }}</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" name="client_id" value="{{ order.client_id }}">
+        <input type="hidden" name="order_id" value="{{ order.id }}">
+        <input type="hidden" name="return_to" value="{{ request.url }}">
+        <div class="mb-3">
+          <label class="form-label fw-bold small">Сумма (долг {{ _debt_m|money }})</label>
+          <input type="number" step="0.01" min="0.01" max="{{ _debt_m }}" name="amount" class="form-control" value="{{ _debt_m }}" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-bold small">Дата</label>
+          <input type="date" name="date" class="form-control" required>
+        </div>
+        <div class="mb-0">
+          <label class="form-label fw-bold small">Комментарий <span class="text-danger">*</span></label>
+          <textarea name="comment" class="form-control" rows="2" required maxlength="200" placeholder="Причина списания"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-danger fw-bold" onclick="return confirm('Списать долг по этому заказу?');">Списать</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
 {% endif %}
 
 {# ============================================================

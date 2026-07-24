@@ -576,6 +576,80 @@ def _budget_period_to_months(tm):
     return list(range(1, 13)), 'За год'
 
 
+def _cashflow_year_net_fact(y):
+    """Net за календарный год: сумма Payment − сумма Expense (по target_year/дате)."""
+    pay = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
+        func.extract('year', Payment.date) == y
+    ).scalar() or 0
+    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
+    exp = db.session.query(func.coalesce(func.sum(Expense.amount), 0)).filter(
+        actual_year == y
+    ).scalar() or 0
+    return Decimal(pay) - Decimal(exp)
+
+
+def _cashflow_opening_balance_before_year(year):
+    """Входящий остаток на 1 янв year = сумма net всех лет строго до year."""
+    pay_years = db.session.query(func.extract('year', Payment.date)).distinct().all()
+    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
+    exp_years = db.session.query(actual_year).distinct().all()
+    years = set()
+    for (y,) in pay_years:
+        if y is not None:
+            years.add(int(y))
+    for (y,) in exp_years:
+        if y is not None:
+            years.add(int(y))
+    total = Decimal(0)
+    for y in sorted(years):
+        if y >= year:
+            continue
+        total += _cashflow_year_net_fact(y)
+    return total
+
+
+def _cashflow_yearly_series(through_year, lookback=4):
+    """Ряд year-end net и накопительный остаток за lookback лет до through_year включительно."""
+    start_y = through_year - lookback
+    # Расширяем вниз, если есть более старые данные
+    pay_min = db.session.query(func.min(func.extract('year', Payment.date))).scalar()
+    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
+    exp_min = db.session.query(func.min(actual_year)).scalar()
+    mins = [int(x) for x in (pay_min, exp_min) if x is not None]
+    if mins:
+        start_y = min(start_y, min(mins))
+
+    # Накопление с самого раннего года в данных, в график отдаём только start_y..through_year
+    pay_years = db.session.query(func.extract('year', Payment.date)).distinct().all()
+    exp_years = db.session.query(actual_year).distinct().all()
+    all_years = set()
+    for (y,) in pay_years:
+        if y is not None:
+            all_years.add(int(y))
+    for (y,) in exp_years:
+        if y is not None:
+            all_years.add(int(y))
+    if not all_years:
+        all_years = {through_year}
+
+    running = Decimal(0)
+    series = []
+    for y in sorted(all_years):
+        if y > through_year:
+            break
+        net = _cashflow_year_net_fact(y)
+        running += net
+        if y >= start_y:
+            series.append({
+                'year': y,
+                'net_fact': net,
+                'cum_fact': running,
+            })
+    if not series:
+        series.append({'year': through_year, 'net_fact': Decimal(0), 'cum_fact': Decimal(0)})
+    return series
+
+
 def _resolve_selected_months(args, fallback_target_month='all'):
     """Извлекает выбранные месяцы из request.args.
 
@@ -735,7 +809,10 @@ def budget():
         if r.month in cashflow_data:
             cashflow_data[r.month]['plan'] = r.amount
 
-    payments_q = db.session.query(func.extract('month', Payment.date).label('month'), func.sum(Payment.amount)).filter(func.extract('year', Payment.date) == year).group_by('month').all()
+    payments_q = db.session.query(
+        func.extract('month', Payment.date).label('month'),
+        func.sum(Payment.amount),
+    ).filter(func.extract('year', Payment.date) == year).group_by('month').all()
     for m, total in payments_q:
         if int(m) in cashflow_data:
             cashflow_data[int(m)]['fact'] = total
@@ -743,12 +820,19 @@ def budget():
     cashflow_total_plan = sum(cashflow_data[m]['plan'] for m in range(1, 13))
     cashflow_total_fact = sum(cashflow_data[m]['fact'] for m in range(1, 13))
 
-    # Итоги cashflow для выбранного периода
+    # Итоги cashflow / выплат для выбранного периода (KPI и таблица)
     cashflow_period_plan = sum(cashflow_data[m]['plan'] for m in selected_months)
     cashflow_period_fact = sum(cashflow_data[m]['fact'] for m in selected_months)
+    cashflow_period_out_plan = sum(grand_totals[m]['plan'] for m in selected_months)
+    cashflow_period_out_fact = sum(grand_totals[m]['fact'] for m in selected_months)
 
-    # Накопительные (кумулятивные) показатели
-    cumulative = {m: {'plan_balance': Decimal(0), 'fact_balance': Decimal(0)} for m in range(1, 13)}
+    # Входящий остаток на 1 янв = сумма net всех прошлых лет (Payment − Expense)
+    opening_balance = _cashflow_opening_balance_before_year(year)
+
+    # Накопительные показатели с начала выбранного года (+ opening)
+    cumulative = {
+        m: {'plan_balance': Decimal(0), 'fact_balance': Decimal(0)} for m in range(1, 13)
+    }
     cum_in_plan = Decimal(0)
     cum_in_fact = Decimal(0)
     cum_out_plan = Decimal(0)
@@ -759,9 +843,27 @@ def budget():
         cum_in_fact += cashflow_data[m]['fact']
         cum_out_plan += grand_totals[m]['plan']
         cum_out_fact += grand_totals[m]['fact']
+        # Настоящий план: план поступлений − план выплат
+        cumulative[m]['plan_balance'] = opening_balance + cum_in_plan - cum_out_plan
+        cumulative[m]['fact_balance'] = opening_balance + cum_in_fact - cum_out_fact
 
-        cumulative[m]['plan_balance'] = cum_in_fact - cum_out_plan  # фактический вход - плановый расход
-        cumulative[m]['fact_balance'] = cum_in_fact - cum_out_fact  # фактический вход - фактический расход
+    # Ряд по годам для графика «накопительный остаток прошлых лет»
+    yearly_cashflow = _cashflow_yearly_series(year)
+
+    # Данные для Chart.js (месяцы текущего года)
+    cashflow_chart = {
+        'labels': [MONTH_NAMES.get(m, str(m)) for m in range(1, 13)],
+        'in_fact': [float(cashflow_data[m]['fact'] or 0) for m in range(1, 13)],
+        'out_fact': [float(grand_totals[m]['fact'] or 0) for m in range(1, 13)],
+        'cum_fact': [float(cumulative[m]['fact_balance'] or 0) for m in range(1, 13)],
+        'cum_plan': [float(cumulative[m]['plan_balance'] or 0) for m in range(1, 13)],
+        'selected_months': list(selected_months),
+    }
+    yearly_chart = {
+        'labels': [str(y['year']) for y in yearly_cashflow],
+        'cum_fact': [float(y['cum_fact'] or 0) for y in yearly_cashflow],
+        'net_fact': [float(y['net_fact'] or 0) for y in yearly_cashflow],
+    }
 
     # Экспорт PDF — учитывает текущий период (multi-select или target_month)
     # и активный таб (бюджет / кешфлоу).
@@ -875,7 +977,13 @@ def budget():
                            cashflow_total_fact=cashflow_total_fact,
                            cashflow_period_plan=cashflow_period_plan,
                            cashflow_period_fact=cashflow_period_fact,
-                           cumulative=cumulative)
+                           cashflow_period_out_plan=cashflow_period_out_plan,
+                           cashflow_period_out_fact=cashflow_period_out_fact,
+                           cumulative=cumulative,
+                           opening_balance=opening_balance,
+                           yearly_cashflow=yearly_cashflow,
+                           cashflow_chart=cashflow_chart,
+                           yearly_chart=yearly_chart)
 
 @bp.route('/budget/export')
 @login_required
@@ -2211,22 +2319,33 @@ def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False,
         inv_info = f"Счет № {o.invoice_number} от {o.invoice_date.strftime('%d.%m.%Y')}" if (o.invoice_number and o.invoice_date) else (f"Счет № {o.invoice_number}" if o.invoice_number else "")
         
         # Создаем элемент детализации для оплаты, чтобы показать его внутри группы
+        is_writeoff = (p.payment_type or '') == 'writeoff'
+        pay_label = (
+            f"Списание долга от {p.date.strftime('%d.%m.%Y')}"
+            if is_writeoff
+            else f"Оплата от {p.date.strftime('%d.%m.%Y')}"
+        )
         payment_item_detail = {
             'date': display_date,
-            'name': f"Оплата от {p.date.strftime('%d.%m.%Y')}",
+            'name': pay_label,
             'size': '-',
             'field': '-',
             'qty': 1,
             'price': Decimal(str(p.amount)),
             'sum': Decimal(str(p.amount)),
             'type': 'payment',
+            'payment_type': p.payment_type or 'cashless',
             'comment': (p.comment or '').strip(),
         }
 
         raw_rows.append({
             'date': display_date, 
             'sort_date': sort_date_val, 
-            'desc': f"Оплата (по заказу #{p.order_id})", 
+            'desc': (
+                f"Списание долга (заказ #{p.order_id})"
+                if is_writeoff
+                else f"Оплата (по заказу #{p.order_id})"
+            ),
             'debit': Decimal(0), 
             'credit': Decimal(str(p.amount)), 
             'order_id': p.order_id, 
@@ -2234,7 +2353,8 @@ def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False,
             'invoice_info': inv_info, # Теперь здесь есть номер счета!
             'is_grouped': False,
             'has_payments': False,
-            'is_payment_row': True 
+            'is_payment_row': True,
+            'is_writeoff': is_writeoff,
         })
 
     # 3. ГРУППИРОВКА И СОРТИРОВКА
@@ -2499,6 +2619,7 @@ def reports_reconciliation():
     t_credit = Decimal(0)
     client_name = ''
     barter_orders = []
+    writeoff_orders = []
     
     current_url = request.url
 
@@ -2521,6 +2642,7 @@ def reports_reconciliation():
                     'paid': bo_paid,
                     'remaining': bo_total - bo_paid
                 })
+            writeoff_orders = _client_orders_with_debt(int(cid))
         except Exception as e:
             flash(f"Ошибка: {str(e)}")
             print(f"RECONCILIATION ERROR: {e}")
@@ -2532,7 +2654,130 @@ def reports_reconciliation():
                            client_name=client_name, mode=mode,
                            zero_opening=zero_opening,
                            current_url=current_url,
-                           barter_orders=barter_orders)
+                           barter_orders=barter_orders,
+                           writeoff_orders=writeoff_orders)
+
+def _order_open_debt(order):
+    """Открытый долг по заказу: сумма заказа − сумма оплат (включая writeoff)."""
+    total = Decimal(str(order.total_sum or 0))
+    paid = sum((Decimal(str(p.amount or 0)) for p in (order.payments or [])), Decimal(0))
+    debt = total - paid
+    return debt if debt > 0 else Decimal(0)
+
+
+def _client_orders_with_debt(client_id):
+    """Заказы клиента с положительным остатком долга (для списания)."""
+    orders = (
+        Order.query.filter(
+            Order.client_id == client_id,
+            Order.status != 'canceled',
+            Order.is_deleted == False,
+        )
+        .order_by(Order.date.desc(), Order.id.desc())
+        .all()
+    )
+    result = []
+    for o in orders:
+        debt = _order_open_debt(o)
+        if debt <= 0:
+            continue
+        inv = ''
+        if o.invoice_number and o.invoice_date:
+            inv = f"Счет № {o.invoice_number} от {o.invoice_date.strftime('%d.%m.%Y')}"
+        elif o.invoice_number:
+            inv = f"Счет № {o.invoice_number}"
+        result.append({
+            'id': o.id,
+            'date': o.date.strftime('%d.%m.%Y') if o.date else '',
+            'invoice': inv,
+            'total': float(o.total_sum or 0),
+            'debt': float(debt),
+            'label': f"#{o.id}" + (f" · {inv}" if inv else '') + f" · долг {debt:,.0f}".replace(',', ' '),
+        })
+    return result
+
+
+@bp.route('/reports/reconciliation/writeoff', methods=['POST'])
+@login_required
+def reports_reconciliation_writeoff():
+    """Admin-only: корректирующая оплата payment_type=writeoff для списания долга клиента."""
+    if current_user.role != 'admin':
+        flash('Списание долга доступно только администратору', 'danger')
+        return redirect(url_for('finance.reports_reconciliation'))
+
+    cid = request.form.get('client_id')
+    order_id = request.form.get('order_id')
+    comment = (request.form.get('comment') or '').strip()
+    amount_raw = (request.form.get('amount') or '').strip().replace(' ', '').replace(',', '.')
+    date_raw = (request.form.get('date') or '').strip()
+    return_to = request.form.get('return_to') or ''
+
+    def _back():
+        if return_to:
+            return redirect(return_to)
+        return redirect(url_for(
+            'finance.reports_reconciliation',
+            client_id=cid,
+            start_date=request.form.get('start_date'),
+            end_date=request.form.get('end_date'),
+            mode=request.form.get('mode') or 'grouped',
+        ))
+
+    if not comment:
+        flash('Комментарий обязателен для списания долга', 'danger')
+        return _back()
+    if not cid or not order_id:
+        flash('Выберите клиента и заказ', 'danger')
+        return _back()
+
+    try:
+        amount = Decimal(amount_raw)
+    except Exception:
+        flash('Некорректная сумма списания', 'danger')
+        return _back()
+    if amount <= 0:
+        flash('Сумма списания должна быть больше нуля', 'danger')
+        return _back()
+
+    try:
+        pay_date = datetime.strptime(date_raw, '%Y-%m-%d').date() if date_raw else msk_today()
+    except Exception:
+        flash('Некорректная дата', 'danger')
+        return _back()
+
+    order = Order.query.get(int(order_id))
+    if not order or int(order.client_id) != int(cid):
+        flash('Заказ не найден у этого клиента', 'danger')
+        return _back()
+    if order.status == 'canceled' or getattr(order, 'is_deleted', False):
+        flash('Нельзя списать долг по отменённому заказу', 'danger')
+        return _back()
+
+    debt = _order_open_debt(order)
+    if amount > debt + Decimal('0.01'):
+        flash(f'Сумма превышает долг по заказу ({debt})', 'danger')
+        return _back()
+
+    # Чуть округляем вверх до долга при копеечных расхождениях
+    if amount > debt:
+        amount = debt
+
+    p = Payment(
+        order_id=order.id,
+        amount=amount,
+        date=pay_date,
+        payment_type='writeoff',
+        comment=comment[:200],
+    )
+    db.session.add(p)
+    db.session.commit()
+    log_action(
+        f"Списание долга клиента #{cid}: заказ #{order.id}, сумма {amount}, дата {pay_date}, "
+        f"комментарий: {comment[:120]}"
+    )
+    flash(f'Долг списан: {amount} ₽ по заказу #{order.id}', 'success')
+    return _back()
+
 
 @bp.route('/reports/reconciliation/export')
 @login_required
