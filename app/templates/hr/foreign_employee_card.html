@@ -142,22 +142,13 @@
             {% endif %}
             <form method="POST" class="row g-2">
                 <input type="hidden" name="action" value="create_registration_period">
-                <div class="col-md-4">
+                <div class="col-md-6">
                     <label class="form-label">Дата начала</label>
                     <input type="date" name="registration_start_date" class="form-control" required>
                 </div>
-                <div class="col-md-4">
-                    <label class="form-label">Режим срока</label>
-                    <select name="reg_months_mode" class="form-select">
-                        <option value="0">Ввести дату вручную</option>
-                        <option value="1">+1 месяц</option>
-                        <option value="2">+2 месяца</option>
-                        <option value="3">+3 месяца</option>
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Дата окончания (если вручную)</label>
-                    <input type="date" name="registration_end_date_manual" class="form-control">
+                <div class="col-md-6">
+                    <label class="form-label">Дата окончания</label>
+                    <input type="date" name="registration_end_date_manual" class="form-control" required>
                 </div>
                 <div class="col-12">
                     <button class="btn btn-outline-primary btn-sm">Сохранить период регистрации</button>
@@ -175,15 +166,11 @@
                     <label class="form-label">Дата продления</label>
                     <input type="date" class="form-control" name="renewal_date" required>
                 </div>
-                <div class="col-md-2">
-                    <label class="form-label">Месяцев</label>
-                    <select name="months_extended" class="form-select">
-                        <option value="1">1</option>
-                        <option value="2">2</option>
-                        <option value="3">3</option>
-                    </select>
+                <div class="col-md-3">
+                    <label class="form-label">Новая дата окончания</label>
+                    <input type="date" class="form-control" name="new_end_date" required>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <label class="form-label">Документ</label>
                     <input type="file" class="form-control" name="renewal_file">
                 </div>
@@ -201,12 +188,11 @@
 
             <div class="table-responsive">
                 <table class="table table-sm align-middle">
-                    <thead><tr><th>Дата</th><th>Мес.</th><th>Срок после продления</th><th>Документ</th></tr></thead>
+                    <thead><tr><th>Дата продления</th><th>Срок после продления</th><th>Документ</th></tr></thead>
                     <tbody>
                         {% for r in reg_renewals %}
                         <tr>
                             <td>{{ r.renewal_date.strftime('%d.%m.%Y') }}</td>
-                            <td>{{ r.months_extended }}</td>
                             <td>{{ r.period_end_after_renewal.strftime('%d.%m.%Y') if r.period_end_after_renewal else '-' }}</td>
                             <td>
                                 {% if r.doc_file_rel_path %}
@@ -217,7 +203,7 @@
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="4" class="text-muted">Продлений пока нет.</td></tr>
+                        <tr><td colspan="3" class="text-muted">Продлений пока нет.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>

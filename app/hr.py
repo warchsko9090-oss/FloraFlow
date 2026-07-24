@@ -1054,16 +1054,12 @@ def foreign_employee_card(employee_id):
             elif action == 'create_registration_period':
                 start_raw = request.form.get('registration_start_date')
                 end_raw = request.form.get('registration_end_date_manual')
-                months_mode = int(request.form.get('reg_months_mode') or 0)
                 if not start_raw:
                     raise ValueError('Укажите дату начала регистрации')
+                if not end_raw:
+                    raise ValueError('Укажите дату окончания регистрации')
                 start_date = datetime.strptime(start_raw, '%Y-%m-%d').date()
-                if months_mode in [1, 2, 3]:
-                    end_date = _add_months(start_date, months_mode)
-                else:
-                    if not end_raw:
-                        raise ValueError('Укажите дату окончания регистрации')
-                    end_date = datetime.strptime(end_raw, '%Y-%m-%d').date()
+                end_date = datetime.strptime(end_raw, '%Y-%m-%d').date()
                 if end_date < start_date:
                     raise ValueError('Дата окончания не может быть раньше даты начала')
 
@@ -1089,19 +1085,15 @@ def foreign_employee_card(employee_id):
                 if not period or period.employee_id != employee.id:
                     raise ValueError('Период регистрации не найден')
                 renewal_date_raw = request.form.get('renewal_date')
+                new_end_raw = request.form.get('new_end_date')
                 if not renewal_date_raw:
                     raise ValueError('Укажите дату продления')
+                if not new_end_raw:
+                    raise ValueError('Укажите новую дату окончания регистрации')
                 renewal_date = datetime.strptime(renewal_date_raw, '%Y-%m-%d').date()
-                months_extended = int(request.form.get('months_extended') or 1)
-                if months_extended not in [1, 2, 3]:
-                    raise ValueError('Продление может быть только на 1, 2 или 3 месяца')
-
-                next_base_date = (
-                    period.end_date
-                    if period.end_date and period.end_date >= renewal_date
-                    else renewal_date
-                )
-                new_end_date = _add_months(next_base_date, months_extended)
+                new_end_date = datetime.strptime(new_end_raw, '%Y-%m-%d').date()
+                if new_end_date < renewal_date:
+                    raise ValueError('Новая дата окончания не может быть раньше даты продления')
 
                 doc_rel_path = None
                 doc_original_name = None
@@ -1125,7 +1117,7 @@ def foreign_employee_card(employee_id):
                     employee_id=employee.id,
                     registration_period_id=period.id,
                     renewal_date=renewal_date,
-                    months_extended=months_extended,
+                    months_extended=0,
                     period_end_after_renewal=new_end_date,
                     doc_file_rel_path=doc_rel_path,
                     doc_original_name=doc_original_name,

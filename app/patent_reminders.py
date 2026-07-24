@@ -8,7 +8,9 @@ from app.utils import msk_today
 from app.telegram import send_message as _send_tg_message_impl
 
 REMINDER_WINDOWS = {
-    'day7': (4, 7),
+    # day7: окно 0–7 — если в день «за 7» сбой, на 6/5/… догоняем один раз,
+    # пока запись в логе не появится. Текст всегда с актуальным остатком дней.
+    'day7': (0, 7),
     'day3': (0, 3),
 }
 REMINDER_LABEL_DAYS = {
@@ -16,8 +18,8 @@ REMINDER_LABEL_DAYS = {
     'day3': 3,
 }
 
-# Регистрация: только окно «за 7 дней» (с догоном 4–7, как у патента day7).
-REGISTRATION_REMINDER_WINDOW = (4, 7)
+# Регистрация: тот же принцип догона 0–7 дней, одно уведомление на срок.
+REGISTRATION_REMINDER_WINDOW = (0, 7)
 REGISTRATION_REMINDER_LABEL = 7
 
 
@@ -50,15 +52,19 @@ def _reminder_already_sent(period_id: int, reminder_type: str) -> bool:
 
 
 def _pending_reminder_type(delta: int, period_id: int) -> str | None:
-    """Определяет, какое напоминание нужно сейчас (с догоном в своём окне)."""
-    if REMINDER_WINDOWS['day3'][0] <= delta <= REMINDER_WINDOWS['day3'][1]:
-        if not _reminder_already_sent(period_id, 'day3'):
-            return 'day3'
+    """Какое напоминание нужно сейчас.
+
+    Сначала «за 7 дней» (с догоном 0–7, если вчера не ушло).
+    Затем отдельно «за 3 дня», если day7 уже был отправлен.
+    """
+    if delta < 0:
         return None
-    if REMINDER_WINDOWS['day7'][0] <= delta <= REMINDER_WINDOWS['day7'][1]:
-        if not _reminder_already_sent(period_id, 'day7'):
-            return 'day7'
-        return None
+    lo7, hi7 = REMINDER_WINDOWS['day7']
+    if lo7 <= delta <= hi7 and not _reminder_already_sent(period_id, 'day7'):
+        return 'day7'
+    lo3, hi3 = REMINDER_WINDOWS['day3']
+    if lo3 <= delta <= hi3 and not _reminder_already_sent(period_id, 'day3'):
+        return 'day3'
     return None
 
 
@@ -94,17 +100,16 @@ def run_patent_reminders_job():
         if _is_patent_paid_for_reminder(period, reminder_type, today):
             continue
 
-        notify_rows.append((period, reminder_type, _employee_name(period)))
+        notify_rows.append((period, reminder_type, delta, _employee_name(period)))
 
     if not notify_rows:
         return 0, "nothing_to_send"
 
     lines = ["<b>Напоминание по оплате патентов</b>", ""]
-    for period, reminder_type, employee_name in notify_rows:
-        label_days = REMINDER_LABEL_DAYS[reminder_type]
+    for period, reminder_type, delta, employee_name in notify_rows:
         lines.append(
-            f"• {employee_name} — срок патента до {period.end_date.strftime('%d.%m.%Y')} "
-            f"(напоминание за {label_days} дн.)"
+            f"• {employee_name} — срок патента до {period.end_date.strftime('%d.%m.%Y')}, "
+            f"осталось {delta} дн."
         )
     message_text = "\n".join(lines)
 
@@ -112,7 +117,7 @@ def run_patent_reminders_job():
     if not ok:
         return 0, f"send_failed: {send_result}"
 
-    for period, reminder_type, _name in notify_rows:
+    for period, reminder_type, _delta, _name in notify_rows:
         db.session.add(PatentReminderLog(
             patent_period_id=period.id,
             reminder_type=reminder_type,
@@ -133,17 +138,11 @@ def _current_patent_for_employee(employee_id: int):
 def _patent_status_line(period, today) -> str:
     """Строка про патент для сообщения о регистрации."""
     if not period or not period.end_date:
-        return (
-            "  Патент: не указан ⚠️ "
-            "Продление регистрации возможно только при действующем патенте"
-        )
+        return "  Патент: не указан"
     patent_days = (period.end_date - today).days
     end_str = period.end_date.strftime('%d.%m.%Y')
     if patent_days < 0:
-        return (
-            f"  Патент: истёк {abs(patent_days)} дн. назад (был до {end_str}) ⚠️ "
-            "Продление регистрации возможно только при действующем патенте"
-        )
+        return f"  Патент: истёк {abs(patent_days)} дн. назад (был до {end_str})"
     if patent_days == 0:
         return f"  Патент действует до сегодня ({end_str})"
     return f"  Патент действует ещё {patent_days} дн., до {end_str}"
@@ -246,7 +245,7 @@ def send_registration_status_digest():
 
     lines = [
         "<b>Сводка по регистрации</b>",
-        f"на {today.strftime('%d.%m.%Y')} (ручная проверка)",
+        f"на {today.strftime('%d.%m.%Y')}",
         "",
     ]
 
@@ -274,11 +273,6 @@ def send_registration_status_digest():
         if len(without_date) > 15:
             lines.append(f"  — … и ещё {len(without_date) - 15}")
 
-    lines.append("")
-    lines.append(
-        f"Итого с датой: {len(with_date)}. "
-        "Авто-напоминания — ежедневно в 9:00 МСК (окно 4–7 дн. до срока)."
-    )
     message_text = "\n".join(lines).rstrip()
 
     ok, send_result = _send_tg_message(message_text)
