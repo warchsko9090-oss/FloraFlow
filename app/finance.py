@@ -578,17 +578,14 @@ def _budget_period_to_months(tm):
 
 def _year_realized_revenue(y):
     """Реализованная выручка года = Σ (shipped_quantity × price)."""
-    total = Decimal(0)
-    orders = Order.query.filter(
+    total = db.session.query(
+        func.coalesce(func.sum(OrderItem.shipped_quantity * OrderItem.price), 0)
+    ).join(Order, OrderItem.order_id == Order.id).filter(
         func.extract('year', Order.date) == y,
         Order.status != 'canceled',
         Order.is_deleted == False,
-    ).all()
-    for o in orders:
-        for item in o.items:
-            price = item.price if item.price is not None else Decimal(0)
-            total += Decimal(item.shipped_quantity or 0) * Decimal(str(price))
-    return total
+    ).scalar()
+    return Decimal(total or 0)
 
 
 def _year_payments(y):
@@ -600,10 +597,15 @@ def _year_payments(y):
 
 
 def _year_partner_debt(y):
-    """Выплаты партнёрам за год (как на вкладке «Результат»)."""
+    """Выплаты партнёрам за год (как на вкладке «Результат»). Кэш на запрос."""
+    from flask import g
+    cache = g.setdefault('_cf_partner_debt_cache', {})
+    if y in cache:
+        return cache[y]
     cd_prev = calculate_cost_data(y - 1)
     debt, _ = calculate_investor_debt(y, cd_prev['accumulated_costs_map'])
-    return Decimal(debt or 0)
+    cache[y] = Decimal(debt or 0)
+    return cache[y]
 
 
 def _year_expenses_fin(y):
@@ -686,13 +688,14 @@ def _month_expenses_fin(y, include_cash=True, include_tax15=True):
 def _cashflow_year_net_fact(y, mode='money'):
     """
     Net года:
-      money   — Payment − (Expense+15% + партнёры)  [реальный ДС]
-      accrual — отгрузки − Expense без нал          [сравнение с планом / финрез-логика без денег]
+      money   — Payment − (Expense+15%)  [партнёры не в накоплении по годам —
+                иначе calculate_cost_data на каждый прошлый год вешает воркеры]
+      accrual — отгрузки − Expense без нал
     """
     if mode == 'accrual':
         exp = _year_expenses_fin(y)['no_cash']
         return _year_realized_revenue(y) - exp
-    exp = _year_expenses_fin(y)['total'] + _year_partner_debt(y)
+    exp = _year_expenses_fin(y)['total']
     return _year_payments(y) - exp
 
 
@@ -3602,12 +3605,12 @@ def archive_align():
 
     year = int(request.args.get('year') or (msk_now().year - 1))
     rows = []
+    # Лёгкая сводка: без calculate_cost_data / партнёров —
+    # иначе GET после кнопки «Выручка» на 9 годах вешает всех воркеров gunicorn.
     for y in sorted(EXCEL_FIN_TARGETS.keys()):
         t = EXCEL_FIN_TARGETS[y]
         rev = _year_realized_revenue(y)
         exp = _year_expenses_fin(y)
-        cd_prev = calculate_cost_data(y - 1)
-        debt, breakdown = calculate_investor_debt(y, cd_prev['accumulated_costs_map'])
         rows.append({
             'year': y,
             'excel_rev': t['revenue'],
@@ -3620,8 +3623,8 @@ def archive_align():
             'cur_net': rev - exp['total'],
             'rev_delta': t['revenue'] - rev,
             'exp_delta': t['expenses'] - exp['posted'],
-            'partner': debt,
-            'partner_breakdown': breakdown,
+            'partner': None,
+            'partner_breakdown': {},
             'locked': y == 2026,
         })
 

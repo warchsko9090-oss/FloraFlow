@@ -30,8 +30,7 @@
           <th class="text-end text-primary">Δ выручка</th>
           <th class="text-end">Excel расход</th>
           <th class="text-end">ERP расход*</th>
-          <th class="text-end text-danger">Δ расход</th>
-          <th class="text-end">Партнёры (справка)</th>
+          <th class="text-end">Δ расход</th>
           <th class="text-center" style="min-width: 280px;">Проводки</th>
         </tr>
       </thead>
@@ -48,9 +47,6 @@
           <td class="text-end">{{ r.cur_exp_posted|money }}</td>
           <td class="text-end fw-bold {% if r.exp_delta == 0 %}text-muted{% elif r.exp_delta > 0 %}text-danger{% else %}text-success{% endif %}">
             {% if r.exp_delta > 0 %}+{% endif %}{{ r.exp_delta|money }}
-          </td>
-          <td class="text-end small text-muted">
-            {% if r.partner %}{{ r.partner|money }}{% else %}—{% endif %}
           </td>
           <td class="text-center">
             {% if r.locked %}
@@ -79,7 +75,6 @@
                   </button>
                 </form>
               </div>
-              <div class="small text-muted mt-1">Партнёры: проводка не нужна (уже вне ИТОГО)</div>
             {% endif %}
           </td>
         </tr>
@@ -87,6 +82,6 @@
       </tbody>
     </table>
   </div>
-  <div class="small text-muted mt-2">* ERP расход = сумма проведённых Expense (без авто-15%). 15% от нал считается в финрезе/кешфлоу сверху.</div>
+  <div class="small text-muted mt-2">* ERP расход = сумма проведённых Expense (без авто-15%). Партнёры — на странице «Фин. результат», здесь не считаем (тяжёлый расчёт).</div>
 </div>
 {% endblock %}
