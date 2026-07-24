@@ -816,7 +816,9 @@ EXCEL_FIN_TARGETS = {
     2022: {'revenue': Decimal('12936500'), 'expenses': Decimal('8298348.85')},
     2023: {'revenue': Decimal('25378300'), 'expenses': Decimal('11238166.47')},
     2024: {'revenue': Decimal('11459100'), 'expenses': Decimal('12399370.67')},
-    2025: {'revenue': Decimal('12544700'), 'expenses': Decimal('11642981.40')},
+    # 2025: «Финансы_Питомника___.xlsm» → лист «Свод»
+    # выручка = сумма по отгрузкам; расходы = «грязные» (нал+безнал, без 15%)
+    2025: {'revenue': Decimal('17607998.60'), 'expenses': Decimal('14938377.28')},
 }
 
 
