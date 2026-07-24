@@ -720,11 +720,11 @@
                         <tr><td>Безнал</td><td class="text-end fw-bold">{{ data.exp_cashless|money }}</td></tr>
                         <tr class="table-info small"><td class="ps-3 text-muted">15% от наличных</td><td class="text-end text-muted">{{ data.tax_cash_15|money }}</td></tr>
                         {% if data.investor_debt > 0 %}
-                        <tr class="table-warning"><td colspan="2" class="fw-bold small text-muted pt-2">Выплаты Партнерам:</td></tr>
+                        <tr class="table-warning"><td colspan="2" class="fw-bold small text-muted pt-2">Выплаты Партнерам <span class="badge bg-secondary">не в ИТОГО</span>:</td></tr>
                         {% for inv_name, amt in data.investor_breakdown.items() %}<tr class="table-warning text-muted small"><td class="ps-3">- {{ inv_name }}</td><td class="text-end">{{ amt|money }}</td></tr>{% endfor %}
-                        <tr class="table-warning fw-bold border-top border-warning"><td>ИТОГО Партнерам</td><td class="text-end">{{ data.investor_debt|money }}</td></tr>
+                        <tr class="table-warning fw-bold border-top border-warning"><td>ИТОГО Партнерам (справка)</td><td class="text-end">{{ data.investor_debt|money }}</td></tr>
                         {% endif %}
-                        <tr class="table-secondary fw-bold border-top border-dark mt-2"><td>ИТОГО РАСХОДЫ (Всего)</td><td class="text-end">{{ data.total_expenses|money }}</td></tr>
+                        <tr class="table-secondary fw-bold border-top border-dark mt-2"><td>ИТОГО РАСХОДЫ (без партнёров)</td><td class="text-end">{{ data.total_expenses|money }}</td></tr>
                     </table>
                 </div>
             </div>

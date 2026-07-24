@@ -713,7 +713,7 @@
                 <!-- ПОСТУПЛЕНИЯ -->
                 <tr class="bg-white">
                     <td class="col-sticky col-code text-center text-success"><i class="fas fa-arrow-down"></i></td>
-                    <td class="col-sticky col-name fw-bold text-success border-end ps-4">Поступления (Входящие)</td>
+                    <td class="col-sticky col-name fw-bold text-success border-end ps-4">Поступления (Входящие)<div class="small fw-normal text-muted">отгрузки = фин. результат</div></td>
                     {% set cf_in_plan_summary = cashflow_total_plan if is_year_view else cashflow_period_plan %}
                     {% set cf_in_fact_summary = cashflow_total_fact if is_year_view else cashflow_period_fact %}
                     <td class="col-sticky col-total-group col-plan-tot text-num col-plan {% if period_only %}fs-5 p-0{% endif %}">
@@ -750,9 +750,9 @@
                 <!-- РАСХОДЫ -->
                 <tr class="bg-white">
                     <td class="col-sticky col-code text-center text-danger"><i class="fas fa-arrow-up"></i></td>
-                    <td class="col-sticky col-name fw-bold text-danger border-end ps-4">Выплаты (Исходящие)</td>
-                    {% set cf_out_plan_summary = grand_totals.get(13).get('plan') if is_year_view else period_totals.plan %}
-                    {% set cf_out_fact_summary = grand_totals.get(13).get('fact') if is_year_view else period_totals.fact %}
+                    <td class="col-sticky col-name fw-bold text-danger border-end ps-4">Выплаты (Исходящие)<div class="small fw-normal text-muted">Expense + 15% нал</div></td>
+                    {% set cf_out_plan_summary = cashflow_out_total_plan if is_year_view else cashflow_period_out_plan %}
+                    {% set cf_out_fact_summary = cashflow_out_total_fact if is_year_view else cashflow_period_out_fact %}
                     <td class="col-sticky col-total-group col-plan-tot text-num col-plan {% if period_only %}fs-5{% endif %}">{{ cf_out_plan_summary|money_int }}</td>
                     <td class="col-sticky col-total-group col-fact-tot text-num fw-bold text-danger col-fact {% if period_only %}fs-5{% endif %}">{{ cf_out_fact_summary|money_int }}</td>
                     <td class="col-sticky col-total-group col-diff-tot text-num col-diff border-end {% if period_only %}fs-5{% endif %}" style="border-right-color: #dee2e6 !important;">
@@ -761,10 +761,10 @@
                     </td>
                     {% if monthly_breakdown %}
                         {% for m in breakdown_months %}
-                        <td class="text-num border-start col-plan bg-white">{{ grand_totals.get(m).get('plan')|money_int }}</td>
-                        <td class="text-num text-danger fw-bold col-fact bg-white">{{ grand_totals.get(m).get('fact')|money_int }}</td>
+                        <td class="text-num border-start col-plan bg-white">{{ cashflow_out.get(m).get('plan')|money_int }}</td>
+                        <td class="text-num text-danger fw-bold col-fact bg-white">{{ cashflow_out.get(m).get('fact')|money_int }}</td>
                         <td class="text-num col-diff bg-white small">
-                            {% set md_out = grand_totals.get(m).get('plan') - grand_totals.get(m).get('fact') %}
+                            {% set md_out = cashflow_out.get(m).get('plan') - cashflow_out.get(m).get('fact') %}
                             <span class="{% if md_out >= 0 %}text-success{% else %}text-danger{% endif %}">{% if md_out > 0 %}+{% endif %}{{ md_out|money_int }}</span>
                         </td>
                         {% endfor %}

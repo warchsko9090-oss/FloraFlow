@@ -576,25 +576,94 @@ def _budget_period_to_months(tm):
     return list(range(1, 13)), 'За год'
 
 
+def _year_realized_revenue(y):
+    """Реализованная выручка года = Σ (shipped_quantity × price), как на вкладке «Результат»."""
+    total = Decimal(0)
+    orders = Order.query.filter(
+        func.extract('year', Order.date) == y,
+        Order.status != 'canceled',
+        Order.is_deleted == False,
+    ).all()
+    for o in orders:
+        for item in o.items:
+            price = item.price if item.price is not None else Decimal(0)
+            total += Decimal(item.shipped_quantity or 0) * Decimal(str(price))
+    return total
+
+
+def _year_expenses_fin(y):
+    """Расходы года как в финрезе: нал + безнал + прочее + 15% от нал (без партнёров)."""
+    rows = db.session.query(Expense.payment_type, func.sum(Expense.amount)).filter(
+        func.extract('year', Expense.date) == y
+    ).group_by(Expense.payment_type).all()
+    ec = next((x[1] for x in rows if x[0] == 'cash'), Decimal(0)) or Decimal(0)
+    ecl = next((x[1] for x in rows if x[0] == 'cashless'), Decimal(0)) or Decimal(0)
+    other = Decimal(0)
+    for ptype, amt in rows:
+        if ptype in ('cash', 'cashless'):
+            continue
+        other += (amt or Decimal(0))
+    tax15 = Decimal(ec) * Decimal('0.15')
+    base = Decimal(ec) + Decimal(ecl) + Decimal(other)
+    return {
+        'cash': Decimal(ec),
+        'cashless': Decimal(ecl),
+        'other': other,
+        'tax_cash_15': tax15,
+        'total': base + tax15,
+        'posted': base,
+    }
+
+
+def _month_realized_revenue(y):
+    """Выручка по месяцам года (ключ 1..12)."""
+    result = {m: Decimal(0) for m in range(1, 13)}
+    orders = Order.query.filter(
+        func.extract('year', Order.date) == y,
+        Order.status != 'canceled',
+        Order.is_deleted == False,
+    ).all()
+    for o in orders:
+        if not o.date:
+            continue
+        m = int(o.date.month)
+        for item in o.items:
+            price = item.price if item.price is not None else Decimal(0)
+            result[m] += Decimal(item.shipped_quantity or 0) * Decimal(str(price))
+    return result
+
+
+def _month_expenses_fin(y):
+    """Расходы по месяцам: сумма Expense + 15% от cash в том же месяце."""
+    result = {m: Decimal(0) for m in range(1, 13)}
+    cash_m = {m: Decimal(0) for m in range(1, 13)}
+    rows = db.session.query(
+        func.extract('month', Expense.date).label('month'),
+        Expense.payment_type,
+        func.sum(Expense.amount),
+    ).filter(func.extract('year', Expense.date) == y).group_by('month', Expense.payment_type).all()
+    for month, ptype, amt in rows:
+        m = int(month)
+        amt = Decimal(amt or 0)
+        result[m] += amt
+        if ptype == 'cash':
+            cash_m[m] += amt
+    for m in range(1, 13):
+        result[m] += cash_m[m] * Decimal('0.15')
+    return result
+
+
 def _cashflow_year_net_fact(y):
-    """Net за календарный год: сумма Payment − сумма Expense (по target_year/дате)."""
-    pay = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
-        func.extract('year', Payment.date) == y
-    ).scalar() or 0
-    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
-    exp = db.session.query(func.coalesce(func.sum(Expense.amount), 0)).filter(
-        actual_year == y
-    ).scalar() or 0
-    return Decimal(pay) - Decimal(exp)
+    """Net года как финрез: выручка(отгрузки) − расходы(+15%), без партнёров."""
+    return _year_realized_revenue(y) - _year_expenses_fin(y)['total']
 
 
 def _cashflow_opening_balance_before_year(year):
     """Входящий остаток на 1 янв year = сумма net всех лет строго до year."""
-    pay_years = db.session.query(func.extract('year', Payment.date)).distinct().all()
-    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
-    exp_years = db.session.query(actual_year).distinct().all()
+    order_years = db.session.query(func.extract('year', Order.date)).distinct().all()
+    exp_years = db.session.query(func.extract('year', Expense.date)).distinct().all()
     years = set()
-    for (y,) in pay_years:
+    for (y,) in order_years:
         if y is not None:
             years.add(int(y))
     for (y,) in exp_years:
@@ -609,21 +678,18 @@ def _cashflow_opening_balance_before_year(year):
 
 
 def _cashflow_yearly_series(through_year, lookback=4):
-    """Ряд year-end net и накопительный остаток за lookback лет до through_year включительно."""
+    """Ряд year-end net и накопительный остаток (логика финреза) до through_year."""
     start_y = through_year - lookback
-    # Расширяем вниз, если есть более старые данные
-    pay_min = db.session.query(func.min(func.extract('year', Payment.date))).scalar()
-    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
-    exp_min = db.session.query(func.min(actual_year)).scalar()
-    mins = [int(x) for x in (pay_min, exp_min) if x is not None]
+    order_min = db.session.query(func.min(func.extract('year', Order.date))).scalar()
+    exp_min = db.session.query(func.min(func.extract('year', Expense.date))).scalar()
+    mins = [int(x) for x in (order_min, exp_min) if x is not None]
     if mins:
         start_y = min(start_y, min(mins))
 
-    # Накопление с самого раннего года в данных, в график отдаём только start_y..through_year
-    pay_years = db.session.query(func.extract('year', Payment.date)).distinct().all()
-    exp_years = db.session.query(actual_year).distinct().all()
+    order_years = db.session.query(func.extract('year', Order.date)).distinct().all()
+    exp_years = db.session.query(func.extract('year', Expense.date)).distinct().all()
     all_years = set()
-    for (y,) in pay_years:
+    for (y,) in order_years:
         if y is not None:
             all_years.add(int(y))
     for (y,) in exp_years:
@@ -648,6 +714,20 @@ def _cashflow_yearly_series(through_year, lookback=4):
     if not series:
         series.append({'year': through_year, 'net_fact': Decimal(0), 'cum_fact': Decimal(0)})
     return series
+
+
+# Целевые итоги из Excel «лист 50» (без долей Новикова / 50-50). 2026 не трогаем.
+EXCEL_FIN_TARGETS = {
+    2017: {'revenue': Decimal('0'), 'expenses': Decimal('770000')},
+    2018: {'revenue': Decimal('0'), 'expenses': Decimal('961000')},
+    2019: {'revenue': Decimal('0'), 'expenses': Decimal('1206000')},
+    2020: {'revenue': Decimal('0'), 'expenses': Decimal('1804636')},
+    2021: {'revenue': Decimal('2371800'), 'expenses': Decimal('3866527')},
+    2022: {'revenue': Decimal('12936500'), 'expenses': Decimal('8298348.85')},
+    2023: {'revenue': Decimal('25378300'), 'expenses': Decimal('11238166.47')},
+    2024: {'revenue': Decimal('11459100'), 'expenses': Decimal('12399370.67')},
+    2025: {'revenue': Decimal('12544700'), 'expenses': Decimal('11642981.40')},
+}
 
 
 def _resolve_selected_months(args, fallback_target_month='all'):
@@ -802,31 +882,36 @@ def budget():
     if period_totals['plan'] > 0:
         period_totals['pct'] = float((period_totals['fact'] / period_totals['plan']) * 100)
 
-    # CASHFLOW: планируемые поступления и фактические поступления
+    # CASHFLOW: приходы = реализованная выручка (отгрузки), как в финрезе;
+    # выплаты факт = все Expense + 15% от нал (без партнёров). План поступлений — CashflowPlan.
     cashflow_data = {m: {'plan': Decimal(0), 'fact': Decimal(0)} for m in range(1, 13)}
     cashflow_records = CashflowPlan.query.filter_by(year=year).all()
     for r in cashflow_records:
         if r.month in cashflow_data:
             cashflow_data[r.month]['plan'] = r.amount
 
-    payments_q = db.session.query(
-        func.extract('month', Payment.date).label('month'),
-        func.sum(Payment.amount),
-    ).filter(func.extract('year', Payment.date) == year).group_by('month').all()
-    for m, total in payments_q:
-        if int(m) in cashflow_data:
-            cashflow_data[int(m)]['fact'] = total
+    rev_by_month = _month_realized_revenue(year)
+    out_by_month = _month_expenses_fin(year)
+    for m in range(1, 13):
+        cashflow_data[m]['fact'] = rev_by_month[m]
+
+    # Факт выплат для кешфлоу (финрез-логика); план выплат — из бюджета
+    cashflow_out = {
+        m: {'plan': grand_totals[m]['plan'], 'fact': out_by_month[m]} for m in range(1, 13)
+    }
 
     cashflow_total_plan = sum(cashflow_data[m]['plan'] for m in range(1, 13))
     cashflow_total_fact = sum(cashflow_data[m]['fact'] for m in range(1, 13))
+    cashflow_out_total_plan = sum(cashflow_out[m]['plan'] for m in range(1, 13))
+    cashflow_out_total_fact = sum(cashflow_out[m]['fact'] for m in range(1, 13))
 
     # Итоги cashflow / выплат для выбранного периода (KPI и таблица)
     cashflow_period_plan = sum(cashflow_data[m]['plan'] for m in selected_months)
     cashflow_period_fact = sum(cashflow_data[m]['fact'] for m in selected_months)
-    cashflow_period_out_plan = sum(grand_totals[m]['plan'] for m in selected_months)
-    cashflow_period_out_fact = sum(grand_totals[m]['fact'] for m in selected_months)
+    cashflow_period_out_plan = sum(cashflow_out[m]['plan'] for m in selected_months)
+    cashflow_period_out_fact = sum(cashflow_out[m]['fact'] for m in selected_months)
 
-    # Входящий остаток на 1 янв = сумма net всех прошлых лет (Payment − Expense)
+    # Входящий остаток на 1 янв = сумма net всех прошлых лет (выручка − расходы+15%)
     opening_balance = _cashflow_opening_balance_before_year(year)
 
     # Накопительные показатели с начала выбранного года (+ opening)
@@ -841,9 +926,8 @@ def budget():
     for m in range(1, 13):
         cum_in_plan += cashflow_data[m]['plan']
         cum_in_fact += cashflow_data[m]['fact']
-        cum_out_plan += grand_totals[m]['plan']
-        cum_out_fact += grand_totals[m]['fact']
-        # Настоящий план: план поступлений − план выплат
+        cum_out_plan += cashflow_out[m]['plan']
+        cum_out_fact += cashflow_out[m]['fact']
         cumulative[m]['plan_balance'] = opening_balance + cum_in_plan - cum_out_plan
         cumulative[m]['fact_balance'] = opening_balance + cum_in_fact - cum_out_fact
 
@@ -854,7 +938,7 @@ def budget():
     cashflow_chart = {
         'labels': [MONTH_NAMES.get(m, str(m)) for m in range(1, 13)],
         'in_fact': [float(cashflow_data[m]['fact'] or 0) for m in range(1, 13)],
-        'out_fact': [float(grand_totals[m]['fact'] or 0) for m in range(1, 13)],
+        'out_fact': [float(cashflow_out[m]['fact'] or 0) for m in range(1, 13)],
         'cum_fact': [float(cumulative[m]['fact_balance'] or 0) for m in range(1, 13)],
         'cum_plan': [float(cumulative[m]['plan_balance'] or 0) for m in range(1, 13)],
         'selected_months': list(selected_months),
@@ -980,6 +1064,9 @@ def budget():
                            cashflow_period_fact=cashflow_period_fact,
                            cashflow_period_out_plan=cashflow_period_out_plan,
                            cashflow_period_out_fact=cashflow_period_out_fact,
+                           cashflow_out=cashflow_out,
+                           cashflow_out_total_plan=cashflow_out_total_plan,
+                           cashflow_out_total_fact=cashflow_out_total_fact,
                            cumulative=cumulative,
                            opening_balance=opening_balance,
                            yearly_cashflow=yearly_cashflow,
@@ -3253,7 +3340,9 @@ def reports_financial():
     cd_prev = calculate_cost_data(year - 1)
     debt, breakdown = calculate_investor_debt(year, cd_prev['accumulated_costs_map'])
     
-    total_exp = ec + ecl + (ec * Decimal('0.15')) + debt
+    total_exp_ops = ec + ecl + (ec * Decimal('0.15'))
+    # Партнёры показываем отдельно, в ИТОГО/прибыль главной сводки не включаем
+    # (как Excel лист 50 без долей партнёров)
     
     orders = Order.query.filter(func.extract('year', Order.date) == year, Order.status != 'canceled', Order.is_deleted == False).all()
     
@@ -3272,9 +3361,10 @@ def reports_financial():
         'tax_cash_15': ec * Decimal('0.15'), 
         'investor_debt': debt, 
         'investor_breakdown': breakdown, 
-        'total_expenses': total_exp, 
+        'total_expenses': total_exp_ops,
+        'total_expenses_with_partners': total_exp_ops + debt,
         'realized_revenue': val_shipped, 
-        'net_profit': val_shipped - total_exp, 
+        'net_profit': val_shipped - total_exp_ops,
         'val_reserved': val_reserved, 
         'val_shipped': val_shipped, 
         'val_partial_shipped': 0, 
@@ -3282,6 +3372,212 @@ def reports_financial():
         'total_sales_potential': val_shipped + val_reserved
     }
     return render_template('finance/reports.html', active_tab='financial', years=range(2017, 2051), selected_year=year, data=data)
+
+
+def _ensure_align_client():
+    name = 'Архив Excel (выравнивание)'
+    c = Client.query.filter_by(name=name).first()
+    if not c:
+        c = Client(name=name)
+        db.session.add(c)
+        db.session.commit()
+    return c
+
+
+def _ensure_align_budget_item():
+    code = 'ARCH.ADJ'
+    item = BudgetItem.query.filter_by(code=code).first()
+    if not item:
+        item = BudgetItem(code=code, name='Корректировка архива (Excel)')
+        db.session.add(item)
+        db.session.commit()
+    return item
+
+
+def _align_stub_refs():
+    """Минимальные plant/size/field для ghost-корректировки выручки."""
+    plant = Plant.query.order_by(Plant.id).first()
+    size = Size.query.order_by(Size.id).first()
+    field = Field.query.order_by(Field.id).first()
+    if not plant or not size or not field:
+        return None
+    return plant, size, field
+
+
+@bp.route('/archive-align', methods=['GET', 'POST'])
+@login_required
+def archive_align():
+    """Admin: выравнивание годовых итогов финреза/кешфлоу под Excel (лист 50)."""
+    if current_user.role != 'admin':
+        flash('Только администратор', 'danger')
+        return redirect(url_for('finance.reports_financial'))
+
+    if request.method == 'POST':
+        year = int(request.form.get('year') or 0)
+        action = request.form.get('action')
+        if year == 2026:
+            flash('2026 не корректируем — год уже вёлся в ERP', 'warning')
+            return redirect(url_for('finance.archive_align', year=year))
+        if year not in EXCEL_FIN_TARGETS:
+            flash('Нет целевых цифр Excel для этого года', 'danger')
+            return redirect(url_for('finance.archive_align'))
+
+        target = EXCEL_FIN_TARGETS[year]
+        cur_rev = _year_realized_revenue(year)
+        cur_exp = _year_expenses_fin(year)
+        # Цель Excel по затратам сравниваем с проведёнными Expense (без авто-15%)
+        rev_delta = target['revenue'] - cur_rev
+        exp_delta = target['expenses'] - cur_exp['posted']
+
+        if action == 'align_revenue':
+            if abs(rev_delta) < Decimal('0.01'):
+                flash(f'{year}: выручка уже совпадает с Excel', 'success')
+                return redirect(url_for('finance.archive_align', year=year))
+            refs = _align_stub_refs()
+            if not refs:
+                flash('Нужны справочники: растение / размер / поле', 'danger')
+                return redirect(url_for('finance.archive_align', year=year))
+            plant, size, field = refs
+            client = _ensure_align_client()
+            order = Order(
+                client_id=client.id,
+                date=date(year, 12, 31),
+                status='ghost',
+                invoice_number=f'ALIGN-{year}',
+            )
+            db.session.add(order)
+            db.session.flush()
+            db.session.add(OrderItem(
+                order_id=order.id,
+                plant_id=plant.id,
+                size_id=size.id,
+                field_id=field.id,
+                year=year,
+                quantity=1,
+                shipped_quantity=1,
+                price=rev_delta,
+            ))
+            # Оплата = сумма корректировки (чтобы ДЗ архива не рос; знак как у выручки)
+            db.session.add(Payment(
+                order_id=order.id,
+                date=date(year, 12, 31),
+                amount=rev_delta,
+                payment_type='cashless',
+                comment=f'Выравнивание выручки {year} под Excel',
+            ))
+            db.session.commit()
+            log_action(f'Архив-выравнивание: выручка {year} delta={rev_delta} (ghost #{order.id})')
+            flash(f'{year}: проведена корректировка выручки {rev_delta} ₽ (ghost + оплата)', 'success')
+
+        elif action == 'align_expense':
+            if abs(exp_delta) < Decimal('0.01'):
+                flash(f'{year}: расходы уже совпадают с Excel', 'success')
+                return redirect(url_for('finance.archive_align', year=year))
+            item = _ensure_align_budget_item()
+            db.session.add(Expense(
+                date=date(year, 12, 31),
+                budget_item_id=item.id,
+                description=f'Выравнивание расходов {year} под Excel',
+                amount=exp_delta,
+                payment_type='cashless',
+                target_year=year,
+                target_month=12,
+            ))
+            db.session.commit()
+            log_action(f'Архив-выравнивание: расход {year} delta={exp_delta}')
+            flash(f'{year}: проведён корректирующий расход {exp_delta} ₽', 'success')
+
+        elif action == 'align_all':
+            # Сначала расход, потом выручка (порядок не критичен)
+            msgs = []
+            if abs(exp_delta) >= Decimal('0.01'):
+                item = _ensure_align_budget_item()
+                db.session.add(Expense(
+                    date=date(year, 12, 31),
+                    budget_item_id=item.id,
+                    description=f'Выравнивание расходов {year} под Excel',
+                    amount=exp_delta,
+                    payment_type='cashless',
+                    target_year=year,
+                    target_month=12,
+                ))
+                msgs.append(f'расход {exp_delta}')
+            if abs(rev_delta) >= Decimal('0.01'):
+                refs = _align_stub_refs()
+                if not refs:
+                    flash('Нужны справочники: растение / размер / поле', 'danger')
+                    return redirect(url_for('finance.archive_align', year=year))
+                plant, size, field = refs
+                client = _ensure_align_client()
+                order = Order(
+                    client_id=client.id,
+                    date=date(year, 12, 31),
+                    status='ghost',
+                    invoice_number=f'ALIGN-{year}',
+                )
+                db.session.add(order)
+                db.session.flush()
+                db.session.add(OrderItem(
+                    order_id=order.id,
+                    plant_id=plant.id,
+                    size_id=size.id,
+                    field_id=field.id,
+                    year=year,
+                    quantity=1,
+                    shipped_quantity=1,
+                    price=rev_delta,
+                ))
+                db.session.add(Payment(
+                    order_id=order.id,
+                    date=date(year, 12, 31),
+                    amount=rev_delta,
+                    payment_type='cashless',
+                    comment=f'Выравнивание выручки {year} под Excel',
+                ))
+                msgs.append(f'выручка {rev_delta}')
+            if not msgs:
+                flash(f'{year}: уже совпадает с Excel', 'success')
+            else:
+                db.session.commit()
+                log_action(f'Архив-выравнивание ALL {year}: {", ".join(msgs)}')
+                flash(f'{year}: проведено — {", ".join(msgs)}', 'success')
+        else:
+            flash('Неизвестное действие', 'danger')
+
+        return redirect(url_for('finance.archive_align', year=year))
+
+    year = int(request.args.get('year') or (msk_now().year - 1))
+    rows = []
+    for y in sorted(EXCEL_FIN_TARGETS.keys()):
+        t = EXCEL_FIN_TARGETS[y]
+        rev = _year_realized_revenue(y)
+        exp = _year_expenses_fin(y)
+        cd_prev = calculate_cost_data(y - 1)
+        debt, breakdown = calculate_investor_debt(y, cd_prev['accumulated_costs_map'])
+        rows.append({
+            'year': y,
+            'excel_rev': t['revenue'],
+            'excel_exp': t['expenses'],
+            'excel_net': t['revenue'] - t['expenses'],
+            'cur_rev': rev,
+            'cur_exp_posted': exp['posted'],
+            'cur_exp_total': exp['total'],
+            'cur_tax15': exp['tax_cash_15'],
+            'cur_net': rev - exp['total'],
+            'rev_delta': t['revenue'] - rev,
+            'exp_delta': t['expenses'] - exp['posted'],
+            'partner': debt,
+            'partner_breakdown': breakdown,
+            'locked': y == 2026,
+        })
+
+    return render_template(
+        'finance/archive_align.html',
+        rows=rows,
+        selected_year=year,
+        now_year=msk_now().year,
+    )
+
 
 @bp.route('/reports/margin')
 @login_required

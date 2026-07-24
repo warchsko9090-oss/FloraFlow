@@ -1349,6 +1349,12 @@
                         <span class="sl-icon"><i class="fas fa-piggy-bank"></i></span>
                         <span class="sl-label">Фин. результат</span>
                     </a>
+                    {% if current_user.role == 'admin' %}
+                    <a class="sidebar-link {% if request.endpoint == 'finance.archive_align' %}active{% endif %}" href="{{ url_for('finance.archive_align') }}">
+                        <span class="sl-icon"><i class="fas fa-balance-scale"></i></span>
+                        <span class="sl-label">Выравнивание архива</span>
+                    </a>
+                    {% endif %}
                     <a class="sidebar-link {% if request.endpoint == 'finance.reports_margin' %}active{% endif %}" href="{{ url_for('finance.reports_margin') }}">
                         <span class="sl-icon"><i class="fas fa-percent"></i></span>
                         <span class="sl-label">Маржинальность</span>
