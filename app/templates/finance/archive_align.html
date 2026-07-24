@@ -14,10 +14,11 @@
 
   <div class="alert alert-info small">
     <b>Как устроено:</b>
-    финрез и кешфлоу считают <b>выручку = отгрузки</b>, <b>расходы = Expense + 15% от нал</b>,
-    партнёров показывают, но <b>не включают в ИТОГО</b>.
+    финрез считает <b>выручку = отгрузки</b>, <b>расходы = Expense + 15% от нал + партнёры</b>.
+    Здесь Δ расхода сравнивается с Excel <b>без 15% и без партнёров</b>.
     Кнопки создают одну корректирующую проводку на дельту года
     (ghost-отгрузка + оплата / расход ARCH.ADJ).
+    <b>Откат</b> удаляет ALIGN-{год} и ARCH.ADJ за год.
   </div>
 
   <div class="table-responsive card shadow-sm border-0">
@@ -31,13 +32,13 @@
           <th class="text-end">Excel расход</th>
           <th class="text-end">ERP расход*</th>
           <th class="text-end">Δ расход</th>
-          <th class="text-center" style="min-width: 280px;">Проводки</th>
+          <th class="text-center" style="min-width: 340px;">Проводки</th>
         </tr>
       </thead>
       <tbody>
         {% for r in rows %}
         <tr class="{% if r.year == selected_year %}table-success{% endif %}">
-          <td class="fw-bold">{{ r.year }}</td>
+          <td class="fw-bold">{{ r.year }}{% if r.has_align %} <span class="badge bg-warning text-dark" title="Есть ALIGN/ARCH.ADJ">adj</span>{% endif %}</td>
           <td class="text-end">{{ r.excel_rev|money }}</td>
           <td class="text-end">{{ r.cur_rev|money }}</td>
           <td class="text-end fw-bold {% if r.rev_delta == 0 %}text-muted{% elif r.rev_delta > 0 %}text-success{% else %}text-danger{% endif %}">
@@ -52,7 +53,7 @@
             {% if r.locked %}
               <span class="badge bg-secondary">заблокирован</span>
             {% else %}
-              <div class="btn-group btn-group-sm">
+              <div class="btn-group btn-group-sm flex-wrap">
                 <form method="POST" class="d-inline" onsubmit="return confirm('Провести корректировку ВЫРУЧКИ {{ r.year }} на {{ r.rev_delta }}?');">
                   <input type="hidden" name="year" value="{{ r.year }}">
                   <input type="hidden" name="action" value="align_revenue">
@@ -72,6 +73,13 @@
                   <input type="hidden" name="action" value="align_all">
                   <button class="btn btn-dark" {% if r.rev_delta == 0 and r.exp_delta == 0 %}disabled{% endif %}>
                     Всё
+                  </button>
+                </form>
+                <form method="POST" class="d-inline" onsubmit="return confirm('ОТКАТИТЬ корректировки ALIGN/ARCH.ADJ за {{ r.year }}?');">
+                  <input type="hidden" name="year" value="{{ r.year }}">
+                  <input type="hidden" name="action" value="rollback_year">
+                  <button class="btn btn-outline-warning" {% if not r.has_align %}disabled{% endif %} title="Удалить ghost ALIGN и ARCH.ADJ">
+                    Откат
                   </button>
                 </form>
               </div>

@@ -717,6 +717,19 @@ def _cashflow_opening_balance_before_year(year, mode='money'):
     return total
 
 
+def _years_with_fin_activity():
+    years = set()
+    for q in (
+        db.session.query(func.extract('year', Payment.date)).distinct().all(),
+        db.session.query(func.extract('year', Order.date)).distinct().all(),
+        db.session.query(func.extract('year', Expense.date)).distinct().all(),
+    ):
+        for (y,) in q:
+            if y is not None:
+                years.add(int(y))
+    return years
+
+
 def _cashflow_yearly_series(through_year, lookback=4, mode='money'):
     """Накопительный остаток по годам в выбранном режиме."""
     start_y = through_year - lookback
@@ -731,17 +744,7 @@ def _cashflow_yearly_series(through_year, lookback=4, mode='money'):
     if mins:
         start_y = min(start_y, min(mins))
 
-    all_years = set()
-    for q in (
-        db.session.query(func.extract('year', Payment.date)).distinct().all(),
-        db.session.query(func.extract('year', Order.date)).distinct().all(),
-        db.session.query(func.extract('year', Expense.date)).distinct().all(),
-    ):
-        for (y,) in q:
-            if y is not None:
-                all_years.add(int(y))
-    if not all_years:
-        all_years = {through_year}
+    all_years = _years_with_fin_activity() or {through_year}
 
     running = Decimal(0)
     series = []
@@ -755,6 +758,53 @@ def _cashflow_yearly_series(through_year, lookback=4, mode='money'):
     if not series:
         series.append({'year': through_year, 'net_fact': Decimal(0), 'cum_fact': Decimal(0)})
     return series
+
+
+def _fin_result_year_net(y):
+    """Чистая прибыль года как на финрезе, но без партнёров (лёгкий SQL)."""
+    return _year_realized_revenue(y) - _year_expenses_fin(y)['total']
+
+
+def _fin_result_yearly_series(through_year):
+    """Накопительный финрез по годам: Σ (выручка − расходы − 15%). Без партнёров."""
+    all_years = _years_with_fin_activity() or {through_year}
+    running = Decimal(0)
+    series = []
+    for y in sorted(all_years):
+        if y > through_year:
+            break
+        net = _fin_result_year_net(y)
+        running += net
+        series.append({'year': y, 'net': net, 'cum': running})
+    if not series:
+        series.append({'year': through_year, 'net': Decimal(0), 'cum': Decimal(0)})
+    return series
+
+
+def _rollback_archive_align_year(year):
+    """Удаляет ghost ALIGN-{year} и расходы ARCH.ADJ за год. Возвращает краткий отчёт."""
+    removed = {'orders': 0, 'expenses': 0}
+    for o in Order.query.filter(Order.invoice_number == f'ALIGN-{year}').all():
+        db.session.delete(o)  # cascade: items + payments
+        removed['orders'] += 1
+
+    filters = [Expense.description.like(f'Выравнивание расходов {year}%')]
+    arch_item = BudgetItem.query.filter_by(code='ARCH.ADJ').first()
+    if arch_item:
+        filters.append(and_(
+            Expense.budget_item_id == arch_item.id,
+            or_(
+                Expense.target_year == year,
+                and_(
+                    func.extract('year', Expense.date) == year,
+                    Expense.description.like('%Выравнивание%'),
+                ),
+            ),
+        ))
+    for e in Expense.query.filter(or_(*filters)).all():
+        db.session.delete(e)
+        removed['expenses'] += 1
+    return removed
 
 
 EXCEL_FIN_TARGETS = {
@@ -3413,6 +3463,19 @@ def reports_financial():
             reserved_qty = item.quantity - item.shipped_quantity
             if reserved_qty > 0: val_reserved += Decimal(reserved_qty) * price
             
+    net_profit = val_shipped - total_exp
+    # Накопительный финрез (лёгкий, без партнёров по всем годам — иначе воркеры виснут)
+    fin_series = _fin_result_yearly_series(year)
+    cum_fin = fin_series[-1]['cum'] if fin_series else Decimal(0)
+    # Для отображаемого года вычитаем партнёров из накопительного остатка один раз
+    # (партнёры прошлых лет в накоплении не учтены — см. подпись в шаблоне)
+    cum_fin_with_partners = cum_fin - Decimal(debt or 0)
+    fin_cum_chart = {
+        'labels': [str(r['year']) for r in fin_series],
+        'net': [float(r['net'] or 0) for r in fin_series],
+        'cum': [float(r['cum'] or 0) for r in fin_series],
+    }
+
     data = {
         'exp_cash': ec, 
         'exp_cashless': ecl, 
@@ -3421,14 +3484,24 @@ def reports_financial():
         'investor_breakdown': breakdown, 
         'total_expenses': total_exp,
         'realized_revenue': val_shipped, 
-        'net_profit': val_shipped - total_exp,
+        'net_profit': net_profit,
+        'cum_fin_balance': cum_fin,
+        'cum_fin_with_partners': cum_fin_with_partners,
+        'fin_series': fin_series,
         'val_reserved': val_reserved, 
         'val_shipped': val_shipped, 
         'val_partial_shipped': 0, 
         'val_partial_unshipped': 0, 
         'total_sales_potential': val_shipped + val_reserved
     }
-    return render_template('finance/reports.html', active_tab='financial', years=range(2017, 2051), selected_year=year, data=data)
+    return render_template(
+        'finance/reports.html',
+        active_tab='financial',
+        years=range(2017, 2051),
+        selected_year=year,
+        data=data,
+        fin_cum_chart=fin_cum_chart,
+    )
 
 
 def _ensure_align_client():
@@ -3486,9 +3559,31 @@ def archive_align():
         rev_delta = target['revenue'] - cur_rev
         exp_delta = target['expenses'] - cur_exp['posted']
 
+        if action == 'rollback_year':
+            removed = _rollback_archive_align_year(year)
+            if removed['orders'] == 0 and removed['expenses'] == 0:
+                flash(f'{year}: корректировок ALIGN не найдено', 'warning')
+            else:
+                db.session.commit()
+                log_action(
+                    f'Архив-откат {year}: orders={removed["orders"]}, expenses={removed["expenses"]}'
+                )
+                flash(
+                    f'{year}: откат — заказов ALIGN {removed["orders"]}, '
+                    f'расходов ARCH.ADJ {removed["expenses"]}',
+                    'success',
+                )
+            return redirect(url_for('finance.archive_align', year=year))
+
         if action == 'align_revenue':
             if abs(rev_delta) < Decimal('0.01'):
                 flash(f'{year}: выручка уже совпадает с Excel', 'success')
+                return redirect(url_for('finance.archive_align', year=year))
+            if Order.query.filter_by(invoice_number=f'ALIGN-{year}').first():
+                flash(
+                    f'{year}: уже есть ALIGN-{year}. Сначала «Откат», потом снова Выручка',
+                    'warning',
+                )
                 return redirect(url_for('finance.archive_align', year=year))
             refs = _align_stub_refs()
             if not refs:
@@ -3547,6 +3642,12 @@ def archive_align():
         elif action == 'align_all':
             # Сначала расход, потом выручка (порядок не критичен)
             msgs = []
+            if abs(rev_delta) >= Decimal('0.01') and Order.query.filter_by(invoice_number=f'ALIGN-{year}').first():
+                flash(
+                    f'{year}: уже есть ALIGN-{year}. Сначала «Откат», потом снова Всё',
+                    'warning',
+                )
+                return redirect(url_for('finance.archive_align', year=year))
             if abs(exp_delta) >= Decimal('0.01'):
                 item = _ensure_align_budget_item()
                 db.session.add(Expense(
@@ -3605,12 +3706,28 @@ def archive_align():
 
     year = int(request.args.get('year') or (msk_now().year - 1))
     rows = []
+    arch_item = BudgetItem.query.filter_by(code='ARCH.ADJ').first()
     # Лёгкая сводка: без calculate_cost_data / партнёров —
     # иначе GET после кнопки «Выручка» на 9 годах вешает всех воркеров gunicorn.
     for y in sorted(EXCEL_FIN_TARGETS.keys()):
         t = EXCEL_FIN_TARGETS[y]
         rev = _year_realized_revenue(y)
         exp = _year_expenses_fin(y)
+        has_align = bool(Order.query.filter_by(invoice_number=f'ALIGN-{y}').first())
+        has_exp_adj = Expense.query.filter(
+            Expense.description.like(f'Выравнивание расходов {y}%')
+        ).first() is not None
+        if not has_exp_adj and arch_item:
+            has_exp_adj = Expense.query.filter(
+                Expense.budget_item_id == arch_item.id,
+                or_(
+                    Expense.target_year == y,
+                    and_(
+                        func.extract('year', Expense.date) == y,
+                        Expense.description.like('%Выравнивание%'),
+                    ),
+                ),
+            ).first() is not None
         rows.append({
             'year': y,
             'excel_rev': t['revenue'],
@@ -3626,6 +3743,7 @@ def archive_align():
             'partner': None,
             'partner_breakdown': {},
             'locked': y == 2026,
+            'has_align': has_align or has_exp_adj,
         })
 
     return render_template(

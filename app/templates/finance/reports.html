@@ -748,7 +748,132 @@
             </div>
         </div>
     </div>
-    <div class="card border-primary shadow text-center p-3"><h5 class="text-muted">Чистая прибыль</h5><h2 class="{% if data.net_profit > 0 %}text-success{% else %}text-danger{% endif %} fw-bold">{{ data.net_profit|money }}</h2></div>
+    <div class="card border-primary shadow text-center p-3 mb-3">
+        <h5 class="text-muted mb-1">Чистая прибыль ({{ selected_year }})</h5>
+        <h2 class="{% if data.net_profit > 0 %}text-success{% else %}text-danger{% endif %} fw-bold mb-0">{{ data.net_profit|money }}</h2>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-4">
+            <div class="card shadow-sm h-100 border-0">
+                <div class="card-header bg-dark text-white fw-bold">
+                    <i class="fas fa-layer-group me-1"></i> Накопительный остаток (финрез)
+                </div>
+                <div class="card-body">
+                    <div class="text-muted small mb-1">На конец {{ selected_year }} · Σ чистой прибыли по годам</div>
+                    <div class="fs-3 fw-bold {% if data.cum_fin_balance >= 0 %}text-success{% else %}text-danger{% endif %}">
+                        {{ data.cum_fin_balance|money }}
+                    </div>
+                    <div class="small text-muted mt-2">
+                        Выручка − расходы − 15% (без партнёров по истории).
+                        {% if data.investor_debt %}
+                        С партнёрами {{ selected_year }}: <b class="{% if data.cum_fin_with_partners >= 0 %}text-success{% else %}text-danger{% endif %}">{{ data.cum_fin_with_partners|money }}</b>
+                        {% endif %}
+                    </div>
+                    {% if data.fin_series %}
+                    <div class="table-responsive mt-3" style="max-height: 220px; overflow-y: auto;">
+                        <table class="table table-sm table-striped mb-0" style="font-size: 12px;">
+                            <thead class="table-light sticky-top">
+                                <tr><th>Год</th><th class="text-end">Прибыль</th><th class="text-end">Накопит.</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for r in data.fin_series %}
+                                <tr class="{% if r.year == selected_year %}fw-bold table-success{% endif %}">
+                                    <td>{{ r.year }}</td>
+                                    <td class="text-end {% if r.net >= 0 %}text-success{% else %}text-danger{% endif %}">{{ r.net|money }}</td>
+                                    <td class="text-end">{{ r.cum|money }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-8">
+            <div class="card shadow-sm h-100 border-0">
+                <div class="card-header bg-white fw-bold">
+                    <i class="fas fa-chart-area me-1 text-primary"></i> Движение накопительного финреза по годам
+                </div>
+                <div class="card-body" style="min-height: 280px;">
+                    <canvas id="finCumChart" height="120"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script type="application/json" id="finCumChartData">{{ fin_cum_chart|tojson }}</script>
+    <script>
+    (function () {
+        var el = document.getElementById('finCumChartData');
+        var canvas = document.getElementById('finCumChart');
+        if (!el || !canvas || typeof Chart === 'undefined') return;
+        var d = JSON.parse(el.textContent);
+        function moneyFmt(v) {
+            try {
+                return Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+            } catch (e) { return v; }
+        }
+        new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: d.labels,
+                datasets: [
+                    {
+                        type: 'bar',
+                        label: 'Чистая прибыль года',
+                        data: d.net,
+                        backgroundColor: d.net.map(function (v) { return v >= 0 ? 'rgba(25,135,84,0.55)' : 'rgba(220,53,69,0.55)'; }),
+                        borderWidth: 0,
+                        yAxisID: 'y',
+                        order: 2,
+                    },
+                    {
+                        type: 'line',
+                        label: 'Накопительный остаток',
+                        data: d.cum,
+                        borderColor: '#0d6efd',
+                        backgroundColor: 'rgba(13,110,253,0.12)',
+                        fill: true,
+                        tension: 0.25,
+                        borderWidth: 2,
+                        pointRadius: 4,
+                        yAxisID: 'y1',
+                        order: 1,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'bottom' },
+                    tooltip: {
+                        callbacks: {
+                            label: function (c) {
+                                return c.dataset.label + ': ' + moneyFmt(c.parsed.y);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        position: 'left',
+                        title: { display: true, text: 'Прибыль года' },
+                        ticks: { callback: function (v) { return moneyFmt(v); } }
+                    },
+                    y1: {
+                        position: 'right',
+                        grid: { drawOnChartArea: false },
+                        title: { display: true, text: 'Накопительный' },
+                        ticks: { callback: function (v) { return moneyFmt(v); } }
+                    }
+                }
+            }
+        });
+    })();
+    </script>
     {% endif %}
 
     <!-- 4. МАРЖИНАЛЬНОСТЬ -->
