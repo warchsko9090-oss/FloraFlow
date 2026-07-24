@@ -699,7 +699,7 @@
     <!-- 3. ФИНАНСОВЫЙ РЕЗУЛЬТАТ -->
     {% if active_tab == 'financial' and current_user.role in ['admin', 'executive'] %}
     <div class="card p-3 mb-3 bg-light">
-        <form method="GET" action="{{ url_for('finance.reports_financial') }}" class="d-flex gap-3 align-items-center" hx-boost="false">
+        <form method="GET" action="{{ url_for('finance.reports_financial') }}" class="d-flex flex-wrap gap-3 align-items-center" hx-boost="false">
             <label class="fw-bold">Отчетный год:</label>
             <select name="year" class="form-select form-select-sm" style="width:100px;">
                 {% for y in years %}
@@ -707,6 +707,11 @@
                 {% endfor %}
             </select>
             <button class="btn btn-primary btn-sm">Показать</button>
+            {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('finance.archive_align', year=selected_year) }}" class="btn btn-outline-dark btn-sm ms-auto">
+                <i class="fas fa-balance-scale me-1"></i> Выравнивание архива
+            </a>
+            {% endif %}
         </form>
     </div>
     
@@ -720,11 +725,11 @@
                         <tr><td>Безнал</td><td class="text-end fw-bold">{{ data.exp_cashless|money }}</td></tr>
                         <tr class="table-info small"><td class="ps-3 text-muted">15% от наличных</td><td class="text-end text-muted">{{ data.tax_cash_15|money }}</td></tr>
                         {% if data.investor_debt > 0 %}
-                        <tr class="table-warning"><td colspan="2" class="fw-bold small text-muted pt-2">Выплаты Партнерам <span class="badge bg-secondary">не в ИТОГО</span>:</td></tr>
+                        <tr class="table-warning"><td colspan="2" class="fw-bold small text-muted pt-2">Выплаты Партнерам:</td></tr>
                         {% for inv_name, amt in data.investor_breakdown.items() %}<tr class="table-warning text-muted small"><td class="ps-3">- {{ inv_name }}</td><td class="text-end">{{ amt|money }}</td></tr>{% endfor %}
-                        <tr class="table-warning fw-bold border-top border-warning"><td>ИТОГО Партнерам (справка)</td><td class="text-end">{{ data.investor_debt|money }}</td></tr>
+                        <tr class="table-warning fw-bold border-top border-warning"><td>ИТОГО Партнерам</td><td class="text-end">{{ data.investor_debt|money }}</td></tr>
                         {% endif %}
-                        <tr class="table-secondary fw-bold border-top border-dark mt-2"><td>ИТОГО РАСХОДЫ (без партнёров)</td><td class="text-end">{{ data.total_expenses|money }}</td></tr>
+                        <tr class="table-secondary fw-bold border-top border-dark mt-2"><td>ИТОГО РАСХОДЫ (Всего)</td><td class="text-end">{{ data.total_expenses|money }}</td></tr>
                     </table>
                 </div>
             </div>
