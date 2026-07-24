@@ -1,6 +1,9 @@
 # Деплой ERP → Amvera FloraFlowERP
 # Запуск из корня репозитория FloraFlow:
 #   .\scripts\deploy-erp.ps1 "описание правок"
+#
+# Важно: Amvera собирает код из git.amvera.ru, НЕ из GitHub.
+# Push только в origin (GitHub) контейнер не обновляет.
 
 param(
     [string]$Message = "deploy erp"
@@ -14,12 +17,23 @@ git status --short
 
 git add -A
 git diff --cached --quiet
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Нечего коммитить." -ForegroundColor Yellow
-    exit 0
+$hasStaged = ($LASTEXITCODE -ne 0)
+
+if ($hasStaged) {
+    git commit -m $Message
+} else {
+    Write-Host "Нечего коммитить — пушим текущий HEAD." -ForegroundColor Yellow
 }
 
-git commit -m $Message
+# GitHub (бэкап / история)
 git push origin master
 
-Write-Host "OK: push выполнен. Amvera FloraFlowERP пересоберёт контейнер." -ForegroundColor Green
+# Amvera (реальный деплой контейнера)
+$amveraUrl = "https://git.amvera.ru/warchesko/floraflowerp"
+$hasAmvera = git remote | Select-String -Pattern "^amvera$"
+if (-not $hasAmvera) {
+    git remote add amvera $amveraUrl
+}
+git push amvera master
+
+Write-Host "OK: push в GitHub + Amvera. Смотрите лог сборки — HEAD должен быть как локальный master." -ForegroundColor Green
