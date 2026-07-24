@@ -960,6 +960,7 @@ def budget():
         
     return render_template('finance/budget.html',
                            year=year,
+                           now_year=msk_now().year,
                            data=data,
                            grand_totals=grand_totals,
                            items=items,
@@ -2334,6 +2335,7 @@ def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False,
             'price': Decimal(str(p.amount)),
             'sum': Decimal(str(p.amount)),
             'type': 'payment',
+            'payment_id': p.id,
             'payment_type': p.payment_type or 'cashless',
             'comment': (p.comment or '').strip(),
         }
@@ -2348,7 +2350,8 @@ def get_reconciliation_data(c_id, f_start, f_end, mode, use_fixed_balance=False,
             ),
             'debit': Decimal(0), 
             'credit': Decimal(str(p.amount)), 
-            'order_id': p.order_id, 
+            'order_id': p.order_id,
+            'payment_id': p.id,
             'doc_items': [payment_item_detail], # Кладем детализацию сюда
             'invoice_info': inv_info, # Теперь здесь есть номер счета!
             'is_grouped': False,
@@ -2776,6 +2779,48 @@ def reports_reconciliation_writeoff():
         f"комментарий: {comment[:120]}"
     )
     flash(f'Долг списан: {amount} ₽ по заказу #{order.id}', 'success')
+    return _back()
+
+
+@bp.route('/reports/reconciliation/writeoff/delete', methods=['POST'])
+@login_required
+def reports_reconciliation_writeoff_delete():
+    """Admin-only: удаление ранее проведённого списания долга (payment_type=writeoff)."""
+    if current_user.role != 'admin':
+        flash('Удаление списания доступно только администратору', 'danger')
+        return redirect(url_for('finance.reports_reconciliation'))
+
+    payment_id = request.form.get('payment_id')
+    return_to = request.form.get('return_to') or ''
+    cid = request.form.get('client_id')
+
+    def _back():
+        if return_to:
+            return redirect(return_to)
+        return redirect(url_for(
+            'finance.reports_reconciliation',
+            client_id=cid,
+            start_date=request.form.get('start_date'),
+            end_date=request.form.get('end_date'),
+            mode=request.form.get('mode') or 'grouped',
+        ))
+
+    p = Payment.query.get(payment_id)
+    if not p or (p.payment_type or '') != 'writeoff':
+        flash('Списание не найдено', 'danger')
+        return _back()
+
+    order = Order.query.get(p.order_id)
+    if cid and order and int(order.client_id) != int(cid):
+        flash('Списание не принадлежит этому клиенту', 'danger')
+        return _back()
+
+    amount = p.amount
+    order_id = p.order_id
+    db.session.delete(p)
+    db.session.commit()
+    log_action(f"Удалил списание долга: payment #{payment_id}, заказ #{order_id}, сумма {amount}")
+    flash(f'Списание удалено: {amount} ₽ (заказ #{order_id})', 'success')
     return _back()
 
 

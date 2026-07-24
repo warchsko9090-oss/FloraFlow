@@ -206,6 +206,17 @@
                                 {{ row.desc }}
                                 {% if row.is_writeoff|default(false) %}
                                 <span class="badge bg-secondary ms-1">списание</span>
+                                {% if current_user.role == 'admin' and row.payment_id|default(none) %}
+                                <form method="POST" action="{{ url_for('finance.reports_reconciliation_writeoff_delete') }}" class="d-inline ms-1" hx-boost="false" onsubmit="return confirm('Удалить списание долга? Долг вернётся в сверку.');">
+                                    <input type="hidden" name="payment_id" value="{{ row.payment_id }}">
+                                    <input type="hidden" name="client_id" value="{{ filters.get('client_id') }}">
+                                    <input type="hidden" name="start_date" value="{{ filters.get('start') or '' }}">
+                                    <input type="hidden" name="end_date" value="{{ filters.get('end') or '' }}">
+                                    <input type="hidden" name="mode" value="{{ mode }}">
+                                    <input type="hidden" name="return_to" value="{{ current_url }}">
+                                    <button type="submit" class="btn btn-link btn-sm text-danger p-0" title="Удалить списание"><i class="fas fa-trash"></i></button>
+                                </form>
+                                {% endif %}
                                 {% endif %}
                                 {% if row.order_id and not row.is_grouped %}
                                 <a href="{{ url_for('orders.order_detail', order_id=row.order_id, return_to=current_url) }}" class="text-decoration-none small ms-1 text-muted" title="Открыть заказ"><i class="fas fa-external-link-alt"></i></a>
@@ -249,6 +260,17 @@
                                                     <i class="fas fa-{% if item.payment_type|default('') == 'writeoff' %}eraser{% else %}check-circle{% endif %} me-1"></i> {{ item.name }}
                                                     {% if item.payment_type|default('') == 'writeoff' %}<span class="badge bg-secondary ms-1">списание</span>{% endif %}
                                                     {% if item.comment %}<span class="text-muted fw-normal ms-1">({{ item.comment }})</span>{% endif %}
+                                                    {% if current_user.role == 'admin' and item.payment_type|default('') == 'writeoff' and item.payment_id|default(none) %}
+                                                    <form method="POST" action="{{ url_for('finance.reports_reconciliation_writeoff_delete') }}" class="d-inline ms-2" hx-boost="false" onsubmit="return confirm('Удалить списание долга?');">
+                                                        <input type="hidden" name="payment_id" value="{{ item.payment_id }}">
+                                                        <input type="hidden" name="client_id" value="{{ filters.get('client_id') }}">
+                                                        <input type="hidden" name="start_date" value="{{ filters.get('start') or '' }}">
+                                                        <input type="hidden" name="end_date" value="{{ filters.get('end') or '' }}">
+                                                        <input type="hidden" name="mode" value="{{ mode }}">
+                                                        <input type="hidden" name="return_to" value="{{ current_url }}">
+                                                        <button type="submit" class="btn btn-link btn-sm text-danger p-0" title="Удалить списание"><i class="fas fa-trash"></i></button>
+                                                    </form>
+                                                    {% endif %}
                                                 </td>
                                                 <td class="text-end text-muted">-</td>
                                                 <td class="text-center text-muted">-</td>

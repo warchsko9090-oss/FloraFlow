@@ -407,7 +407,15 @@
                             {% if p.payment_type == 'writeoff' %}
                             <span class="badge bg-secondary" title="{{ p.comment or '' }}">списание</span>
                             {% endif %}
-                            {% if current_user.role in ['admin', 'executive', 'user'] and order.status != 'canceled' %}
+                            {% if p.payment_type == 'writeoff' %}
+                              {% if current_user.role == 'admin' and order.status != 'canceled' %}
+                              <form method="POST" class="m-0 d-none d-md-inline-block" onsubmit="return confirm('Удалить списание долга? Долг по заказу вернётся.');" hx-boost="false">
+                                  <input type="hidden" name="delete_payment" value="1">
+                                  <input type="hidden" name="payment_id" value="{{ p.id }}">
+                                  <button type="submit" class="btn btn-link text-danger p-0 btn-sm" title="Удалить списание"><i class="fas fa-trash"></i></button>
+                              </form>
+                              {% endif %}
+                            {% elif current_user.role in ['admin', 'executive', 'user'] and order.status != 'canceled' %}
                             <button type="button" class="btn btn-link text-primary p-0 btn-sm d-none d-md-inline-block" onclick="showEditPaymentModal({{ p.id }}, '{{ p.date }}', {{ p.amount }}, '{{ p.comment or '' }}', '{{ p.payment_type }}')" title="Редактировать">
                                 <i class="fas fa-edit"></i>
                             </button>
