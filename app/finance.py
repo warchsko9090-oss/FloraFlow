@@ -2311,7 +2311,18 @@ def _parse_zero_opening_arg():
 
 
 def build_reconciliation_detail_rows(c_id, f_start, f_end):
-    """Плоские строки позиций отгрузки + оплаты по заказам для детального Excel."""
+    """Группы по заказам для детального Excel (формат как «Камолов отгрузки»).
+
+    Возвращает список групп:
+      {
+        'order_id', 'pp', 'client', 'invoice',
+        'lines': [{name, size, field, qty, price, sum, ship_date}, ...],
+        'payments': [{date, number, amount}, ...],
+      }
+    """
+    client = Client.query.get(c_id)
+    client_name = client.name if client else ''
+
     ship_query = db.session.query(Document).join(Order).filter(
         Order.client_id == c_id, Document.doc_type == 'shipment'
     )
@@ -2328,55 +2339,86 @@ def build_reconciliation_detail_rows(c_id, f_start, f_end):
         for oi in OrderItem.query.filter(OrderItem.order_id.in_(ship_order_ids)).all():
             oi_price_map[(oi.order_id, oi.plant_id, oi.size_id, oi.field_id)] = oi.price
 
-    pay_query = db.session.query(Payment, Order).join(Order).filter(Order.client_id == c_id)
-    if f_start:
-        pay_query = pay_query.filter(func.date(Payment.date) >= f_start)
-    if f_end:
-        pay_query = pay_query.filter(func.date(Payment.date) <= f_end)
-    payments = pay_query.order_by(Payment.date).all()
-
+    # Оплаты по заказам с отгрузкой — все оплаты заказа (как в образце),
+    # плюс оплаты периода по заказам без отгрузки.
+    pay_query = db.session.query(Payment).join(Order).filter(Order.client_id == c_id)
+    all_client_payments = pay_query.order_by(Payment.date).all()
     payments_by_order = {}
-    for p, o in payments:
+    for p in all_client_payments:
         payments_by_order.setdefault(p.order_id, []).append(p)
 
-    def _invoice_number(order):
+    def _invoice_label(order):
         if not order:
             return ''
         if order.invoice_number and order.invoice_date:
-            return f"№ {order.invoice_number} от {order.invoice_date.strftime('%d.%m.%Y')}"
+            return f"Счет №{order.invoice_number} от {order.invoice_date.strftime('%d.%m.%Y')}"
         if order.invoice_number:
-            return f"№ {order.invoice_number}"
-        return ''
+            return f"Счет №{order.invoice_number}"
+        return f"Заказ #{order.id}"
 
-    def _payment_cols(order_id):
-        pays = payments_by_order.get(order_id) or []
-        dates = '; '.join(p.date.strftime('%d.%m.%Y') for p in pays if p.date)
-        comments = '; '.join((p.comment or '').strip() for p in pays if (p.comment or '').strip())
-        return dates, comments
+    def _pp_number(order):
+        if order and order.invoice_number:
+            digits = ''.join(ch for ch in str(order.invoice_number) if ch.isdigit())
+            if digits:
+                try:
+                    return int(digits)
+                except ValueError:
+                    pass
+            return order.invoice_number
+        return order.id if order else ''
 
-    detail_rows = []
-    orders_with_ship_lines = set()
+    def _payment_number(payment):
+        comment = (payment.comment or '').strip()
+        if comment:
+            # часто в комментарии номер ПП
+            digits = ''.join(ch for ch in comment if ch.isdigit())
+            if digits and len(digits) <= 8:
+                return digits
+            return comment[:40]
+        return payment.id
+
+    groups_map = {}
+    group_order = []
+
+    def _ensure_group(order):
+        if not order:
+            return None
+        if order.id not in groups_map:
+            groups_map[order.id] = {
+                'order_id': order.id,
+                'pp': _pp_number(order),
+                'client': client_name,
+                'invoice': _invoice_label(order),
+                'lines': [],
+                'payments': [
+                    {
+                        'date': p.date.strftime('%d.%m.%Y') if p.date else '',
+                        'number': _payment_number(p),
+                        'amount': float(Decimal(str(p.amount or 0))),
+                    }
+                    for p in (payments_by_order.get(order.id) or [])
+                ],
+            }
+            group_order.append(order.id)
+        return groups_map[order.id]
 
     for doc in ship_docs:
-        inv = _invoice_number(doc.order)
-        pay_dates, pay_comments = _payment_cols(doc.order_id)
+        group = _ensure_group(doc.order)
+        if not group:
+            continue
+        ship_date = doc.date.strftime('%d.%m.%Y') if doc.date else ''
         for r in doc.rows:
-            orders_with_ship_lines.add(doc.order_id)
             raw_price = oi_price_map.get((doc.order_id, r.plant_id, r.size_id, r.field_from_id))
             price = Decimal(str(raw_price)) if raw_price is not None else Decimal(0)
-            qty = Decimal(r.quantity)
-            detail_rows.append({
+            qty = Decimal(r.quantity or 0)
+            group['lines'].append({
                 'name': r.plant.name if r.plant else '-',
                 'size': r.size.name if r.size else '-',
                 'field': r.field_from.name if r.field_from else '-',
                 'qty': float(qty),
                 'price': float(price),
                 'sum': float(price * qty),
-                'ship_date': doc.date.strftime('%d.%m.%Y') if doc.date else '',
-                'invoice': inv,
-                'payment_dates': pay_dates,
-                'payment_comments': pay_comments,
-                'order_id': doc.order_id,
+                'ship_date': ship_date,
             })
 
     ghost_query = Order.query.filter(Order.client_id == c_id, Order.status == 'ghost')
@@ -2385,47 +2427,60 @@ def build_reconciliation_detail_rows(c_id, f_start, f_end):
     if f_end:
         ghost_query = ghost_query.filter(func.date(Order.date) <= f_end)
     for o in ghost_query.order_by(Order.date).all():
-        inv = _invoice_number(o)
-        pay_dates, pay_comments = _payment_cols(o.id)
+        group = _ensure_group(o)
+        ship_date = o.date.strftime('%d.%m.%Y') if o.date else ''
         for i in o.items:
-            orders_with_ship_lines.add(o.id)
             price = Decimal(str(i.price)) if i.price else Decimal(0)
-            qty = Decimal(i.quantity)
-            detail_rows.append({
+            qty = Decimal(i.quantity or 0)
+            group['lines'].append({
                 'name': i.plant.name if i.plant else '-',
                 'size': i.size.name if i.size else '-',
                 'field': i.field.name if i.field else '-',
                 'qty': float(qty),
                 'price': float(price),
                 'sum': float(price * qty),
-                'ship_date': o.date.strftime('%d.%m.%Y') if o.date else '',
-                'invoice': inv,
-                'payment_dates': pay_dates,
-                'payment_comments': pay_comments,
-                'order_id': o.id,
+                'ship_date': ship_date,
             })
 
-    # Оплаты по заказам без отгрузки в периоде — отдельная служебная строка
+    # Оплаты периода по заказам без отгрузки в выборке
     for order_id, pays in payments_by_order.items():
-        if order_id in orders_with_ship_lines:
+        if order_id in groups_map:
             continue
-        order = pays[0].order if hasattr(pays[0], 'order') and pays[0].order else Order.query.get(order_id)
-        pay_dates, pay_comments = _payment_cols(order_id)
-        detail_rows.append({
-            'name': f'Оплаты без отгрузки (заказ #{order_id})',
+        in_period = []
+        for p in pays:
+            if not p.date:
+                continue
+            d = p.date.isoformat() if hasattr(p.date, 'isoformat') else str(p.date)
+            if f_start and d < f_start:
+                continue
+            if f_end and d > f_end:
+                continue
+            in_period.append(p)
+        if not in_period:
+            continue
+        order = Order.query.get(order_id)
+        group = _ensure_group(order)
+        if not group:
+            continue
+        group['payments'] = [
+            {
+                'date': p.date.strftime('%d.%m.%Y') if p.date else '',
+                'number': _payment_number(p),
+                'amount': float(Decimal(str(p.amount or 0))),
+            }
+            for p in in_period
+        ]
+        group['lines'] = [{
+            'name': 'Оплаты без отгрузки',
             'size': '',
             'field': '',
-            'qty': '',
-            'price': '',
-            'sum': float(sum(Decimal(str(p.amount)) for p in pays)),
+            'qty': 0,
+            'price': 0,
+            'sum': 0,
             'ship_date': '',
-            'invoice': _invoice_number(order),
-            'payment_dates': pay_dates,
-            'payment_comments': pay_comments,
-            'order_id': order_id,
-        })
+        }]
 
-    return detail_rows
+    return [groups_map[oid] for oid in group_order]
 
 
 @bp.route('/reports/reconciliation')
@@ -2645,6 +2700,7 @@ def reports_reconciliation_export():
 @bp.route('/reports/reconciliation/export-detail')
 @login_required
 def reports_reconciliation_export_detail():
+    """Детальный Excel в формате отгрузок (как файл Камолова): группы по счёту + оплаты + Итого."""
     from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
     cid = request.args.get('client_id')
@@ -2656,71 +2712,128 @@ def reports_reconciliation_export_detail():
 
     client_obj = Client.query.get(int(cid))
     client_name = client_obj.name if client_obj else "Неизвестный"
-    detail_rows = build_reconciliation_detail_rows(int(cid), f_start, f_end)
+    groups = build_reconciliation_detail_rows(int(cid), f_start, f_end)
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Детальная сверка"
 
     bold_font = Font(bold=True)
-    header_fill = PatternFill(start_color="E0F2F1", end_color="E0F2F1", fill_type="solid")
+    header_fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
+    total_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
     border_style = Border(
         left=Side(style='thin'), right=Side(style='thin'),
         top=Side(style='thin'), bottom=Side(style='thin'),
     )
     align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
     align_right = Alignment(horizontal='right', vertical='center')
+    align_left = Alignment(horizontal='left', vertical='center')
 
-    ws.merge_cells('A1:J1')
-    ws['A1'] = f"Детальная сверка с {client_name}"
+    ws.merge_cells('A1:M1')
+    ws['A1'] = f"Детальная сверка / отгрузки — {client_name}"
     ws['A1'].font = Font(size=14, bold=True, color="2E7D32")
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
 
-    ws.merge_cells('A2:J2')
+    ws.merge_cells('A2:M2')
     period_str = (
-        f"Период: {datetime.strptime(f_start, '%Y-%m-%d').strftime('%d.%m.%Y') if f_start else '...'} - "
+        f"Период: {datetime.strptime(f_start, '%Y-%m-%d').strftime('%d.%m.%Y') if f_start else '...'} — "
         f"{datetime.strptime(f_end, '%Y-%m-%d').strftime('%d.%m.%Y') if f_end else '...'}"
     )
     ws['A2'] = period_str
     ws['A2'].alignment = Alignment(horizontal='center')
 
     headers = [
-        "Наименование", "Размер", "Поле", "Кол-во", "Цена", "Сумма",
-        "Дата отгрузки", "Номер счета", "Даты оплаты", "Комментарии к оплатам",
+        "п/п", "Наименование", "Размер", "Поле", "Кол-во, шт", "Цена, руб", "Стоимость, руб",
+        "Клиент", "Счет", "Дата ПП", "№ ПП", "Оплаты", "Дата отгрузки",
     ]
     ws.append([])
     ws.append(headers)
+    header_row = ws.max_row
     for col_num, header in enumerate(headers, 1):
-        cell = ws.cell(row=4, column=col_num)
+        cell = ws.cell(row=header_row, column=col_num)
         cell.font = bold_font
         cell.fill = header_fill
         cell.border = border_style
         cell.alignment = align_center
 
-    for row in detail_rows:
-        ws.append([
-            row['name'],
-            row['size'],
-            row['field'],
-            row['qty'] if row['qty'] != '' else None,
-            row['price'] if row['price'] != '' else None,
-            row['sum'] if row['sum'] != '' else None,
-            row['ship_date'],
-            row['invoice'],
-            row['payment_dates'],
-            row['payment_comments'],
-        ])
+    def _write_row(values, *, fill=None, bold=False):
+        ws.append(values)
         curr = ws.max_row
-        for i in range(1, 11):
+        for i in range(1, len(headers) + 1):
             cell = ws.cell(row=curr, column=i)
             cell.border = border_style
-            if i in (4, 5, 6) and cell.value is not None:
-                cell.number_format = '#,##0.00' if i != 4 else '0'
+            if fill:
+                cell.fill = fill
+            if bold:
+                cell.font = bold_font
+            if i in (5, 6, 7, 12):
                 cell.alignment = align_right
+                if isinstance(cell.value, (int, float)):
+                    cell.number_format = '#,##0.00' if i != 5 else '0'
+            elif i == 1:
+                cell.alignment = align_center
+            else:
+                cell.alignment = align_left
+        return curr
+
+    grand_qty = 0.0
+    grand_sum = 0.0
+    grand_pay = 0.0
+
+    for group in groups:
+        lines = group.get('lines') or []
+        payments = group.get('payments') or []
+        n_rows = max(len(lines), len(payments), 1)
+
+        group_qty = sum(float(l.get('qty') or 0) for l in lines)
+        group_sum = sum(float(l.get('sum') or 0) for l in lines)
+        group_pay = sum(float(p.get('amount') or 0) for p in payments)
+        grand_qty += group_qty
+        grand_sum += group_sum
+        grand_pay += group_pay
+
+        for i in range(n_rows):
+            line = lines[i] if i < len(lines) else None
+            pay = payments[i] if i < len(payments) else None
+            values = [
+                group.get('pp') if i == 0 else None,
+                (line or {}).get('name') if line else None,
+                (line or {}).get('size') if line else None,
+                (line or {}).get('field') if line else None,
+                (line or {}).get('qty') if line else None,
+                (line or {}).get('price') if line else None,
+                (line or {}).get('sum') if line else None,
+                group.get('client') if i == 0 else None,
+                group.get('invoice') if i == 0 else None,
+                (pay or {}).get('date') if pay else None,
+                (pay or {}).get('number') if pay else None,
+                (pay or {}).get('amount') if pay else None,
+                (line or {}).get('ship_date') if line else None,
+            ]
+            _write_row(values)
+
+        _write_row(
+            [
+                None, None, None, 'Итого', group_qty, None, group_sum,
+                None, None, None, None, group_pay if group_pay else None, None,
+            ],
+            fill=total_fill,
+            bold=True,
+        )
+
+    if groups:
+        _write_row(
+            [
+                None, 'ВСЕГО', None, None, grand_qty, None, grand_sum,
+                None, None, None, None, grand_pay if grand_pay else None, None,
+            ],
+            fill=PatternFill(start_color="CFE2F3", end_color="CFE2F3", fill_type="solid"),
+            bold=True,
+        )
 
     widths = {
-        'A': 36, 'B': 14, 'C': 16, 'D': 10, 'E': 12, 'F': 14,
-        'G': 14, 'H': 28, 'I': 28, 'J': 36,
+        'A': 8, 'B': 32, 'C': 14, 'D': 12, 'E': 11, 'F': 12, 'G': 14,
+        'H': 14, 'I': 28, 'J': 12, 'K': 12, 'L': 12, 'M': 14,
     }
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
@@ -2730,6 +2843,7 @@ def reports_reconciliation_export_detail():
     buf.seek(0)
     filename = f"Act_detail_{client_name}_{f_start or ''}_{f_end or ''}.xlsx"
     return send_file(buf, download_name=filename, as_attachment=True)
+
 
 @bp.route('/reports/turnover')
 @login_required

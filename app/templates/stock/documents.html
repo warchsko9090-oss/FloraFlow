@@ -1661,6 +1661,7 @@
     </div>
     <div class="offcanvas-body bg-light" id="sourceFieldBody">
         <div class="alert alert-info py-2 small mb-3" id="sourceFieldHint">Выберите позицию...</div>
+        <div id="sourceFieldTotal" class="alert alert-success py-2 small mb-3 fw-bold" style="display:none;"></div>
         <div id="sourceFieldLoader" class="text-center py-5" style="display: none;">
             <i class="fas fa-spinner fa-spin fa-3x text-success opacity-50"></i>
         </div>
@@ -2771,10 +2772,15 @@
         const titleEl  = document.getElementById('sourceFieldTitle');
         const loader   = document.getElementById('sourceFieldLoader');
         const hint     = document.getElementById('sourceFieldHint');
+        const totalEl  = document.getElementById('sourceFieldTotal');
         const itemsEl  = document.getElementById('sourceFieldItems');
         const footer   = document.getElementById('recountFooter');
         titleEl.innerText = fieldName;
         hint.innerText = opts.hint || '';
+        if (totalEl) {
+            totalEl.style.display = 'none';
+            totalEl.innerHTML = '';
+        }
         loader.style.display = 'block';
         itemsEl.innerHTML = '';
         footer.style.display = 'none';
@@ -2787,6 +2793,19 @@
             if (!data.items || data.items.length === 0) {
                 itemsEl.innerHTML = '<div class="alert alert-warning text-center">На этом поле нет остатков.</div>';
                 return;
+            }
+
+            const totalQty = data.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+            const totalFree = data.items.reduce((s, it) => {
+                const reserved = Number(it.reserved) || 0;
+                const free = it.free != null ? Number(it.free) : Math.max(0, (Number(it.qty) || 0) - reserved);
+                return s + free;
+            }, 0);
+            if (totalEl) {
+                totalEl.style.display = 'block';
+                totalEl.innerHTML = opts.showFree
+                    ? `Всего на поле: <b>${totalQty}</b> шт · свободно: <b>${totalFree}</b> шт · позиций: <b>${data.items.length}</b>`
+                    : `Всего на поле: <b>${totalQty}</b> шт · позиций: <b>${data.items.length}</b>`;
             }
 
             if (opts.recountMode) {
