@@ -361,7 +361,7 @@
                                 <span class="plant-head-line"><span class="plant-title">{{ group.name }}</span>{% if group.root_system or group.pruning %}<span class="plant-attrs">{% if group.root_system %}<span class="plant-attr-dot"> · </span>{{ group.root_system }}{% endif %}{% if group.pruning %}<span class="plant-attr-dot"> · </span>{{ group.pruning }}{% endif %}</span>{% endif %}</span>
                                 {% if group.latin_name %}<span class="latin">{{ group.latin_name }}</span>{% endif %}
                             </td>
-                            <td class="c-free" style="width: 20%;">{% if all_on_request %}&nbsp;{% else %}{{ group.totals.free }}{% endif %}</td>
+                            <td class="c-free" style="width: 20%;">{% if all_on_request %}&nbsp;{% else %}{{ group.totals.free }} шт{% endif %}</td>
                         </tr>
                     </table>
                 </td>
@@ -374,7 +374,7 @@
                             <td class="c-name" style="width: 42%;">&nbsp;</td>
                             <td class="c-size" style="width: 18%;">{{ row.size or '—' }}</td>
                             <td class="c-price" style="width: 20%;">{{ fmt(row.price) }}</td>
-                            <td class="c-free" style="width: 20%;">{% if force_on_request or row.pdf_on_request %}по запросу{% else %}{{ row.free }}{% endif %}</td>
+                            <td class="c-free" style="width: 20%;">{% if force_on_request or row.pdf_on_request %}по запросу{% else %}{{ row.free }} шт{% endif %}</td>
                         </tr>
                     </table>
                 </td>
@@ -441,8 +441,8 @@
     {% endif %}
 
     {% if pdf_part in ('full', 'containers') and container_groups %}
-    {{ render_section_header('Саженцы', 'Саженцы · контейнер', qty_label='Наличие') }}
-    {{ render_group_block(container_groups, force_on_request=true) }}
+    {{ render_section_header('Саженцы', 'Саженцы · контейнер', qty_label='Наличие, шт') }}
+    {{ render_group_block(container_groups) }}
     <tr>
         <td class="inset" style="padding: 6pt 0 10pt; text-align: center; color: #6B726C; font-size: 8pt; font-style: italic;">
             Точное наличие и цену растений в контейнерах уточняйте у менеджера
