@@ -19,8 +19,24 @@
         return String(name || '').toLowerCase().includes('сосн');
     }
 
+    function normalizeSizeUnitsCm(raw) {
+        let s = String(raw || '').trim();
+        if (!s) return s;
+        s = s.replace(/(?<=\d)\s*[Cc][Mm]\b/g, ' см');
+        s = s.replace(/(?<=\d)\s*(?:[Mm][Mm]|мм)\b/g, ' см');
+        s = s.replace(/(?<=\d)\s*[Mm]\b(?![A-Za-zА-Яа-я])/g, ' см');
+        s = s.replace(
+            /([HhDdВвШш]\s*)(\d+(?:\s*-\s*\d+)?)(?!\s*см)(\s*(?:·|[|/]|$)|\s+(?=[A-Za-zА-Яа-я]))/g,
+            (full, head, num, tail) => {
+                if (/^\s*см\b/i.test(tail || '')) return full;
+                return `${head}${num} см${tail || ''}`;
+            }
+        );
+        return s.replace(/\s{2,}/g, ' ').replace(/(?:\s*см){2,}/gi, ' см').trim();
+    }
+
     function parseSizeSpec(spec) {
-        const raw = String(spec || '').trim();
+        const raw = normalizeSizeUnitsCm(String(spec || '').trim());
         if (!raw) return { kind: 'other', label: '—' };
         const dual = raw.match(/^([\d][\d\-]*)\s*[*×xX]\s*([\d][\d\-]*)$/);
         if (dual) return { kind: 'dual', a: dual[1], b: dual[2] };

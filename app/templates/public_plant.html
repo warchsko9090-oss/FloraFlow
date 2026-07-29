@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -210,7 +210,7 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/shop.js') }}?v=8"></script>
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=9"></script>
     <script>
         const plantMeta = {{ plant | tojson }};
         const variants = Shop.sortVariants({{ variants_json|safe }});

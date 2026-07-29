@@ -29,7 +29,11 @@ def get_reserved_map(plant_id=None, size_id=None, field_id=None, year=None,
             func.sum(OrderItem.quantity - OrderItem.shipped_quantity),
         )
         .join(Order)
-        .filter(*_active_order_filter())
+        .filter(
+            *_active_order_filter(),
+            OrderItem.field_id.isnot(None),
+            OrderItem.year.isnot(None),
+        )
     )
     if plant_id is not None:
         q = q.filter(OrderItem.plant_id == plant_id)

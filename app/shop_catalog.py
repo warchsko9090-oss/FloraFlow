@@ -247,12 +247,24 @@ def _aggregate_stock_by_pair(reserved_map):
 
 
 def _aggregate_seedling_stock_by_plant(reserved_map):
-    """{plant_id: {free_qty, price, size_id, plant, size}} — голый «Саженец» на контейнерной площадке."""
+    """{plant_id: {free_qty, price, size_id, plant, size}} — товарные саженцы на контейнерной площадке.
+
+    Считаем:
+      • голый «Товарный»/«Саженцы»;
+      • «Товарный · контейнер [· промер]» / legacy «Саженцы · …»
+    только на полях контейнерной площадки — реальное наличие для сайта/КП/PDF.
+    """
     from app.services import get_container_field_ids
+    from app.seedlings import is_product_seedling_size_name
 
     seedling_ids = set(get_seedling_size_ids())
+    product_ids = {
+        s.id for s in Size.query.all()
+        if is_product_seedling_size_name(s.name)
+    }
+    size_ids = seedling_ids | product_ids
     container_ids = get_container_field_ids()
-    if not seedling_ids or not container_ids:
+    if not size_ids or not container_ids:
         return {}
 
     grouped = {}
@@ -260,7 +272,7 @@ def _aggregate_seedling_stock_by_plant(reserved_map):
         StockBalance.query
         .options(joinedload(StockBalance.plant), joinedload(StockBalance.size))
         .filter(
-            StockBalance.size_id.in_(seedling_ids),
+            StockBalance.size_id.in_(size_ids),
             StockBalance.field_id.in_(container_ids),
         )
         .all()
@@ -282,7 +294,11 @@ def _aggregate_seedling_stock_by_plant(reserved_map):
                 'price': None,
             }
         grouped[pid]['free_qty'] += free
-        if free > 0:
+        # Для карточки «Саженец» предпочитаем голый размер, иначе любой с остатком
+        if st.size_id in seedling_ids and free > 0:
+            grouped[pid]['size_id'] = st.size_id
+            grouped[pid]['size'] = st.size
+        elif free > 0 and grouped[pid]['size_id'] not in seedling_ids:
             grouped[pid]['size_id'] = st.size_id
             grouped[pid]['size'] = st.size
 
@@ -307,20 +323,26 @@ def _aggregate_seedling_stock_by_plant(reserved_map):
 
 def collect_seedlings_for_admin():
     """Растения с саженцами (голые «Саженцы» и/или промеренные) для вкладки админки."""
+    from app.services import get_container_field_ids
+
     reserved_map = get_reserved_map()
     stock_by_plant = _aggregate_seedling_stock_by_plant(reserved_map)
     cards = {c.plant_id: c for c in _load_shop_plant_cards()}
     plant_display = get_plant_display_map()
 
-    # Промеренные саженцы тоже нужно уметь принудительно скрывать с сайта/PDF.
+    # Промеренные товарные саженцы — только контейнерная площадка.
     measured_ids = set(get_measured_seedling_size_ids())
     measured_free: dict[int, int] = {}
     measured_size: dict[int, int] = {}
-    if measured_ids:
+    container_ids = get_container_field_ids() if measured_ids else set()
+    if measured_ids and container_ids:
         for st in (
             StockBalance.query
             .options(joinedload(StockBalance.plant), joinedload(StockBalance.size))
-            .filter(StockBalance.size_id.in_(measured_ids))
+            .filter(
+                StockBalance.size_id.in_(measured_ids),
+                StockBalance.field_id.in_(container_ids),
+            )
             .all()
         ):
             free = max(
@@ -697,11 +719,11 @@ def build_visible_seedling_items(apply_shop_prices=True):
     from app.seedlings import size_name_export_label
     from flask import current_app
 
-    if not get_seedling_size_ids():
-        return []
-
     reserved_map = get_reserved_map()
     stock_by_plant = _aggregate_seedling_stock_by_plant(reserved_map)
+    if not stock_by_plant and not get_seedling_size_ids():
+        return []
+
     plant_display = get_plant_display_map()
     price_overrides = get_shop_price_map()
     cards = {c.plant_id: c for c in _load_shop_plant_cards()}

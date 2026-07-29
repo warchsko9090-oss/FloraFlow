@@ -514,29 +514,33 @@ def _parse_shop_doc_payload(doc: Document) -> dict:
 
 
 def _shop_kp_details_from_doc(doc: Document):
+    from app.seedlings import size_name_export_label
     payload = _parse_shop_doc_payload(doc)
     line_prices = draft_line_prices_from_payload(payload)
     card_map = get_plant_card_map()
+    cat_map = {(item["plant_id"], item["size_id"]): item for item in get_aggregated_catalog()}
     details = []
     total_sum = 0.0
     for row in doc.rows:
         key = (row.plant_id, row.size_id)
+        cat = cat_map.get(key)
         if key in line_prices:
             price = line_prices[key]
         else:
-            cat_map = {(item["plant_id"], item["size_id"]): item for item in get_aggregated_catalog()}
-            cat = cat_map.get(key)
             price = float(cat["price"]) if cat else 0.0
         row_sum = row.quantity * price
         card = card_map.get(row.plant_id, {})
+        free_qty = int(cat.get("free_qty") or 0) if cat else None
         details.append({
             "plant": row.plant.name if row.plant else "—",
-            "size": row.size.name if row.size else "—",
+            "size": size_name_export_label(row.size.name) if row.size else "—",
             "root_system": card.get("root_system", ""),
             "pruning": card.get("pruning", ""),
             "qty": row.quantity,
             "price": price,
             "sum": row_sum,
+            "free_qty": free_qty,
+            "is_seedling": bool(cat.get("is_seedling")) if cat else False,
         })
         total_sum += row_sum
     if payload.get("total_sum") is not None and line_prices:
@@ -831,7 +835,7 @@ def public_shop_stock_pdf():
         shop_contacts=get_shop_contacts_for_site(),
         contact_display_label=contact_display_label,
     )
-    filename = f"Tovarnye_ostatki_{end_date.strftime('%d.%m.%Y')}.pdf"
+    filename = f"Прайс Княжество от {end_date.strftime('%d.%m.%Y')}.pdf"
     pdf_kwargs = dict(page_bg="#111814", page_margin="0")
 
     if ground_groups and container_groups:

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
     {% set shop_page_title = 'Княжество — B2B питомник' %}
@@ -75,7 +75,7 @@
     {% include 'shop/_checkout.html' %}
     {% include 'shop/_cookie_consent.html' %}
 
-    <script src="{{ url_for('static', filename='js/shop.js') }}?v=8"></script>
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=9"></script>
     <script>
         const plants = {{ plants_json|safe }};
         let activeCategory = 'all';

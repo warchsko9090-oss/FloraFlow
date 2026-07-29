@@ -9,7 +9,7 @@ from app.utils import msk_now, check_stock_availability, get_actual_price
 
 APPROVAL_SLOTS = (
     ('user', 'Менеджер питомника'),
-    ('shop_manager', 'Менеджер сайта'),
+    ('shop_manager', 'Активный менеджер продаж'),
 )
 
 ROLES_APPROVE_AS_USER = frozenset({'user', 'admin'})

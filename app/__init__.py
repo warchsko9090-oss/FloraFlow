@@ -280,6 +280,8 @@ def create_app():
             ensure_payment_file_column()
             from app.shop_on_request import ensure_shop_on_request_nullable
             ensure_shop_on_request_nullable()
+            from app.order_item_schema import ensure_order_item_batch_nullable
+            ensure_order_item_batch_nullable(app.logger)
             from app.services import ensure_numbered_container_yards
             ensure_numbered_container_yards()
         except Exception as e:

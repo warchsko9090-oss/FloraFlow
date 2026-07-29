@@ -26,7 +26,7 @@
                             <td>
                                 {% if user.role == 'admin' %}<span class="badge bg-danger">Admin</span>
                                 {% elif user.role == 'user' %}<span class="badge bg-primary">Менеджер питомника</span>
-                                {% elif user.role == 'shop_manager' %}<span class="badge bg-info text-dark">Менеджер сайта</span>
+                                {% elif user.role == 'shop_manager' %}<span class="badge bg-info text-dark">Активный менеджер продаж</span>
                                 {% else %}<span class="badge bg-secondary">{{ user.role }}</span>{% endif %}
                             </td>
                             <td class="text-end">
@@ -49,7 +49,7 @@
 </div>
 
 <!-- Modal Add -->
-<div class="modal fade" id="addUserModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form method="POST"><div class="modal-header bg-success text-white"><h5 class="modal-title">Новый пользователь</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" name="action" value="add"><div class="mb-3"><label>Логин</label><input type="text" name="username" class="form-control" required></div><div class="mb-3"><label>Пароль</label><input type="text" name="password" class="form-control" required></div><div class="mb-3"><label>Роль</label><select name="role" class="form-select"><option value="user">Менеджер питомника</option><option value="shop_manager">Менеджер сайта</option><option value="admin">Администратор</option><option value="executive">Руководитель</option><option value="user2">Кадровик</option></select></div></div><div class="modal-footer"><button type="submit" class="btn btn-success">Создать</button></div></form></div></div></div>
+<div class="modal fade" id="addUserModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form method="POST"><div class="modal-header bg-success text-white"><h5 class="modal-title">Новый пользователь</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" name="action" value="add"><div class="mb-3"><label>Логин</label><input type="text" name="username" class="form-control" required></div><div class="mb-3"><label>Пароль</label><input type="text" name="password" class="form-control" required></div><div class="mb-3"><label>Роль</label><select name="role" class="form-select"><option value="user">Менеджер питомника</option><option value="shop_manager">Активный менеджер продаж</option><option value="admin">Администратор</option><option value="executive">Руководитель</option><option value="user2">Кадровик</option></select></div></div><div class="modal-footer"><button type="submit" class="btn btn-success">Создать</button></div></form></div></div></div>
 
 <!-- Modal Password -->
 <div class="modal fade" id="changePassModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form method="POST"><div class="modal-header bg-warning"><h5 class="modal-title">Смена пароля</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" name="action" value="change_password"><input type="hidden" name="user_id" id="passUserId"><p>Для: <b id="passUserName"></b></p><div class="mb-3"><label>Новый пароль</label><input type="text" name="new_password" class="form-control" required></div></div><div class="modal-footer"><button type="submit" class="btn btn-warning">Сохранить</button></div></form></div></div></div>
@@ -74,7 +74,7 @@
                 <label>Роль</label>
                 <select name="role" id="editUserRole" class="form-select">
                     <option value="user">Менеджер питомника (User)</option>
-                    <option value="shop_manager">Менеджер сайта (Shop manager)</option>
+                    <option value="shop_manager">Активный менеджер продаж (Active sales manager)</option>
                     <option value="admin">Администратор (Admin)</option>
                     <option value="executive">Руководитель (Executive)</option>
                     <option value="user2">Кадровик (User2)</option>

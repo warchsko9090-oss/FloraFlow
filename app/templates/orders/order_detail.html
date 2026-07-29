@@ -514,10 +514,20 @@
                 <i class="fas fa-lock text-warning me-2 mt-1"></i>
                 <div>
                     <strong>Заказ оплачен ({{ order_paid_total|money_int }} из {{ order.total_sum|money_int }}).</strong>
-                    Удаление позиций и уменьшение количества для менеджера отключены.
+                    Удаление позиций и уменьшение количества для менеджера питомника отключены.
                     Чтобы уточнить поле или размер по факту бирковки — используйте кнопку
                     <span class="badge bg-secondary"><i class="fas fa-code-branch"></i> Разделить</span>
                     на нужной позиции.
+                </div>
+            </div>
+            {% elif shop_manager_locks %}
+            <div class="alert alert-info border-0 rounded-0 mb-0 px-3 py-2 small d-flex align-items-start">
+                <i class="fas fa-info-circle text-info me-2 mt-1"></i>
+                <div>
+                    <strong>Активный менеджер продаж:</strong>
+                    можно менять количество, добавлять и удалять позиции.
+                    Цену, поле и партию менять нельзя — новые позиции добавляются без поля/партии,
+                    задача на назначение уходит менеджеру питомника и админу.
                 </div>
             </div>
             {% endif %}
@@ -628,7 +638,7 @@
                                     <input type="hidden" name="item_id[]" value="{{ item.id }}">
                                 </td>
                                 <td class="align-middle td-field" data-label="Поле">
-                                    {% if order.status != 'canceled' and current_user.role != 'user2' %}
+                                    {% if order.status != 'canceled' and current_user.role != 'user2' and not shop_manager_locks %}
                                     <div class="d-none d-md-block">
                                         <select name="field_id[]" class="form-select form-select-sm field-select select-search" onchange="updateRowBatchDetails(this)" {% if order_locked_for_manager %}disabled title="Заказ оплачен — используйте 'Разделить'"{% endif %}>
                                             {% for f in fields %}
@@ -639,11 +649,16 @@
                                         <input type="hidden" name="field_id[]" value="{{ item.field_id }}">
                                         {% endif %}
                                     </div>
-                                    <div class="d-md-none text-end">{{ item.field.name }}</div>
-                                    {% else %}{{ item.field.name }}{% endif %}
+                                    <div class="d-md-none text-end">{% if item.field %}{{ item.field.name }}{% else %}<span class="text-warning">не назначено</span>{% endif %}</div>
+                                    {% else %}
+                                      {% if shop_manager_locks %}
+                                      <input type="hidden" name="field_id[]" value="{{ item.field_id or '' }}">
+                                      {% endif %}
+                                      {% if item.field %}{{ item.field.name }}{% else %}<span class="badge bg-warning text-dark">не назначено</span>{% endif %}
+                                    {% endif %}
                                 </td>
                                 <td class="align-middle td-year" data-label="Год">
-                                    {% if order.status != 'canceled' and current_user.role != 'user2' %}
+                                    {% if order.status != 'canceled' and current_user.role != 'user2' and not shop_manager_locks %}
                                     <div class="d-none d-md-block">
                                         <select name="year[]" class="form-select form-select-sm year-select" required {% if order_locked_for_manager %}disabled title="Заказ оплачен"{% endif %}>
                                             <option value="{{ item.year }}" selected>{{ item.year }}</option>
@@ -652,14 +667,19 @@
                                         <input type="hidden" name="year[]" value="{{ item.year }}">
                                         {% endif %}
                                     </div>
-                                    <div class="d-md-none text-end">{{ item.year }}</div>
-                                    {% else %}{{ item.year }}{% endif %}
+                                    <div class="d-md-none text-end">{% if item.year %}{{ item.year }}{% else %}—{% endif %}</div>
+                                    {% else %}
+                                      {% if shop_manager_locks %}
+                                      <input type="hidden" name="year[]" value="{{ item.year or '' }}">
+                                      {% endif %}
+                                      {% if item.year %}{{ item.year }}{% else %}<span class="badge bg-warning text-dark">—</span>{% endif %}
+                                    {% endif %}
                                 </td>
                                 {% if current_user.role != 'user2' %}
                                 <td class="align-middle td-price" data-label="Цена">
                                     {% if order.status != 'canceled' %}
                                     <div class="d-none d-md-block">
-                                        <input type="number" step="0.01" name="price[]" value="{{ item.price }}" class="form-control form-control-sm text-end p-1" {% if order_locked_for_manager %}readonly title="Заказ оплачен — цену менять нельзя"{% endif %}>
+                                        <input type="number" step="0.01" name="price[]" value="{{ item.price }}" class="form-control form-control-sm text-end p-1" {% if meta_locked %}readonly title="Цену менять нельзя"{% endif %}>
                                     </div>
                                     <div class="d-md-none text-end">{{ item.price|money }}</div>
                                     {% else %}{{ item.price|money }}{% endif %}
@@ -693,7 +713,7 @@
                                 </td>
                                 <td class="align-middle text-center td-actions d-none d-md-table-cell" data-label="Действия">
                                     {% if order.status != 'canceled' %}
-                                        {% if current_user.role != 'user2' and item.shipped_quantity == 0 and (item.dug_quantity or 0) == 0 %}
+                                        {% if current_user.role != 'user2' and item.shipped_quantity == 0 and (item.dug_quantity or 0) == 0 and not shop_manager_locks %}
                                         <button type="button"
                                                 class="btn btn-outline-secondary btn-sm me-1 split-item-btn"
                                                 title="Разделить позицию (по полям/размерам)"
@@ -706,7 +726,7 @@
                                                 data-price="{{ item.price|float }}"
                                                 data-plant-name="{{ item.plant.name }}"
                                                 data-size-name="{{ item.size.name }}"
-                                                data-field-name="{{ item.field.name }}">
+                                                data-field-name="{{ item.field.name if item.field else '' }}">
                                             <i class="fas fa-code-branch"></i>
                                         </button>
                                         {% endif %}
@@ -811,13 +831,14 @@
                   </select>
               </div>
               <div class="row">
-                  <div class="col-6 mb-2">
+                  <div class="col-{% if shop_manager_locks %}12{% else %}6{% endif %} mb-2">
                       <label>Размер</label>
                       <select name="size" class="form-select form-select-sm select-search" required>
                           <option value="" selected disabled>...</option>
                           {% for s in sizes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
                       </select>
                   </div>
+                  {% if not shop_manager_locks %}
                   <div class="col-6 mb-2">
                       <label>Поле (Склад)</label>
                       <select name="field" class="form-select form-select-sm select-search" required>
@@ -825,13 +846,18 @@
                           {% for f in fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
                       </select>
                   </div>
+                  {% endif %}
               </div>
+              {% if shop_manager_locks %}
+              <div class="alert alert-light small py-2">Поле и партия будут назначены менеджером питомника (задача в дашборд).</div>
+              {% else %}
               <div class="mb-2">
                   <label>Год (Партия)</label>
                   <select name="year" id="modalYearSelect" class="form-select form-select-sm" required>
                       <option disabled selected>Выберите параметры выше...</option>
                   </select>
               </div>
+              {% endif %}
               <div class="mb-2">
                   <label>Количество</label>
                   <input type="number" name="quantity" class="form-control" required min="1" value="1">

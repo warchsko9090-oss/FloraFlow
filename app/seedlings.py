@@ -101,17 +101,50 @@ def size_name_ui_label(name: str) -> str:
 
 
 def size_name_export_label(name: str) -> str:
-    """PDF/Excel: «Товарный · …» → «Саженцы · …»."""
+    """PDF/Excel/витрина: «Товарный · …» → «Саженцы · …», единицы — см."""
     raw = (name or '').strip()
     if not raw:
         return raw
     if raw == STAGE_SAZHENCY:
-        return STAGE_SAZHENCY_EXPORT
+        return normalize_size_units_cm(STAGE_SAZHENCY_EXPORT)
     if raw.startswith(STAGE_SAZHENCY + SEEDLING_SEP):
-        return STAGE_SAZHENCY_EXPORT + raw[len(STAGE_SAZHENCY):]
+        return normalize_size_units_cm(STAGE_SAZHENCY_EXPORT + raw[len(STAGE_SAZHENCY):])
     if raw.startswith(STAGE_SAZHENCY + ' '):
-        return STAGE_SAZHENCY_EXPORT + raw[len(STAGE_SAZHENCY):]
-    return raw
+        return normalize_size_units_cm(STAGE_SAZHENCY_EXPORT + raw[len(STAGE_SAZHENCY):])
+    return normalize_size_units_cm(raw)
+
+
+def normalize_size_units_cm(name: str) -> str:
+    """Единицы размера на сайте/в PDF: только «см» (не M/CM/мм).
+
+    Примеры:
+      H 80-100 CM · D 80-100  → H 80-100 см · D 80-100 см
+      H 80-100 M · WRB        → H 80-100 см · WRB
+      H 200-225 · WRB         → H 200-225 см · WRB
+    """
+    s = (name or '').strip()
+    if not s:
+        return s
+    # После цифры: CM/cm/мм/mm → см; одиночная M/m (метры по ошибке) → см
+    s = re.sub(r'(?<=\d)\s*[Cc][Mm]\b', ' см', s)
+    s = re.sub(r'(?<=\d)\s*(?:[Mm][Mm]|мм)\b', ' см', s)
+    s = re.sub(r'(?<=\d)\s*[Mm]\b(?![A-Za-zА-Яа-я])', ' см', s)
+
+    def _ensure_cm(match: re.Match) -> str:
+        head, num, tail = match.group(1), match.group(2), match.group(3) or ''
+        if re.match(r'\s*см\b', tail, flags=re.IGNORECASE):
+            return match.group(0)
+        return f'{head}{num} см{tail}'
+
+    # H/D/В/Ш + число/диапазон без «см»
+    s = re.sub(
+        r'([HhDdВвШш]\s*)(\d+(?:\s*-\s*\d+)?)(?!\s*см)(\s*(?:·|[|/]|$)|\s+(?=[A-Za-zА-Яа-я]))',
+        _ensure_cm,
+        s,
+    )
+    s = re.sub(r'\s{2,}', ' ', s).strip()
+    s = re.sub(r'(?:\s*см){2,}', ' см', s, flags=re.IGNORECASE)
+    return s
 
 
 def stage_export_label(stage: str) -> str:

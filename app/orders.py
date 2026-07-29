@@ -77,20 +77,91 @@ def _order_paid_total(order_id):
         return Decimal(0)
 
 
+def _is_shop_sales_manager(user):
+    """Роль «активный менеджер продаж» (shop_manager)."""
+    return getattr(user, 'role', None) == 'shop_manager'
+
+
 def _is_order_locked_for_manager(order, user):
-    """True, если для роли 'user' (менеджер по продажам) заказ нужно
+    """True, если для роли 'user' (менеджер питомника) заказ нужно
     защитить от удаления и уменьшения позиций (есть хотя бы одна оплата).
 
     Админ и executive — без ограничений.
+    shop_manager (активный менеджер продаж) — отдельная логика (_shop_manager_locks_meta).
     """
     if order is None or user is None:
         return False
     if not getattr(user, 'is_authenticated', False):
         return False
     role = getattr(user, 'role', None)
-    if role not in ('user', 'shop_manager'):
+    if role != 'user':
         return False
     return _order_paid_total(order.id) > 0
+
+
+def _shop_manager_locks_meta(user):
+    """Активный менеджер продаж: можно qty/add/delete, нельзя price/field/year."""
+    return _is_shop_sales_manager(user)
+
+
+def _notify_assign_batch_task(order, item):
+    """Задача менеджеру питомника + админу: проставить поле и партию."""
+    try:
+        if order is None or item is None:
+            return
+        plant_name = item.plant.name if item.plant else f'#{item.plant_id}'
+        size_name = item.size.name if item.size else f'#{item.size_id}'
+        dedup_key = f'assign_batch:{order.id}:{item.id}'
+        existing = (
+            TgTask.query
+            .filter_by(dedup_key=dedup_key, status='new')
+            .first()
+        )
+        if existing:
+            return
+        client_name = ''
+        try:
+            client_name = order.client.name if order.client else ''
+        except Exception:
+            client_name = ''
+        title = f'Проставить поле и партию в заказе #{order.id}'
+        details = (
+            f'<div><strong>Заказ #{order.id}</strong>'
+            + (f' — {client_name}' if client_name else '')
+            + '</div>'
+            f'<div class="mt-1">Позиция #{item.id}: <b>{plant_name}</b> · {size_name} '
+            f'× {int(item.quantity or 0)} шт.</div>'
+            '<div class="text-muted small mt-1">Добавил активный менеджер продаж без поля и партии.</div>'
+        )
+        by = getattr(current_user, 'username', None) or 'shop_manager'
+        task = TgTask(
+            raw_text=f'[assign_batch:order={order.id}:item={item.id}]',
+            title=title,
+            details=details,
+            action_type='assign_batch',
+            action_payload=json.dumps({
+                'order_id': order.id,
+                'item_id': item.id,
+                'plant_id': item.plant_id,
+                'size_id': item.size_id,
+                'quantity': int(item.quantity or 0),
+                'by': by,
+            }, ensure_ascii=False),
+            status='new',
+            assignee_role='admin,user',
+            sender_name='system.shop_manager',
+            source='audit',
+            severity='warning',
+            dedup_key=dedup_key,
+            first_seen_at=msk_now(),
+            last_seen_at=msk_now(),
+        )
+        db.session.add(task)
+    except Exception as exc:
+        try:
+            current_app.logger.warning('assign_batch task failed: %s', exc)
+        except Exception:
+            pass
 
 
 _AUDIT_FIELD_LABELS = {
@@ -670,7 +741,7 @@ def client_draft_detail(doc_id):
                 flash('Черновик уже обработан')
                 return redirect(url_for('orders.client_draft_detail', doc_id=doc.id))
             if not can_reject_draft(role, doc.doc_type):
-                flash('Отклонить заявку могут менеджер питомника, менеджер сайта или администратор')
+                flash('Отклонить заявку могут менеджер питомника, активный менеджер продаж или администратор')
                 return redirect(url_for('orders.client_draft_detail', doc_id=doc.id))
             doc.doc_type = 'client_draft_rejected'
             db.session.commit()
@@ -711,7 +782,7 @@ def client_draft_detail(doc_id):
                     flash(f'Заявка полностью согласована. Создан заказ #{order.id} (резерв)')
                     return redirect(url_for('orders.order_detail', order_id=order.id))
                 db.session.commit()
-                flash('Согласование менеджера питомника сохранено. Ожидается согласование менеджера сайта.')
+                flash('Согласование менеджера питомника сохранено. Ожидается согласование активного менеджера продаж.')
             except Exception as e:
                 db.session.rollback()
                 flash(f'Ошибка: {e}')
@@ -722,7 +793,7 @@ def client_draft_detail(doc_id):
                 flash('Заявка уже обработана')
                 return redirect(url_for('orders.client_draft_detail', doc_id=doc.id))
             if not can_approve_as_shop_manager(role, doc.doc_type, appr['slots']['shop_manager']['done']):
-                flash('Согласование менеджера сайта доступно менеджеру сайта или администратору')
+                flash('Согласование активного менеджера продаж доступно менеджеру сайта или администратору')
                 return redirect(url_for('orders.client_draft_detail', doc_id=doc.id))
 
             payload = load_draft_payload(doc.comment)
@@ -736,7 +807,7 @@ def client_draft_detail(doc_id):
                     flash(f'Заявка полностью согласована. Создан заказ #{order.id} (резерв)')
                     return redirect(url_for('orders.order_detail', order_id=order.id))
                 db.session.commit()
-                flash('Согласование менеджера сайта сохранено. Ожидается согласование менеджера питомника.')
+                flash('Согласование активного менеджера продаж сохранено. Ожидается согласование менеджера питомника.')
             except Exception as e:
                 db.session.rollback()
                 flash(f'Ошибка: {e}')
@@ -1412,6 +1483,7 @@ def order_detail(order_id):
             stock_baseline = snapshot_overcommit_for_order(o.id)
 
             order_locked = _is_order_locked_for_manager(o, current_user)
+            shop_locks = _shop_manager_locks_meta(current_user)
 
             for i, iid in enumerate(ids):
                 it = OrderItem.query.get(int(iid))
@@ -1419,10 +1491,20 @@ def order_detail(order_id):
                     continue
 
                 new_qty = int(qtys[i])
-                new_field_id = int(flds[i])
-                new_year = int(yrs[i])
+                # Активный менеджер продаж: только кол-во; цена/поле/партия — как было.
+                if shop_locks:
+                    new_field_id = it.field_id
+                    new_year = it.year
+                    try:
+                        new_price_forced = float(it.price or 0)
+                    except Exception:
+                        new_price_forced = 0.0
+                else:
+                    new_field_id = int(flds[i])
+                    new_year = int(yrs[i])
+                    new_price_forced = None
 
-                # Защита оплаченных заказов от менеджера: нельзя уменьшать кол-во,
+                # Защита оплаченных заказов от менеджера питомника: нельзя уменьшать кол-во,
                 # менять поле/год/цену. Только увеличение и добавление новых позиций.
                 if order_locked:
                     old_qty = int(it.quantity or 0)
@@ -1468,30 +1550,31 @@ def order_detail(order_id):
                         return redirect(return_to)
                     return redirect(url_for('orders.order_detail', order_id=order_id))
 
-                # Проверка остатка с учетом новой партии и исключением текущей строки.
-                ok, free = check_stock_availability(
-                    it.plant_id,
-                    it.size_id,
-                    new_field_id,
-                    new_year,
-                    new_qty,
-                    exclude_item_id=it.id
-                )
-                if not ok:
-                    field_obj = Field.query.get(new_field_id)
-                    field_name = field_obj.name if field_obj else new_field_id
-                    flash(
-                        f'Недостаточно остатка для позиции "{it.plant.name} {it.size.name}" '
-                        f'(поле: {field_name}, год: {new_year}). Доступно: {free}, запрошено: {new_qty}.'
+                # Проверка остатка: позиции без поля/партии (добавлены менеджером продаж) — пропускаем.
+                if new_field_id is not None and new_year is not None:
+                    ok, free = check_stock_availability(
+                        it.plant_id,
+                        it.size_id,
+                        new_field_id,
+                        new_year,
+                        new_qty,
+                        exclude_item_id=it.id
                     )
-                    if return_to:
-                        return redirect(return_to)
-                    return redirect(url_for('orders.order_detail', order_id=order_id))
+                    if not ok:
+                        field_obj = Field.query.get(new_field_id)
+                        field_name = field_obj.name if field_obj else new_field_id
+                        flash(
+                            f'Недостаточно остатка для позиции "{it.plant.name} {it.size.name}" '
+                            f'(поле: {field_name}, год: {new_year}). Доступно: {free}, запрошено: {new_qty}.'
+                        )
+                        if return_to:
+                            return redirect(return_to)
+                        return redirect(url_for('orders.order_detail', order_id=order_id))
 
                 prepared_updates.append({
                     'item': it,
                     'new_qty': new_qty,
-                    'new_price': float(prices[i]),
+                    'new_price': new_price_forced if new_price_forced is not None else float(prices[i]),
                     'new_field_id': new_field_id,
                     'new_year': new_year
                 })
@@ -1499,8 +1582,8 @@ def order_detail(order_id):
             for upd in prepared_updates:
                 it = upd['item']
                 old_qty = int(it.quantity or 0)
-                old_field_id = int(it.field_id or 0)
-                old_year = int(it.year or 0)
+                old_field_id = it.field_id
+                old_year = it.year
                 try:
                     old_price_dec = Decimal(it.price or 0)
                 except Exception:
@@ -1606,66 +1689,106 @@ def order_detail(order_id):
         elif 'add_new_item' in request.form:
             from app.stock_helpers import snapshot_overcommit_for_order
             stock_baseline = snapshot_overcommit_for_order(o.id)
-            p, s, f, y, q = request.form.get('plant'), request.form.get('size'), request.form.get('field'), request.form.get('year'), int(request.form.get('quantity'))
-            ok, free = check_stock_availability(p, s, f, int(y), q)
-            if ok: 
-                wholesale = get_actual_price(p, s, f)
+            shop_locks = _shop_manager_locks_meta(current_user)
+            p = request.form.get('plant')
+            s = request.form.get('size')
+            q = int(request.form.get('quantity') or 0)
+            if shop_locks:
+                # Без поля и партии — задача менеджеру питомника / админу.
+                f, y = None, None
+                wholesale = get_actual_price(p, s, None) if p and s else 0
+                try:
+                    wholesale = float(wholesale or 0)
+                except Exception:
+                    wholesale = 0
                 new_item = OrderItem(
                     order_id=o.id,
                     plant_id=p,
                     size_id=s,
-                    field_id=f,
-                    year=int(y),
+                    field_id=None,
+                    year=None,
                     quantity=q,
-                    price=order_default_price(p, s, wholesale)
+                    price=order_default_price(p, s, wholesale),
                 )
                 db.session.add(new_item)
                 db.session.flush()
-                if not o.project_id:
-                    from app.finance import resolve_project_id_for_yard_fields
-                    linked = resolve_project_id_for_yard_fields([f])
-                    if linked:
-                        o.project_id = linked
                 _record_order_item_history(
                     order_id=o.id,
                     item=new_item,
                     action_type='add_item',
                     before_qty=0,
-                    after_qty=q
+                    after_qty=q,
                 )
-                # Аудит: менеджер добавил позицию в оплаченный заказ
-                try:
-                    plant_obj = Plant.query.get(p)
-                    size_obj = Size.query.get(s)
-                    field_obj = Field.query.get(f)
-                    _audit_paid_order_change(o, 'add_item', {
-                        'item_id': new_item.id,
-                        'plant_name': plant_obj.name if plant_obj else '',
-                        'size_name': size_obj.name if size_obj else '',
-                        'field_name': field_obj.name if field_obj else '',
-                        'year': int(y),
-                        'quantity': q,
-                        'price': str(new_item.price),
-                    }, item_id=new_item.id)
-                except Exception:
-                    pass
-
-                # Защита от гонки: финальный re-check относительно baseline'а.
-                try:
-                    from app.stock_helpers import assert_stock_for_order
-                    assert_stock_for_order(o.id, baseline=stock_baseline)
-                except ValueError as exc:
-                    db.session.rollback()
-                    flash(str(exc))
-                    if return_to:
-                        return redirect(return_to)
-                    return redirect(url_for('orders.order_detail', order_id=order_id))
-
+                _notify_assign_batch_task(o, new_item)
                 db.session.commit()
-            else: 
-                flash(f'Недостаточно товара. Доступно: {free}')
+                flash('Позиция добавлена без поля и партии. Задача на назначение ушла менеджеру питомника и админу.')
+            else:
+                f, y = request.form.get('field'), request.form.get('year')
+                ok, free = check_stock_availability(p, s, f, int(y), q)
+                if ok:
+                    wholesale = get_actual_price(p, s, f)
+                    new_item = OrderItem(
+                        order_id=o.id,
+                        plant_id=p,
+                        size_id=s,
+                        field_id=f,
+                        year=int(y),
+                        quantity=q,
+                        price=order_default_price(p, s, wholesale)
+                    )
+                    db.session.add(new_item)
+                    db.session.flush()
+                    if not o.project_id:
+                        from app.finance import resolve_project_id_for_yard_fields
+                        linked = resolve_project_id_for_yard_fields([f])
+                        if linked:
+                            o.project_id = linked
+                    _record_order_item_history(
+                        order_id=o.id,
+                        item=new_item,
+                        action_type='add_item',
+                        before_qty=0,
+                        after_qty=q
+                    )
+                    # Аудит: менеджер добавил позицию в оплаченный заказ
+                    try:
+                        plant_obj = Plant.query.get(p)
+                        size_obj = Size.query.get(s)
+                        field_obj = Field.query.get(f)
+                        _audit_paid_order_change(o, 'add_item', {
+                            'item_id': new_item.id,
+                            'plant_name': plant_obj.name if plant_obj else '',
+                            'size_name': size_obj.name if size_obj else '',
+                            'field_name': field_obj.name if field_obj else '',
+                            'year': int(y),
+                            'quantity': q,
+                            'price': str(new_item.price),
+                        }, item_id=new_item.id)
+                    except Exception:
+                        pass
+
+                    # Защита от гонки: финальный re-check относительно baseline'а.
+                    try:
+                        from app.stock_helpers import assert_stock_for_order
+                        assert_stock_for_order(o.id, baseline=stock_baseline)
+                    except ValueError as exc:
+                        db.session.rollback()
+                        flash(str(exc))
+                        if return_to:
+                            return redirect(return_to)
+                        return redirect(url_for('orders.order_detail', order_id=order_id))
+
+                    db.session.commit()
+                else:
+                    flash(f'Недостаточно товара. Доступно: {free}')
 
         elif 'split_item' in request.form:
+            if _shop_manager_locks_meta(current_user):
+                flash('Активный менеджер продаж не может разделять позиции. Поле и партию назначает менеджер питомника.')
+                if return_to:
+                    return redirect(return_to)
+                return redirect(url_for('orders.order_detail', order_id=order_id))
+
             # === Разделение позиции ===
             # Менеджер уточняет поля/размеры по факту бирковки. Защита денег клиента:
             # суммарное кол-во новых частей >= исходного, и суммарная стоимость
@@ -1971,6 +2094,9 @@ def order_detail(order_id):
 
     order_paid_total = _order_paid_total(o.id)
     order_locked_for_manager = _is_order_locked_for_manager(o, current_user)
+    shop_manager_locks = _shop_manager_locks_meta(current_user)
+    # UI: блокируем поле/цену/партию и для оплаченного user, и для shop_manager всегда
+    meta_locked = order_locked_for_manager or shop_manager_locks
 
     # История изменений позиций — только для админа. Запросом не утяжеляем
     # страницу для других ролей. Лимит 200 событий хватает с запасом, кнопка
@@ -2016,6 +2142,8 @@ def order_detail(order_id):
                            current_year=msk_now().year,
                            order_paid_total=order_paid_total,
                            order_locked_for_manager=order_locked_for_manager,
+                           shop_manager_locks=shop_manager_locks,
+                           meta_locked=meta_locked,
                            order_history_rows=order_history_rows,
                            return_to=return_to)
 

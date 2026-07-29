@@ -1130,7 +1130,7 @@
         <nav class="sidebar-nav">
 
         {% if current_user.role == 'shop_manager' %}
-            {# ---------- МЕНЮ МЕНЕДЖЕРА САЙТА ---------- #}
+            {# ---------- МЕНЮ АКТИВНОГО МЕНЕДЖЕРА ПРОДАЖ ---------- #}
             <div class="sidebar-group-title">Главное</div>
             <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('orders.') and request.endpoint not in ('orders.client_drafts_list', 'orders.client_draft_detail') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
                 <span class="sl-icon"><i class="fas fa-shopping-basket"></i></span>
