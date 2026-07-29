@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from flask import make_response, has_app_context, current_app
 from flask_login import current_user
@@ -331,7 +331,14 @@ def create_pdf_response(html_content, filename, *, page_bg=None, page_margin='1c
     data = merge_pdf_bytes(blobs) if len(blobs) > 1 else blobs[0]
     response = make_response(data)
     response.headers['Content-Type'] = 'application/pdf'
-    response.headers['Content-Disposition'] = f'attachment; filename={filename}'
+    ascii_fallback = re.sub(r'[^A-Za-z0-9._ -]+', '_', filename).strip() or 'download.pdf'
+    if not ascii_fallback.lower().endswith('.pdf'):
+        ascii_fallback += '.pdf'
+    quoted_name = quote(filename)
+    response.headers['Content-Disposition'] = (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quoted_name}"
+    )
     return response
 
 def apply_excel_styles(ws):

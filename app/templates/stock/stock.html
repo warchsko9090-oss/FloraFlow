@@ -1291,13 +1291,7 @@
                             th.textContent = 'НАЛИЧИЕ';
                         }
                     });
-                    // «по запросу» только у размера; напротив наименования — пусто.
-                    tClone.querySelectorAll('.group-header-row .col-free-cell').forEach(td => {
-                        td.textContent = '';
-                    });
-                    tClone.querySelectorAll('.detail-row .col-free-cell, .footer-free').forEach(td => {
-                        td.textContent = 'по запросу';
-                    });
+                    // В PDF по контейнерным позициям показываем реальные свободные остатки цифрой.
                 }
                 let banner = '';
                 if (sectionMeta && sectionMeta.title) {

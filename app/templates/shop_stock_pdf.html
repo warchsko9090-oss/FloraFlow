@@ -6,7 +6,7 @@
 
     <meta charset="UTF-8">
 
-    <title>Товарные остатки — Княжество</title>
+    <title>Прайс Княжество от {{ doc_date.strftime('%d.%m.%Y') }}</title>
 
     <style>
 
@@ -352,7 +352,6 @@
     {% macro render_group_block(block_groups, force_on_request=false) %}
         {% for group in block_groups %}
             {% set ns.has_any = true %}
-            {% set all_on_request = force_on_request or (group.rows|length > 0 and group.rows|selectattr('pdf_on_request')|list|length == group.rows|length) %}
             <tr>
                 <td class="inset">
                     <table width="100%" cellpadding="0" cellspacing="0" class="group" style="table-layout: fixed;">
@@ -361,7 +360,7 @@
                                 <span class="plant-head-line"><span class="plant-title">{{ group.name }}</span>{% if group.root_system or group.pruning %}<span class="plant-attrs">{% if group.root_system %}<span class="plant-attr-dot"> · </span>{{ group.root_system }}{% endif %}{% if group.pruning %}<span class="plant-attr-dot"> · </span>{{ group.pruning }}{% endif %}</span>{% endif %}</span>
                                 {% if group.latin_name %}<span class="latin">{{ group.latin_name }}</span>{% endif %}
                             </td>
-                            <td class="c-free" style="width: 20%;">{% if all_on_request %}&nbsp;{% else %}{{ group.totals.free }} шт{% endif %}</td>
+                            <td class="c-free" style="width: 20%;">{{ group.totals.free }} шт</td>
                         </tr>
                     </table>
                 </td>
@@ -374,7 +373,7 @@
                             <td class="c-name" style="width: 42%;">&nbsp;</td>
                             <td class="c-size" style="width: 18%;">{{ row.size or '—' }}</td>
                             <td class="c-price" style="width: 20%;">{{ fmt(row.price) }}</td>
-                            <td class="c-free" style="width: 20%;">{% if force_on_request or row.pdf_on_request %}по запросу{% else %}{{ row.free }} шт{% endif %}</td>
+                            <td class="c-free" style="width: 20%;">{{ row.free }} шт</td>
                         </tr>
                     </table>
                 </td>
