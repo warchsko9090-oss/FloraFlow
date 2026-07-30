@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h4 class="mb-0 text-primary fw-bold"><i class="fas fa-money-bill-wave me-2"></i>Поступления ДС</h4>
+        <div class="small text-muted mt-1">
+            Оплаты по заказам — то же, что «Приход ДС» в Cashflow. Списания и взаимозачёты тоже входят в итог бюджета.
+        </div>
+    </div>
+    <a class="btn btn-success btn-sm"
+       href="{{ url_for('finance.reports_order_payments',
+           export='xlsx',
+           year=filters.year,
+           month=filters.month or none,
+           client_id=filters.client_id or none,
+           payment_type=filters.payment_type or none,
+           order_q=filters.order_q or none,
+           start_date=filters.start_date or none,
+           end_date=filters.end_date or none,
+           hide_writeoff='1' if filters.hide_writeoff else none,
+           sort=filters.sort or none) }}">
+        <i class="fas fa-file-excel me-1"></i> Excel
+    </a>
+</div>
+
+<div class="card p-3 mb-3 bg-light border-0 shadow-sm">
+    <form method="GET" class="row g-2 align-items-end" hx-boost="false">
+        <div class="col-6 col-md-1">
+            <label class="form-label small fw-bold text-muted text-uppercase mb-1">Год</label>
+            <select name="year" class="form-select form-select-sm">
+                {% for y in years %}
+                <option value="{{ y }}" {% if filters.year == y %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-6 col-md-2">
+            <label class="form-label small fw-bold text-muted text-uppercase mb-1">Месяц</label>
+            <select name="month" class="form-select form-select-sm">
+                <option value="">Весь год</option>
+                {% for m in range(1, 13) %}
+                <option value="{{ m }}" {% if filters.month == m %}selected{% endif %}>{{ month_names.get(m, m) }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label small fw-bold text-muted text-uppercase mb-1">Клиент</label>
+            <select name="client_id" class="form-select form-select-sm select-search">
+                <option value="">Все</option>
+                {% for c in clients %}
+                <option value="{{ c.id }}" {% if filters.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-6 col-md-2">
+            <label class="form-label small fw-bold text-muted text-uppercase mb-1">Тип</label>
+            <select name="payment_type" class="form-select form-select-sm">
+                <option value="">Все типы</option>
+                {% for key, label in type_labels.items() %}
+                <option value="{{ key }}" {% if filters.payment_type == key %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-6 col-md-2">
+            <label class="form-label small fw-bold text-muted text-uppercase mb-1">Сортировка</label>
+            <select name="sort" class="form-select form-select-sm">
+                <option value="date_desc" {% if filters.sort == 'date_desc' %}selected{% endif %}>Дата ↓</option>
+                <option value="date_asc" {% if filters.sort == 'date_asc' %}selected{% endif %}>Дата ↑</option>
+                <option value="amount_desc" {% if filters.sort == 'amount_desc' %}selected{% endif %}>Сумма ↓</option>
+                <option value="amount_asc" {% if filters.sort == 'amount_asc' %}selected{% endif %}>Сумма ↑</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small fw-bold text-muted text-uppercase mb-1">Поиск</label>
+            <input type="text" name="order_q" value="{{ filters.order_q or '' }}" class="form-control form-control-sm" placeholder="Клиент / счёт / ID">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label small fw-bold text-muted text-uppercase mb-1">Период (вместо месяца)</label>
+            <div class="input-group input-group-sm">
+                <input type="date" name="start_date" value="{{ filters.start_date or '' }}" class="form-control">
+                <span class="input-group-text">–</span>
+                <input type="date" name="end_date" value="{{ filters.end_date or '' }}" class="form-control">
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="form-check mt-4">
+                <input class="form-check-input" type="checkbox" name="hide_writeoff" value="1" id="hideWriteoff"
+                       {% if filters.hide_writeoff %}checked{% endif %}>
+                <label class="form-check-label small" for="hideWriteoff">Скрыть списания долга</label>
+            </div>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary btn-sm"><i class="fas fa-search me-1"></i> Показать</button>
+            <a href="{{ url_for('finance.reports_order_payments', year=filters.year, month=filters.month or '') }}" class="btn btn-outline-secondary btn-sm">Сброс</a>
+        </div>
+    </form>
+</div>
+
+<div class="row g-2 mb-3">
+    <div class="col-6 col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body py-2">
+                <div class="small text-muted text-uppercase">Всего (как в Cashflow)</div>
+                <div class="fs-5 fw-bold text-success">{{ total_all|money }}</div>
+                <div class="small text-muted">{{ count }} платежей</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body py-2">
+                <div class="small text-muted text-uppercase">Живые деньги</div>
+                <div class="fs-5 fw-bold text-primary">{{ total_money|money }}</div>
+                <div class="small text-muted">безнал + нал</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body py-2">
+                <div class="small text-muted text-uppercase">Списания</div>
+                <div class="fs-5 fw-bold text-secondary">{{ total_writeoff|money }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body py-2">
+                <div class="small text-muted text-uppercase">Взаимозачёт</div>
+                <div class="fs-5 fw-bold text-warning">{{ total_barter|money }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 mb-3 small">
+    {% for key, label in type_labels.items() %}
+    <span class="badge bg-light text-dark border">
+        {{ label }}: <b>{{ type_totals.get(key, 0)|money }}</b>
+    </span>
+    {% endfor %}
+</div>
+
+<div class="card shadow-sm border-0 d-none d-md-block">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0" style="font-size: 13px;">
+            <thead class="table-light">
+                <tr>
+                    <th>Дата</th>
+                    <th class="text-end">Сумма</th>
+                    <th>Тип</th>
+                    <th>Клиент</th>
+                    <th>Заказ</th>
+                    <th class="text-end">Сумма заказа</th>
+                    <th>Комментарий</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in payments %}
+                <tr class="{% if p.payment_type == 'writeoff' %}table-secondary{% elif p.payment_type == 'barter' %}table-warning{% elif p.amount >= 500000 %}table-success{% endif %}">
+                    <td class="text-nowrap">{{ p.date.strftime('%d.%m.%Y') if p.date else '—' }}</td>
+                    <td class="text-end fw-bold text-nowrap">{{ p.amount|money }}</td>
+                    <td>
+                        {% if p.payment_type == 'writeoff' %}
+                            <span class="badge bg-secondary">{{ p.type_label }}</span>
+                        {% elif p.payment_type == 'barter' %}
+                            <span class="badge bg-warning text-dark">{{ p.type_label }}</span>
+                        {% elif p.payment_type == 'cash' %}
+                            <span class="badge bg-info text-dark">{{ p.type_label }}</span>
+                        {% else %}
+                            <span class="badge bg-success">{{ p.type_label }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ p.client_name }}</td>
+                    <td>
+                        <a href="{{ url_for('orders.order_detail', order_id=p.order_id) }}" class="fw-bold">
+                            {% if p.invoice_number %}{{ p.invoice_number }}{% else %}#{{ p.order_id }}{% endif %}
+                        </a>
+                        {% if p.order_deleted %}<span class="badge bg-danger ms-1">удалён</span>{% endif %}
+                    </td>
+                    <td class="text-end text-muted text-nowrap">{{ p.order_sum|money }}</td>
+                    <td class="text-muted">{{ p.comment }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center py-5 text-muted">
+                        Нет оплат за выбранный период
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            {% if payments %}
+            <tfoot class="table-light fw-bold">
+                <tr>
+                    <td>Итого</td>
+                    <td class="text-end">{{ total_all|money }}</td>
+                    <td colspan="5"></td>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+</div>
+
+<div class="d-md-none">
+    {% for p in payments %}
+    <div class="card mb-2 shadow-sm border-0">
+        <div class="card-body py-2">
+            <div class="d-flex justify-content-between">
+                <div class="small text-muted">{{ p.date.strftime('%d.%m.%Y') if p.date else '—' }} · {{ p.type_label }}</div>
+                <div class="fw-bold text-success">{{ p.amount|money }}</div>
+            </div>
+            <div class="fw-bold">{{ p.client_name }}</div>
+            <a href="{{ url_for('orders.order_detail', order_id=p.order_id) }}" class="small">
+                {% if p.invoice_number %}Счёт {{ p.invoice_number }}{% else %}Заказ #{{ p.order_id }}{% endif %}
+            </a>
+            {% if p.comment %}<div class="small text-muted mt-1">{{ p.comment }}</div>{% endif %}
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-4">Нет оплат за выбранный период</div>
+    {% endfor %}
+</div>
+
+{% endblock %}

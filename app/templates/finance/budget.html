@@ -754,7 +754,7 @@
                 <!-- ПОСТУПЛЕНИЯ -->
                 <tr class="bg-white">
                     <td class="col-sticky col-code text-center text-success"><i class="fas fa-arrow-down"></i></td>
-                    <td class="col-sticky col-name fw-bold text-success border-end ps-4">Поступления (Входящие)<div class="small fw-normal text-muted">{{ cf_in_label|default('факт') }}</div></td>
+                    <td class="col-sticky col-name fw-bold text-success border-end ps-4">Поступления (Входящие)<div class="small fw-normal text-muted">{{ cf_in_label|default('факт') }}{% if current_user.role in ['admin', 'executive', 'user'] and cf_mode == 'money' %} · <a href="{{ url_for('finance.reports_order_payments', year=year, month=selected_months[0] if selected_months|length == 1 else none) }}" class="text-decoration-none">реестр оплат</a>{% endif %}</div></td>
                     {% set cf_in_plan_summary = cashflow_total_plan if is_year_view else cashflow_period_plan %}
                     {% set cf_in_fact_summary = cashflow_total_fact if is_year_view else cashflow_period_fact %}
                     <td class="col-sticky col-total-group col-plan-tot text-num col-plan {% if period_only %}fs-5 p-0{% endif %}">

@@ -7,7 +7,7 @@ from decimal import Decimal
 from werkzeug.utils import secure_filename
 from flask import Blueprint, render_template, request, redirect, url_for, flash, send_file, current_app, jsonify, send_from_directory
 from flask_login import login_required, current_user
-from sqlalchemy import func, or_, and_
+from sqlalchemy import func, or_, and_, cast, String
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side 
 from openpyxl.utils import get_column_letter
@@ -3308,6 +3308,196 @@ def reports_reconciliation_export_detail():
     buf.seek(0)
     filename = f"Act_detail_{client_name}_{f_start or ''}_{f_end or ''}.xlsx"
     return send_file(buf, download_name=filename, as_attachment=True)
+
+
+_PAYMENT_TYPE_LABELS = {
+    'cashless': 'Безнал',
+    'cash': 'Нал',
+    'barter': 'Взаимозачет',
+    'writeoff': 'Списание долга',
+}
+
+
+def _order_payments_allowed():
+    return current_user.role in ['admin', 'executive', 'user']
+
+
+@bp.route('/reports/order-payments')
+@login_required
+def reports_order_payments():
+    """Реестр оплат по заказам — разбор прихода ДС в Cashflow."""
+    if not _order_payments_allowed():
+        flash('Недостаточно прав для просмотра поступлений ДС.', 'danger')
+        return redirect(url_for('main.index'))
+
+    today = msk_today()
+    year = request.args.get('year', type=int) or today.year
+    month = request.args.get('month', type=int)
+    # По умолчанию — текущий месяц (удобно для разбора аномалии в Cashflow)
+    if 'month' not in request.args and 'start_date' not in request.args and 'end_date' not in request.args:
+        month = today.month
+
+    f_client = request.args.get('client_id', type=int)
+    f_type = (request.args.get('payment_type') or '').strip() or None
+    f_order = (request.args.get('order_q') or '').strip()
+    f_start = (request.args.get('start_date') or '').strip() or None
+    f_end = (request.args.get('end_date') or '').strip() or None
+    hide_writeoff = request.args.get('hide_writeoff') == '1'
+    sort = (request.args.get('sort') or 'date_desc').strip()
+    export = request.args.get('export')
+
+    query = (
+        db.session.query(Payment, Order, Client)
+        .join(Order, Payment.order_id == Order.id)
+        .outerjoin(Client, Order.client_id == Client.id)
+    )
+    if f_start or f_end:
+        if f_start:
+            query = query.filter(Payment.date >= f_start)
+        if f_end:
+            query = query.filter(Payment.date <= f_end)
+    else:
+        query = query.filter(func.extract('year', Payment.date) == year)
+        if month and 1 <= month <= 12:
+            query = query.filter(func.extract('month', Payment.date) == month)
+    if f_client:
+        query = query.filter(Order.client_id == f_client)
+    if f_type:
+        query = query.filter(Payment.payment_type == f_type)
+    if hide_writeoff:
+        query = query.filter(or_(Payment.payment_type.is_(None), Payment.payment_type != 'writeoff'))
+    if f_order:
+        like = f'%{f_order}%'
+        query = query.filter(or_(
+            Order.invoice_number.ilike(like),
+            Client.name.ilike(like),
+            cast(Order.id, String).ilike(like),
+        ))
+
+    if sort == 'amount_desc':
+        query = query.order_by(Payment.amount.desc(), Payment.date.desc())
+    elif sort == 'amount_asc':
+        query = query.order_by(Payment.amount.asc(), Payment.date.desc())
+    elif sort == 'date_asc':
+        query = query.order_by(Payment.date.asc(), Payment.id.asc())
+    else:
+        query = query.order_by(Payment.date.desc(), Payment.id.desc())
+
+    rows_raw = query.all()
+
+    order_ids = list({order.id for _, order, _ in rows_raw})
+    order_sum_map = {}
+    if order_ids:
+        order_sum_map = dict(
+            db.session.query(
+                OrderItem.order_id,
+                func.coalesce(func.sum(OrderItem.price * OrderItem.quantity), 0),
+            )
+            .filter(OrderItem.order_id.in_(order_ids))
+            .group_by(OrderItem.order_id)
+            .all()
+        )
+
+    type_totals = {k: Decimal(0) for k in _PAYMENT_TYPE_LABELS}
+    type_totals['other'] = Decimal(0)
+    total_all = Decimal(0)
+    total_money = Decimal(0)  # без writeoff и barter
+    payments = []
+    for p, order, client in rows_raw:
+        amt = Decimal(p.amount or 0)
+        ptype = (p.payment_type or 'cashless').strip() or 'cashless'
+        total_all += amt
+        if ptype in type_totals:
+            type_totals[ptype] += amt
+        else:
+            type_totals['other'] += amt
+        if ptype not in ('writeoff', 'barter'):
+            total_money += amt
+        payments.append({
+            'id': p.id,
+            'date': p.date,
+            'amount': amt,
+            'payment_type': ptype,
+            'type_label': _PAYMENT_TYPE_LABELS.get(ptype, ptype),
+            'comment': p.comment or '',
+            'file_path': p.file_path,
+            'order_id': order.id,
+            'invoice_number': order.invoice_number or '',
+            'order_date': order.date,
+            'order_sum': Decimal(order_sum_map.get(order.id) or 0),
+            'order_status': order.status,
+            'order_deleted': bool(order.is_deleted),
+            'client_id': client.id if client else None,
+            'client_name': client.name if client else '—',
+        })
+
+    if export == 'xlsx':
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Поступления ДС'
+        headers = [
+            'Дата', 'Сумма', 'Тип', 'Клиент', '№ счёта', 'ID заказа',
+            'Сумма заказа', 'Статус заказа', 'Комментарий',
+        ]
+        header_fill = PatternFill(start_color='CFE2F3', end_color='CFE2F3', fill_type='solid')
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(1, col, h)
+            cell.font = Font(bold=True)
+            cell.fill = header_fill
+        for i, row in enumerate(payments, 2):
+            ws.cell(i, 1, row['date'].strftime('%d.%m.%Y') if row['date'] else '')
+            ws.cell(i, 2, float(row['amount']))
+            ws.cell(i, 3, row['type_label'])
+            ws.cell(i, 4, row['client_name'])
+            ws.cell(i, 5, row['invoice_number'])
+            ws.cell(i, 6, row['order_id'])
+            ws.cell(i, 7, float(row['order_sum']))
+            ws.cell(i, 8, row['order_status'] or '')
+            ws.cell(i, 9, row['comment'])
+        for col, width in enumerate([12, 14, 16, 32, 14, 10, 14, 12, 40], 1):
+            ws.column_dimensions[get_column_letter(col)].width = width
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        period = f'{year}' + (f'_{month:02d}' if month else '')
+        return send_file(
+            buf,
+            download_name=f'order_payments_{period}.xlsx',
+            as_attachment=True,
+        )
+
+    clients = Client.query.order_by(Client.name).all()
+    years = sorted({
+        int(y) for (y,) in db.session.query(func.extract('year', Payment.date)).distinct().all() if y
+    } | {today.year}, reverse=True)
+
+    filters = {
+        'year': year,
+        'month': month,
+        'client_id': f_client,
+        'payment_type': f_type,
+        'order_q': f_order,
+        'start_date': f_start,
+        'end_date': f_end,
+        'hide_writeoff': hide_writeoff,
+        'sort': sort,
+    }
+
+    return render_template(
+        'finance/order_payments.html',
+        payments=payments,
+        clients=clients,
+        years=years,
+        filters=filters,
+        type_totals=type_totals,
+        type_labels=_PAYMENT_TYPE_LABELS,
+        total_all=total_all,
+        total_money=total_money,
+        total_writeoff=type_totals.get('writeoff', Decimal(0)),
+        total_barter=type_totals.get('barter', Decimal(0)),
+        month_names=MONTH_NAMES,
+        count=len(payments),
+    )
 
 
 @bp.route('/reports/turnover')

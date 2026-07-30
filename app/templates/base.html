@@ -1199,7 +1199,7 @@
                         <span class="sl-icon"><i class="fas fa-truck-ramp-box"></i></span>
                         <span class="sl-label">Поступление</span>
                     </a>
-                    <a class="sidebar-link {% if request.endpoint == 'stock.documents' %}active{% endif %}" href="{{ url_for('stock.documents') }}">
+                    <a class="sidebar-link {% if request.endpoint == 'stock.documents' %}active{% endif %}" href="{{ url_for('stock.documents') }}" data-hx-boost="false">
                         <span class="sl-icon"><i class="fas fa-file-invoice"></i></span>
                         <span class="sl-label">Журнал документов</span>
                     </a>
@@ -1328,6 +1328,12 @@
                         <span class="sl-icon"><i class="fas fa-handshake"></i></span>
                         <span class="sl-label">Акт сверки</span>
                     </a>
+                    {% if current_user.role in ['admin', 'executive', 'user'] %}
+                    <a class="sidebar-link {% if request.endpoint == 'finance.reports_order_payments' %}active{% endif %}" href="{{ url_for('finance.reports_order_payments') }}">
+                        <span class="sl-icon"><i class="fas fa-money-bill-wave"></i></span>
+                        <span class="sl-label">Поступления ДС</span>
+                    </a>
+                    {% endif %}
                     {% if current_user.role in ['admin', 'executive'] %}
                     <a class="sidebar-link {% if request.endpoint == 'finance.projects_list' %}active{% endif %}" href="{{ url_for('finance.projects_list') }}">
                         <span class="sl-icon"><i class="fas fa-tasks"></i></span>
@@ -1538,7 +1544,7 @@
         <a class="bn-link {% if request.endpoint and request.endpoint.startswith('orders.') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
             <i class="fas fa-shopping-basket"></i><span>Заказы</span>
         </a>
-        <a class="bn-link {% if request.endpoint and request.endpoint.startswith('stock.') %}active{% endif %}" href="{{ url_for('stock.documents') }}">
+        <a class="bn-link {% if request.endpoint and request.endpoint.startswith('stock.') %}active{% endif %}" href="{{ url_for('stock.documents') }}" data-hx-boost="false">
             <i class="fas fa-warehouse"></i><span>Склад</span>
         </a>
         {# Бригадир (user2/brigadier) не имеет доступа к планированию — ведём его сразу во «Ввод выкопки». #}
@@ -1586,6 +1592,7 @@
             <a class="drawer-link" href="{{ url_for('crm.crm_client_analytics') }}"><i class="fas fa-users-viewfinder"></i> CRM — клиенты</a>
             <a class="drawer-link" href="{{ url_for('crm.crm_abc') }}"><i class="fas fa-sort-amount-down"></i> ABC / XYZ</a>
             <a class="drawer-link" href="{{ url_for('finance.invoices_summary') }}"><i class="fas fa-coins"></i> Финансы</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_order_payments') }}"><i class="fas fa-money-bill-wave"></i> Поступления ДС</a>
         </div>
         {% endif %}
 
@@ -1594,7 +1601,7 @@
             <a class="drawer-link" href="{{ url_for('stock.inventory_mobile') }}"><i class="fas fa-mobile-alt"></i> Моб. инвентаризация</a>
             <a class="drawer-link" href="{{ url_for('stock.stock_report') }}"><i class="fas fa-boxes"></i> Остатки</a>
             <a class="drawer-link" href="{{ url_for('stock.stock_receipts') }}"><i class="fas fa-truck-ramp-box"></i> Поступление</a>
-            <a class="drawer-link" href="{{ url_for('stock.documents') }}"><i class="fas fa-file-invoice"></i> Журнал документов</a>
+            <a class="drawer-link" href="{{ url_for('stock.documents') }}" data-hx-boost="false"><i class="fas fa-file-invoice"></i> Журнал документов</a>
         </div>
 
         <div class="drawer-group">
