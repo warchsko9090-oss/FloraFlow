@@ -36,10 +36,35 @@
         · автор: {{ op.created_by.username if op.created_by else '—' }}
       </span>
     </div>
-    <a class="btn btn-light" href="{{ url_for('vium.vium_operations') }}">
-      <i class="fas fa-arrow-left"></i> К журналу
-    </a>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-light" href="{{ url_for('vium.vium_operations') }}">
+        <i class="fas fa-arrow-left"></i> К журналу
+      </a>
+      {% if can_edit %}
+      <a class="btn btn-outline-primary" href="{{ url_for('vium.vium_operation_edit', op_id=op.id) }}">
+        <i class="fas fa-pen"></i> Редактировать
+      </a>
+      {% endif %}
+      {% if can_reverse %}
+      <form method="POST" action="{{ url_for('vium.vium_operation_delete', op_id=op.id) }}"
+            onsubmit="return confirm('Отменить операцию #{{ op.id }} и восстановить остатки?');">
+        <button type="submit" class="btn btn-outline-danger">
+          <i class="fas fa-trash"></i> Удалить / откат
+        </button>
+      </form>
+      {% elif reverse_reason %}
+      <span class="btn btn-outline-secondary disabled" title="{{ reverse_reason }}">
+        <i class="fas fa-ban"></i> Удаление недоступно
+      </span>
+      {% endif %}
+    </div>
   </div>
+
+  {% if not can_reverse and reverse_reason %}
+  <div class="alert alert-warning py-2 small mb-3">
+    <i class="fas fa-info-circle me-1"></i>{{ reverse_reason }}
+  </div>
+  {% endif %}
 
   <div class="vium-card">
     <div class="meta-grid">

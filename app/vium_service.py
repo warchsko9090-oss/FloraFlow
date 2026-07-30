@@ -300,3 +300,140 @@ def parse_lot_consumption(payload: str | None) -> list[dict]:
         return data if isinstance(data, list) else []
     except Exception:
         return []
+
+
+def lots_created_by_operation(op_id: int) -> list[ViumLot]:
+    """Партии, созданные intake/adjust(+) с source_operation_id=op_id."""
+    return (
+        ViumLot.query
+        .filter(ViumLot.source_operation_id == op_id)
+        .order_by(ViumLot.id.asc())
+        .all()
+    )
+
+
+def _restore_line_consumption(line: ViumOperationLine) -> None:
+    """Вернуть на партии количества из lot_consumption строки."""
+    for c in parse_lot_consumption(line.lot_consumption):
+        lot_id = int(c.get('lot_id') or 0)
+        restore = _to_dec(c.get('qty'))
+        if not lot_id or restore <= ZERO:
+            continue
+        lot = ViumLot.query.get(lot_id)
+        if not lot:
+            raise ValueError(f'Партия #{lot_id} не найдена — откат невозможен')
+        new_rem = _to_dec(lot.qty_remaining) + restore
+        received = _to_dec(lot.qty_received)
+        if new_rem > received + QTY_EPS:
+            raise ValueError(
+                f'Партия #{lot_id}: восстановление {restore} превысит приход '
+                f'({received}), сейчас остаток {_to_dec(lot.qty_remaining)}'
+            )
+        lot.qty_remaining = new_rem
+
+
+def can_reverse_operation(op: ViumOperation) -> Tuple[bool, str]:
+    """Можно ли откатить операцию и удалить документ.
+
+    Поступление / корректировка (+): только если партии ещё не списывали.
+    Расход / списание / корректировка (−): восстанавливаем FIFO-срезы.
+    """
+    if not op:
+        return False, 'Операция не найдена'
+
+    if op.kind == 'intake':
+        lots = lots_created_by_operation(op.id)
+        if not lots and op.lines:
+            return False, 'Не найдены партии поступления — откат невозможен'
+        for lot in lots:
+            rem = _to_dec(lot.qty_remaining)
+            recv = _to_dec(lot.qty_received)
+            if rem + QTY_EPS < recv:
+                used = recv - rem
+                return False, (
+                    f'Партия #{lot.id} уже частично списана ({used} ед.) — '
+                    f'сначала откатите расходы по этой партии'
+                )
+        return True, ''
+
+    if op.kind in ('consume', 'writeoff'):
+        for line in op.lines:
+            chunks = parse_lot_consumption(line.lot_consumption)
+            if _to_dec(line.qty) > ZERO and not chunks:
+                return False, (
+                    f'У строки материала #{line.material_id} нет среза партий — '
+                    f'откат невозможен'
+                )
+            for c in chunks:
+                lot = ViumLot.query.get(int(c.get('lot_id') or 0))
+                if not lot:
+                    return False, f'Партия #{c.get("lot_id")} удалена — откат невозможен'
+                restore = _to_dec(c.get('qty'))
+                if _to_dec(lot.qty_remaining) + restore > _to_dec(lot.qty_received) + QTY_EPS:
+                    return False, (
+                        f'Партия #{lot.id}: восстановление превысит исходный приход'
+                    )
+        return True, ''
+
+    if op.kind == 'adjust':
+        for line in op.lines:
+            qty = _to_dec(line.qty)
+            if qty > ZERO:
+                lots = [
+                    lt for lt in lots_created_by_operation(op.id)
+                    if lt.material_id == line.material_id
+                ]
+                for lot in lots:
+                    if _to_dec(lot.qty_remaining) + QTY_EPS < _to_dec(lot.qty_received):
+                        return False, (
+                            f'Партия #{lot.id} уже списана — откат корректировки невозможен'
+                        )
+            elif qty < ZERO:
+                for c in parse_lot_consumption(line.lot_consumption):
+                    lot = ViumLot.query.get(int(c.get('lot_id') or 0))
+                    if not lot:
+                        return False, f'Партия #{c.get("lot_id")} удалена'
+                    restore = _to_dec(c.get('qty'))
+                    if _to_dec(lot.qty_remaining) + restore > _to_dec(lot.qty_received) + QTY_EPS:
+                        return False, f'Партия #{lot.id}: восстановление превысит приход'
+        return True, ''
+
+    return False, f'Неизвестный тип операции: {op.kind!r}'
+
+
+def reverse_operation(op: ViumOperation) -> None:
+    """Откатить влияние на склад и удалить документ операции.
+
+    Не коммитит — коммит за роутом. Бросает ValueError, если откат нельзя.
+    """
+    ok, reason = can_reverse_operation(op)
+    if not ok:
+        raise ValueError(reason)
+
+    if op.kind == 'intake':
+        for lot in lots_created_by_operation(op.id):
+            db.session.delete(lot)
+
+    elif op.kind in ('consume', 'writeoff'):
+        for line in op.lines:
+            _restore_line_consumption(line)
+
+    elif op.kind == 'adjust':
+        for line in op.lines:
+            qty = _to_dec(line.qty)
+            if qty > ZERO:
+                for lot in lots_created_by_operation(op.id):
+                    if lot.material_id == line.material_id:
+                        db.session.delete(lot)
+            elif qty < ZERO:
+                _restore_line_consumption(line)
+
+    # Связанный inbox: снова можно провести счёт
+    from .models import ViumInvoiceQueue
+    for q in ViumInvoiceQueue.query.filter_by(operation_id=op.id).all():
+        q.operation_id = None
+        q.processed_at = None
+        if (q.status or '') == 'done':
+            q.status = 'ready'
+
+    db.session.delete(op)

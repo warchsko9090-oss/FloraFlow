@@ -12,6 +12,9 @@
 * `GET  /vium/operation/new`             — форма создания операции
 * `POST /vium/operation/new`             — сохранить операцию
 * `GET  /vium/operation/<id>`            — карточка операции
+* `GET  /vium/operation/<id>/edit`       — правка поступления (если партии не списаны)
+* `POST /vium/operation/<id>/edit`       — сохранить правку (откат + новое проведение)
+* `POST /vium/operation/<id>/delete`     — откат и удаление операции
 * `GET  /vium/export`                    — Excel остатков
 * `GET  /vium/inbox`                     — очередь оцифровки PDF-счетов
 * `GET  /vium/inbox/<id>`                — карточка очереди (фазы 2/3)
@@ -212,12 +215,169 @@ def vium_operation_view(op_id: int):
             'consumption': vium_service.parse_lot_consumption(line.lot_consumption),
         })
 
+    can_reverse, reverse_reason = vium_service.can_reverse_operation(op)
+    can_edit = can_reverse and op.kind == 'intake'
+
     return render_template(
         'vium/vium_operation_view.html',
         op=op,
         lines_view=lines_view,
         kind_label=vium_service.op_kind_label(op.kind),
+        can_reverse=can_reverse,
+        reverse_reason=reverse_reason,
+        can_edit=can_edit,
     )
+
+
+@bp.route('/operation/<int:op_id>/delete', methods=['POST'])
+@login_required
+def vium_operation_delete(op_id: int):
+    deny = _check_access()
+    if deny is not None:
+        return deny
+    op = ViumOperation.query.get_or_404(op_id)
+    kind_label = vium_service.op_kind_label(op.kind)
+    try:
+        vium_service.reverse_operation(op)
+        db.session.commit()
+    except ValueError as e:
+        db.session.rollback()
+        flash(f'Нельзя удалить операцию: {e}', 'danger')
+        return redirect(url_for('vium.vium_operation_view', op_id=op_id))
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception('vium operation delete failed')
+        flash(f'Ошибка удаления: {e}', 'danger')
+        return redirect(url_for('vium.vium_operation_view', op_id=op_id))
+
+    flash(f'Операция «{kind_label}» #{op_id} отменена, остатки восстановлены.')
+    return redirect(url_for('vium.vium_operations'))
+
+
+@bp.route('/operation/<int:op_id>/edit', methods=['GET', 'POST'])
+@login_required
+def vium_operation_edit(op_id: int):
+    """Правка поступления: откат старого документа + проведение заново."""
+    deny = _check_access()
+    if deny is not None:
+        return deny
+    op = ViumOperation.query.get_or_404(op_id)
+
+    if op.kind != 'intake':
+        flash('Редактирование доступно только для поступлений. Остальные типы — удалите и создайте заново.')
+        return redirect(url_for('vium.vium_operation_view', op_id=op_id))
+
+    can_reverse, reverse_reason = vium_service.can_reverse_operation(op)
+    if not can_reverse:
+        flash(f'Правка невозможна: {reverse_reason}', 'danger')
+        return redirect(url_for('vium.vium_operation_view', op_id=op_id))
+
+    materials = (
+        ViumMaterial.query
+        .filter(ViumMaterial.is_archived == False)  # noqa: E712
+        .order_by(ViumMaterial.name.asc())
+        .all()
+    )
+
+    if request.method == 'GET':
+        prefill_lines = []
+        for ln in op.lines:
+            prefill_lines.append({
+                'material_id': ln.material_id,
+                'qty': float(ln.qty) if ln.qty is not None else '',
+                'unit_price': float(ln.unit_price) if ln.unit_price is not None else '',
+                'note': ln.note or '',
+            })
+        return render_template(
+            'vium/vium_operation_form.html',
+            materials=materials,
+            kind_choices=KIND_CHOICES,
+            prefill_kind='intake',
+            today=op.date or msk_now().date(),
+            edit_op=op,
+            prefill_comment=op.comment or '',
+            prefill_lines=prefill_lines,
+            form_action=url_for('vium.vium_operation_edit', op_id=op.id),
+            lock_kind=True,
+        )
+
+    # POST: reverse + recreate intake
+    op_date = _parse_date(request.form.get('date'))
+    comment = (request.form.get('comment') or '').strip() or None
+    raw_material_ids = request.form.getlist('material_id[]')
+    raw_qtys = request.form.getlist('qty[]')
+    raw_prices = request.form.getlist('unit_price[]')
+    raw_notes = request.form.getlist('note[]')
+
+    invoice_id = op.invoice_id
+    old_id = op.id
+
+    try:
+        vium_service.reverse_operation(op)
+        db.session.flush()
+
+        new_op = ViumOperation(
+            kind='intake',
+            date=op_date,
+            comment=comment,
+            invoice_id=invoice_id,
+            created_by_user_id=getattr(current_user, 'id', None),
+        )
+        db.session.add(new_op)
+        db.session.flush()
+
+        line_count = 0
+        for idx, mid_raw in enumerate(raw_material_ids):
+            mid_raw = (mid_raw or '').strip()
+            if not mid_raw:
+                continue
+            try:
+                mid = int(mid_raw)
+            except ValueError:
+                continue
+            qty = _parse_decimal(raw_qtys[idx] if idx < len(raw_qtys) else None, default=Decimal('0'))
+            if not qty or qty <= 0:
+                continue
+            price = _parse_decimal(raw_prices[idx] if idx < len(raw_prices) else None)
+            if price is None or price < 0:
+                price = Decimal('0')
+            note = (raw_notes[idx] if idx < len(raw_notes) else '') or None
+            if note:
+                note = note.strip() or None
+            db.session.add(ViumOperationLine(
+                operation_id=new_op.id,
+                material_id=mid,
+                qty=qty,
+                unit_price=price,
+                note=note,
+            ))
+            line_count += 1
+
+        if line_count == 0:
+            raise ValueError('Нужно добавить хотя бы одну строку')
+
+        db.session.flush()
+        vium_service.apply_operation(new_op)
+
+        if invoice_id:
+            for q in ViumInvoiceQueue.query.filter_by(invoice_id=invoice_id).all():
+                q.operation_id = new_op.id
+                q.status = 'done'
+                q.processed_at = msk_now()
+
+        db.session.commit()
+    except ValueError as e:
+        db.session.rollback()
+        flash(f'Не удалось сохранить правку: {e}', 'danger')
+        return redirect(url_for('vium.vium_operations'))
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception('vium operation edit failed')
+        flash(f'Ошибка правки: {e}', 'danger')
+        return redirect(url_for('vium.vium_operations'))
+
+    flash(f'Поступление обновлено (было #{old_id} → #{new_op.id}).')
+    return redirect(url_for('vium.vium_operation_view', op_id=new_op.id))
 
 
 # ---------------------------------------------------------------------------
