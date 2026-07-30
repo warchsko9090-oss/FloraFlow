@@ -80,6 +80,25 @@ def natural_key(obj):
     if isinstance(obj, BudgetItem): text = obj.code
     return [int(s) if s.isdigit() else s.lower() for s in re.split('([0-9]+)', text)]
 
+
+def size_natural_key(obj):
+    """Сортировка размеров растений по возрастанию чисел в названии.
+
+    60-80 → 80-100 → 80-100 / 100-120 → 100-120 → 120-140
+    (лексикографически «100-120» ошибочно шло раньше «60-80»).
+    Числа и текст сравнимы безопасно (без TypeError int vs str).
+    """
+    text = obj.name if hasattr(obj, 'name') else str(obj or '')
+    parts = []
+    for s in re.split(r'([0-9]+)', text):
+        if not s:
+            continue
+        if s.isdigit():
+            parts.append((0, int(s)))
+        else:
+            parts.append((1, s.lower()))
+    return parts or [(1, '')]
+
 def check_stock_availability(plant_id, size_id, field_id, year, quantity_needed, exclude_item_id=None):
     """Проверяет, хватает ли свободного остатка (с учётом резервов).
 

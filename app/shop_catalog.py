@@ -784,14 +784,15 @@ def build_visible_seedling_items(apply_shop_prices=True):
 
 
 def sort_catalog_items(items):
-    """Горячие выше (по display_order), затем по названию."""
+    """Горячие выше (по display_order), затем по названию и размеру (числа по возрастанию)."""
+    from app.utils import size_natural_key
     return sorted(
         items,
         key=lambda x: (
             0 if x.get('is_hot') else 1,
             int(x.get('display_order') or 0),
             (x.get('plant_name') or '').lower(),
-            (x.get('size_name') or '').lower(),
+            size_natural_key(x.get('size_name') or ''),
         ),
     )
 

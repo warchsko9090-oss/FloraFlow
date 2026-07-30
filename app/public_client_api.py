@@ -37,7 +37,7 @@ from app.shop_catalog import (
     sort_plant_groups,
 )
 from app.stock_helpers import get_reserved_map
-from app.utils import msk_now, create_pdf_response, natural_key
+from app.utils import msk_now, create_pdf_response, natural_key, size_natural_key
 from app.rate_limit import rate_limit, check_rate_limit
 from app.shop_security import shop_kp_access_token, verify_shop_kp_access
 from app.shop_landing_page import get_landing_context
@@ -130,7 +130,7 @@ def public_catalog():
                 "photo_url": photo_url,
             }
         )
-    items.sort(key=lambda x: (x["plant_name"].lower(), x["size_name"].lower()))
+    items.sort(key=lambda x: (x["plant_name"].lower(), size_natural_key(x["size_name"])))
     return jsonify({"status": "ok", "items": items})
 
 
@@ -613,11 +613,9 @@ def catalog_item_to_shop_row(item: dict) -> dict:
 
 def catalog_size_hint(size_names: list[str]) -> str:
     """Подпись размеров на карточке: один размер как есть, несколько — «от …»."""
-    from app.utils import natural_key
-
     names = sorted(
         [n.strip() for n in (size_names or []) if (n or '').strip()],
-        key=natural_key,
+        key=size_natural_key,
     )
     if not names:
         return ''
@@ -682,7 +680,7 @@ def group_catalog_by_plant(catalog_items):
         if item.get("is_hot"):
             plant["is_hot"] = True
     for plant in plants.values():
-        plant["size_names"] = sorted(plant.get("size_names") or [], key=lambda s: s.lower())
+        plant["size_names"] = sorted(plant.get("size_names") or [], key=size_natural_key)
         plant["size_hint"] = catalog_size_hint(plant["size_names"])
     return sort_plant_groups(plants.values())
 
@@ -752,7 +750,7 @@ def _build_site_stock_pdf_groups(catalog_items: list) -> list:
         groups = []
         for plant_name in sorted(section_buckets.keys(), key=lambda n: n.lower()):
             group = section_buckets[plant_name]
-            group['rows'].sort(key=lambda r: (r.get('size') or '').lower())
+            group['rows'].sort(key=lambda r: size_natural_key(r.get('size') or ''))
             group['totals']['free'] = sum(
                 int(r.get('free') or 0) for r in group['rows'] if not r.get('pdf_on_request')
             )
