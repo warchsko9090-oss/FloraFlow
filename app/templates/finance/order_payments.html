@@ -5,7 +5,8 @@
     <div>
         <h4 class="mb-0 text-primary fw-bold"><i class="fas fa-money-bill-wave me-2"></i>Поступления ДС</h4>
         <div class="small text-muted mt-1">
-            Оплаты по заказам — то же, что «Приход ДС» в Cashflow. Списания и взаимозачёты тоже входят в итог бюджета.
+            Оплаты по заказам. Списания долга (корректировки) видны здесь и в сверке,
+            но в Cashflow / KPI не входят.
         </div>
     </div>
     <a class="btn btn-success btn-sm"
@@ -100,7 +101,7 @@
     <div class="col-6 col-md-3">
         <div class="card border-0 shadow-sm h-100">
             <div class="card-body py-2">
-                <div class="small text-muted text-uppercase">Всего (как в Cashflow)</div>
+                <div class="small text-muted text-uppercase">Все оплаты (с корректировками)</div>
                 <div class="fs-5 fw-bold text-success">{{ total_all|money }}</div>
                 <div class="small text-muted">{{ count }} платежей</div>
             </div>
@@ -109,9 +110,9 @@
     <div class="col-6 col-md-3">
         <div class="card border-0 shadow-sm h-100">
             <div class="card-body py-2">
-                <div class="small text-muted text-uppercase">Живые деньги</div>
+                <div class="small text-muted text-uppercase">В Cashflow / KPI</div>
                 <div class="fs-5 fw-bold text-primary">{{ total_money|money }}</div>
-                <div class="small text-muted">безнал + нал</div>
+                <div class="small text-muted">без списаний долга</div>
             </div>
         </div>
     </div>

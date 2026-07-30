@@ -443,6 +443,15 @@ class Payment(db.Model):
     comment = db.Column(db.String(200))
     file_path = db.Column(db.String(255), nullable=True) # Путь к файлу платежки
 
+    # Технические типы: закрывают долг в сверке, но не являются приходом ДС.
+    NON_CASH_TYPES = ('writeoff',)
+
+    @classmethod
+    def cash_inflow_filter(cls):
+        """Фильтр реальных поступлений ДС (без списаний-корректировок)."""
+        from sqlalchemy import func
+        return func.coalesce(cls.payment_type, 'cashless').notin_(cls.NON_CASH_TYPES)
+
 class OrderItemHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False)

@@ -589,9 +589,10 @@ def _year_realized_revenue(y):
 
 
 def _year_payments(y):
-    """Реальные приходы ДС за год (Payment)."""
+    """Реальные приходы ДС за год (Payment без корректировок-списаний)."""
     pay = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
-        func.extract('year', Payment.date) == y
+        func.extract('year', Payment.date) == y,
+        Payment.cash_inflow_filter(),
     ).scalar() or 0
     return Decimal(pay)
 
@@ -651,11 +652,15 @@ def _month_realized_revenue(y):
 
 
 def _month_payments(y):
+    """Приход ДС по месяцам — без writeoff (корректировки долга не деньги)."""
     result = {m: Decimal(0) for m in range(1, 13)}
     rows = db.session.query(
         func.extract('month', Payment.date).label('month'),
         func.sum(Payment.amount),
-    ).filter(func.extract('year', Payment.date) == y).group_by('month').all()
+    ).filter(
+        func.extract('year', Payment.date) == y,
+        Payment.cash_inflow_filter(),
+    ).group_by('month').all()
     for month, amt in rows:
         result[int(month)] = Decimal(amt or 0)
     return result
@@ -1244,7 +1249,10 @@ def budget_export():
             func.extract('month', Payment.date).label('month'),
             func.sum(Payment.amount),
         )
-        .filter(func.extract('year', Payment.date) == year)
+        .filter(
+            func.extract('year', Payment.date) == year,
+            Payment.cash_inflow_filter(),
+        )
         .group_by('month')
         .all()
     )
@@ -3401,7 +3409,7 @@ def reports_order_payments():
     type_totals = {k: Decimal(0) for k in _PAYMENT_TYPE_LABELS}
     type_totals['other'] = Decimal(0)
     total_all = Decimal(0)
-    total_money = Decimal(0)  # без writeoff и barter
+    total_money = Decimal(0)  # как в Cashflow: без writeoff
     payments = []
     for p, order, client in rows_raw:
         amt = Decimal(p.amount or 0)
@@ -3411,7 +3419,7 @@ def reports_order_payments():
             type_totals[ptype] += amt
         else:
             type_totals['other'] += amt
-        if ptype not in ('writeoff', 'barter'):
+        if ptype not in Payment.NON_CASH_TYPES:
             total_money += amt
         payments.append({
             'id': p.id,

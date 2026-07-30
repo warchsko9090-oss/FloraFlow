@@ -216,7 +216,11 @@ def _shipment_rows(start, end):
 def _collect_week_metrics(monday, sunday):
     cash_in = _safe_float(
         db.session.query(func.coalesce(func.sum(Payment.amount), 0))
-        .filter(Payment.date >= monday, Payment.date <= sunday).scalar() or 0
+        .filter(
+            Payment.date >= monday,
+            Payment.date <= sunday,
+            Payment.cash_inflow_filter(),
+        ).scalar() or 0
     )
     expenses = _safe_float(
         db.session.query(func.coalesce(func.sum(Expense.amount), 0))

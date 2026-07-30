@@ -350,9 +350,10 @@ def tool_get_expenses(category_name=None, month=None, year=None, description_con
 
 
 def tool_get_cash_in(month=None, year=None, client_name=None):
-    """Поступления денег за период (Payment по Payment.date)."""
+    """Поступления денег за период (Payment по Payment.date, без writeoff)."""
     first, last = _parse_period(month=month, year=year)
     q = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).select_from(Payment)
+    q = q.filter(Payment.cash_inflow_filter())
     if client_name:
         client, cands = _find_one(Client, client_name)
         if not client:

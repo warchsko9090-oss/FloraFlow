@@ -58,14 +58,16 @@ def _pct_delta(cur, prev):
 
 
 def _cash_in_for(first_day, last_day):
-    """Поступления денег за период — сумма всех платежей клиентов по Payment.date.
+    """Поступления денег за период — сумма платежей клиентов по Payment.date.
 
+    Без writeoff: списания долга — корректировки сверки, не живые ДС.
     Именно это мы считаем «выручкой за месяц» в KPI — по запросу бизнеса
     (факт поступлений, а не зарезервированные заказы).
     """
     q = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
         Payment.date >= first_day,
         Payment.date <= last_day,
+        Payment.cash_inflow_filter(),
     )
     return _safe_float(q.scalar() or 0)
 
