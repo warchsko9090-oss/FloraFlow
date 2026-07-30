@@ -214,15 +214,6 @@
                     Кол-во растений: <b>{{ impact_summary_card.total_qty }} шт.</b>
                     <span class="text-muted">(грядки и контейнерная площадка не учитываются)</span>
                 </small>
-                {% set _vu = vium_unit_by_year.get(selected_year, 0) %}
-                {% set _fu = fot_unit_by_year.get(selected_year, 0) %}
-                {% if _vu or _fu %}
-                <div class="small text-muted mt-1">
-                    <span class="me-2">opex+amort: <b>{{ summary_totals[selected_year]['total_unit']|money }}</b></span>
-                    {% if _vu %}<span class="me-2" style="color:#1B5E20;">+ ВиУМ: <b>{{ _vu|money }}</b></span>{% endif %}
-                    {% if _fu %}<span class="me-2" style="color:#7c3aed;">+ ФОТ: <b>{{ _fu|money }}</b></span>{% endif %}
-                </div>
-                {% endif %}
             </div>
             <div class="text-end">
                 <span class="fs-4 fw-bold text-danger">{{ impact_summary_card.unit_cost|money }}</span>
@@ -234,19 +225,6 @@
             </div>
         </div>
     </div>
-
-    {% if fot_missing_dates %}
-    <div class="alert alert-warning py-2 mb-3 small">
-        <i class="fas fa-triangle-exclamation me-1"></i>
-        За даты
-        <strong>
-            {% for d in fot_missing_dates -%}
-                {{ d.strftime('%d.%m') }}{% if not loop.last %}, {% endif %}
-            {%- endfor %}
-        </strong>
-        выкопки есть, а часов нет — ФОТ за эти дни пока 0. Когда бригадир введёт часы, отчёт пересчитается автоматически.
-    </div>
-    {% endif %}
 
     <!-- Плашка «Записать в базу» — стоит ВЫШЕ фильтров, чтобы открытые
          выпадающие списки фильтров не оказывались под ней. -->
@@ -345,10 +323,8 @@
                     <th class="text-end bg-warning bg-opacity-10 text-dark sortable" onclick="sortTable(4, true)">Цена закупки <i class="fas fa-sort sort-icon"></i></th>
                     <th class="text-end text-muted sortable" onclick="sortTable(5, true)">Себест. накоп. (Опер) <i class="fas fa-sort sort-icon"></i></th>
                     <th class="text-end text-primary sortable" onclick="sortTable(6, true)">Аморт. накоп. <i class="fas fa-sort sort-icon"></i></th>
-                    <th class="text-end sortable" style="color:#1B5E20;" onclick="sortTable(7, true)" title="Плановый расход ВиУМ × средняя цена / выкопано шт за год партии">ВиУМ ₽/шт <i class="fas fa-sort sort-icon"></i></th>
-                    <th class="text-end sortable" style="color:#7c3aed;" onclick="sortTable(8, true)" title="Сумма ФОТ за год / выкопано шт за год">ФОТ ₽/шт <i class="fas fa-sort sort-icon"></i></th>
-                    <th class="text-end fw-bold bg-light sortable" onclick="sortTable(9, true)">Итого за ед. <i class="fas fa-sort sort-icon"></i></th>
-                    <th class="text-end fw-bold sortable" onclick="sortTable(10, true)">Итоговая сумма <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="text-end fw-bold bg-light sortable" onclick="sortTable(7, true)">Итого за ед. <i class="fas fa-sort sort-icon"></i></th>
+                    <th class="text-end fw-bold sortable" onclick="sortTable(8, true)">Итоговая сумма <i class="fas fa-sort sort-icon"></i></th>
                 </tr>
             </thead>
             <tbody>
@@ -376,8 +352,6 @@
                     </td>
                     <td class="text-end text-muted">{{ row.accum_opex|money }}</td>
                     <td class="text-end text-primary">{{ row.accum_amort|money }}</td>
-                    <td class="text-end" style="color:#1B5E20;">{{ row.vium_unit|money }}</td>
-                    <td class="text-end" style="color:#7c3aed;">{{ row.fot_unit|money }}</td>
                     <td class="text-end fw-bold bg-light">{{ row.total_unit_cost|money }}</td>
                     <td class="text-end fw-bold text-dark">{{ row.total_cost|money }}</td>
                 </tr>
@@ -387,7 +361,7 @@
                 <tr class="table-row-warm fw-bold">
                     <td colspan="3" class="text-end text-uppercase" style="color: #fff !important;">ИТОГО:</td>
                     <td class="text-end" style="color: #fff !important;">{{ impact_summary_card.total_qty }}</td>
-                    <td colspan="6"></td>
+                    <td colspan="4"></td>
                     <td class="text-end" style="font-size:14px; color: #fff !important;">{{ impact_table_total|money }}</td>
                 </tr>
             </tfoot>

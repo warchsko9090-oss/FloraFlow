@@ -556,75 +556,8 @@ def calculate_cost_data(selected_year=None, period=None):
             accum_opex_map[start_year] = opex_accum
             accum_amort_map[start_year] = amort_accum
 
-    # ---- ВиУМ ₽/шт и ФОТ ₽/шт по году (фаза 4) -----------------------------
-    # Расчёт on-demand. Учёт ведём только за годы, где есть данные —
-    # ранние периоды (до запуска фазы 4) останутся 0 без штрафа на
-    # производительность.
-    vium_unit_by_year = {y: Decimal(0) for y in years}
-    fot_unit_by_year = {y: Decimal(0) for y in years}
-    try:
-        from app import vium_techcard, vium_fot
-        from app.models import ViumPlannedConsume
-        from datetime import date as _d
-
-        # Соберём список годов, где есть плановые расходы или выкопка.
-        plan_years = {
-            int(y) for (y,) in db.session.query(
-                func.extract('year', ViumPlannedConsume.log_date)
-            ).filter(
-                ViumPlannedConsume.log_date.isnot(None)
-            ).distinct().all() if y is not None
-        }
-        # Год запуска фазы 4 (берём текущий) — также пробуем посчитать ФОТ.
-        if selected_year:
-            plan_years.add(int(selected_year))
-
-        # Средние цены (по партиям) — берём один раз.
-        fact_overview = vium_techcard.vium_service.materials_overview()
-
-        for y in plan_years:
-            if y < BASE_COST_YEAR or y > years[-1]:
-                continue
-            yr_start = _d(y, 1, 1)
-            yr_end = _d(y, 12, 31)
-            qty_dug_year = vium_fot.period_dug_qty(yr_start, yr_end) or 0
-
-            # ВиУМ: сумма (qty_planned × avg_price) за год / qty_dug_year.
-            plan_rows = (
-                db.session.query(
-                    ViumPlannedConsume.material_id,
-                    func.coalesce(func.sum(ViumPlannedConsume.qty_planned), 0)
-                ).filter(
-                    ViumPlannedConsume.log_date >= yr_start,
-                    ViumPlannedConsume.log_date <= yr_end,
-                ).group_by(ViumPlannedConsume.material_id).all()
-            )
-            vium_total = Decimal(0)
-            for mid, qty in plan_rows:
-                qty_d = Decimal(str(qty or 0))
-                avg = fact_overview.get(int(mid), {}).get('avg_price', Decimal(0))
-                vium_total += qty_d * (avg or Decimal(0))
-            if qty_dug_year > 0:
-                vium_unit_by_year[y] = vium_total / Decimal(qty_dug_year)
-                fot_unit_by_year[y] = vium_fot.period_fot_per_unit(yr_start, yr_end)
-
-        # Дополним сводку year-уровневыми деривативами.
-        for y in years:
-            v_unit = vium_unit_by_year.get(y, Decimal(0))
-            f_unit = fot_unit_by_year.get(y, Decimal(0))
-            summary_totals[y]['vium_unit'] = v_unit
-            summary_totals[y]['fot_unit'] = f_unit
-            summary_totals[y]['total_unit_with_extras'] = (
-                summary_totals[y].get('total_unit', Decimal(0)) + v_unit + f_unit
-            )
-    except Exception:
-        # Если что-то отвалилось (например, миграция ещё не накатилась) —
-        # отчёт должен открыться без двух новых колонок.
-        try:
-            from flask import current_app as _ca
-            _ca.logger.exception('vium/fot unit cost calculation failed')
-        except Exception:
-            pass
+    # ВиУМ / ФОТ ₽/шт считаются только внутри раздела «Учёт ВиУМ»
+    # (план-отчёт) и не входят в денежные отчёты себестоимости.
 
     return {
         'years': years, 'budget_items': budget_items, 'all_expenses': all_expenses,
@@ -635,8 +568,6 @@ def calculate_cost_data(selected_year=None, period=None):
         'accum_amort_map': accum_amort_map, 
         'cumulative_cost': accumulated_costs_map.get(2017, Decimal(0)), 
         'raw_amort_source': raw_amort_source,
-        'vium_unit_by_year': vium_unit_by_year,
-        'fot_unit_by_year': fot_unit_by_year,
     }
 
 

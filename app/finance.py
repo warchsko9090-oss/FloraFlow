@@ -1841,7 +1841,7 @@ def _build_cost_report_xlsx(
 
     # --- Лист 2: Детализация партий ---
     ws2 = wb.create_sheet('Влияние на цену')
-    impact_cols = 11
+    impact_cols = 9
     write_banner(
         ws2, 1, 2,
         f'Влияние на цену — партии на {selected_year} год',
@@ -1863,20 +1863,19 @@ def _build_cost_report_xlsx(
     impact_headers = [
         'Растение', 'Поле', 'Год партии', 'Кол-во, шт',
         'Цена закупки', 'Накоп. опер.', 'Накоп. аморт.',
-        'ВиУМ ₽/шт', 'ФОТ ₽/шт', 'Итого за ед.', 'Итого сумма',
+        'Итого за ед.', 'Итого сумма',
     ]
     for i, h in enumerate(impact_headers, 1):
         ws2.cell(row=hdr_row, column=i, value=h)
     paint_row(ws2, hdr_row, impact_cols, fill=fill_impact_hdr, font=font_th)
     ws2.freeze_panes = ws2.cell(row=hdr_row + 1, column=1)
 
-    money_cols = {5, 6, 7, 8, 9, 10, 11}
+    money_cols = {5, 6, 7, 8, 9}
     row_idx = hdr_row + 1
     for n, r in enumerate(impact_rows):
         line = [
             r['name'], r['field'], r['year'], r['quantity'],
             float(r['purchase_price']), float(r['accum_opex']), float(r['accum_amort']),
-            float(r.get('vium_unit') or 0), float(r.get('fot_unit') or 0),
             float(r['total_unit_cost']), float(r['total_cost']),
         ]
         for col_idx, val in enumerate(line, 1):
@@ -1890,14 +1889,14 @@ def _build_cost_report_xlsx(
         row_idx += 1
 
     for col_idx, val in enumerate(
-        ['ИТОГО', '', '', impact_total_qty, '', '', '', '', '', '', float(impact_table_total)],
+        ['ИТОГО', '', '', impact_total_qty, '', '', '', '', float(impact_table_total)],
         1,
     ):
         ws2.cell(row=row_idx, column=col_idx, value=val if val != '' else None)
     paint_row(
         ws2, row_idx, impact_cols,
         fill=fill_impact_total, font=font_total,
-        number_cols={11}, qty_cols={4},
+        number_cols={9}, qty_cols={4},
     )
     autosize(ws2, impact_cols)
 
@@ -2148,9 +2147,7 @@ def cost_report():
             batch_year = v['year']
             ac_opex = cd['accum_opex_map'].get(batch_year, Decimal(0))
             ac_amort = cd['accum_amort_map'].get(batch_year, Decimal(0))
-            vium_unit = cd.get('vium_unit_by_year', {}).get(batch_year, Decimal(0)) or Decimal(0)
-            fot_unit = cd.get('fot_unit_by_year', {}).get(batch_year, Decimal(0)) or Decimal(0)
-            total_unit_cost = avg_purchase_price + ac_opex + ac_amort + vium_unit + fot_unit
+            total_unit_cost = avg_purchase_price + ac_opex + ac_amort
             total_cost_batch = total_unit_cost * Decimal(qty)
 
             label_name = v['name']
@@ -2167,8 +2164,6 @@ def cost_report():
                 'purchase_price': avg_purchase_price,
                 'accum_opex': ac_opex,
                 'accum_amort': ac_amort,
-                'vium_unit': vium_unit,
-                'fot_unit': fot_unit,
                 'total_unit_cost': total_unit_cost,
                 'total_cost': total_cost_batch,
                 'supplier_name': v.get('supplier_name') or '',
@@ -2268,22 +2263,6 @@ def cost_report():
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
 
-    # ФОТ-плашка: даты с выкопкой без часов (только за выбранный год).
-    fot_missing_dates = []
-    try:
-        from app import vium_fot
-        from datetime import date as _d
-        if selected_year:
-            yr_start = _d(int(selected_year), 1, 1)
-            today = msk_now().date()
-            yr_end = _d(int(selected_year), 12, 31)
-            if yr_end > today:
-                yr_end = today
-            if yr_end >= yr_start:
-                fot_missing_dates = vium_fot.missing_hours_dates(yr_start, yr_end)
-    except Exception:
-        current_app.logger.exception('vium_fot.missing_hours_dates failed')
-
     return render_template('finance/cost.html', 
                            years=years, visible_years=visible_years, hidden_years=[], hidden_items=[], 
                            all_items=all_items, op_rows=op_rows, amort_rows=amort_rows,
@@ -2294,9 +2273,6 @@ def cost_report():
                            impact_summary_card=impact_summary_card, impact_table_total=impact_table_total, active_tab=active_tab, 
                            all_plants=all_plants, selected_plants=f_plants,
                            all_fields=Field.query.all() if need_impact_data else [], selected_fields=f_fields,
-                           fot_missing_dates=fot_missing_dates,
-                           vium_unit_by_year=cd.get('vium_unit_by_year', {}),
-                           fot_unit_by_year=cd.get('fot_unit_by_year', {}),
                            container_rows=container_rows,
                            container_total_qty=container_total_qty,
                            container_table_total=container_table_total,
