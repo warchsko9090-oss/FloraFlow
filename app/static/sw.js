@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v62'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
+const CACHE_VERSION = 'v64'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
 
@@ -8,7 +8,8 @@ const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
 const NO_CACHE_PATHS = [
     '/digging/planning', '/documents', '/logs', '/digging',
     '/stock', '/stock/export',
-    '/api/visual_stock', '/api/field_recount', '/api/feed',
+    '/api/visual_stock', '/api/field_recount', '/api/stock_info',
+    '/api/inventory', '/api/feed',
     '/api/cache-manifest',
 ];
 

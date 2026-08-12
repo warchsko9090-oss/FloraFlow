@@ -47,8 +47,8 @@
         --c-muted-soft:   #94a3b8;
         --c-border:       #e2e8f0;
         --c-border-soft:  #eef2f6;
-        --c-bg:           #f8fafc;
-        --c-bg-card:      #ffffff;
+        --c-bg:           #f5f6f2;
+        --c-bg-card:      rgba(255, 255, 255, 0.78);
         --c-warn:         #f59e0b;
         --c-danger:       #ef4444;
 
@@ -74,6 +74,7 @@
         -webkit-text-size-adjust: 100%;
         -moz-text-size-adjust: 100%;
         text-size-adjust: 100%;
+        background: var(--c-bg);
     }
     body {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -85,6 +86,25 @@
         min-height: 100vh;
         /* iOS safe area */
         padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+    /* Мягкая цветовая подсветка фона (aurora) — все страницы ERP */
+    body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background:
+            radial-gradient(ellipse 920px 680px at 4% -6%, rgba(129, 199, 132, 0.50), transparent 62%),
+            radial-gradient(ellipse 860px 620px at 98% -2%, rgba(255, 204, 153, 0.42), transparent 60%),
+            radial-gradient(ellipse 720px 540px at 86% 108%, rgba(165, 214, 167, 0.34), transparent 58%),
+            radial-gradient(ellipse 640px 500px at 8% 102%, rgba(200, 230, 201, 0.40), transparent 56%),
+            radial-gradient(ellipse 480px 380px at 48% 42%, rgba(241, 248, 233, 0.55), transparent 70%);
+    }
+    .app-shell,
+    .guest-main {
+        position: relative;
+        z-index: 1;
     }
     h1, h2, h3, h4, h5, h6 {
         color: var(--c-ink);
@@ -107,6 +127,9 @@
             "sidebar header"
             "sidebar main";
         min-height: 100vh;
+        position: relative;
+        z-index: 1;
+        background: transparent;
     }
     .app-shell.sidebar-collapsed {
         grid-template-columns: var(--sidebar-w-c) 1fr;
@@ -117,7 +140,9 @@
        ============================================================ */
     .app-sidebar {
         grid-area: sidebar;
-        background: var(--c-bg-card);
+        background: rgba(255, 255, 255, 0.86);
+        backdrop-filter: blur(18px) saturate(140%);
+        -webkit-backdrop-filter: blur(18px) saturate(140%);
         border-right: 1px solid var(--c-border);
         position: sticky;
         top: 0;
@@ -547,6 +572,7 @@
         grid-area: main;
         padding: 20px 24px 40px;
         min-width: 0;
+        background: transparent;
     }
     #main-container {
         max-width: 1440px;
@@ -561,10 +587,7 @@
         align-items: center;
         justify-content: center;
         padding: 24px 16px;
-        background:
-            radial-gradient(1200px 600px at 20% 10%, rgba(67,160,71,0.10), transparent 60%),
-            radial-gradient(800px 500px at 85% 90%, rgba(46,125,50,0.10), transparent 60%),
-            linear-gradient(135deg, #f1f8e9 0%, #e8f5e9 55%, #f8faf7 100%);
+        background: transparent;
     }
     .guest-container {
         width: 100%;
@@ -598,6 +621,8 @@
     }
     .filter-panel {
         background: var(--c-bg-card);
+        backdrop-filter: blur(16px) saturate(140%);
+        -webkit-backdrop-filter: blur(16px) saturate(140%);
         border-radius: var(--radius-md);
         padding: 0.85rem 1rem;
         border: 1px solid var(--c-border);
@@ -901,6 +926,21 @@
     }
     @media print {
         #page-loading-overlay, #nprogress { display: none !important; }
+        body::before { display: none !important; }
+        body, html { background: #fff !important; }
+        .card, .filter-panel, .app-sidebar {
+            background: #fff !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+    }
+    @media (prefers-reduced-transparency: reduce) {
+        body::before { opacity: 0.35; }
+        .card, .filter-panel, .app-sidebar {
+            background-color: #fff !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
     }
     /* HTMX fade */
     .fade-me-in.htmx-settling { opacity: 0; }
@@ -918,7 +958,13 @@
         border: 1px solid var(--c-border);
         border-radius: var(--radius-md);
         transition: transform 0.18s, box-shadow 0.18s, border-color 0.18s;
-        background-color: #fff;
+        background-color: var(--c-bg-card);
+        backdrop-filter: blur(16px) saturate(140%);
+        -webkit-backdrop-filter: blur(16px) saturate(140%);
+    }
+    .card.bg-light,
+    .card.bg-white {
+        background-color: var(--c-bg-card) !important;
     }
     .card:hover {
         transform: translateY(-2px);
