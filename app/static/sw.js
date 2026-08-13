@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v64'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
+const CACHE_VERSION = 'v65'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
 

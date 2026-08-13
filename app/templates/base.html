@@ -74,37 +74,28 @@
         -webkit-text-size-adjust: 100%;
         -moz-text-size-adjust: 100%;
         text-size-adjust: 100%;
-        background: var(--c-bg);
-    }
-    body {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-        font-size: 14px;
-        line-height: 1.55;
-        background: var(--c-bg);
-        color: var(--c-ink-soft);
-        margin: 0;
-        min-height: 100vh;
-        /* iOS safe area */
-        padding-bottom: env(safe-area-inset-bottom, 0);
-    }
-    /* Мягкая цветовая подсветка фона (aurora) — все страницы ERP */
-    body::before {
-        content: "";
-        position: fixed;
-        inset: 0;
-        z-index: 0;
-        pointer-events: none;
-        background:
+        background-color: var(--c-bg);
+        /* Aurora на html, без отдельного слоя: иначе z-index на .app-shell
+           запирает Bootstrap-модалки, а серый backdrop вешается на body сверху. */
+        background-image:
             radial-gradient(ellipse 920px 680px at 4% -6%, rgba(129, 199, 132, 0.50), transparent 62%),
             radial-gradient(ellipse 860px 620px at 98% -2%, rgba(255, 204, 153, 0.42), transparent 60%),
             radial-gradient(ellipse 720px 540px at 86% 108%, rgba(165, 214, 167, 0.34), transparent 58%),
             radial-gradient(ellipse 640px 500px at 8% 102%, rgba(200, 230, 201, 0.40), transparent 56%),
             radial-gradient(ellipse 480px 380px at 48% 42%, rgba(241, 248, 233, 0.55), transparent 70%);
+        background-attachment: fixed;
+        background-repeat: no-repeat;
     }
-    .app-shell,
-    .guest-main {
-        position: relative;
-        z-index: 1;
+    body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        font-size: 14px;
+        line-height: 1.55;
+        background: transparent;
+        color: var(--c-ink-soft);
+        margin: 0;
+        min-height: 100vh;
+        /* iOS safe area */
+        padding-bottom: env(safe-area-inset-bottom, 0);
     }
     h1, h2, h3, h4, h5, h6 {
         color: var(--c-ink);
@@ -127,8 +118,6 @@
             "sidebar header"
             "sidebar main";
         min-height: 100vh;
-        position: relative;
-        z-index: 1;
         background: transparent;
     }
     .app-shell.sidebar-collapsed {
@@ -926,8 +915,7 @@
     }
     @media print {
         #page-loading-overlay, #nprogress { display: none !important; }
-        body::before { display: none !important; }
-        body, html { background: #fff !important; }
+        html, body { background: #fff !important; }
         .card, .filter-panel, .app-sidebar {
             background: #fff !important;
             backdrop-filter: none !important;
@@ -935,13 +923,18 @@
         }
     }
     @media (prefers-reduced-transparency: reduce) {
-        body::before { opacity: 0.35; }
+        html { background-image: none; }
         .card, .filter-panel, .app-sidebar {
             background-color: #fff !important;
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
         }
     }
+
+    /* Bootstrap modal/backdrop живут на body. Не поднимать .app-shell z-index —
+       иначе серый фон перекрывает окно (выплата в табеле и все остальные модалки). */
+    .modal-backdrop { z-index: 1050; }
+    .modal { z-index: 1055; }
     /* HTMX fade */
     .fade-me-in.htmx-settling { opacity: 0; }
     .fade-me-in { opacity: 1; transition: opacity 0.3s ease-out; }
@@ -1892,6 +1885,15 @@
         document.body.classList.remove('modal-open');
         document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
     }
+
+    // Модалки Bootstrap должны быть прямыми детьми body, иначе любой
+    // родительский stacking context (z-index / backdrop-filter) прячет окно
+    // под серым backdrop, который Bootstrap вешает на body.
+    document.addEventListener('show.bs.modal', function (e) {
+        if (e.target && e.target.parentElement !== document.body) {
+            document.body.appendChild(e.target);
+        }
+    });
 
     document.addEventListener('htmx:afterSwap', function(evt) {
         initSelect2(evt.detail.elt);
