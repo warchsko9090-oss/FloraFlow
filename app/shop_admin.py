@@ -654,6 +654,8 @@ def _build_catalog_admin_rows(admin_pairs):
                 'is_hot': row['is_hot'],
                 'display_order': row['display_order'],
                 'is_hidden': row['is_hidden'],
+                'root_system': row.get('root_system') or '',
+                'pruning': row.get('pruning') or '',
                 'variants': [],
             }
         by_plant[pid]['variants'].append(row)
@@ -661,6 +663,10 @@ def _build_catalog_admin_rows(admin_pairs):
             by_plant[pid]['is_hot'] = True
         if row['is_hidden']:
             by_plant[pid]['is_hidden'] = True
+        if row.get('root_system'):
+            by_plant[pid]['root_system'] = row['root_system']
+        if row.get('pruning'):
+            by_plant[pid]['pruning'] = row['pruning']
 
     groups = list(by_plant.values())
     groups.sort(key=lambda g: (

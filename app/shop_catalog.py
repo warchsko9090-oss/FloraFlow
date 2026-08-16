@@ -328,7 +328,6 @@ def collect_seedlings_for_admin():
     reserved_map = get_reserved_map()
     stock_by_plant = _aggregate_seedling_stock_by_plant(reserved_map)
     cards = {c.plant_id: c for c in _load_shop_plant_cards()}
-    plant_display = get_plant_display_map()
 
     # Промеренные товарные саженцы — только контейнерная площадка.
     measured_ids = set(get_measured_seedling_size_ids())
@@ -378,7 +377,6 @@ def collect_seedlings_for_admin():
         if not size_id:
             continue
         card = cards.get(plant_id)
-        pd = plant_display.get(plant_id, {})
         base_price = float(hist.get((plant_id, size_id), 0) or 0)
         rows.append({
             'plant_id': plant_id,
@@ -390,10 +388,10 @@ def collect_seedlings_for_admin():
             'seedling_visible': bool(card.seedling_visible) if card else False,
             'seedling_on_request': bool(card.seedling_on_request) if card else False,
             'seedling_hidden': plant_id in hidden_ids,
-            'is_hot': pd.get('seedling_is_hot', False),
-            'display_order': pd.get('seedling_display_order', 0),
-            'root_system': pd.get('seedling_root_system', ''),
-            'pruning': pd.get('seedling_pruning', ''),
+            'is_hot': bool(card.seedling_is_hot) if card else False,
+            'display_order': int(card.seedling_display_order or 0) if card else 0,
+            'root_system': (card.seedling_root_system or '').strip() if card else '',
+            'pruning': (card.seedling_pruning or '').strip() if card else '',
         })
     return rows
 

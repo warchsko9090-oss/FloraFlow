@@ -280,7 +280,7 @@
         <div class="card shadow-sm">
             <div class="card-header bg-light fw-semibold">Новый контакт</div>
             <div class="card-body">
-                <form method="POST">
+                <form method="POST" hx-boost="false">
                     <input type="hidden" name="tab" value="contacts">
                     <input type="hidden" name="action" value="add_contact">
                     <div class="mb-2">
@@ -390,7 +390,7 @@
             «На сайте» можно изменить вручную, но не ниже оптовой. Пустое поле или совпадение с розницей по умолчанию — сброс переопределения.
         </p>
         {% if price_rows %}
-        <form method="POST">
+        <form method="POST" hx-boost="false">
             <input type="hidden" name="tab" value="prices">
             <input type="hidden" name="action" value="save_prices">
             <div class="table-responsive" style="max-height:70vh;overflow:auto;">
@@ -452,7 +452,7 @@
             <strong>По запросу</strong> — показывать без остатка с кнопкой заявки (в корзину не добавляется).
         </p>
         {% if catalog_rows %}
-        <form method="POST">
+        <form method="POST" hx-boost="false">
             <input type="hidden" name="tab" value="catalog">
             <input type="hidden" name="action" value="save_catalog">
             <div class="table-responsive" style="max-height:70vh;overflow:auto;">
@@ -489,13 +489,15 @@
                             <td>
                                 {% if loop.first %}
                                 <input type="text" name="root_system_{{ group.plant_id }}" list="root-system-options"
-                                    class="form-control form-control-sm" value="{{ group.root_system }}" placeholder="Ком (WRB), Контейнер…">
+                                    class="form-control form-control-sm" autocomplete="off"
+                                    value="{{ group.root_system or '' }}" placeholder="Ком (WRB), Контейнер…">
                                 {% endif %}
                             </td>
                             <td>
                                 {% if loop.first %}
                                 <input type="text" name="pruning_{{ group.plant_id }}" list="pruning-options"
-                                    class="form-control form-control-sm" value="{{ group.pruning }}" placeholder="Шар, Ниваки…">
+                                    class="form-control form-control-sm" autocomplete="off"
+                                    value="{{ group.pruning or '' }}" placeholder="Шар, Ниваки…">
                                 {% endif %}
                             </td>
                             <td class="text-center">
@@ -565,7 +567,7 @@
             Фото контейнерной площадки — вкладка «Товары и фото» (блок «Контейнерная площадка»). «Топ», корневая система и стрижка для секции контейнеров — здесь. Цены — из «История цен» ERP / вкладка «Цены».
         </p>
         {% if seedling_rows %}
-        <form method="POST">
+        <form method="POST" hx-boost="false">
             <input type="hidden" name="tab" value="seedlings">
             <input type="hidden" name="action" value="save_seedlings">
             <div class="table-responsive" style="max-height:70vh;overflow:auto;">
@@ -599,11 +601,13 @@
                             <td class="text-end text-muted">{{ row.base_price|round(0)|int }} ₽</td>
                             <td>
                                 <input type="text" name="seedling_root_system_{{ row.plant_id }}" list="root-system-options"
-                                    class="form-control form-control-sm" value="{{ row.root_system }}" placeholder="С3, ОКС…">
+                                    class="form-control form-control-sm" autocomplete="off"
+                                    value="{{ row.root_system or '' }}" placeholder="С3, ОКС…">
                             </td>
                             <td>
                                 <input type="text" name="seedling_pruning_{{ row.plant_id }}" list="pruning-options"
-                                    class="form-control form-control-sm" value="{{ row.pruning }}" placeholder="Шар, Штамб…">
+                                    class="form-control form-control-sm" autocomplete="off"
+                                    value="{{ row.pruning or '' }}" placeholder="Шар, Штамб…">
                             </td>
                             <td class="text-center">
                                 <input type="checkbox" class="form-check-input" name="seedling_hot_{{ row.plant_id }}" value="1"
@@ -655,7 +659,7 @@
         <div class="card shadow-sm mb-3">
             <div class="card-header bg-light fw-semibold">Текст и карта</div>
             <div class="card-body">
-                <form method="POST">
+                <form method="POST" hx-boost="false">
                     <input type="hidden" name="tab" value="contact_page">
                     <input type="hidden" name="action" value="save_contact_page">
                     <div class="mb-2">
@@ -716,7 +720,7 @@
         <div class="card shadow-sm mb-3">
             <div class="card-header bg-light fw-semibold">Новый реквизит</div>
             <div class="card-body">
-                <form method="POST">
+                <form method="POST" hx-boost="false">
                     <input type="hidden" name="tab" value="contact_page">
                     <input type="hidden" name="action" value="add_requisite">
                     <div class="mb-2">
@@ -792,7 +796,7 @@
         <div class="card shadow-sm mb-3">
             <div class="card-header bg-light fw-semibold">Тексты главной страницы</div>
             <div class="card-body">
-                <form method="POST">
+                <form method="POST" hx-boost="false">
                     <input type="hidden" name="tab" value="landing">
                     <input type="hidden" name="action" value="save_landing_page">
                     <div class="mb-2">
@@ -983,7 +987,7 @@
         <div class="card shadow-sm mb-3">
             <div class="card-header bg-light fw-semibold">Почтовые уведомления по заявкам сайта</div>
             <div class="card-body">
-                <form method="POST">
+                <form method="POST" hx-boost="false">
                     <input type="hidden" name="tab" value="landing">
                     <input type="hidden" name="action" value="save_shop_email_settings">
                     <div class="form-check form-switch mb-3">
