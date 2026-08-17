@@ -65,7 +65,7 @@ def create_app():
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
     # Лимит загрузок (по умолчанию 64 MB, можно переопределить env MAX_UPLOAD_MB)
-    max_upload_mb = int(os.environ.get('MAX_UPLOAD_MB', '64'))
+    max_upload_mb = int(os.environ.get('MAX_UPLOAD_MB', '128'))
     app.config['MAX_CONTENT_LENGTH'] = max_upload_mb * 1024 * 1024
 
     # --- WEB PUSH (VAPID) ---

@@ -1985,6 +1985,108 @@
             form.setAttribute('hx-boost', 'false');
             form.setAttribute('data-hx-boost', 'false');
         });
+        bindImageCompressOnFileInputs(root);
+    }
+    async function compressFileInput(input) {
+        const files = Array.from(input.files || []);
+        if (!files.length) return;
+        let dt;
+        try { dt = new DataTransfer(); } catch (e) { return; }
+        const COMPRESS_OVER = 400 * 1024;
+        for (const file of files) {
+            const isImg = (file.type || '').startsWith('image/') || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(file.name || '');
+            if (isImg && file.size > COMPRESS_OVER && typeof compressImage === 'function') {
+                try {
+                    dt.items.add(await compressImage(file, 1920, 1920, 0.82));
+                } catch (err) {
+                    dt.items.add(file);
+                }
+            } else {
+                dt.items.add(file);
+            }
+        }
+        input.files = dt.files;
+    }
+    function bindImageCompressOnFileInputs(scope) {
+        const root = (scope && scope.querySelectorAll) ? scope : document;
+        root.querySelectorAll('input[type="file"]').forEach(input => {
+            if (input.dataset.compressBound === '1') return;
+            input.dataset.compressBound = '1';
+            input.addEventListener('change', function () {
+                compressFileInput(input).catch(function () {});
+            });
+        });
+    }
+    document.addEventListener('submit', function (e) {
+        const form = e.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        if ((form.getAttribute('method') || 'get').toLowerCase() !== 'post') return;
+        const fileInputs = Array.from(form.querySelectorAll('input[type="file"]'));
+        if (!fileInputs.length) return;
+        if (form.dataset.ffUploadReady === '1') return;
+        const files = fileInputs.flatMap(inp => Array.from(inp.files || []));
+        if (!files.length) return;
+        const hasImages = files.some(f =>
+            (f.type || '').startsWith('image/') || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(f.name || '')
+        );
+        if (!hasImages) return;
+        e.preventDefault();
+        e.stopPropagation();
+        prepareAndSubmitImageForm(form, fileInputs);
+    }, true);
+    async function prepareAndSubmitImageForm(form, fileInputs) {
+        const btn = form.querySelector('button[type="submit"], input[type="submit"]');
+        const prevHtml = btn ? btn.innerHTML : '';
+        if (btn) { btn.disabled = true; btn.innerHTML = 'Сжимаем фото…'; }
+        try {
+            for (const inp of fileInputs) await compressFileInput(inp);
+            const files = fileInputs.flatMap(inp => Array.from(inp.files || []));
+            const total = files.reduce((s, f) => s + (f.size || 0), 0);
+            const ONE_SHOT = 800 * 1024;
+            if (total <= ONE_SHOT) {
+                form.dataset.ffUploadReady = '1';
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
+                return;
+            }
+            const url = form.getAttribute('action') || window.location.href;
+            const firstName = fileInputs[0].getAttribute('name') || 'photos';
+            let saved = 0;
+            let failed = 0;
+            for (let i = 0; i < files.length; i++) {
+                if (btn) btn.innerHTML = 'Загрузка ' + (i + 1) + '/' + files.length + '…';
+                const fd = new FormData(form);
+                fileInputs.forEach(inp => fd.delete(inp.name || firstName));
+                fd.append(firstName, files[i]);
+                const res = await fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' });
+                const text = await res.text();
+                if (res.status === 413 || /payload too large/i.test(text)) {
+                    failed++;
+                    continue;
+                }
+                if (!res.ok && res.status >= 400) { failed++; continue; }
+                saved++;
+            }
+            if (failed && !saved) {
+                alert('Фото слишком большие для сервера. Попробуйте по одному снимку.');
+                if (btn) { btn.disabled = false; btn.innerHTML = prevHtml; }
+                return;
+            }
+            if (failed) {
+                alert('Загружено ' + saved + ' из ' + files.length + '. Часть файлов не прошла лимит сервера.');
+            }
+            const tabInp = form.querySelector('input[name="tab"]');
+            const plantInp = form.querySelector('input[name="plant_id"]');
+            const next = new URL(url, window.location.origin);
+            if (tabInp && tabInp.value) next.searchParams.set('tab', tabInp.value);
+            let hash = '';
+            if (plantInp && plantInp.value) hash = '#plant-card-' + plantInp.value;
+            window.location.href = next.pathname + next.search + hash;
+        } catch (err) {
+            console.error(err);
+            alert('Не удалось загрузить фото. Попробуйте по одному, меньшего размера.');
+            if (btn) { btn.disabled = false; btn.innerHTML = prevHtml; }
+        }
     }
     document.addEventListener('DOMContentLoaded', function() {
         disableBoostForDownloads();
@@ -2279,7 +2381,8 @@
                     ctx.drawImage(img, 0, 0, width, height);
                     canvas.toBlob((blob) => {
                         if (blob) {
-                            try { resolve(new File([blob], file.name, { type: 'image/jpeg', lastModified: Date.now() })); }
+                            const base = String(file.name || 'photo').replace(/\.[^.]+$/, '') || 'photo';
+                            try { resolve(new File([blob], base + '.jpg', { type: 'image/jpeg', lastModified: Date.now() })); }
                             catch(e) { reject(new Error('File constructor not supported')); }
                         } else { reject(new Error('Canvas toBlob failed')); }
                     }, 'image/jpeg', quality);
