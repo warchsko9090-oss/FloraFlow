@@ -55,7 +55,7 @@
     <div class="card-header bg-light fw-semibold">Загрузка фона (слайд-шоу)</div>
     <div class="card-body">
         <p class="text-muted small">Изображения сохраняются в <code>data-sidebar</code> и используются на <code>/shop</code> и на <strong>главной странице</strong> (слайд-шоу). Форматы: {{ image_extensions }}.</p>
-        <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end">
+        <form method="POST" enctype="multipart/form-data" hx-boost="false" data-hx-boost="false" class="row g-2 align-items-end">
             <input type="hidden" name="tab" value="background">
             <input type="hidden" name="action" value="upload_background">
             <div class="col-md-8">
@@ -130,7 +130,7 @@
     </div>
     <div class="card-body">
         <h6 class="text-success small fw-semibold mb-2"><i class="fas fa-tree me-1"></i>Фото — растения в грунте</h6>
-        <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end mb-3">
+        <form method="POST" enctype="multipart/form-data" hx-boost="false" data-hx-boost="false" class="row g-2 align-items-end mb-3">
             <input type="hidden" name="tab" value="photos">
             <input type="hidden" name="action" value="upload_plant_photos">
             <input type="hidden" name="plant_id" value="{{ card.id }}">
@@ -167,7 +167,7 @@
         {% endif %}
 
         <h6 class="text-primary small fw-semibold mb-2"><i class="fas fa-seedling me-1"></i>Фото — контейнерная площадка</h6>
-        <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end mb-3">
+        <form method="POST" enctype="multipart/form-data" hx-boost="false" data-hx-boost="false" class="row g-2 align-items-end mb-3">
             <input type="hidden" name="tab" value="photos">
             <input type="hidden" name="action" value="upload_plant_photos">
             <input type="hidden" name="plant_id" value="{{ card.id }}">
@@ -923,7 +923,7 @@
                     {% else %}
                     <div class="text-muted small mb-2">Фото не загружено</div>
                     {% endif %}
-                    <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end mb-1">
+                    <form method="POST" enctype="multipart/form-data" hx-boost="false" data-hx-boost="false" class="row g-2 align-items-end mb-1">
                         <input type="hidden" name="tab" value="landing">
                         <input type="hidden" name="action" value="upload_landing_price_top">
                         <input type="hidden" name="card" value="{{ n }}">
@@ -950,7 +950,7 @@
             <div class="card-header bg-light fw-semibold">Слайды «Материал, за который…»</div>
             <div class="card-body">
                 <p class="text-muted small">Отдельное слайд-шоу справа от текста блока. Форматы: {{ image_extensions }}.</p>
-                <form method="POST" enctype="multipart/form-data" class="row g-2 align-items-end mb-3">
+                <form method="POST" enctype="multipart/form-data" hx-boost="false" data-hx-boost="false" class="row g-2 align-items-end mb-3">
                     <input type="hidden" name="tab" value="landing">
                     <input type="hidden" name="action" value="upload_landing_desire_slides">
                     <div class="col-12">

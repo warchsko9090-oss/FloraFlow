@@ -1958,13 +1958,14 @@
         }
     });
 
-    // --- DOWNLOAD LINKS (отключаем hx-boost) ---
+    // --- DOWNLOAD LINKS + FILE UPLOADS (отключаем hx-boost) ---
     function disableBoostForDownloads(scope = document) {
+        const root = (scope && scope.querySelectorAll) ? scope : document;
         const selectors = [
             'a[href$=".xlsx"]','a[href$=".xls"]','a[href$=".pdf"]','a[href$=".db"]',
             'a[href*="download"]','a[href*="/export"]'
         ];
-        const els = scope.querySelectorAll(selectors.join(','));
+        const els = root.querySelectorAll(selectors.join(','));
         els.forEach(el => {
             el.setAttribute('hx-boost', 'false');
             if (!el.hasAttribute('target')) {
@@ -1972,8 +1973,28 @@
             }
         });
     }
-    document.addEventListener('DOMContentLoaded', function() { disableBoostForDownloads(); });
-    document.addEventListener('htmx:afterSwap', function(evt) { disableBoostForDownloads(evt.detail.elt); });
+    function disableBoostForFileForms(scope = document) {
+        const root = (scope && scope.querySelectorAll) ? scope : document;
+        root.querySelectorAll('input[type="file"]').forEach(inp => {
+            const form = inp.closest('form');
+            if (!form) return;
+            form.setAttribute('hx-boost', 'false');
+            form.setAttribute('data-hx-boost', 'false');
+        });
+        root.querySelectorAll('form[enctype*="multipart"]').forEach(form => {
+            form.setAttribute('hx-boost', 'false');
+            form.setAttribute('data-hx-boost', 'false');
+        });
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        disableBoostForDownloads();
+        disableBoostForFileForms();
+    });
+    document.addEventListener('htmx:afterSwap', function(evt) {
+        const scope = (evt.detail && evt.detail.elt) || document;
+        disableBoostForDownloads(scope);
+        disableBoostForFileForms(scope);
+    });
 
     // --- SERVICE WORKER & SMART CACHE WARMING ---
     let _warmCacheRunning = false;
