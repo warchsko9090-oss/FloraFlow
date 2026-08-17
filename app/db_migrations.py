@@ -156,6 +156,56 @@ def ensure_legacy_schema(logger=None) -> None:
             db.session.rollback()
 
     _backfill_registration_periods(logger)
+    _ensure_changelog_releases(logger)
+
+
+_CHANGELOG_RELEASES = (
+    {
+        'version': 'v1.3.6',
+        'date': '2026-08-17',
+        'content': (
+            'Сделано:\n'
+            'Себестоимость больше не плюсует ВиУМ и ФОТ сверху — эти суммы остаются в отчётах ВиУМ, без двойного счёта.\n'
+            'Операции ВиУМ можно отменить (сторно) и править поступления, если партии ещё не списаны.\n'
+            'Финансы → Поступления ДС: реестр оплат по заказам за месяц (клиент, тип, сумма), Excel. Доступ: админ, руководитель, менеджер питомника. Из бюджета в режиме «ДС (оплаты)» — ссылка «реестр оплат».\n'
+            'Списания долга закрывают сверку, но не входят в кешфлоу, KPI и дайджест.\n'
+            'Мягкая цветовая подсветка фона ERP в фирменных тонах.\n'
+            '\n'
+            'Исправлено:\n'
+            'Выплата в табеле и остальные диалоговые окна больше не открываются «под серым экраном» — с ними снова можно работать.\n'
+            'Стрижка и корневая система на вкладках «Товарные позиции» и «Саженцы» сохраняются и видны при повторном входе.\n'
+            'Загрузка фото на витрину: снимки с телефона сжимаются и уходят по одному — без ошибки «payload too large» и без зависания кнопки.\n'
+            'В PDF прайса размеры идут по возрастанию (от меньшего).'
+        ),
+    },
+)
+
+
+def _ensure_changelog_releases(logger=None) -> None:
+    """Публикует известные релизы в «Что нового», если версии ещё нет."""
+    try:
+        from datetime import date as date_cls
+        from app.models import ChangeLog
+        insp = inspect(db.engine)
+        if not insp.has_table('change_log'):
+            return
+        for rel in _CHANGELOG_RELEASES:
+            exists = ChangeLog.query.filter_by(version=rel['version']).first()
+            if exists:
+                continue
+            y, m, d = (int(x) for x in rel['date'].split('-'))
+            db.session.add(ChangeLog(
+                version=rel['version'],
+                content=rel['content'],
+                date=date_cls(y, m, d),
+            ))
+            db.session.commit()
+            if logger:
+                logger.info('changelog: published %s', rel['version'])
+    except Exception as exc:
+        if logger:
+            logger.warning('changelog: skip seed — %s', exc)
+        db.session.rollback()
 
 
 def _backfill_registration_periods(logger=None) -> None:
