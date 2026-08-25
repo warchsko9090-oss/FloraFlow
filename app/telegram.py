@@ -14,7 +14,8 @@ def _get_bot_token():
 CHAT_ROUTES = {
     "hr": ["TG_CHAT_ID_HR", "TG_CHAT_ID"],
     "orders": ["TG_CHAT_ID_ORDERS", "TG_CHAT_ID"],
-    "digging": ["TG_CHAT_ID_HR", "TG_CHAT_ID"],
+    # Отчёт по выкопке идёт в ту же группу, что отгрузки (не в производство).
+    "digging": ["TG_CHAT_ID_ORDERS", "TG_CHAT_ID"],
     "patents": ["TG_CHAT_ID_PATENTS", "TG_CHAT_ID_HR", "TG_CHAT_ID"],
     # «Расходы Жемчужниково» — чат, по которому ходит монитор из app/expense_chat.py.
     # В этот чат бот тоже иногда пишет (например, подтверждения админа), поэтому

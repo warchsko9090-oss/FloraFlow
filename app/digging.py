@@ -339,7 +339,7 @@ def mobile_index():
 
                     msg_lines.append("")
                     msg_lines.append(f"📊 <b>Итого сегодня: {tg_total_qty} шт.</b>")
-                    _tg_send("\n".join(msg_lines), chat_type="digging")
+                    _tg_send("\n".join(msg_lines), chat_type="orders")
 
                 # Заказ готов к отгрузке
                 for r_order in orders_just_ready:
