@@ -383,7 +383,6 @@ def index():
     user, is_dev, _pending = resolve_user()
     html = render_template(
         'tg_pay/index.html',
-        dev_mode=is_dev,
         has_user=bool(user),
     )
     resp = make_response(html)

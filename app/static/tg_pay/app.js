@@ -8,7 +8,6 @@
 
   const view = document.getElementById('view');
   const titleEl = document.getElementById('screenTitle');
-  const devBar = document.getElementById('devBar');
   let me = null;
   let budgetItems = [];
 
@@ -77,49 +76,12 @@
     return '';
   }
 
-  async function loadStatus() {
-    try {
-      const res = await fetch('/tg/pay/api/status');
-      return await res.json();
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function statusBlock(status, extra) {
-    const bits = [];
-    if (status) {
-      bits.push(status.db ? 'БД ок' : 'БД ошибка');
-      bits.push(status.bot_token ? 'бот ок' : 'нет TG_BOT_TOKEN');
-      bits.push(status.last_telegram
-        ? ('вебхук: ' + status.last_telegram.kind)
-        : 'вебхук: тишина — Telegram не достучался');
-    }
-    if (extra) bits.push(extra);
-    if (!bits.length) return '';
-    return `<p class="hint">${bits.join(' · ')}</p>`;
-  }
-
   async function boot() {
-    const status = await loadStatus();
     try {
       me = await api('/tg/pay/api/me');
     } catch (e) {
-      view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e.message}</p>${statusBlock(status)}</div>`;
+      view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e.message}</p></div>`;
       return;
-    }
-    me._status = status;
-    if (me.dev) {
-      devBar.hidden = false;
-      devBar.querySelectorAll('button').forEach((b) => {
-        b.classList.toggle('on', (document.cookie.match(/tg_pay_as=([^;]*)/) || [])[1] === b.dataset.as
-          || (!document.cookie.includes('tg_pay_as') && b.dataset.as === 'admin' && me.can_edit)
-          || (!document.cookie.includes('tg_pay_as') && b.dataset.as === 'payer' && !me.can_edit));
-        b.onclick = () => {
-          document.cookie = 'tg_pay_as=' + b.dataset.as + '; path=/; SameSite=Lax';
-          location.href = '/tg/pay?as=' + b.dataset.as;
-        };
-      });
     }
     if (me.can_edit || me.can_inbox) {
       budgetItems = await api('/tg/pay/api/budget-items');
@@ -132,19 +94,14 @@
     setTitle('Счета на оплату');
     const data = await api('/tg/pay/api/invoices');
     const rows = data.invoices || [];
-    const payRows = rows.filter((x) => x.status === 'new');
-    const drafts = rows.filter((x) => x.status === 'draft');
-    const shown = me.can_edit ? rows : payRows;
+    const shown = me.can_edit ? rows : rows.filter((x) => x.status === 'new');
 
     let html = `
       <div class="hero">
         <div class="label">Итого к оплате</div>
         <div class="sum">${money(data.total_new)}</div>
-        <div class="meta">${(data.count_new || 0) + (data.count_draft || 0)} счёт(ов)</div>
+        <div class="meta">${shown.length} счёт(ов)</div>
       </div>
-      ${statusBlock(me._status, me.can_edit
-        ? ('вы ' + me.username + ' — можно загружать')
-        : ('вы ' + me.username + ' / ' + me.role + ' — оплата'))}
     `;
     if (me.can_inbox && data.inbox_count) {
       html += `<a class="inbox-banner" href="#/inbox">Входящие из чата · ${data.inbox_count}</a>`;
@@ -156,7 +113,7 @@
     } else {
       html += '<div class="list">';
       for (const inv of shown) {
-        const badge = (inv.status === 'draft' ? '<span class="badge">черновик</span>' : '') + prioBadge(inv.priority);
+        const badge = prioBadge(inv.priority);
         html += `<a class="row${inv.priority === 'high' ? ' row-high' : ''}" href="#/inv/${inv.id}">
           <div>
             <div class="name">${badge}${esc(inv.summary)}</div>
