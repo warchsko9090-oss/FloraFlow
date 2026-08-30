@@ -310,6 +310,48 @@ def ensure_webhook(url=None):
     return True, url
 
 
+def delete_webhook(drop_pending=False):
+    bot_token = _get_bot_token()
+    if not bot_token:
+        return False, 'TG_BOT_TOKEN not set'
+    try:
+        r = requests.post(
+            f'https://api.telegram.org/bot{bot_token}/deleteWebhook',
+            json={'drop_pending_updates': bool(drop_pending)},
+            timeout=10,
+        )
+        data = r.json() if r.content else {}
+        if not r.ok or not data.get('ok', True):
+            return False, r.text or str(data)
+        return True, 'ok'
+    except Exception as exc:
+        return False, str(exc)
+
+
+def get_updates(offset=None, timeout=25):
+    bot_token = _get_bot_token()
+    if not bot_token:
+        return []
+    params = {
+        'timeout': timeout,
+        'allowed_updates': [
+            'message', 'edited_message',
+            'channel_post', 'edited_channel_post',
+        ],
+    }
+    if offset:
+        params['offset'] = offset
+    r = requests.get(
+        f'https://api.telegram.org/bot{bot_token}/getUpdates',
+        params=params,
+        timeout=timeout + 10,
+    )
+    data = r.json() if r.content else {}
+    if not data.get('ok'):
+        raise RuntimeError(data.get('description') or r.text)
+    return data.get('result') or []
+
+
 def get_webhook_info():
     bot_token = _get_bot_token()
     if not bot_token:

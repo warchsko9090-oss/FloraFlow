@@ -1981,18 +1981,13 @@ def _tg_resolve_mentions(text, mentions, id_map):
 
 @bp.route('/api/telegram/webhook', methods=['POST'])
 def telegram_webhook():
-    """
-    Telegram присылает сюда обновления. Ловим сообщения из наших супергрупп,
-    только от разрешённых отправителей (руководители К и В), где упомянут
-    @FloraFlovvBot — и передаём их AI-агенту, который нарезает задачи в дашборд.
-
-    Безопасность:
-      • Whitelist chat_id (TG_ALLOWED_CHAT_IDS + TG_CHAT_ID*) — иначе игнор.
-      • Whitelist отправителей по username (TG_ALLOWED_SENDERS) — иначе игнор.
-      • Триггер: @упоминание бота (TG_BOT_USERNAME) в любом месте текста,
-        регистронезависимо. В личке бот отвечает всегда (для тестов).
-    """
     data = request.get_json(silent=True) or {}
+    return jsonify(process_telegram_update(data))
+
+
+def process_telegram_update(data):
+    """Один update: webhook POST или getUpdates. Возвращает dict."""
+    data = data or {}
 
     # 1) Извлекаем «сообщение» из любого типа апдейта (обычные, правки, каналы).
     msg = (
@@ -2004,7 +1999,7 @@ def telegram_webhook():
     if not msg:
         _tg_audit({'ts': datetime.utcnow().isoformat(), 'stage': 'no_message',
                    'update_keys': list(data.keys())})
-        return jsonify({'status': 'ok'})
+        return {'status': 'ok'}
 
     text = msg.get('text') or msg.get('caption') or ''
     chat = msg.get('chat') or {}
@@ -2054,7 +2049,7 @@ def telegram_webhook():
     allowed_chats = _tg_allowed_chat_ids()
     if not is_private and allowed_chats and chat_id not in allowed_chats:
         _tg_audit({**base_audit, 'stage': 'chat_not_allowed', 'allowed_chats': sorted(allowed_chats)})
-        return jsonify({'status': 'ok', 'reason': 'chat_not_allowed'})
+        return {'status': 'ok', 'reason': 'chat_not_allowed'}
 
     # 2.2) Mini App счетов: /start и PDF в личке — не в AI-агента.
     if is_private:
@@ -2063,7 +2058,7 @@ def telegram_webhook():
             note_telegram_update('message', sender_obj.get('id'))
             if handle_private_update(msg):
                 _tg_audit({**base_audit, 'stage': 'tg_pay'})
-                return jsonify({'status': 'ok'})
+                return {'status': 'ok'}
         except Exception as exc:
             current_app.logger.exception('tg_pay.handle_private_update failed')
             _tg_audit({**base_audit, 'stage': 'tg_pay_error', 'error': str(exc)})
@@ -2081,7 +2076,7 @@ def telegram_webhook():
         except Exception as exc:
             current_app.logger.exception('expense_chat.ingest_message failed')
             _tg_audit({**base_audit, 'stage': 'expense_chat_error', 'error': str(exc)})
-        return jsonify({'status': 'ok'})
+        return {'status': 'ok'}
 
     # 3) Whitelist отправителей (по username).
     allowed_senders = _tg_allowed_senders()
@@ -2089,14 +2084,14 @@ def telegram_webhook():
         if not sender_username or sender_username.lower() not in allowed_senders:
             _tg_audit({**base_audit, 'stage': 'sender_not_allowed',
                        'allowed_senders': sorted(allowed_senders)})
-            return jsonify({'status': 'ok', 'reason': 'sender_not_allowed'})
+            return {'status': 'ok', 'reason': 'sender_not_allowed'}
 
     # 4) Триггер: упоминание бота в тексте (либо личка).
     bot_username = _tg_bot_username()
     mentioned = _tg_mentions_bot(text, bot_username)
     if not (is_private or mentioned):
         _tg_audit({**base_audit, 'stage': 'bot_not_mentioned', 'bot_username': bot_username})
-        return jsonify({'status': 'ok', 'reason': 'bot_not_mentioned'})
+        return {'status': 'ok', 'reason': 'bot_not_mentioned'}
 
     # 5) Всё ок — отдаём AI-агенту. Текст с подменой text_mention -> @<canonical>.
     sender_for_ai = sender_label or 'Руководитель'
@@ -2122,7 +2117,7 @@ def telegram_webhook():
             db.session.rollback()
         _tg_audit({**base_audit, 'stage': 'ai_error', 'error': str(exc)})
 
-    return jsonify({'status': 'ok'})
+    return {'status': 'ok'}
 
 
 @bp.route('/api/telegram/_debug', methods=['GET'])

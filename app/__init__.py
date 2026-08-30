@@ -323,13 +323,18 @@ def create_app():
 
     try:
         from app.telegram import set_pay_menu_button, ensure_webhook, get_webhook_info
-        ok, msg = ensure_webhook()
-        if ok:
-            app.logger.info('Telegram webhook set: %s', msg)
+        from app.tg_poller import start_telegram_poller, _should_poll
+        if _should_poll():
+            start_telegram_poller(app)
+            app.logger.info('Telegram: inbound webhook skipped, using getUpdates polling')
         else:
-            app.logger.warning('Telegram webhook skipped: %s', msg)
-        info = get_webhook_info()
-        app.logger.info('Telegram getWebhookInfo: %s', info)
+            ok, msg = ensure_webhook()
+            if ok:
+                app.logger.info('Telegram webhook set: %s', msg)
+            else:
+                app.logger.warning('Telegram webhook skipped: %s', msg)
+            info = get_webhook_info()
+            app.logger.info('Telegram getWebhookInfo: %s', info)
         ok, msg = set_pay_menu_button()
         if ok:
             app.logger.info('Telegram menu button set')
