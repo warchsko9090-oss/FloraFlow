@@ -322,14 +322,19 @@ def create_app():
         app.logger.exception('init_scheduler failed')
 
     try:
-        from app.telegram import set_pay_menu_button
+        from app.telegram import set_pay_menu_button, ensure_webhook
+        ok, msg = ensure_webhook()
+        if ok:
+            app.logger.info('Telegram webhook set: %s', msg)
+        else:
+            app.logger.info('Telegram webhook skipped: %s', msg)
         ok, msg = set_pay_menu_button()
         if ok:
             app.logger.info('Telegram menu button set')
         else:
             app.logger.info('Telegram menu button skipped: %s', msg)
     except Exception as e:
-        app.logger.warning('set_pay_menu_button failed: %s', e)
+        app.logger.warning('telegram boot hooks failed: %s', e)
 
     return app
 

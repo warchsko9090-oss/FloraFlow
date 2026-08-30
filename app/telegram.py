@@ -264,6 +264,45 @@ def default_miniapp_url():
     return ''
 
 
+def default_webhook_url():
+    env = (os.environ.get('TG_WEBHOOK_URL') or '').strip()
+    if env:
+        return env.rstrip('/')
+    mini = default_miniapp_url()
+    if mini.startswith('https://'):
+        return mini.rsplit('/tg/pay', 1)[0] + '/api/telegram/webhook'
+    return ''
+
+
+def ensure_webhook(url=None):
+    """После рестарта Amvera Telegram должен снова слать апдейты на прод."""
+    bot_token = _get_bot_token()
+    url = (url or default_webhook_url() or '').rstrip('/')
+    if not bot_token or not url.startswith('https://'):
+        return False, 'skip'
+    try:
+        r = requests.post(
+            f'https://api.telegram.org/bot{bot_token}/setWebhook',
+            json={
+                'url': url,
+                'allowed_updates': [
+                    'message', 'edited_message',
+                    'channel_post', 'edited_channel_post',
+                ],
+                'drop_pending_updates': False,
+            },
+            timeout=10,
+        )
+        if not r.ok:
+            return False, r.text
+        data = r.json() if r.content else {}
+        if not data.get('ok', True):
+            return False, str(data)
+    except Exception as exc:
+        return False, str(exc)
+    return True, url
+
+
 def set_pay_menu_button(url=None):
     """Кнопка меню бота → Mini App «Счета на оплату»."""
     bot_token = _get_bot_token()

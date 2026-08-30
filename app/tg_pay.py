@@ -103,28 +103,47 @@ def _tg_user_id_map() -> dict[str, str]:
     return mapping
 
 
+def _bind_telegram_id(user: User, tg_id: int) -> None:
+    """Пишем telegram_id, если колонка свободна. Два Telegram на один логин
+    живут через TG_USER_ID_MAP — unique не даёт хранить оба числа на одной строке."""
+    if user.telegram_id == tg_id:
+        return
+    taken = User.query.filter_by(telegram_id=tg_id).first()
+    if taken and taken.id != user.id:
+        taken.telegram_id = None
+    if user.telegram_id and user.telegram_id != tg_id:
+        return
+    user.telegram_id = tg_id
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 def _user_from_telegram(tg_user: dict) -> User | None:
-    tg_id = tg_user.get('id')
-    if not tg_id:
+    raw_id = tg_user.get('id')
+    if not raw_id:
         return None
-    found = User.query.filter_by(telegram_id=int(tg_id)).first()
+    tg_id = int(raw_id)
+
+    # Явная карта важнее ника Telegram и уже сохранённого telegram_id:
+    # иначе @KirillT навсегда садится в менеджера, даже если в env стоит admin.
+    canonical = _tg_user_id_map().get(str(tg_id), '')
+    if canonical:
+        found = User.query.filter(db.func.lower(User.username) == canonical.lower()).first()
+        if found:
+            _bind_telegram_id(found, tg_id)
+            return found
+        return None
+
+    found = User.query.filter_by(telegram_id=tg_id).first()
     if found:
         return found
     username = (tg_user.get('username') or '').lstrip('@').lower()
     if username:
         found = User.query.filter(db.func.lower(User.username) == username).first()
         if found:
-            if not found.telegram_id:
-                found.telegram_id = int(tg_id)
-                db.session.commit()
-            return found
-    canonical = _tg_user_id_map().get(str(tg_id), '')
-    if canonical:
-        found = User.query.filter(db.func.lower(User.username) == canonical.lower()).first()
-        if found:
-            if not found.telegram_id:
-                found.telegram_id = int(tg_id)
-                db.session.commit()
+            _bind_telegram_id(found, tg_id)
             return found
     return None
 
