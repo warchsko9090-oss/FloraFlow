@@ -57,7 +57,7 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('payment_invoice', 'summary', 'VARCHAR(500)', 'VARCHAR(500)'),
     ('payment_invoice', 'line_items', 'TEXT', 'TEXT'),
     ('payment_invoice', 'source', 'VARCHAR(20)', 'VARCHAR(20)'),
-    ('user', 'telegram_id', 'BIGINT', 'INTEGER'),
+    ('"user"', 'telegram_id', 'BIGINT', 'INTEGER'),
     ('document', 'project_id', 'INTEGER', 'INTEGER'),
     ('document', 'supplier_id', 'INTEGER', 'INTEGER'),
     ('document_row', 'purchase_price', 'NUMERIC(10, 2)', 'NUMERIC(10,2)'),
