@@ -130,12 +130,30 @@ h1 {
 
 .row .sub { color: var(--mute); font-size: 12px; margin-top: 4px; }
 
-.row .amt {
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: -0.03em;
-    white-space: nowrap;
+.row-high { border-left: 4px solid #b42318; }
+
+.badge-high { color: #b42318; }
+.badge-low { color: var(--mute); }
+
+.inbox-banner, .inbox-link {
+    display: block;
+    text-decoration: none;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    font-weight: 600;
+    font-size: 14px;
 }
+.inbox-banner {
+    background: var(--ink);
+    color: var(--white);
+}
+.inbox-link {
+    background: var(--white);
+    color: var(--brass);
+}
+
+.inbox-card .sub { color: var(--mute); font-size: 12px; margin-top: 4px; }
 
 .badge {
     display: inline-block;
@@ -187,10 +205,12 @@ h1 {
 }
 
 .amount-xl {
-    font-size: 40px;
+    font-size: clamp(26px, 8vw, 40px);
     font-weight: 700;
     letter-spacing: -0.04em;
-    line-height: 1;
+    line-height: 1.15;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
 
 .article {
@@ -199,17 +219,25 @@ h1 {
     font-size: 14px;
 }
 
-.lines { margin-top: 16px; }
+.lines { margin-top: 16px; padding: 0; }
 .lines li {
     list-style: none;
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    column-gap: 12px;
+    align-items: baseline;
     padding: 9px 0;
     border-top: 1px solid var(--paper-2);
     font-size: 14px;
 }
-.lines .q { color: var(--mute); white-space: nowrap; }
+.lines .ln-name { min-width: 0; overflow-wrap: anywhere; }
+.lines .ln-amt {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    text-align: right;
+}
+.lines .q { color: var(--mute); white-space: nowrap; font-size: 12px; }
 
 .field { margin-top: 12px; }
 .field label {

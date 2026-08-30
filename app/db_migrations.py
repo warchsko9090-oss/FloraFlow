@@ -57,6 +57,8 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('payment_invoice', 'summary', 'VARCHAR(500)', 'VARCHAR(500)'),
     ('payment_invoice', 'line_items', 'TEXT', 'TEXT'),
     ('payment_invoice', 'source', 'VARCHAR(20)', 'VARCHAR(20)'),
+    ('payment_invoice', 'file_blob', 'BYTEA', 'BLOB'),
+    ('chat_expense_message', 'matched_invoice_id', 'INTEGER', 'INTEGER'),
     ('"user"', 'telegram_id', 'BIGINT', 'INTEGER'),
     ('document', 'project_id', 'INTEGER', 'INTEGER'),
     ('document', 'supplier_id', 'INTEGER', 'INTEGER'),
@@ -160,6 +162,13 @@ def ensure_legacy_schema(logger=None) -> None:
             db.session.rollback()
 
     _backfill_registration_periods(logger)
+    try:
+        from app.invoice_files import backfill_blobs
+        backfill_blobs(logger)
+    except Exception as exc:
+        if logger:
+            logger.warning('invoice blob backfill skipped: %s', exc)
+        db.session.rollback()
     _ensure_changelog_releases(logger)
 
 

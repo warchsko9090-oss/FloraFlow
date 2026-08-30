@@ -4,9 +4,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from decimal import Decimal, InvalidOperation
 
 log = logging.getLogger(__name__)
+
+_MONEY_NUM = r'(\d{1,3}(?:\s\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{2}|\d+)'
+_TOTAL_LABEL = re.compile(
+    r'(?is)(?:всего\s+к\s+оплате|к\s+оплате|на\s+сумму|итого)'
+    r'(?!\s*(?:ндс|без\s+налога))'
+    r'[^\d]{0,48}' + _MONEY_NUM
+)
 
 
 def _money(value) -> Decimal | None:
@@ -16,6 +24,25 @@ def _money(value) -> Decimal | None:
         return Decimal(str(value).replace('\xa0', '').replace(' ', '').replace(',', '.'))
     except (InvalidOperation, TypeError, ValueError):
         return None
+
+
+def extract_document_total(text: str) -> Decimal | None:
+    """Итог с подвала счёта («Итого», «на сумму»), не сумма строк и не догадка LLM."""
+    if not text:
+        return None
+    body = text.replace('\xa0', ' ')
+    found: list[Decimal] = []
+    for m in _TOTAL_LABEL.finditer(body):
+        chunk = m.group(0).lower()
+        if 'ндс' in chunk and 'на сумму' not in chunk and 'к оплате' not in chunk:
+            continue
+        val = _money(m.group(1))
+        if val and val > 0:
+            found.append(val)
+    if not found:
+        return None
+    # Подвал обычно в конце; при нескольких «Итого» (по страницам) берём последнее.
+    return found[-1]
 
 
 def summarize_lines(lines: list[dict], fallback_name: str = '') -> tuple[str, Decimal]:
@@ -117,12 +144,14 @@ def parse_invoice_file(path: str, original_name: str = '') -> dict:
             'raw_text_len': 0,
         }
 
-    summary, amount = summarize_lines(lines, name)
+    summary, line_sum = summarize_lines(lines, name)
+    printed = extract_document_total(raw_text)
     groq_summary, groq_amount = _groq_purpose(raw_text, lines, summary)
     if groq_summary:
         summary = groq_summary
-    if groq_amount and groq_amount > 0:
-        amount = groq_amount
+    # Печатный «Итого» важнее суммы строк и Groq: LLM видит обрезанный текст
+    # и на длинных счетах (50+ позиций) часто ошибается на сотни рублей.
+    amount = printed or line_sum or groq_amount or Decimal('0')
     return {
         'summary': summary,
         'amount': amount,

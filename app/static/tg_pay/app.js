@@ -13,8 +13,14 @@
   let budgetItems = [];
 
   function money(n) {
-    const v = Math.round(Number(n) || 0);
-    return v.toLocaleString('ru-RU') + ' ₽';
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '0\u00a0₽';
+    const rounded = Math.round(v * 100) / 100;
+    const hasKop = Math.abs(rounded - Math.round(rounded)) >= 0.005;
+    return rounded.toLocaleString('ru-RU', {
+      minimumFractionDigits: hasKop ? 2 : 0,
+      maximumFractionDigits: 2,
+    }) + '\u00a0₽';
   }
 
   function headers() {
@@ -61,7 +67,14 @@
     const parts = hash.split('/').filter(Boolean);
     if (parts[0] === 'inv' && parts[1]) return renderDetail(+parts[1]);
     if (parts[0] === 'new') return renderUpload();
+    if (parts[0] === 'inbox') return renderInbox();
     return renderList();
+  }
+
+  function prioBadge(p) {
+    if (p === 'high') return '<span class="badge badge-high">срочно</span>';
+    if (p === 'low') return '<span class="badge badge-low">не срочно</span>';
+    return '';
   }
 
   async function loadStatus() {
@@ -108,7 +121,7 @@
         };
       });
     }
-    if (me.can_edit) {
+    if (me.can_edit || me.can_inbox) {
       budgetItems = await api('/tg/pay/api/budget-items');
     }
     window.addEventListener('hashchange', route);
@@ -131,15 +144,20 @@
       </div>
       ${statusBlock(me._status, me.can_edit
         ? ('вы ' + me.username + ' — можно загружать')
-        : ('вы ' + me.username + ' / ' + me.role + ' — только просмотр'))}
+        : ('вы ' + me.username + ' / ' + me.role + ' — оплата'))}
     `;
+    if (me.can_inbox && data.inbox_count) {
+      html += `<a class="inbox-banner" href="#/inbox">Входящие из чата · ${data.inbox_count}</a>`;
+    } else if (me.can_inbox) {
+      html += `<a class="inbox-link" href="#/inbox">Входящие из чата</a>`;
+    }
     if (!shown.length) {
       html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'Загрузите PDF счёта.' : 'Неоплаченных счетов нет.'}</p></div>`;
     } else {
       html += '<div class="list">';
       for (const inv of shown) {
-        const badge = inv.status === 'draft' ? '<span class="badge">черновик</span>' : '';
-        html += `<a class="row" href="#/inv/${inv.id}">
+        const badge = (inv.status === 'draft' ? '<span class="badge">черновик</span>' : '') + prioBadge(inv.priority);
+        html += `<a class="row${inv.priority === 'high' ? ' row-high' : ''}" href="#/inv/${inv.id}">
           <div>
             <div class="name">${badge}${esc(inv.summary)}</div>
             <div class="sub">${esc((inv.budget && inv.budget.name) || 'без статьи')}</div>
@@ -164,9 +182,12 @@
     let lines = '';
     if (inv.lines && inv.lines.length) {
       lines = '<ul class="lines">' + inv.lines.map((ln) => {
-        const q = [ln.qty, ln.unit].filter(Boolean).join(' ');
-        const sum = ln.total != null ? money(ln.total) : '';
-        return `<li><span>${esc(ln.description || '')}${q ? `<div class="q">${esc(q)}</div>` : ''}</span><span>${sum}</span></li>`;
+        const qty = ln.qty != null && ln.qty !== '' ? String(ln.qty).replace('.', ',') : '';
+        const q = [qty, ln.unit].filter(Boolean).join('\u00a0');
+        let raw = ln.total;
+        if (raw == null && ln.qty && ln.unit_price) raw = Number(ln.qty) * Number(ln.unit_price);
+        const sum = raw != null ? money(raw) : '';
+        return `<li><span class="ln-name">${esc(ln.description || '')}${q ? `<span class="q"> · ${esc(q)}</span>` : ''}</span><span class="ln-amt">${sum}</span></li>`;
       }).join('') + '</ul>';
     } else {
       lines = '<p class="hint">Состав не распознан — смотрите PDF.</p>';
@@ -185,10 +206,23 @@
             ${budgetItems.map((b) => `<option value="${b.id}" ${inv.budget_item_id === b.id ? 'selected' : ''}>${esc(b.code || '')} ${esc(b.name)}</option>`).join('')}
           </select>
         </div>
+        <div class="field"><label>Срочность</label>
+          <select id="fPrio">
+            <option value="high" ${inv.priority === 'high' ? 'selected' : ''}>Срочно</option>
+            <option value="normal" ${inv.priority !== 'high' && inv.priority !== 'low' ? 'selected' : ''}>Обычный</option>
+            <option value="low" ${inv.priority === 'low' ? 'selected' : ''}>Не срочно</option>
+          </select>
+        </div>
       `;
     } else {
-      editor = `<div class="article">${esc((inv.budget && inv.budget.name) || 'Статья не указана')}</div>`;
+      editor = `<div class="article">${prioBadge(inv.priority)}${esc((inv.budget && inv.budget.name) || 'Статья не указана')}</div>`;
     }
+
+    const payBtn = inv.status === 'new'
+      ? '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>'
+      : (can && inv.status === 'draft'
+        ? '<button class="btn btn-ink" type="button" id="btnConfirm">Оплачено</button>'
+        : '');
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
@@ -196,17 +230,22 @@
         <div class="amount-xl">${money(inv.amount)}</div>
         <p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
         ${editor}
-        ${lines}
-        ${inv.has_file ? '' : '<p class="warn">Файл на диске не найден.</p>'}
+        ${inv.has_file ? '' : '<p class="warn">PDF счёта не найден.</p>'}
+        ${can ? '<button class="btn btn-ink" type="button" id="btnSave">Сохранить</button>' : ''}
         <button class="btn btn-brass" type="button" id="btnPdf">Скачать PDF</button>
-        ${can && inv.status === 'draft' ? '<button class="btn btn-ink" type="button" id="btnConfirm">В оплату</button>' : ''}
+        ${payBtn}
+        ${lines}
         ${can ? '<button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>' : ''}
       </div>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
     document.getElementById('btnPdf').onclick = () => sendPdf(inv);
+    const save = document.getElementById('btnSave');
+    if (save) save.onclick = () => saveInv(inv.id, false);
     const conf = document.getElementById('btnConfirm');
     if (conf) conf.onclick = () => saveInv(inv.id, true);
+    const paid = document.getElementById('btnPaid');
+    if (paid) paid.onclick = () => markPaid(inv.id);
     const drop = document.getElementById('btnDrop');
     if (drop) drop.onclick = async () => {
       if (!confirm('Удалить счёт?')) return;
@@ -215,11 +254,26 @@
     };
   }
 
+  async function markPaid(id) {
+    if (!confirm('Счёт оплачен? Он исчезнет из списка.')) return;
+    view.classList.add('busy');
+    try {
+      await api('/tg/pay/api/invoices/' + id + '/mark-paid', { method: 'POST' });
+      haptic('medium');
+      location.hash = '#/';
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      view.classList.remove('busy');
+    }
+  }
+
   async function saveInv(id, confirmPay) {
     const body = {
       summary: (document.getElementById('fSummary') || {}).value,
       amount: (document.getElementById('fAmount') || {}).value,
       budget_item_id: (document.getElementById('fBudget') || {}).value || null,
+      priority: (document.getElementById('fPrio') || {}).value || 'normal',
       confirm: !!confirmPay,
     };
     view.classList.add('busy');
@@ -293,6 +347,75 @@
       location.hash = '#/inv/' + inv.id;
     } catch (e) {
       status.textContent = e.message;
+    } finally {
+      view.classList.remove('busy');
+    }
+  }
+
+  function budgetSelect(selectedId) {
+    return `<select class="inbox-budget">
+      <option value="">— статья —</option>
+      ${budgetItems.map((b) => `<option value="${b.id}" ${selectedId === b.id ? 'selected' : ''}>${esc(b.code || '')} ${esc(b.name)}</option>`).join('')}
+    </select>`;
+  }
+
+  async function renderInbox() {
+    setTitle('Входящие из чата');
+    const data = await api('/tg/pay/api/inbox');
+    const items = data.items || [];
+    let html = `<button class="back" type="button" id="goBack">← к счетам</button>`;
+    if (!items.length) {
+      html += '<div class="empty"><h2>Пусто</h2><p>Сообщений из чата расходов нет.</p></div>';
+    } else {
+      html += '<div class="list">';
+      for (const it of items) {
+        const match = it.invoice
+          ? `<div class="sub">похоже на счёт: ${esc(it.invoice.summary)} · ${money(it.invoice.amount)}</div>`
+          : '';
+        html += `<div class="card inbox-card" data-id="${it.id}">
+          <div class="amount-xl" style="font-size:28px">${money(it.amount)}</div>
+          <p class="hint" style="margin-top:8px">${esc(it.description)}</p>
+          <div class="sub">${esc(it.sender)}${it.payment_type === 'cash' ? ' · нал' : it.payment_type === 'cashless' ? ' · безнал' : ''}</div>
+          ${match}
+          <div class="field"><label>Статья</label>${budgetSelect(it.suggested_budget_item_id)}</div>
+          ${it.invoice ? '<button class="btn btn-ink" type="button" data-act="invoice">Это оплата счёта</button>' : ''}
+          <button class="btn btn-brass" type="button" data-act="expense">В расходы</button>
+          <button class="btn btn-ghost" type="button" data-act="reject">Не расход</button>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    view.innerHTML = html;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+    view.querySelectorAll('.inbox-card').forEach((card) => {
+      const id = card.dataset.id;
+      card.querySelectorAll('[data-act]').forEach((btn) => {
+        btn.onclick = () => inboxAct(id, btn.dataset.act, card);
+      });
+    });
+  }
+
+  async function inboxAct(id, act, card) {
+    const sel = card.querySelector('.inbox-budget');
+    const bid = sel && sel.value ? sel.value : null;
+    view.classList.add('busy');
+    try {
+      if (act === 'reject') {
+        await api('/tg/pay/api/inbox/' + id + '/reject', { method: 'POST' });
+      } else {
+        await api('/tg/pay/api/inbox/' + id + '/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            budget_item_id: bid,
+            as_expense: act === 'expense',
+          }),
+        });
+      }
+      haptic('medium');
+      await renderInbox();
+    } catch (e) {
+      alert(e.message);
     } finally {
       view.classList.remove('busy');
     }

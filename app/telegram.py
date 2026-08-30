@@ -1,4 +1,5 @@
 import os
+import io
 import requests
 import json
 
@@ -213,23 +214,34 @@ def send_chat_message(chat_id, text, reply_markup=None):
     return False, last_err
 
 
-def send_chat_document(chat_id, path, filename=None, caption=''):
+def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes=None):
     """Отправляет файл в конкретный чат — на iPhone его удобнее открыть, чем качать из WebView."""
     bot_token = _get_bot_token()
-    if not bot_token or not chat_id or not path:
+    if not bot_token or not chat_id:
         return False, "TG creds not configured"
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-    name = filename or os.path.basename(path)
+    name = filename or (os.path.basename(path) if path else 'invoice.pdf')
     try:
-        with open(path, 'rb') as f:
+        if file_bytes is not None:
+            files = {'document': (name, io.BytesIO(file_bytes))}
             r = requests.post(
                 url,
-                data={'chat_id': chat_id, 'caption': caption or '', 'parse_mode': 'HTML'},
-                files={'document': (name, f)},
+                data={'chat_id': chat_id, 'caption': caption or ''},
+                files=files,
                 timeout=30,
             )
-            if not r.ok:
-                return False, r.text
+        else:
+            if not path:
+                return False, "no file"
+            with open(path, 'rb') as f:
+                r = requests.post(
+                    url,
+                    data={'chat_id': chat_id, 'caption': caption or ''},
+                    files={'document': (name, f)},
+                    timeout=30,
+                )
+        if not r.ok:
+            return False, r.text
     except Exception as exc:
         return False, str(exc)
     return True, "ok"

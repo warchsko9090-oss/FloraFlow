@@ -76,7 +76,7 @@ from decimal import Decimal, InvalidOperation
 from flask import current_app
 
 from app.models import (
-    db, Expense, BudgetItem, TgTask, User,
+    db, Expense, BudgetItem, TgTask, User, PaymentInvoice,
     ChatExpenseMessage, ChatExpenseAlias,
 )
 from app.utils import msk_now, msk_today
@@ -382,6 +382,49 @@ def find_duplicate_expense(
         return candidates[0] if not a else None
 
 
+def find_matching_invoice(amount: Decimal, description: str, fuzzy_threshold: int = 55):
+    """Неоплаченный счёт с близкой суммой и похожим назначением."""
+    if amount is None:
+        return None
+    try:
+        amount = Decimal(str(amount))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    unpaid = PaymentInvoice.query.filter(PaymentInvoice.status == 'new').all()
+    if not unpaid:
+        return None
+    delta = max(Decimal('100'), (amount * Decimal('0.05')))
+    close = []
+    for inv in unpaid:
+        try:
+            inv_amt = Decimal(str(inv.amount or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if abs(inv_amt - amount) <= delta:
+            close.append(inv)
+    if not close:
+        return None
+    if len(close) == 1 and not (description or '').strip():
+        return close[0]
+    hay = _normalize_alias_key(description or '', max_words=12)
+    try:
+        from rapidfuzz import fuzz
+        best, best_score = None, 0
+        for inv in close:
+            text = ' '.join(filter(None, [
+                inv.summary, inv.comment, inv.original_name,
+            ]))
+            other = _normalize_alias_key(text, max_words=12)
+            score = fuzz.token_set_ratio(hay, other) if hay and other else 40
+            if score > best_score:
+                best_score, best = score, inv
+        if best is not None and (best_score >= fuzzy_threshold or (len(close) == 1 and best_score >= 35)):
+            return best
+        return close[0] if len(close) == 1 else None
+    except Exception:
+        return close[0]
+
+
 # ---------------------------------------------------------------------------
 # ТОЧКА ВХОДА ИЗ WEBHOOK
 # ---------------------------------------------------------------------------
@@ -464,6 +507,40 @@ def ingest_message(msg: dict) -> dict:
             _safe_react(tg_chat_id, tg_message_id, "✅")
             return {"ok": True, "status": "matched", "expense_id": dup.id}
 
+        # 1.5) Похоже на неоплаченный счёт — не создаём обычный расход сразу.
+        inv_hit = find_matching_invoice(parsed["amount"], parsed["description"])
+        if inv_hit is not None:
+            row.status = "invoice_match"
+            row.matched_invoice_id = inv_hit.id
+            if inv_hit.budget_item_id:
+                row.suggested_budget_item_id = inv_hit.budget_item_id
+            task = _create_task_for_chat_expense(row, source="invoice")
+            db.session.add(row)
+            db.session.flush()
+            if task is not None:
+                task.action_payload = json.dumps({
+                    "chat_expense_id": row.id,
+                    "invoice_id": inv_hit.id,
+                    "url": f"/expenses/chat/{row.id}",
+                    "amount": str(parsed["amount"]),
+                    "description": parsed["description"],
+                    "payment_type": parsed["payment_type"],
+                    "suggested_budget_item_id": row.suggested_budget_item_id,
+                    "classifier_source": "invoice",
+                    "tg_chat_id": tg_chat_id,
+                    "tg_message_id": tg_message_id,
+                    "sender": sender,
+                }, ensure_ascii=False)
+                db.session.add(task)
+                db.session.flush()
+                row.task_id = task.id
+            db.session.commit()
+            return {
+                "ok": True, "status": "invoice_match",
+                "chat_expense_id": row.id,
+                "invoice_id": inv_hit.id,
+            }
+
         # 2) Нет дубля — подсказываем статью бюджета и создаём TgTask.
         suggested_id, source = classify_budget_item(parsed["description"])
         row.suggested_budget_item_id = suggested_id
@@ -522,7 +599,9 @@ def _create_task_for_chat_expense(row: ChatExpenseMessage, source: str) -> TgTas
     if row.sender_name:
         details_parts.append(f"От: {row.sender_name}")
     details_parts.append(f"Источник: ТГ-чат «Расходы Жемчужниково»")
-    if source == "alias":
+    if source == "invoice":
+        details_parts.append("Похоже на неоплаченный счёт — подтвердите в Mini App «Счета».")
+    elif source == "alias":
         details_parts.append("Подсказка статьи — из обучения по прошлым подтверждениям.")
     elif source == "llm":
         details_parts.append("Подсказка статьи — от AI-классификатора.")
@@ -599,6 +678,7 @@ def confirm_chat_expense(
             description=row.parsed_description or row.raw_text[:500],
             amount=row.parsed_amount,
             payment_type=payment_type,
+            invoice_id=row.matched_invoice_id,
         )
         db.session.add(expense)
         db.session.flush()
@@ -606,6 +686,16 @@ def confirm_chat_expense(
         row.expense_id = expense.id
         row.status = "imported"
         row.suggested_budget_item_id = final_item_id
+
+        if row.matched_invoice_id:
+            inv = PaymentInvoice.query.get(row.matched_invoice_id)
+            if inv is not None and inv.status == "new":
+                inv.status = "paid"
+                try:
+                    from app.vium_inbox import maybe_enqueue as _vium_enqueue
+                    _vium_enqueue(inv)
+                except Exception:
+                    current_app.logger.exception("vium_inbox after chat-invoice match")
 
         # Обучаем классификатор.
         alias_key = _normalize_alias_key(row.parsed_description or "")

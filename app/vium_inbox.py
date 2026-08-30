@@ -260,11 +260,8 @@ def remember_alias(description: str, material_id: int,
 
 def _invoice_pdf_path(invoice: PaymentInvoice) -> str | None:
     try:
-        upload = current_app.config.get('UPLOAD_FOLDER') or ''
-        if not upload:
-            return None
-        path = os.path.join(upload, 'invoices', invoice.filename)
-        return path if os.path.isfile(path) else None
+        from app.invoice_files import materialize_path
+        return materialize_path(invoice)
     except Exception:
         return None
 

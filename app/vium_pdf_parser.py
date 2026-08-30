@@ -233,5 +233,10 @@ def extract_invoice_lines(path: str) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
+        if ln.get('total') is None and ln.get('qty') is not None and ln.get('unit_price') is not None:
+            try:
+                ln['total'] = float(ln['qty']) * float(ln['unit_price'])
+            except (TypeError, ValueError):
+                pass
         cleaned.append(ln)
     return cleaned

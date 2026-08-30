@@ -196,12 +196,10 @@ def expenses():
 
                 filename = secure_filename(file.filename)
                 save_name = f"inv_{int(msk_now().timestamp())}_{filename}"
-                
-                inv_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'invoices')
-                if not os.path.exists(inv_dir):
-                    os.makedirs(inv_dir)
-                    
-                file.save(os.path.join(inv_dir, save_name))
+                data = file.read()
+                if not data:
+                    flash('Ошибка: пустой файл')
+                    return redirect(url_for('finance.expenses', tab='invoices'))
                 
                 due_date_str = request.form.get('due_date')
                 d_val = datetime.strptime(due_date_str, '%Y-%m-%d').date() if due_date_str else None
@@ -221,6 +219,8 @@ def expenses():
                     comment=request.form.get('comment', ''),
                     vium_intake_mode=(vim if vim != 'auto' else None),
                 )
+                from app.invoice_files import attach_file
+                attach_file(inv, data, save_name)
                 db.session.add(inv)
                 db.session.commit()
                 flash('Счет успешно загружен')
@@ -5753,12 +5753,12 @@ def invoice_download(inv_id):
         return redirect(url_for('main.index'))
     
     inv = PaymentInvoice.query.get_or_404(inv_id)
-    inv_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'invoices')
-    try:
-        return send_from_directory(inv_dir, inv.filename, as_attachment=True, download_name=inv.original_name)
-    except Exception:
+    from app.invoice_files import flask_send
+    resp = flask_send(inv, as_attachment=True)
+    if resp is None:
         flash("Файл не найден на сервере")
         return redirect(url_for('finance.expenses', tab='invoices'))
+    return resp
 
 @bp.route('/finance/summary', methods=['GET'])
 @login_required

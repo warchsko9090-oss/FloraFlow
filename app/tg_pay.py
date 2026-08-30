@@ -26,13 +26,14 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from app.models import db, User, PaymentInvoice, BudgetItem
+from app.models import db, User, PaymentInvoice, BudgetItem, ChatExpenseMessage
 from app.tg_pay_parse import parse_invoice_file
 from app.utils import msk_now
 from app.telegram import (
     _get_bot_token, send_chat_message, send_chat_document, download_bot_file,
     default_miniapp_url,
 )
+from app.invoice_files import invoice_bytes, has_file as invoice_has_file, attach_file, flask_send
 
 bp = Blueprint('tg_pay', __name__, url_prefix='/tg/pay')
 
@@ -250,6 +251,21 @@ def _can_edit(user: User) -> bool:
     return (user.role or '') == 'admin'
 
 
+def _can_inbox(user: User) -> bool:
+    return (user.role or '') in ('admin', 'executive')
+
+
+def _notify_watchers(inv: PaymentInvoice, except_user: User | None = None):
+    purpose = _purpose(inv)
+    amount = f"{float(inv.amount or 0):,.0f}".replace(',', ' ')
+    text = f"К оплате: {purpose}\n{amount} ₽"
+    q = User.query.filter(User.telegram_id.isnot(None))
+    for u in q.all():
+        if except_user is not None and u.id == except_user.id:
+            continue
+        send_chat_message(u.telegram_id, text)
+
+
 def require_user(fn):
     @wraps(fn)
     def wrapped(*args, **kwargs):
@@ -287,9 +303,8 @@ def _purpose(inv: PaymentInvoice) -> str:
 
 
 def _invoice_path(inv: PaymentInvoice) -> str | None:
-    upload = current_app.config.get('UPLOAD_FOLDER') or ''
-    path = os.path.join(upload, 'invoices', inv.filename)
-    return path if os.path.isfile(path) else None
+    from app.invoice_files import materialize_path
+    return materialize_path(inv)
 
 
 def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
@@ -307,7 +322,7 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
         ),
         'original_name': inv.original_name,
         'source': inv.source or 'web',
-        'has_file': bool(_invoice_path(inv)),
+        'has_file': invoice_has_file(inv),
     }
     if detail:
         data['comment'] = inv.comment or ''
@@ -343,7 +358,7 @@ def _save_parsed_invoice(filename: str, original_name: str, parsed: dict, source
         comment=summary[:500],
     )
     db.session.add(inv)
-    db.session.commit()
+    db.session.flush()
     return inv
 
 
@@ -402,6 +417,7 @@ def api_me(user: User):
         'username': user.username,
         'role': user.role,
         'can_edit': _can_edit(user),
+        'can_inbox': _can_inbox(user),
         'dev': _dev_mode() and not request.headers.get('X-Telegram-Init-Data'),
         'telegram_id': user.telegram_id,
     })
@@ -423,19 +439,27 @@ def api_invoices(user: User):
     q = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid')
     if not _can_edit(user):
         q = q.filter(PaymentInvoice.status == 'new')
-    rows = q.order_by(
-        PaymentInvoice.status.asc(),
-        PaymentInvoice.priority.desc(),
-        PaymentInvoice.id.desc(),
-    ).all()
+    _prio = {'high': 0, 'normal': 1, 'low': 2}
+    rows = q.all()
+    rows.sort(key=lambda inv: (
+        0 if (inv.status or '') == 'draft' else 1,
+        _prio.get(inv.priority or 'normal', 1),
+        -(inv.id or 0),
+    ))
     invoices = [serialize_invoice(inv) for inv in rows]
     total = sum(x['amount'] for x in invoices if x['status'] == 'new')
     drafts = sum(1 for x in invoices if x['status'] == 'draft')
+    inbox_count = 0
+    if _can_inbox(user):
+        inbox_count = ChatExpenseMessage.query.filter(
+            ChatExpenseMessage.status.in_(['pending', 'invoice_match'])
+        ).count()
     return jsonify({
         'invoices': invoices,
         'total_new': total,
         'count_new': sum(1 for x in invoices if x['status'] == 'new'),
         'count_draft': drafts,
+        'inbox_count': inbox_count,
     })
 
 
@@ -454,16 +478,10 @@ def api_invoice_file(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if not _can_edit(user) and inv.status != 'new':
         return jsonify({'error': 'not_found'}), 404
-    inv_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'invoices')
-    try:
-        return send_from_directory(
-            inv_dir,
-            inv.filename,
-            as_attachment=False,
-            download_name=inv.original_name,
-        )
-    except Exception:
+    resp = flask_send(inv, as_attachment=False)
+    if resp is None:
         return jsonify({'error': 'file_missing'}), 404
+    return resp
 
 
 @bp.route('/api/invoices/<int:inv_id>/send-pdf', methods=['POST'])
@@ -472,8 +490,8 @@ def api_send_pdf(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if not _can_edit(user) and inv.status != 'new':
         return jsonify({'error': 'not_found'}), 404
-    path = _invoice_path(inv)
-    if not path:
+    data = invoice_bytes(inv)
+    if not data:
         return jsonify({'error': 'file_missing'}), 404
     chat_id = user.telegram_id
     if not chat_id:
@@ -484,9 +502,9 @@ def api_send_pdf(user: User, inv_id: int):
         })
     ok, err = send_chat_document(
         chat_id,
-        path,
         filename=inv.original_name,
         caption=f"{_purpose(inv)} · {inv.amount} ₽",
+        file_bytes=data,
     )
     if not ok:
         return jsonify({'ok': False, 'error': err, 'file_url': f'/tg/pay/api/invoices/{inv.id}/file'})
@@ -510,6 +528,8 @@ def api_upload(user: User):
     save_name, path = _store_upload(data, file.filename)
     parsed = parse_invoice_file(path, file.filename)
     inv = _save_parsed_invoice(save_name, file.filename, parsed, source='miniapp')
+    attach_file(inv, data, save_name)
+    db.session.commit()
     payload = serialize_invoice(inv, detail=True)
     payload['parse_error'] = parsed.get('error')
     return jsonify(payload)
@@ -538,6 +558,9 @@ def api_save(user: User, inv_id: int):
         inv.priority = body['priority']
     if body.get('confirm'):
         inv.status = 'new'
+        db.session.commit()
+        _notify_watchers(inv, except_user=user)
+        return jsonify(serialize_invoice(inv, detail=True))
     db.session.commit()
     return jsonify(serialize_invoice(inv, detail=True))
 
@@ -558,6 +581,90 @@ def api_discard(user: User, inv_id: int):
             os.remove(path)
         except OSError:
             pass
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/invoices/<int:inv_id>/mark-paid', methods=['POST'])
+@require_user
+def api_mark_paid(user: User, inv_id: int):
+    inv = PaymentInvoice.query.get_or_404(inv_id)
+    if inv.status != 'new':
+        return jsonify({'error': 'not_open'}), 400
+    inv.status = 'paid'
+    try:
+        from app.vium_inbox import maybe_enqueue
+        maybe_enqueue(inv)
+    except Exception:
+        current_app.logger.exception('vium_inbox.maybe_enqueue (miniapp mark_paid)')
+    db.session.commit()
+    return jsonify({'ok': True, 'id': inv.id})
+
+
+def _serialize_inbox(row: ChatExpenseMessage) -> dict:
+    inv = row.matched_invoice
+    sug = row.suggested_item
+    return {
+        'id': row.id,
+        'status': row.status,
+        'amount': float(row.parsed_amount or 0),
+        'description': row.parsed_description or row.raw_text or '',
+        'payment_type': row.parsed_payment_type,
+        'sender': row.sender_name or '',
+        'invoice': (
+            {
+                'id': inv.id,
+                'summary': _purpose(inv),
+                'amount': float(inv.amount or 0),
+                'status': inv.status,
+            }
+            if inv else None
+        ),
+        'suggested_budget_item_id': row.suggested_budget_item_id,
+        'suggested_budget': (
+            {'id': sug.id, 'name': sug.name, 'code': sug.code}
+            if sug else None
+        ),
+    }
+
+
+@bp.route('/api/inbox')
+@require_user
+def api_inbox(user: User):
+    if not _can_inbox(user):
+        return jsonify({'items': []})
+    rows = ChatExpenseMessage.query.filter(
+        ChatExpenseMessage.status.in_(['pending', 'invoice_match'])
+    ).order_by(ChatExpenseMessage.id.desc()).limit(50).all()
+    return jsonify({'items': [_serialize_inbox(r) for r in rows]})
+
+
+@bp.route('/api/inbox/<int:msg_id>/confirm', methods=['POST'])
+@require_user
+def api_inbox_confirm(user: User, msg_id: int):
+    if not _can_inbox(user):
+        return jsonify({'error': 'forbidden'}), 403
+    from app.expense_chat import confirm_chat_expense
+    body = request.get_json(silent=True) or {}
+    if body.get('as_expense'):
+        row = ChatExpenseMessage.query.get_or_404(msg_id)
+        row.matched_invoice_id = None
+        db.session.flush()
+    bid = body.get('budget_item_id')
+    ok, msg = confirm_chat_expense(msg_id, user, budget_item_id=int(bid) if bid else None)
+    if not ok:
+        return jsonify({'ok': False, 'error': msg}), 400
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/inbox/<int:msg_id>/reject', methods=['POST'])
+@require_user
+def api_inbox_reject(user: User, msg_id: int):
+    if not _can_inbox(user):
+        return jsonify({'error': 'forbidden'}), 403
+    from app.expense_chat import reject_chat_expense
+    ok, msg = reject_chat_expense(msg_id, user)
+    if not ok:
+        return jsonify({'ok': False, 'error': msg}), 400
     return jsonify({'ok': True})
 
 
@@ -658,6 +765,8 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
     save_name, path = _store_upload(blob, name)
     parsed = parse_invoice_file(path, name)
     inv = _save_parsed_invoice(save_name, name, parsed, source='tg')
+    attach_file(inv, blob, save_name)
+    db.session.commit()
     purpose = _purpose(inv)
     amount = f"{inv.amount:,.0f}".replace(',', ' ')
     article = inv.item.name if inv.item else 'статья не выбрана'
@@ -676,7 +785,7 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
         f'Черновик счёта #{inv.id}\n'
         f'<b>{purpose}</b>\n'
         f'{amount} ₽ · {article}{extra}\n\n'
-        f'Откройте приложение, поправьте если нужно и нажмите «В оплату».',
+        f'Откройте приложение, поправьте если нужно и нажмите «Оплачено».',
         reply_markup=markup,
     )
     return True

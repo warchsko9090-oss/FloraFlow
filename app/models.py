@@ -801,8 +801,9 @@ class PaymentInvoice(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     
-    filename = db.Column(db.String(255), nullable=False)  # Имя файла на диске
+    filename = db.Column(db.String(255), nullable=False)
     original_name = db.Column(db.String(255), nullable=False)
+    file_blob = db.Column(db.LargeBinary)
 
     # Одна строка «за что платим» — то, что видит казначей в списке Mini App.
     summary = db.Column(db.String(500))
@@ -1202,6 +1203,7 @@ class ChatExpenseMessage(db.Model):
     # Создан ли по факту Expense и какой TgTask сейчас висит на эту карточку.
     expense_id = db.Column(db.Integer, db.ForeignKey('expense.id'), nullable=True)
     task_id = db.Column(db.Integer, db.ForeignKey('tg_task.id'), nullable=True)
+    matched_invoice_id = db.Column(db.Integer, db.ForeignKey('payment_invoice.id'), nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
@@ -1209,6 +1211,7 @@ class ChatExpenseMessage(db.Model):
     suggested_item = db.relationship('BudgetItem', foreign_keys=[suggested_budget_item_id])
     expense = db.relationship('Expense', foreign_keys=[expense_id])
     task = db.relationship('TgTask', foreign_keys=[task_id])
+    matched_invoice = db.relationship('PaymentInvoice', foreign_keys=[matched_invoice_id])
 
     __table_args__ = (
         db.UniqueConstraint('tg_chat_id', 'tg_message_id', name='_tg_chat_msg_uc'),
