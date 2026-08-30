@@ -140,7 +140,7 @@
       <div class="hero">
         <div class="label">Итого к оплате</div>
         <div class="sum">${money(data.total_new)}</div>
-        <div class="meta">${data.count_new} счёт(ов)${data.count_draft ? ' · ' + data.count_draft + ' черновик' : ''}</div>
+        <div class="meta">${(data.count_new || 0) + (data.count_draft || 0)} счёт(ов)</div>
       </div>
       ${statusBlock(me._status, me.can_edit
         ? ('вы ' + me.username + ' — можно загружать')
@@ -218,11 +218,9 @@
       editor = `<div class="article">${prioBadge(inv.priority)}${esc((inv.budget && inv.budget.name) || 'Статья не указана')}</div>`;
     }
 
-    const payBtn = inv.status === 'new'
-      ? '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>'
-      : (can && inv.status === 'draft'
-        ? '<button class="btn btn-ink" type="button" id="btnConfirm">Оплачено</button>'
-        : '');
+    const payBtn = inv.status === 'paid'
+      ? ''
+      : '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>';
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
@@ -242,8 +240,6 @@
     document.getElementById('btnPdf').onclick = () => sendPdf(inv);
     const save = document.getElementById('btnSave');
     if (save) save.onclick = () => saveInv(inv.id, false);
-    const conf = document.getElementById('btnConfirm');
-    if (conf) conf.onclick = () => saveInv(inv.id, true);
     const paid = document.getElementById('btnPaid');
     if (paid) paid.onclick = () => markPaid(inv.id);
     const drop = document.getElementById('btnDrop');

@@ -169,7 +169,24 @@ def ensure_legacy_schema(logger=None) -> None:
         if logger:
             logger.warning('invoice blob backfill skipped: %s', exc)
         db.session.rollback()
+    _publish_invoice_drafts(logger)
     _ensure_changelog_releases(logger)
+
+
+def _publish_invoice_drafts(logger=None) -> None:
+    """Черновики Mini App раньше не входили в «к оплате» — публикуем как new."""
+    try:
+        result = db.session.execute(
+            text("UPDATE payment_invoice SET status = 'new' WHERE status = 'draft'")
+        )
+        n = result.rowcount or 0
+        db.session.commit()
+        if n and logger:
+            logger.info('legacy schema: published %s invoice draft(s) to new', n)
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: invoice draft publish skipped — %s', exc)
+        db.session.rollback()
 
 
 _CHANGELOG_RELEASES = (

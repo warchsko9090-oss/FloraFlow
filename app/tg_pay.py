@@ -353,7 +353,7 @@ def _save_parsed_invoice(filename: str, original_name: str, parsed: dict, source
         source=source,
         budget_item_id=budget_id,
         amount=amount,
-        status='draft',
+        status='new',
         priority='normal',
         comment=summary[:500],
     )
@@ -447,7 +447,8 @@ def api_invoices(user: User):
         -(inv.id or 0),
     ))
     invoices = [serialize_invoice(inv) for inv in rows]
-    total = sum(x['amount'] for x in invoices if x['status'] == 'new')
+    unpaid = [x for x in invoices if x['status'] != 'paid']
+    total = sum(x['amount'] for x in unpaid)
     drafts = sum(1 for x in invoices if x['status'] == 'draft')
     inbox_count = 0
     if _can_inbox(user):
@@ -457,7 +458,7 @@ def api_invoices(user: User):
     return jsonify({
         'invoices': invoices,
         'total_new': total,
-        'count_new': sum(1 for x in invoices if x['status'] == 'new'),
+        'count_new': sum(1 for x in unpaid if x['status'] == 'new'),
         'count_draft': drafts,
         'inbox_count': inbox_count,
     })
@@ -530,6 +531,7 @@ def api_upload(user: User):
     inv = _save_parsed_invoice(save_name, file.filename, parsed, source='miniapp')
     attach_file(inv, data, save_name)
     db.session.commit()
+    _notify_watchers(inv, except_user=user)
     payload = serialize_invoice(inv, detail=True)
     payload['parse_error'] = parsed.get('error')
     return jsonify(payload)
@@ -556,8 +558,12 @@ def api_save(user: User, inv_id: int):
         inv.budget_item_id = int(bid) if bid else None
     if 'priority' in body and body['priority'] in ('high', 'normal', 'low'):
         inv.priority = body['priority']
-    if body.get('confirm'):
+    became_new = False
+    if body.get('confirm') or inv.status == 'draft':
+        if inv.status != 'new':
+            became_new = True
         inv.status = 'new'
+    if became_new or body.get('confirm'):
         db.session.commit()
         _notify_watchers(inv, except_user=user)
         return jsonify(serialize_invoice(inv, detail=True))
@@ -588,7 +594,7 @@ def api_discard(user: User, inv_id: int):
 @require_user
 def api_mark_paid(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
-    if inv.status != 'new':
+    if inv.status not in ('new', 'draft'):
         return jsonify({'error': 'not_open'}), 400
     inv.status = 'paid'
     try:
@@ -767,8 +773,9 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
     inv = _save_parsed_invoice(save_name, name, parsed, source='tg')
     attach_file(inv, blob, save_name)
     db.session.commit()
+    _notify_watchers(inv, except_user=user)
     purpose = _purpose(inv)
-    amount = f"{inv.amount:,.0f}".replace(',', ' ')
+    amount = f"{inv.amount:,.2f}".replace(',', ' ').replace('.', ',')
     article = inv.item.name if inv.item else 'статья не выбрана'
     extra = f"\n{parsed['error']}" if parsed.get('error') else ''
     app_url = _public_miniapp_url()
@@ -776,16 +783,16 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
     if app_url.startswith('https://'):
         markup = {
             'inline_keyboard': [[{
-                'text': 'Проверить и подтвердить',
+                'text': 'Открыть счёт',
                 'web_app': {'url': app_url},
             }]]
         }
     _tg_reply(
         chat_id,
-        f'Черновик счёта #{inv.id}\n'
+        f'Счёт #{inv.id} в оплате\n'
         f'<b>{purpose}</b>\n'
         f'{amount} ₽ · {article}{extra}\n\n'
-        f'Откройте приложение, поправьте если нужно и нажмите «Оплачено».',
+        f'Когда переведёте — в приложении нажмите «Оплачено».',
         reply_markup=markup,
     )
     return True
