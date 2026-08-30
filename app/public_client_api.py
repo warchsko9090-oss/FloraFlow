@@ -834,7 +834,7 @@ def public_shop_stock_pdf():
         contact_display_label=contact_display_label,
     )
     filename = f"Прайс Княжество от {end_date.strftime('%d.%m.%Y')}.pdf"
-    pdf_kwargs = dict(page_bg="#111814", page_margin="0")
+    pdf_kwargs = dict(page_bg="#FFFFFF", page_margin="0")
 
     if ground_groups and container_groups:
         html_ground = render_template(
