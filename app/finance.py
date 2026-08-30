@@ -179,6 +179,11 @@ def expenses():
                     flash('Счет помечен как оплаченный')
                     log_action(f"Пометил счет как оплаченный: {inv.original_name}")
                     try:
+                        from app.invoice_files import ensure_expense_for_paid_invoice
+                        ensure_expense_for_paid_invoice(inv)
+                    except Exception:
+                        current_app.logger.exception('expense from mark_paid')
+                    try:
                         from app.vium_inbox import maybe_enqueue as _vium_enqueue
                         _vium_enqueue(inv)
                     except Exception:

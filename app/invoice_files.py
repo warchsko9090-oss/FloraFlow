@@ -96,6 +96,40 @@ def flask_send(inv: PaymentInvoice, *, as_attachment: bool = True):
     )
 
 
+def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
+    """Пишет расход по оплаченному счёту, если его ещё нет. Не коммитит."""
+    from decimal import Decimal
+
+    from app.models import Expense
+    from app.utils import msk_today
+
+    existing = Expense.query.filter_by(invoice_id=inv.id).first()
+    if existing:
+        return existing
+    budget_id = inv.budget_item_id
+    if not budget_id:
+        try:
+            from app.expense_chat import classify_budget_item
+            text = ' '.join(filter(None, [inv.summary, inv.comment, inv.original_name]))
+            budget_id, _src = classify_budget_item(text)
+        except Exception:
+            budget_id = None
+    if not budget_id:
+        return None
+    desc = (inv.summary or inv.comment or inv.original_name or 'Счёт на оплату').strip()[:500]
+    exp = Expense(
+        date=msk_today(),
+        budget_item_id=budget_id,
+        description=desc,
+        amount=inv.amount or Decimal('0'),
+        payment_type='cashless',
+        invoice_id=inv.id,
+    )
+    db.session.add(exp)
+    db.session.flush()
+    return exp
+
+
 def backfill_blobs(logger=None) -> int:
     """Копирует PDF с диска в БД, если blob ещё пустой."""
     n = 0

@@ -597,6 +597,11 @@ def api_mark_paid(user: User, inv_id: int):
         return jsonify({'error': 'not_open'}), 400
     inv.status = 'paid'
     try:
+        from app.invoice_files import ensure_expense_for_paid_invoice
+        ensure_expense_for_paid_invoice(inv)
+    except Exception:
+        current_app.logger.exception('expense from miniapp mark_paid')
+    try:
         from app.vium_inbox import maybe_enqueue
         maybe_enqueue(inv)
     except Exception:
