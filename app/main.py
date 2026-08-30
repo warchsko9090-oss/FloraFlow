@@ -2059,7 +2059,8 @@ def telegram_webhook():
     # 2.2) Mini App счетов: /start и PDF в личке — не в AI-агента.
     if is_private:
         try:
-            from app.tg_pay import handle_private_update
+            from app.tg_pay import handle_private_update, note_telegram_update
+            note_telegram_update('message', sender_obj.get('id'))
             if handle_private_update(msg):
                 _tg_audit({**base_audit, 'stage': 'tg_pay'})
                 return jsonify({'status': 'ok'})

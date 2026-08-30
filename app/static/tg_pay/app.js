@@ -64,13 +64,38 @@
     return renderList();
   }
 
+  async function loadStatus() {
+    try {
+      const res = await fetch('/tg/pay/api/status');
+      return await res.json();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function statusBlock(status, extra) {
+    const bits = [];
+    if (status) {
+      bits.push(status.db ? 'БД ок' : 'БД ошибка');
+      bits.push(status.bot_token ? 'бот ок' : 'нет TG_BOT_TOKEN');
+      bits.push(status.last_telegram
+        ? ('вебхук: ' + status.last_telegram.kind)
+        : 'вебхук: тишина — Telegram не достучался');
+    }
+    if (extra) bits.push(extra);
+    if (!bits.length) return '';
+    return `<p class="hint">${bits.join(' · ')}</p>`;
+  }
+
   async function boot() {
+    const status = await loadStatus();
     try {
       me = await api('/tg/pay/api/me');
     } catch (e) {
-      view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e.message}</p></div>`;
+      view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e.message}</p>${statusBlock(status)}</div>`;
       return;
     }
+    me._status = status;
     if (me.dev) {
       devBar.hidden = false;
       devBar.querySelectorAll('button').forEach((b) => {
@@ -104,6 +129,9 @@
         <div class="sum">${money(data.total_new)}</div>
         <div class="meta">${data.count_new} счёт(ов)${data.count_draft ? ' · ' + data.count_draft + ' черновик' : ''}</div>
       </div>
+      ${statusBlock(me._status, me.can_edit
+        ? ('вы ' + me.username + ' — можно загружать')
+        : ('вы ' + me.username + ' / ' + me.role + ' — только просмотр'))}
     `;
     if (!shown.length) {
       html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'Загрузите PDF счёта.' : 'Неоплаченных счетов нет.'}</p></div>`;

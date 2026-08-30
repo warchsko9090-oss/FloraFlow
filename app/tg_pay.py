@@ -15,6 +15,7 @@ import hmac
 import json
 import os
 import re
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from urllib.parse import parse_qsl, unquote
@@ -30,17 +31,74 @@ from app.tg_pay_parse import parse_invoice_file
 from app.utils import msk_now
 from app.telegram import (
     _get_bot_token, send_chat_message, send_chat_document, download_bot_file,
+    default_miniapp_url,
 )
 
 bp = Blueprint('tg_pay', __name__, url_prefix='/tg/pay')
 
 _ALLOWED_EXT = {'.pdf', '.jpg', '.jpeg', '.png', '.webp'}
 _DEV_COOKIE = 'tg_pay_as'
+_LAST_TG_FILE = '/data/tg_last_update.json'
 
 
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
+
+def note_telegram_update(kind: str, tg_id=None):
+    payload = {
+        'at': datetime.utcnow().isoformat() + 'Z',
+        'kind': kind,
+        'telegram_id': tg_id,
+    }
+    try:
+        if os.path.isdir('/data'):
+            with open(_LAST_TG_FILE, 'w', encoding='utf-8') as fh:
+                json.dump(payload, fh)
+    except Exception:
+        pass
+    return payload
+
+
+def _last_telegram_update() -> dict | None:
+    try:
+        if os.path.isfile(_LAST_TG_FILE):
+            with open(_LAST_TG_FILE, encoding='utf-8') as fh:
+                return json.load(fh)
+    except Exception:
+        return None
+    return None
+
+
+def _db_ok() -> bool:
+    try:
+        User.query.limit(1).all()
+        return True
+    except Exception:
+        db.session.rollback()
+        return False
+
+
+def _start_greeting(sender, tg_id) -> str:
+    lines = ['FloraFlow на связи.']
+    lines.append('База данных: ок' if _db_ok() else 'База данных: ошибка')
+    lines.append('Токен бота: ок' if _get_bot_token() else 'Токен бота: НЕ ЗАДАН в Amvera (TG_BOT_TOKEN)')
+    user = _user_from_telegram(sender) if sender else None
+    if user:
+        if _can_edit(user):
+            lines.append(f'Вы: {tg_id} → {user.username} (можно загружать PDF)')
+        else:
+            lines.append(
+                f'Вы: {tg_id} → {user.username}, роль {user.role}. '
+                f'Загружать PDF может только admin.'
+            )
+    else:
+        lines.append(f'Вы: {tg_id} — не привязан к ERP.')
+        lines.append(f'В Amvera одна строка: TG_USER_ID_MAP={tg_id}:admin')
+    lines.append('')
+    lines.append('Пришлите PDF счёта или откройте кнопку «Счета».')
+    return '\n'.join(lines)
+
 
 def _dev_mode() -> bool:
     # На Amvera фейковый вход запрещён: иначе Mini App открывается
@@ -57,14 +115,15 @@ def _public_miniapp_url() -> str:
     env = (os.environ.get('TG_MINIAPP_URL') or '').strip()
     if env:
         return env.rstrip('/')
+    hardcoded = default_miniapp_url()
+    if hardcoded.startswith('https://'):
+        return hardcoded
     try:
         host = (request.host_url or '').rstrip('/')
         if host.startswith('https://'):
             return host + '/tg/pay'
     except RuntimeError:
         pass
-    if os.path.isdir('/data') or os.environ.get('AMVERA'):
-        return 'https://floraflowerp-warchesko.amvera.io/tg/pay'
     return ''
 
 
@@ -319,6 +378,22 @@ def index():
     return resp
 
 
+@bp.route('/api/status')
+def api_status():
+    """Публичная проверка: живы ли БД, токен и вебхук Telegram."""
+    last = _last_telegram_update()
+    token = bool(_get_bot_token())
+    db_ok = _db_ok()
+    return jsonify({
+        'ok': db_ok and token,
+        'db': db_ok,
+        'bot_token': token,
+        'miniapp_url': _public_miniapp_url(),
+        'mapped_ids': list(_tg_user_id_map().keys()),
+        'last_telegram': last,
+    })
+
+
 @bp.route('/api/me')
 @require_user
 def api_me(user: User):
@@ -491,10 +566,10 @@ def api_discard(user: User, inv_id: int):
 # ---------------------------------------------------------------------------
 
 def _tg_reply(chat_id, text, reply_markup=None):
-    try:
-        send_chat_message(chat_id, text, reply_markup=reply_markup)
-    except Exception:
-        current_app.logger.exception('tg_pay reply failed')
+    ok, err = send_chat_message(chat_id, text, reply_markup=reply_markup)
+    if not ok:
+        current_app.logger.warning('tg_pay reply failed chat=%s err=%s', chat_id, err)
+    return ok
 
 
 def _is_invoice_document(doc: dict) -> bool:
@@ -519,7 +594,9 @@ def handle_private_update(msg: dict) -> bool:
     tg_id = sender.get('id')
 
     if text.startswith('/start') or text in ('счета', 'Счета', '/pay'):
+        note_telegram_update('start', tg_id)
         url = _public_miniapp_url()
+        markup = None
         if url.startswith('https://'):
             markup = {
                 'inline_keyboard': [[{
@@ -527,22 +604,13 @@ def handle_private_update(msg: dict) -> bool:
                     'web_app': {'url': url},
                 }]]
             }
-            _tg_reply(
-                chat_id,
-                'Счета на оплату — список, сумма, PDF.',
-                reply_markup=markup,
-            )
-        else:
-            _tg_reply(
-                chat_id,
-                'Локальный режим: откройте в браузере\nhttp://127.0.0.1:5000/tg/pay\n\n'
-                'Чтобы кнопка работала в Telegram, задайте TG_MINIAPP_URL (https-туннель).',
-            )
+        _tg_reply(chat_id, _start_greeting(sender, tg_id), reply_markup=markup)
         return True
 
     doc = msg.get('document')
     if not doc:
         return False
+    note_telegram_update('document', tg_id)
     if not _is_invoice_document(doc):
         _tg_reply(chat_id, 'Нужен файл PDF (счёт на оплату).')
         return True

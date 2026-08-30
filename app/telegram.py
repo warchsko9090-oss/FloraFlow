@@ -185,25 +185,32 @@ def send_photo_album(photo_paths, chat_type="hr"):
 
 
 def send_chat_message(chat_id, text, reply_markup=None):
-    """Личное сообщение в конкретный chat_id (не через CHAT_ROUTES)."""
+    """Личное сообщение в конкретный chat_id (не через CHAT_ROUTES).
+
+    Если Telegram отклоняет HTML или кнопку Mini App — повторяем без них,
+    иначе пользователь видит полное молчание при живом вебхуке.
+    """
     bot_token = _get_bot_token()
     if not bot_token or not chat_id:
         return False, "TG creds not configured"
-    payload = {
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': 'HTML',
-    }
-    if reply_markup:
-        payload['reply_markup'] = reply_markup
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    try:
-        r = requests.post(url, json=payload, timeout=8)
-        if not r.ok:
-            return False, r.text
-    except Exception as exc:
-        return False, str(exc)
-    return True, "ok"
+    payloads = []
+    base = {'chat_id': chat_id, 'text': text}
+    if reply_markup:
+        payloads.append({**base, 'parse_mode': 'HTML', 'reply_markup': reply_markup})
+        payloads.append({**base, 'reply_markup': reply_markup})
+    payloads.append({**base, 'parse_mode': 'HTML'})
+    payloads.append(base)
+    last_err = 'send failed'
+    for payload in payloads:
+        try:
+            r = requests.post(url, json=payload, timeout=8)
+            if r.ok:
+                return True, "ok"
+            last_err = r.text
+        except Exception as exc:
+            last_err = str(exc)
+    return False, last_err
 
 
 def send_chat_document(chat_id, path, filename=None, caption=''):
@@ -301,6 +308,20 @@ def ensure_webhook(url=None):
     except Exception as exc:
         return False, str(exc)
     return True, url
+
+
+def get_webhook_info():
+    bot_token = _get_bot_token()
+    if not bot_token:
+        return {'ok': False, 'error': 'TG_BOT_TOKEN not set'}
+    try:
+        r = requests.get(
+            f'https://api.telegram.org/bot{bot_token}/getWebhookInfo',
+            timeout=10,
+        )
+        return r.json() if r.content else {'ok': False, 'error': r.text}
+    except Exception as exc:
+        return {'ok': False, 'error': str(exc)}
 
 
 def set_pay_menu_button(url=None):
