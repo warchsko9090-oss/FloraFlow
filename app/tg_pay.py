@@ -43,6 +43,10 @@ _DEV_COOKIE = 'tg_pay_as'
 # ---------------------------------------------------------------------------
 
 def _dev_mode() -> bool:
+    # На Amvera фейковый вход запрещён: иначе Mini App открывается
+    # «как попало» без привязки Telegram и счета не грузятся.
+    if os.environ.get('AMVERA') or os.path.isdir('/data'):
+        return False
     flag = (os.environ.get('TG_MINIAPP_DEV') or '').strip().lower()
     if flag in ('1', 'true', 'yes'):
         return True
@@ -93,7 +97,8 @@ def _tg_user_id_map() -> dict[str, str]:
         tg_id, canonical = part.split(':', 1)
         tg_id = tg_id.strip()
         canonical = canonical.strip().lstrip('@')
-        if tg_id and canonical:
+        # Один Telegram id — один логин ERP. Повтор не перезаписываем.
+        if tg_id and canonical and tg_id not in mapping:
             mapping[tg_id] = canonical
     return mapping
 
@@ -466,6 +471,24 @@ def api_discard(user: User, inv_id: int):
 # Bot ingest (webhook)
 # ---------------------------------------------------------------------------
 
+def _tg_reply(chat_id, text, reply_markup=None):
+    try:
+        send_chat_message(chat_id, text, reply_markup=reply_markup)
+    except Exception:
+        current_app.logger.exception('tg_pay reply failed')
+
+
+def _is_invoice_document(doc: dict) -> bool:
+    mime = (doc.get('mime_type') or '').lower()
+    name = (doc.get('file_name') or '').lower()
+    if 'pdf' in mime or name.endswith('.pdf'):
+        return True
+    # iPhone часто шлёт PDF как octet-stream без расширения в file_name.
+    if mime in ('', 'application/octet-stream', 'application/x-pdf'):
+        return True
+    return False
+
+
 def handle_private_update(msg: dict) -> bool:
     """True, если апдейт обработан Mini App (не отдавать AI)."""
     chat = msg.get('chat') or {}
@@ -474,6 +497,7 @@ def handle_private_update(msg: dict) -> bool:
     text = (msg.get('text') or '').strip()
     chat_id = chat.get('id')
     sender = msg.get('from') or {}
+    tg_id = sender.get('id')
 
     if text.startswith('/start') or text in ('счета', 'Счета', '/pay'):
         url = _public_miniapp_url()
@@ -484,13 +508,13 @@ def handle_private_update(msg: dict) -> bool:
                     'web_app': {'url': url},
                 }]]
             }
-            send_chat_message(
+            _tg_reply(
                 chat_id,
                 'Счета на оплату — список, сумма, PDF.',
                 reply_markup=markup,
             )
         else:
-            send_chat_message(
+            _tg_reply(
                 chat_id,
                 'Локальный режим: откройте в браузере\nhttp://127.0.0.1:5000/tg/pay\n\n'
                 'Чтобы кнопка работала в Telegram, задайте TG_MINIAPP_URL (https-туннель).',
@@ -500,19 +524,48 @@ def handle_private_update(msg: dict) -> bool:
     doc = msg.get('document')
     if not doc:
         return False
-    mime = (doc.get('mime_type') or '').lower()
-    name = doc.get('file_name') or 'invoice.pdf'
-    if 'pdf' not in mime and not name.lower().endswith('.pdf'):
-        return False
-
-    user = _user_from_telegram(sender)
-    if not user or not _can_edit(user):
-        send_chat_message(chat_id, 'Загружать счета может администратор.')
+    if not _is_invoice_document(doc):
+        _tg_reply(chat_id, 'Нужен файл PDF (счёт на оплату).')
         return True
 
+    try:
+        return _ingest_private_pdf(chat_id, sender, tg_id, doc)
+    except Exception:
+        current_app.logger.exception('tg_pay ingest failed')
+        _tg_reply(chat_id, 'Не смог разобрать счёт. Пришлите PDF ещё раз или загрузите через кнопку + в приложении.')
+        return True
+
+
+def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
+    user = _user_from_telegram(sender)
+    if not user:
+        mapped = _tg_user_id_map().get(str(tg_id), '')
+        hint = (
+            f'Этот Telegram не привязан к ERP.\n'
+            f'Ваш id: <code>{tg_id}</code>\n\n'
+            f'В Amvera одна строка, логин ERP (не имя):\n'
+            f'<code>TG_USER_ID_MAP={tg_id}:admin</code>'
+        )
+        if mapped:
+            hint = (
+                f'В карте указан логин «{mapped}», такого пользователя в ERP нет.\n'
+                f'Нужен логин из входа в систему, обычно <code>admin</code>:\n'
+                f'<code>TG_USER_ID_MAP={tg_id}:admin</code>'
+            )
+        _tg_reply(chat_id, hint)
+        return True
+    if not _can_edit(user):
+        _tg_reply(
+            chat_id,
+            f'Сейчас вы как <b>{user.username}</b> ({user.role}). '
+            f'Загружать PDF может только admin.',
+        )
+        return True
+
+    name = doc.get('file_name') or 'invoice.pdf'
     blob, err = download_bot_file(doc.get('file_id'))
     if not blob:
-        send_chat_message(chat_id, f'Не смог скачать файл: {err}')
+        _tg_reply(chat_id, f'Не смог скачать файл: {err}')
         return True
 
     save_name, path = _store_upload(blob, name)
@@ -531,7 +584,7 @@ def handle_private_update(msg: dict) -> bool:
                 'web_app': {'url': app_url},
             }]]
         }
-    send_chat_message(
+    _tg_reply(
         chat_id,
         f'Черновик счёта #{inv.id}\n'
         f'<b>{purpose}</b>\n'

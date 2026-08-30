@@ -25,8 +25,14 @@
     return h;
   }
 
+  function withAuth(path) {
+    if (!tg || !tg.initData) return path;
+    const sep = path.includes('?') ? '&' : '?';
+    return path + sep + 'initData=' + encodeURIComponent(tg.initData);
+  }
+
   async function api(path, opts) {
-    const res = await fetch(path, {
+    const res = await fetch(withAuth(path), {
       credentials: 'same-origin',
       ...opts,
       headers: { ...headers(), ...(opts && opts.headers || {}) },
@@ -213,7 +219,7 @@
         return;
       }
     } catch (_) {}
-    const res = await fetch('/tg/pay/api/invoices/' + inv.id + '/file', {
+    const res = await fetch(withAuth('/tg/pay/api/invoices/' + inv.id + '/file'), {
       credentials: 'same-origin',
       headers: headers(),
     });
