@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+    <meta name="theme-color" content="#111814">
+    <title>Счета на оплату</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='tg_pay/app.css') }}">
+</head>
+<body class="{% if dev_mode %}is-dev{% endif %}">
+    <div id="app">
+        <header class="top">
+            <div class="top-mark"></div>
+            <div class="top-copy">
+                <p class="eyebrow">Княжество</p>
+                <h1 id="screenTitle">Счета на оплату</h1>
+            </div>
+            <div id="devBar" class="dev-bar" hidden>
+                <button type="button" data-as="admin">Счета на оплату</button>
+                <button type="button" data-as="payer">Оплата</button>
+            </div>
+        </header>
+        <main id="view"></main>
+    </div>
+    <script src="{{ url_for('static', filename='tg_pay/app.js') }}"></script>
+</body>
+</html>

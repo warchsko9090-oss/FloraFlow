@@ -182,3 +182,108 @@ def send_photo_album(photo_paths, chat_type="hr"):
             return False, str(exc)
             
     return True, "ok"
+
+
+def send_chat_message(chat_id, text, reply_markup=None):
+    """Личное сообщение в конкретный chat_id (не через CHAT_ROUTES)."""
+    bot_token = _get_bot_token()
+    if not bot_token or not chat_id:
+        return False, "TG creds not configured"
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'HTML',
+    }
+    if reply_markup:
+        payload['reply_markup'] = reply_markup
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    try:
+        r = requests.post(url, json=payload, timeout=8)
+        if not r.ok:
+            return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+    return True, "ok"
+
+
+def send_chat_document(chat_id, path, filename=None, caption=''):
+    """Отправляет файл в конкретный чат — на iPhone его удобнее открыть, чем качать из WebView."""
+    bot_token = _get_bot_token()
+    if not bot_token or not chat_id or not path:
+        return False, "TG creds not configured"
+    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+    name = filename or os.path.basename(path)
+    try:
+        with open(path, 'rb') as f:
+            r = requests.post(
+                url,
+                data={'chat_id': chat_id, 'caption': caption or '', 'parse_mode': 'HTML'},
+                files={'document': (name, f)},
+                timeout=30,
+            )
+            if not r.ok:
+                return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+    return True, "ok"
+
+
+def download_bot_file(file_id):
+    """Скачивает файл из Telegram по file_id. Возвращает (bytes, file_path) или (None, err)."""
+    bot_token = _get_bot_token()
+    if not bot_token or not file_id:
+        return None, "TG creds not configured"
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{bot_token}/getFile",
+            params={'file_id': file_id},
+            timeout=15,
+        )
+        if not r.ok:
+            return None, r.text
+        file_path = (r.json().get('result') or {}).get('file_path')
+        if not file_path:
+            return None, "no file_path"
+        fr = requests.get(
+            f"https://api.telegram.org/file/bot{bot_token}/{file_path}",
+            timeout=30,
+        )
+        if not fr.ok:
+            return None, fr.text
+        return fr.content, file_path
+    except Exception as exc:
+        return None, str(exc)
+
+
+def default_miniapp_url():
+    env = (os.environ.get('TG_MINIAPP_URL') or '').strip()
+    if env:
+        return env.rstrip('/')
+    if os.path.isdir('/data') or os.environ.get('AMVERA'):
+        return 'https://floraflowerp-warchesko.amvera.io/tg/pay'
+    return ''
+
+
+def set_pay_menu_button(url=None):
+    """Кнопка меню бота → Mini App «Счета на оплату»."""
+    bot_token = _get_bot_token()
+    url = (url or default_miniapp_url() or '').rstrip('/')
+    if not bot_token or not url.startswith('https://'):
+        return False, 'skip'
+    try:
+        r = requests.post(
+            f'https://api.telegram.org/bot{bot_token}/setChatMenuButton',
+            json={
+                'menu_button': {
+                    'type': 'web_app',
+                    'text': 'Счета',
+                    'web_app': {'url': url},
+                }
+            },
+            timeout=8,
+        )
+        if not r.ok:
+            return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+    return True, 'ok'

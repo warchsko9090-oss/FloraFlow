@@ -783,7 +783,10 @@ def index():
     # 1. Счета на оплату
     if current_user.role in ['admin', 'executive']:
         try:
-            invoices = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid').all()
+            invoices = PaymentInvoice.query.filter(
+                PaymentInvoice.status != 'paid',
+                PaymentInvoice.status != 'draft',
+            ).all()
             for inv in invoices:
                 try:
                     remaining = (inv.amount or 0) - sum((e.amount or 0) for e in (inv.expenses or []))
@@ -2053,6 +2056,17 @@ def telegram_webhook():
         _tg_audit({**base_audit, 'stage': 'chat_not_allowed', 'allowed_chats': sorted(allowed_chats)})
         return jsonify({'status': 'ok', 'reason': 'chat_not_allowed'})
 
+    # 2.2) Mini App счетов: /start и PDF в личке — не в AI-агента.
+    if is_private:
+        try:
+            from app.tg_pay import handle_private_update
+            if handle_private_update(msg):
+                _tg_audit({**base_audit, 'stage': 'tg_pay'})
+                return jsonify({'status': 'ok'})
+        except Exception as exc:
+            current_app.logger.exception('tg_pay.handle_private_update failed')
+            _tg_audit({**base_audit, 'stage': 'tg_pay_error', 'error': str(exc)})
+
     # 2.5) «Расходы Жемчужниково»: сообщения из этого чата не требуют упоминания
     # бота и идут НЕ в AI-агента, а в специализированный монитор расходов.
     # Это до шагов 3-5, потому что там фильтр на @FloraFlovvBot и на белый
@@ -2233,11 +2247,19 @@ def telegram_set_webhook():
         payload['secret_token'] = secret
     try:
         r = _rq.post(f"https://api.telegram.org/bot{token}/setWebhook", json=payload, timeout=10)
+        menu_ok, menu_msg = False, ''
+        try:
+            from app.telegram import set_pay_menu_button
+            mini = url.rsplit('/api/telegram/webhook', 1)[0] + '/tg/pay'
+            menu_ok, menu_msg = set_pay_menu_button(mini)
+        except Exception as menu_exc:
+            menu_msg = str(menu_exc)
         return jsonify({
             'action': 'setWebhook',
             'url': url,
             'http_status': r.status_code,
             'data': r.json(),
+            'menu_button': {'ok': menu_ok, 'detail': menu_msg},
         })
     except Exception as exc:
         return jsonify({'error': str(exc), 'url': url}), 500

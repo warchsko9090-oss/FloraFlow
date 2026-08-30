@@ -10,8 +10,9 @@ db = SQLAlchemy()
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
-    password_hash = db.Column(db.String(200), nullable=False) 
+    password_hash = db.Column(db.String(200), nullable=False)
     role = db.Column(db.String(20), nullable=False) # 'admin', 'user', 'user2'
+    telegram_id = db.Column(db.BigInteger, unique=True, nullable=True, index=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -802,6 +803,12 @@ class PaymentInvoice(db.Model):
     
     filename = db.Column(db.String(255), nullable=False)  # Имя файла на диске
     original_name = db.Column(db.String(255), nullable=False)
+
+    # Одна строка «за что платим» — то, что видит казначей в списке Mini App.
+    summary = db.Column(db.String(500))
+    # JSON-массив позиций [{description, qty, unit, unit_price, total}, ...]
+    line_items = db.Column(db.Text)
+    source = db.Column(db.String(20), default='web')  # web | tg | miniapp
     
     budget_item_id = db.Column(db.Integer, db.ForeignKey('budget_item.id'), nullable=True)
     amount = db.Column(db.Numeric(10, 2), default=0.0)
@@ -809,7 +816,7 @@ class PaymentInvoice(db.Model):
     
     priority = db.Column(db.String(20), default='normal') # high, normal, low
     comment = db.Column(db.String(500))
-    status = db.Column(db.String(20), default='new') # new, paid
+    status = db.Column(db.String(20), default='new') # draft, new, paid
 
     # Override автоматического whitelist по статье: 'auto' (по умолчанию),
     # 'force' — точно отправить в инбокс ВиУМ при оплате,

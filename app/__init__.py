@@ -124,6 +124,8 @@ def create_app():
     app.register_blueprint(orders.bp)
     app.register_blueprint(stock.bp)
     app.register_blueprint(finance.bp)
+    from . import tg_pay
+    app.register_blueprint(tg_pay.bp)
     app.register_blueprint(hr.bp)
     app.register_blueprint(crm.bp)
     app.register_blueprint(chat.bp)
@@ -318,6 +320,16 @@ def create_app():
         init_scheduler(app)
     except Exception:
         app.logger.exception('init_scheduler failed')
+
+    try:
+        from app.telegram import set_pay_menu_button
+        ok, msg = set_pay_menu_button()
+        if ok:
+            app.logger.info('Telegram menu button set')
+        else:
+            app.logger.info('Telegram menu button skipped: %s', msg)
+    except Exception as e:
+        app.logger.warning('set_pay_menu_button failed: %s', e)
 
     return app
 

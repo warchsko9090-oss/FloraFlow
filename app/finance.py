@@ -58,7 +58,10 @@ def expenses():
     invoices = []
     invoice_summary = None
     if tab == 'invoices':
-        invoices = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid').order_by(
+        invoices = PaymentInvoice.query.filter(
+            PaymentInvoice.status != 'paid',
+            PaymentInvoice.status != 'draft',
+        ).order_by(
             PaymentInvoice.due_date.asc(),
             PaymentInvoice.priority.desc()
         ).all()
