@@ -346,6 +346,11 @@ h1 {
 .btn-quiet { background: var(--paper-2); color: var(--ink); font-weight: 600; }
 .btn-ghost { background: transparent; color: var(--danger); }
 
+#editPanel {
+    margin-top: 8px;
+    padding-top: 4px;
+}
+
 .hint { color: var(--mute); font-size: 13px; margin-top: 8px; line-height: 1.4; }
 .warn { color: var(--danger); font-size: 13px; margin-top: 8px; }
 

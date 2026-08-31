@@ -215,41 +215,46 @@
       lines = '<p class="hint">Состав не распознан — смотрите PDF.</p>';
     }
 
-    let editor = '';
+    const payHint = `<p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
+      <p class="ptype" style="margin-top:8px">${inv.payment_type === 'cash' ? 'Нал' : 'Безнал'}</p>`;
+
+    let editPanel = '';
     if (can) {
-      editor = `
-        <div class="field"><label>Назначение</label>
-          <textarea id="fSummary">${esc(inv.summary)}</textarea></div>
-        <div class="field"><label>Сумма</label>
-          <input id="fAmount" inputmode="decimal" value="${inv.amount || ''}"></div>
-        <div class="field"><label>Статья</label>
-          <select id="fBudget">
-            <option value="">— не выбрана —</option>
-            ${budgetItems.map((b) => `<option value="${b.id}" ${inv.budget_item_id === b.id ? 'selected' : ''}>${esc(b.code || '')} ${esc(b.name)}</option>`).join('')}
-          </select>
+      editPanel = `
+        <button class="btn btn-quiet" type="button" id="btnMore">Правки</button>
+        <div id="editPanel" hidden>
+          <div class="field"><label>Назначение</label>
+            <textarea id="fSummary">${esc(inv.summary)}</textarea></div>
+          <div class="field"><label>Сумма</label>
+            <input id="fAmount" inputmode="decimal" value="${inv.amount || ''}"></div>
+          <div class="field"><label>Статья</label>
+            <select id="fBudget">
+              <option value="">— не выбрана —</option>
+              ${budgetItems.map((b) => `<option value="${b.id}" ${inv.budget_item_id === b.id ? 'selected' : ''}>${esc(b.code || '')} ${esc(b.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Срочность</label>
+            <select id="fPrio">
+              <option value="high" ${inv.priority === 'high' ? 'selected' : ''}>Срочно</option>
+              <option value="normal" ${inv.priority !== 'high' && inv.priority !== 'low' ? 'selected' : ''}>Обычный</option>
+              <option value="low" ${inv.priority === 'low' ? 'selected' : ''}>Не срочно</option>
+            </select>
+          </div>
+          <div class="field"><label>Оплата</label>
+            <select id="fPayType">
+              <option value="cashless" ${inv.payment_type !== 'cash' ? 'selected' : ''}>Безнал</option>
+              <option value="cash" ${inv.payment_type === 'cash' ? 'selected' : ''}>Нал</option>
+            </select>
+          </div>
+          <div class="field"><label>План на неделю</label>
+            <input id="fPlan" inputmode="decimal" value="${inv.planned_amount || ''}" placeholder="сумма в пятницу"></div>
+          ${!inv.has_file ? `<div class="field"><label>Реальный счёт</label>
+            <input id="fAttach" type="file" accept="application/pdf,image/*"></div>
+            <button class="btn btn-quiet" type="button" id="btnAttach">Прикрепить файл</button>` : ''}
+          <button class="btn btn-quiet" type="button" id="btnSave">Сохранить правки</button>
+          <button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>
         </div>
-        <div class="field"><label>Срочность</label>
-          <select id="fPrio">
-            <option value="high" ${inv.priority === 'high' ? 'selected' : ''}>Срочно</option>
-            <option value="normal" ${inv.priority !== 'high' && inv.priority !== 'low' ? 'selected' : ''}>Обычный</option>
-            <option value="low" ${inv.priority === 'low' ? 'selected' : ''}>Не срочно</option>
-          </select>
-        </div>
-        <div class="field"><label>Оплата</label>
-          <select id="fPayType">
-            <option value="cashless" ${inv.payment_type !== 'cash' ? 'selected' : ''}>Безнал</option>
-            <option value="cash" ${inv.payment_type === 'cash' ? 'selected' : ''}>Нал</option>
-          </select>
-        </div>
-        <div class="field"><label>План на неделю</label>
-          <input id="fPlan" inputmode="decimal" value="${inv.planned_amount || ''}" placeholder="сумма в пятницу"></div>
-        ${!inv.has_file ? `<div class="field"><label>Реальный счёт</label>
-          <input id="fAttach" type="file" accept="application/pdf,image/*"></div>
-          <button class="btn btn-quiet" type="button" id="btnAttach">Прикрепить файл</button>` : ''}
       `;
-    } else {
-      editor = `<div class="article">${prioBadge(inv.priority)}${inv.payment_type === 'cash' ? 'нал · ' : 'безнал · '}${esc((inv.budget && inv.budget.name) || 'Статья не указана')}</div>
-        ${inv.planned_amount ? `<p class="hint">план ${money(inv.planned_amount)}${inv.fact_amount ? ' · факт ' + money(inv.fact_amount) : ''}</p>` : ''}`;
     }
 
     const payBtn = inv.status === 'paid'
@@ -263,18 +268,26 @@
       <button class="back" type="button" id="goBack">← к списку</button>
       <div class="card">
         <div class="amount-xl">${money(inv.amount)}</div>
-        <p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
-        ${editor}
-        ${can ? '<button class="btn btn-quiet" type="button" id="btnSave">Сохранить правки</button>' : ''}
+        ${payHint}
         ${fileBtns}
         ${payBtn}
+        ${editPanel}
         ${lines}
-        ${can ? '<button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>' : ''}
       </div>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
     const openBtn = document.getElementById('btnOpen');
     if (openBtn) openBtn.onclick = () => openInvoice(inv);
+    const more = document.getElementById('btnMore');
+    const panel = document.getElementById('editPanel');
+    if (more && panel) {
+      more.onclick = () => {
+        const open = panel.hasAttribute('hidden');
+        if (open) panel.removeAttribute('hidden');
+        else panel.setAttribute('hidden', '');
+        more.textContent = open ? 'Скрыть правки' : 'Правки';
+      };
+    }
     const save = document.getElementById('btnSave');
     if (save) save.onclick = () => saveInv(inv.id, false);
     const attach = document.getElementById('btnAttach');
