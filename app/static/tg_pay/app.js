@@ -255,10 +255,9 @@
     const payBtn = inv.status === 'paid'
       ? ''
       : '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>';
-    const fileBtns = inv.has_file ? `
-        <button class="btn btn-brass" type="button" id="btnDl">Скачать счёт</button>
-        <button class="btn btn-quiet" type="button" id="btnTg">Прислать в Telegram</button>
-      ` : '<p class="warn">Файл счёта не найден.</p>';
+    const fileBtns = inv.has_file
+      ? '<button class="btn btn-brass" type="button" id="btnOpen">Открыть счёт</button>'
+      : '<p class="warn">Файл счёта не найден.</p>';
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
@@ -274,10 +273,8 @@
       </div>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
-    const dl = document.getElementById('btnDl');
-    if (dl) dl.onclick = () => downloadPdf(inv);
-    const tgBtn = document.getElementById('btnTg');
-    if (tgBtn) tgBtn.onclick = () => sendPdf(inv);
+    const openBtn = document.getElementById('btnOpen');
+    if (openBtn) openBtn.onclick = () => openInvoice(inv);
     const save = document.getElementById('btnSave');
     if (save) save.onclick = () => saveInv(inv.id, false);
     const attach = document.getElementById('btnAttach');
@@ -332,34 +329,12 @@
     }
   }
 
-  async function downloadPdf(inv) {
-    haptic();
-    const res = await fetch(withAuth('/tg/pay/api/invoices/' + inv.id + '/file'), {
-      credentials: 'same-origin',
-      headers: headers(),
-    });
-    if (!res.ok) {
-      alert('Не удалось скачать счёт');
-      return;
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = inv.original_name || 'invoice.pdf';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.open(url, '_blank');
-  }
-
-  async function sendPdf(inv) {
+  async function openInvoice(inv) {
     haptic();
     try {
       const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', { method: 'POST' });
       if (sent.ok) {
-        alert('PDF отправил в чат с ботом.');
+        alert('Счёт отправил в чат с ботом — откройте его там.');
         return;
       }
     } catch (_) {}
@@ -368,12 +343,11 @@
       headers: headers(),
     });
     if (!res.ok) {
-      alert('Не удалось открыть PDF');
+      alert('Не удалось открыть счёт');
       return;
     }
     const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
+    window.open(URL.createObjectURL(blob), '_blank');
   }
 
   function renderNew() {
