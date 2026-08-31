@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 
 from flask import current_app, send_file
 
@@ -131,23 +132,23 @@ def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
 
 
 def notify_invoice_paid_chat(inv: PaymentInvoice) -> None:
-    """Пишет в чат «Расходы», что счёт оплачен. Сообщения бота ingest пропускает."""
+    """В чат «Расходы» — та же строка, что пишут люди: «25327р- стройбаза. Безнал»."""
     from app.telegram import send_message
 
-    purpose = (inv.summary or inv.comment or inv.original_name or 'Счёт').strip()
+    purpose = (inv.summary or inv.comment or inv.original_name or 'счёт').strip()
+    purpose = re.sub(r'\s+', ' ', purpose)
     purpose = purpose.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    article = inv.item.name if getattr(inv, 'item', None) else ''
-    article = (article or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    if purpose.endswith('.'):
+        purpose = purpose[:-1].rstrip()
     try:
-        amount = f"{float(inv.amount or 0):,.2f}".replace(',', ' ').replace('.', ',')
+        val = float(inv.amount or 0)
     except (TypeError, ValueError):
-        amount = str(inv.amount or 0)
-    text = (
-        f'Оплачен счёт\n'
-        f'<b>{purpose}</b>\n'
-        f'{amount} ₽ · безнал'
-        + (f' · {article}' if article else '')
-    )
+        val = 0
+    if abs(val - round(val)) < 0.005:
+        amount = str(int(round(val)))
+    else:
+        amount = f"{val:.2f}".replace('.', ',')
+    text = f'{amount}р- {purpose}. Безнал'
     ok, err = send_message(text, chat_type='expenses')
     if not ok:
         try:
