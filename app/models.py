@@ -824,7 +824,19 @@ class PaymentInvoice(db.Model):
     # 'skip'  — точно не отправлять, даже если статья is_vium_source=True.
     vium_intake_mode = db.Column(db.String(10), nullable=True)
 
+    # Mini App: план на неделю (пт) и факт по реальному счёту.
+    payment_type = db.Column(db.String(20), default='cashless')  # cash | cashless
+    planned_amount = db.Column(db.Numeric(12, 2), nullable=True)
+    kind = db.Column(db.String(20), default='invoice')  # plan | invoice
+    week_start = db.Column(db.Date, nullable=True)
+    plan_id = db.Column(db.Integer, db.ForeignKey('payment_invoice.id'), nullable=True)
+
     item = db.relationship('BudgetItem')
+    fact_invoices = db.relationship(
+        'PaymentInvoice',
+        foreign_keys=[plan_id],
+        backref=db.backref('plan', remote_side=[id]),
+    )
 
 # --- ВЫКОПКА (DIGGING) ---
 class DiggingLog(db.Model):

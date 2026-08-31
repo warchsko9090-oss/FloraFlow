@@ -63,11 +63,19 @@
 
   function route() {
     const hash = (location.hash || '#/').replace(/^#/, '');
-    const parts = hash.split('/').filter(Boolean);
+    const path = hash.split('?')[0];
+    const parts = path.split('/').filter(Boolean);
     if (parts[0] === 'inv' && parts[1]) return renderDetail(+parts[1]);
-    if (parts[0] === 'new') return renderUpload();
+    if (parts[0] === 'new') return renderNew();
+    if (parts[0] === 'plan') return renderPlan();
+    if (parts[0] === 'file') return renderUpload();
     if (parts[0] === 'inbox') return renderInbox();
     return renderList();
+  }
+
+  function hashParam(name) {
+    const q = (location.hash.split('?')[1] || '');
+    return new URLSearchParams(q).get(name);
   }
 
   function prioBadge(p) {
@@ -90,17 +98,79 @@
     route();
   }
 
+  function compact(n) {
+    const v = Number(n) || 0;
+    if (v >= 1000000) {
+      const s = (v / 1000000).toFixed(1).replace('.', ',').replace(',0', '');
+      return s + '\u00a0млн';
+    }
+    return Math.round(v).toLocaleString('ru-RU');
+  }
+
+  function gaugeHtml(inv) {
+    const plan = Number(inv.planned_amount);
+    const fact = Number(inv.fact_amount || 0);
+    const hasPlan = Number.isFinite(plan) && plan > 0;
+    if (!hasPlan) {
+      return `<div class="gauge gauge-none"><span>${compact(inv.pay_amount || inv.amount)}</span></div>`;
+    }
+    let pct = 0;
+    let tone = 'wait';
+    if (fact > 0 && fact <= plan) {
+      tone = 'ok';
+      pct = Math.max(6, Math.round((fact / plan) * 100));
+    } else if (fact > plan) {
+      tone = 'bad';
+      pct = 100;
+    }
+    const label = fact > 0 ? compact(fact) : 'план';
+    return `<div class="gauge gauge-${tone}" style="--p:${pct}"><span>${label}</span></div>`;
+  }
+
+  function rowHtml(inv) {
+    const plan = Number(inv.planned_amount);
+    const fact = Number(inv.fact_amount || 0);
+    let sub = esc((inv.budget && inv.budget.name) || 'без статьи');
+    if (Number.isFinite(plan) && plan > 0) {
+      sub = 'план ' + money(plan) + (fact > 0 ? ' · факт ' + money(fact) : ' · ждём счёт');
+      if (fact > 0 && fact < plan) sub += ' · −' + money(plan - fact);
+      if (fact > plan) sub += ' · +' + money(fact - plan);
+    }
+    const ptype = inv.payment_type === 'cash' ? 'нал' : 'безнал';
+    return `<a class="row row-bubble${inv.priority === 'high' ? ' row-high' : ''}${fact > plan && plan > 0 ? ' row-over' : ''}" href="#/inv/${inv.id}">
+      ${gaugeHtml(inv)}
+      <div>
+        <div class="name">${prioBadge(inv.priority)}${esc(inv.summary)} <span class="ptype">${ptype}</span></div>
+        <div class="sub">${sub}</div>
+      </div>
+    </a>`;
+  }
+
   async function renderList() {
     setTitle('Счета на оплату');
     const data = await api('/tg/pay/api/invoices');
     const rows = data.invoices || [];
     const shown = me.can_edit ? rows : rows.filter((x) => x.status === 'new');
+    const cash = shown.filter((x) => x.payment_type === 'cash');
+    const cashless = shown.filter((x) => x.payment_type !== 'cash');
+    const plan = Number(data.total_plan) || 0;
+    const fact = Number(data.total_fact) || 0;
+    let delta = '';
+    if (plan > 0 && fact > 0) {
+      delta = fact <= plan
+        ? 'экономия ' + money(plan - fact)
+        : 'перерасход ' + money(fact - plan);
+    }
 
     let html = `
       <div class="hero">
-        <div class="label">Итого к оплате</div>
+        <div class="label">К оплате</div>
         <div class="sum">${money(data.total_new)}</div>
-        <div class="meta">${shown.length} счёт(ов)</div>
+        <div class="split">
+          <span>Безнал ${money(data.total_cashless || 0)}</span>
+          <span>Нал ${money(data.total_cash || 0)}</span>
+        </div>
+        ${plan ? `<div class="meta">план ${money(plan)}${fact ? ' · факт ' + money(fact) : ''}${delta ? ' · ' + delta : ''}</div>` : `<div class="meta">${shown.length} счёт(ов)</div>`}
       </div>
     `;
     if (me.can_inbox && data.inbox_count) {
@@ -109,23 +179,17 @@
       html += `<a class="inbox-link" href="#/inbox">Входящие из чата</a>`;
     }
     if (!shown.length) {
-      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'Загрузите PDF счёта.' : 'Неоплаченных счетов нет.'}</p></div>`;
+      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План на неделю или PDF счёта.' : 'Неоплаченных счетов нет.'}</p></div>`;
     } else {
-      html += '<div class="list">';
-      for (const inv of shown) {
-        const badge = prioBadge(inv.priority);
-        html += `<a class="row${inv.priority === 'high' ? ' row-high' : ''}" href="#/inv/${inv.id}">
-          <div>
-            <div class="name">${badge}${esc(inv.summary)}</div>
-            <div class="sub">${esc((inv.budget && inv.budget.name) || 'без статьи')}</div>
-          </div>
-          <div class="amt">${money(inv.amount)}</div>
-        </a>`;
+      if (cashless.length) {
+        html += '<h2 class="sec">Безнал</h2><div class="list">' + cashless.map(rowHtml).join('') + '</div>';
       }
-      html += '</div>';
+      if (cash.length) {
+        html += '<h2 class="sec">Нал</h2><div class="list">' + cash.map(rowHtml).join('') + '</div>';
+      }
     }
     if (me.can_edit) {
-      html += `<button class="fab" type="button" id="fabAdd" aria-label="Загрузить счёт">+</button>`;
+      html += `<button class="fab" type="button" id="fabAdd" aria-label="Добавить">+</button>`;
     }
     view.innerHTML = html;
     const fab = document.getElementById('fabAdd');
@@ -170,9 +234,21 @@
             <option value="low" ${inv.priority === 'low' ? 'selected' : ''}>Не срочно</option>
           </select>
         </div>
+        <div class="field"><label>Оплата</label>
+          <select id="fPayType">
+            <option value="cashless" ${inv.payment_type !== 'cash' ? 'selected' : ''}>Безнал</option>
+            <option value="cash" ${inv.payment_type === 'cash' ? 'selected' : ''}>Нал</option>
+          </select>
+        </div>
+        <div class="field"><label>План на неделю</label>
+          <input id="fPlan" inputmode="decimal" value="${inv.planned_amount || ''}" placeholder="сумма в пятницу"></div>
+        ${!inv.has_file ? `<div class="field"><label>Реальный счёт</label>
+          <input id="fAttach" type="file" accept="application/pdf,image/*"></div>
+          <button class="btn btn-quiet" type="button" id="btnAttach">Прикрепить файл</button>` : ''}
       `;
     } else {
-      editor = `<div class="article">${prioBadge(inv.priority)}${esc((inv.budget && inv.budget.name) || 'Статья не указана')}</div>`;
+      editor = `<div class="article">${prioBadge(inv.priority)}${inv.payment_type === 'cash' ? 'нал · ' : 'безнал · '}${esc((inv.budget && inv.budget.name) || 'Статья не указана')}</div>
+        ${inv.planned_amount ? `<p class="hint">план ${money(inv.planned_amount)}${inv.fact_amount ? ' · факт ' + money(inv.fact_amount) : ''}</p>` : ''}`;
     }
 
     const payBtn = inv.status === 'paid'
@@ -203,6 +279,8 @@
     if (tgBtn) tgBtn.onclick = () => sendPdf(inv);
     const save = document.getElementById('btnSave');
     if (save) save.onclick = () => saveInv(inv.id, false);
+    const attach = document.getElementById('btnAttach');
+    if (attach) attach.onclick = () => attachToPlan(inv.id);
     const paid = document.getElementById('btnPaid');
     if (paid) paid.onclick = () => markPaid(inv.id);
     const drop = document.getElementById('btnDrop');
@@ -233,6 +311,8 @@
       amount: (document.getElementById('fAmount') || {}).value,
       budget_item_id: (document.getElementById('fBudget') || {}).value || null,
       priority: (document.getElementById('fPrio') || {}).value || 'normal',
+      payment_type: (document.getElementById('fPayType') || {}).value || 'cashless',
+      planned_amount: (document.getElementById('fPlan') || {}).value,
       confirm: !!confirmPay,
     };
     view.classList.add('busy');
@@ -295,19 +375,117 @@
     window.open(url, '_blank');
   }
 
+  function renderNew() {
+    setTitle('Добавить');
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← к списку</button>
+      <a class="choice" href="#/plan">
+        <div class="choice-k">План</div>
+        <p>На неделю вперёд — сумма без файла. В пт для руководителя.</p>
+      </a>
+      <a class="choice" href="#/file">
+        <div class="choice-k">Файл</div>
+        <p>PDF или фото реального счёта.</p>
+      </a>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+  }
+
+  function renderPlan() {
+    setTitle('План на неделю');
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← назад</button>
+      <div class="card">
+        <p class="hint">Пятничный план: назначение и сумма. Файл прикрепите в течение недели.</p>
+        <div class="field"><label>Назначение</label>
+          <textarea id="pSummary" placeholder="ЧОП, ГСМ, сетка…"></textarea></div>
+        <div class="field"><label>План, ₽</label>
+          <input id="pAmount" inputmode="decimal"></div>
+        <div class="field"><label>Оплата</label>
+          <select id="pType">
+            <option value="cashless">Безнал</option>
+            <option value="cash">Нал</option>
+          </select>
+        </div>
+        <div class="field"><label>Статья</label>
+          <select id="pBudget">
+            <option value="">— не выбрана —</option>
+            ${budgetItems.map((b) => `<option value="${b.id}">${esc(b.code || '')} ${esc(b.name)}</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn btn-ink" type="button" id="btnPlan">Создать план</button>
+        <p class="hint" id="pStatus"></p>
+      </div>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
+    document.getElementById('btnPlan').onclick = createPlan;
+  }
+
+  async function createPlan() {
+    const status = document.getElementById('pStatus');
+    const summary = (document.getElementById('pSummary') || {}).value;
+    const planned_amount = (document.getElementById('pAmount') || {}).value;
+    view.classList.add('busy');
+    try {
+      const inv = await api('/tg/pay/api/invoices/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary,
+          planned_amount,
+          payment_type: (document.getElementById('pType') || {}).value,
+          budget_item_id: (document.getElementById('pBudget') || {}).value || null,
+        }),
+      });
+      haptic('medium');
+      location.hash = '#/inv/' + inv.id;
+    } catch (e) {
+      status.textContent = e.message;
+    } finally {
+      view.classList.remove('busy');
+    }
+  }
+
+  async function attachToPlan(planId) {
+    const input = document.getElementById('fAttach');
+    if (!input || !input.files || !input.files[0]) {
+      alert('Выберите PDF или фото.');
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', input.files[0]);
+    fd.append('plan_id', String(planId));
+    view.classList.add('busy');
+    try {
+      const inv = await api('/tg/pay/api/invoices/upload', { method: 'POST', body: fd });
+      haptic('medium');
+      location.hash = '#/inv/' + inv.id;
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      view.classList.remove('busy');
+    }
+  }
+
   function renderUpload() {
     setTitle('Новый счёт');
     view.innerHTML = `
-      <button class="back" type="button" id="goBack">← к списку</button>
+      <button class="back" type="button" id="goBack">← назад</button>
       <div class="card">
-        <p class="hint">PDF или фото счёта — разберём сумму и позиции. Счёт сразу попадёт к оплате.</p>
+        <p class="hint">PDF или фото счёта — разберём сумму и позиции.</p>
         <div class="field"><label>Файл</label>
           <input id="fFile" type="file" accept="application/pdf,image/*"></div>
+        <div class="field"><label>Оплата</label>
+          <select id="fUpType">
+            <option value="cashless">Безнал</option>
+            <option value="cash">Нал</option>
+          </select>
+        </div>
         <button class="btn btn-ink" type="button" id="btnUp">Разобрать</button>
         <p class="hint" id="upStatus"></p>
       </div>
     `;
-    document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+    document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
     document.getElementById('btnUp').onclick = uploadFile;
   }
 
@@ -320,6 +498,10 @@
     }
     const fd = new FormData();
     fd.append('file', input.files[0]);
+    const ptype = (document.getElementById('fUpType') || {}).value;
+    if (ptype) fd.append('payment_type', ptype);
+    const planId = hashParam('plan');
+    if (planId) fd.append('plan_id', planId);
     status.textContent = 'Читаю счёт…';
     view.classList.add('busy');
     try {

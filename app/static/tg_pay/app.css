@@ -85,7 +85,83 @@ h1 {
     font-variant-numeric: tabular-nums;
 }
 
-.hero .meta { color: #c5c0b4; font-size: 13px; margin-top: 6px; }
+.hero .split {
+    display: flex;
+    gap: 16px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: #c5c0b4;
+}
+.hero .split span { white-space: nowrap; }
+
+.sec {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--brass);
+    font-weight: 700;
+    margin: 18px 4px 8px;
+}
+
+.row-bubble {
+    grid-template-columns: 64px 1fr;
+    align-items: center;
+}
+.row-over { border-left: 4px solid var(--danger); }
+.ptype {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--mute);
+    font-weight: 700;
+}
+
+.gauge {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: conic-gradient(var(--g, var(--brass)) calc(var(--p, 0) * 1%), var(--paper-2) 0);
+    flex-shrink: 0;
+    position: relative;
+}
+.gauge span {
+    position: relative;
+    z-index: 1;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    background: var(--white);
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+.gauge-ok { --g: var(--ok); }
+.gauge-bad { --g: var(--danger); }
+.gauge-wait { --g: var(--brass); }
+.gauge-none {
+    background: var(--paper-2);
+}
+
+.choice {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    background: var(--white);
+    border-radius: 22px;
+    padding: 18px 18px;
+    margin-bottom: 10px;
+}
+.choice-k {
+    font-size: 20px;
+    font-weight: 700;
+}
+.choice p { color: var(--mute); font-size: 14px; margin-top: 6px; }
 
 .list { display: flex; flex-direction: column; gap: 8px; }
 

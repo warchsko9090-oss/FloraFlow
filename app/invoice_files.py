@@ -118,12 +118,16 @@ def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
     if not budget_id:
         return None
     desc = (inv.summary or inv.comment or inv.original_name or 'Счёт на оплату').strip()[:500]
+    amt = inv.amount or Decimal('0')
+    if amt <= 0 and inv.planned_amount:
+        amt = inv.planned_amount
+    ptype = inv.payment_type if getattr(inv, 'payment_type', None) in ('cash', 'cashless') else 'cashless'
     exp = Expense(
         date=msk_today(),
         budget_item_id=budget_id,
         description=desc,
-        amount=inv.amount or Decimal('0'),
-        payment_type='cashless',
+        amount=amt,
+        payment_type=ptype,
         invoice_id=inv.id,
     )
     db.session.add(exp)
@@ -144,11 +148,16 @@ def notify_invoice_paid_chat(inv: PaymentInvoice) -> None:
         val = float(inv.amount or 0)
     except (TypeError, ValueError):
         val = 0
+    if val <= 0 and getattr(inv, 'planned_amount', None):
+        try:
+            val = float(inv.planned_amount or 0)
+        except (TypeError, ValueError):
+            pass
     if abs(val - round(val)) < 0.005:
         amount = str(int(round(val)))
     else:
         amount = f"{val:.2f}".replace('.', ',')
-    text = f'{amount}р- {purpose}. Безнал'
+    text = f'{amount}р- {purpose}. {"Нал" if getattr(inv, "payment_type", None) == "cash" else "Безнал"}'
     ok, err = send_message(text, chat_type='expenses')
     if not ok:
         try:

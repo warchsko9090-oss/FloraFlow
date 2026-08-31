@@ -15,7 +15,7 @@ import hmac
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from urllib.parse import parse_qsl, unquote
@@ -28,7 +28,7 @@ from werkzeug.utils import secure_filename
 
 from app.models import db, User, PaymentInvoice, BudgetItem, ChatExpenseMessage
 from app.tg_pay_parse import parse_invoice_file
-from app.utils import msk_now
+from app.utils import msk_now, msk_today
 from app.telegram import (
     _get_bot_token, send_chat_message, send_chat_document, download_bot_file,
     default_miniapp_url,
@@ -257,8 +257,10 @@ def _can_inbox(user: User) -> bool:
 
 def _notify_watchers(inv: PaymentInvoice, except_user: User | None = None):
     purpose = _purpose(inv)
-    amount = f"{float(inv.amount or 0):,.0f}".replace(',', ' ')
-    text = f"К оплате: {purpose}\n{amount} ₽"
+    amount = f"{_pay_amount(inv):,.0f}".replace(',', ' ')
+    kind = 'План' if (inv.kind or '') == 'plan' and not invoice_has_file(inv) else 'К оплате'
+    ptype = 'нал' if (inv.payment_type or '') == 'cash' else 'безнал'
+    text = f"{kind}: {purpose}\n{amount} ₽ · {ptype}"
     q = User.query.filter(User.telegram_id.isnot(None))
     for u in q.all():
         if except_user is not None and u.id == except_user.id:
@@ -302,6 +304,42 @@ def _purpose(inv: PaymentInvoice) -> str:
     return (inv.summary or inv.comment or inv.original_name or 'Счёт').strip()
 
 
+def _monday(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def _default_plan_week(today: date | None = None) -> date:
+    """В пт–вс план на следующую неделю, иначе текущая (пн)."""
+    today = today or msk_today()
+    if today.weekday() >= 4:
+        return today + timedelta(days=(7 - today.weekday()))
+    return _monday(today)
+
+
+def _parse_money(value) -> Decimal:
+    return Decimal(str(value or 0).replace(',', '.').replace(' ', '').replace('\xa0', ''))
+
+
+def _fact_amount(inv: PaymentInvoice) -> float:
+    kids = list(getattr(inv, 'fact_invoices', None) or [])
+    if kids:
+        return float(sum((k.amount or 0) for k in kids))
+    if (inv.kind or 'invoice') == 'plan' and not invoice_has_file(inv):
+        return 0.0
+    return float(inv.amount or 0)
+
+
+def _pay_amount(inv: PaymentInvoice) -> float:
+    """Сколько заложено к оплате: факт, иначе план, иначе сумма счёта."""
+    fact = _fact_amount(inv)
+    if fact > 0:
+        return fact
+    planned = inv.planned_amount
+    if planned is not None:
+        return float(planned or 0)
+    return float(inv.amount or 0)
+
+
 def _invoice_path(inv: PaymentInvoice) -> str | None:
     from app.invoice_files import materialize_path
     return materialize_path(inv)
@@ -309,6 +347,9 @@ def _invoice_path(inv: PaymentInvoice) -> str | None:
 
 def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
     item = inv.item
+    planned = float(inv.planned_amount) if inv.planned_amount is not None else None
+    fact = _fact_amount(inv)
+    linked = next(iter(getattr(inv, 'fact_invoices', None) or []), None)
     data = {
         'id': inv.id,
         'summary': _purpose(inv),
@@ -316,18 +357,35 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
         'status': inv.status or 'new',
         'priority': inv.priority or 'normal',
         'due_date': inv.due_date.isoformat() if inv.due_date else None,
+        'kind': inv.kind or 'invoice',
+        'payment_type': inv.payment_type or 'cashless',
+        'planned_amount': planned,
+        'fact_amount': fact,
+        'pay_amount': _pay_amount(inv),
+        'week_start': inv.week_start.isoformat() if inv.week_start else None,
+        'plan_id': inv.plan_id,
+        'linked_id': linked.id if linked else None,
         'budget': (
             {'id': item.id, 'name': item.name, 'code': item.code}
             if item else None
         ),
         'original_name': inv.original_name,
         'source': inv.source or 'web',
-        'has_file': invoice_has_file(inv),
+        'has_file': invoice_has_file(inv) or bool(linked and invoice_has_file(linked)),
     }
     if detail:
         data['comment'] = inv.comment or ''
         data['lines'] = _lines_of(inv)
         data['budget_item_id'] = inv.budget_item_id
+        open_plans = [
+            {'id': p.id, 'summary': _purpose(p), 'planned_amount': float(p.planned_amount or 0)}
+            for p in PaymentInvoice.query.filter_by(kind='plan').filter(
+                PaymentInvoice.status != 'paid',
+                PaymentInvoice.id != inv.id,
+            ).order_by(PaymentInvoice.id.desc()).limit(40).all()
+            if not list(getattr(p, 'fact_invoices', None) or []) and not invoice_has_file(p)
+        ]
+        data['open_plans'] = open_plans
     return data
 
 
@@ -356,6 +414,9 @@ def _save_parsed_invoice(filename: str, original_name: str, parsed: dict, source
         status='new',
         priority='normal',
         comment=summary[:500],
+        payment_type='cashless',
+        kind='invoice',
+        week_start=_default_plan_week(),
     )
     db.session.add(inv)
     db.session.flush()
@@ -438,6 +499,7 @@ def api_invoices(user: User):
     q = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid')
     if not _can_edit(user):
         q = q.filter(PaymentInvoice.status == 'new')
+    q = q.filter(PaymentInvoice.plan_id.is_(None))
     _prio = {'high': 0, 'normal': 1, 'low': 2}
     rows = q.all()
     rows.sort(key=lambda inv: (
@@ -446,19 +508,26 @@ def api_invoices(user: User):
         -(inv.id or 0),
     ))
     invoices = [serialize_invoice(inv) for inv in rows]
-    unpaid = [x for x in invoices if x['status'] != 'paid']
-    total = sum(x['amount'] for x in unpaid)
-    drafts = sum(1 for x in invoices if x['status'] == 'draft')
+    unpaid = [x for x in invoices if x['status'] != 'paid' and not x.get('plan_id')]
+    total = sum(x.get('pay_amount') or x['amount'] for x in unpaid)
+    cash = sum((x.get('pay_amount') or 0) for x in unpaid if x.get('payment_type') == 'cash')
+    cashless = sum((x.get('pay_amount') or 0) for x in unpaid if x.get('payment_type') != 'cash')
+    plan_sum = sum((x.get('planned_amount') or 0) for x in unpaid if x.get('planned_amount'))
+    fact_sum = sum((x.get('fact_amount') or 0) for x in unpaid)
     inbox_count = 0
     if _can_inbox(user):
         inbox_count = ChatExpenseMessage.query.filter(
             ChatExpenseMessage.status.in_(['pending', 'invoice_match'])
         ).count()
     return jsonify({
-        'invoices': invoices,
+        'invoices': unpaid,
         'total_new': total,
-        'count_new': sum(1 for x in unpaid if x['status'] == 'new'),
-        'count_draft': drafts,
+        'total_cash': cash,
+        'total_cashless': cashless,
+        'total_plan': plan_sum,
+        'total_fact': fact_sum,
+        'week_start': _default_plan_week().isoformat(),
+        'count_new': len(unpaid),
         'inbox_count': inbox_count,
     })
 
@@ -478,7 +547,12 @@ def api_invoice_file(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if not _can_edit(user) and inv.status != 'new':
         return jsonify({'error': 'not_found'}), 404
-    resp = flask_send(inv, as_attachment=False)
+    src = inv
+    if not invoice_has_file(src):
+        kid = next(iter(getattr(inv, 'fact_invoices', None) or []), None)
+        if kid:
+            src = kid
+    resp = flask_send(src, as_attachment=False)
     if resp is None:
         return jsonify({'error': 'file_missing'}), 404
     return resp
@@ -491,6 +565,10 @@ def api_send_pdf(user: User, inv_id: int):
     if not _can_edit(user) and inv.status != 'new':
         return jsonify({'error': 'not_found'}), 404
     data = invoice_bytes(inv)
+    if not data:
+        kid = next(iter(getattr(inv, 'fact_invoices', None) or []), None)
+        if kid:
+            data = invoice_bytes(kid)
     if not data:
         return jsonify({'error': 'file_missing'}), 404
     chat_id = user.telegram_id
@@ -527,8 +605,36 @@ def api_upload(user: User):
         return jsonify({'error': 'empty'}), 400
     save_name, path = _store_upload(data, file.filename)
     parsed = parse_invoice_file(path, file.filename)
+    plan_id = request.form.get('plan_id') or request.args.get('plan_id')
+    plan = PaymentInvoice.query.get(int(plan_id)) if plan_id else None
+    if plan and (plan.kind or '') == 'plan':
+        attach_file(plan, data, save_name)
+        amount = parsed.get('amount') or Decimal('0')
+        if not isinstance(amount, Decimal):
+            try:
+                amount = _parse_money(amount)
+            except (InvalidOperation, TypeError, ValueError):
+                amount = Decimal('0')
+        plan.amount = amount
+        if parsed.get('summary') and not (plan.summary or '').strip():
+            plan.summary = parsed['summary'][:500]
+        plan.line_items = json.dumps(parsed.get('lines') or [], ensure_ascii=False)
+        plan.original_name = file.filename[:255]
+        db.session.commit()
+        _notify_watchers(plan, except_user=user)
+        payload = serialize_invoice(plan, detail=True)
+        payload['parse_error'] = parsed.get('error')
+        return jsonify(payload)
     inv = _save_parsed_invoice(save_name, file.filename, parsed, source='miniapp')
     attach_file(inv, data, save_name)
+    if plan_id:
+        try:
+            inv.plan_id = int(plan_id)
+        except (TypeError, ValueError):
+            pass
+    ptype = (request.form.get('payment_type') or '').strip()
+    if ptype in ('cash', 'cashless'):
+        inv.payment_type = ptype
     db.session.commit()
     _notify_watchers(inv, except_user=user)
     payload = serialize_invoice(inv, detail=True)
@@ -557,6 +663,20 @@ def api_save(user: User, inv_id: int):
         inv.budget_item_id = int(bid) if bid else None
     if 'priority' in body and body['priority'] in ('high', 'normal', 'low'):
         inv.priority = body['priority']
+    if 'payment_type' in body and body['payment_type'] in ('cash', 'cashless'):
+        inv.payment_type = body['payment_type']
+    if 'planned_amount' in body:
+        raw = body.get('planned_amount')
+        if raw in (None, ''):
+            inv.planned_amount = None
+        else:
+            try:
+                inv.planned_amount = _parse_money(raw)
+            except (InvalidOperation, TypeError, ValueError):
+                return jsonify({'error': 'bad_plan'}), 400
+    if 'plan_id' in body:
+        pid = body.get('plan_id')
+        inv.plan_id = int(pid) if pid else None
     became_new = False
     if body.get('confirm') or inv.status == 'draft':
         if inv.status != 'new':
@@ -567,6 +687,51 @@ def api_save(user: User, inv_id: int):
         _notify_watchers(inv, except_user=user)
         return jsonify(serialize_invoice(inv, detail=True))
     db.session.commit()
+    return jsonify(serialize_invoice(inv, detail=True))
+
+
+@bp.route('/api/invoices/plan', methods=['POST'])
+@require_user
+def api_create_plan(user: User):
+    if not _can_edit(user):
+        return jsonify({'error': 'forbidden'}), 403
+    body = request.get_json(silent=True) or {}
+    summary = (body.get('summary') or '').strip()[:500]
+    if not summary:
+        return jsonify({'error': 'need_summary'}), 400
+    try:
+        planned = _parse_money(body.get('planned_amount'))
+    except (InvalidOperation, TypeError, ValueError):
+        return jsonify({'error': 'bad_plan'}), 400
+    if planned <= 0:
+        return jsonify({'error': 'bad_plan'}), 400
+    ptype = body.get('payment_type') if body.get('payment_type') in ('cash', 'cashless') else 'cashless'
+    bid = body.get('budget_item_id')
+    week_raw = (body.get('week_start') or '').strip()
+    try:
+        week = date.fromisoformat(week_raw) if week_raw else _default_plan_week()
+        week = _monday(week)
+    except ValueError:
+        week = _default_plan_week()
+    stamp = f"plan_{int(msk_now().timestamp())}"
+    inv = PaymentInvoice(
+        filename=stamp,
+        original_name=summary[:255],
+        summary=summary,
+        source='miniapp',
+        budget_item_id=int(bid) if bid else None,
+        amount=Decimal('0'),
+        planned_amount=planned,
+        status='new',
+        priority='normal',
+        comment=summary,
+        payment_type=ptype,
+        kind='plan',
+        week_start=week,
+    )
+    db.session.add(inv)
+    db.session.commit()
+    _notify_watchers(inv, except_user=user)
     return jsonify(serialize_invoice(inv, detail=True))
 
 
@@ -596,6 +761,8 @@ def api_mark_paid(user: User, inv_id: int):
     if inv.status not in ('new', 'draft'):
         return jsonify({'error': 'not_open'}), 400
     inv.status = 'paid'
+    for kid in list(getattr(inv, 'fact_invoices', None) or []):
+        kid.status = 'paid'
     exp = None
     try:
         from app.invoice_files import ensure_expense_for_paid_invoice
