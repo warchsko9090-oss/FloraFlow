@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title"><i class="fas fa-file-invoice-dollar"></i> Счета клиентам</div>
+        <div class="page-subtitle">Исходящие счета из Telegram Mini App. Заказ и резерв не создаются.</div>
+    </div>
+</div>
+
+<div class="filter-panel mb-3">
+    <form method="GET" class="d-flex gap-2" hx-boost="false">
+        <select class="form-select form-select-sm" name="status" style="max-width: 240px;">
+            <option value="all" {% if status == 'all' %}selected{% endif %}>Все</option>
+            <option value="draft" {% if status == 'draft' %}selected{% endif %}>Черновики</option>
+            <option value="approved" {% if status == 'approved' %}selected{% endif %}>Согласованные</option>
+        </select>
+        <button class="btn btn-success btn-sm">Показать</button>
+    </form>
+</div>
+
+<div class="card section-card">
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>№</th>
+                    <th>Дата</th>
+                    <th>Клиент</th>
+                    <th>Фирма</th>
+                    <th>Автор</th>
+                    <th>Позиций</th>
+                    <th class="text-end">Сумма</th>
+                    <th>Статус</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for inv in invoices %}
+                <tr>
+                    <td>{{ inv.id }}</td>
+                    <td>{{ inv.created_at|dateru if inv.created_at else '—' }}</td>
+                    <td>
+                        {{ inv.buyer_name or '—' }}
+                        {% if inv.buyer_inn %}<div class="small text-muted">ИНН {{ inv.buyer_inn }}</div>{% endif %}
+                    </td>
+                    <td>
+                        {{ inv.company.short_name if inv.company else '—' }}
+                        {% if inv.company and inv.company.vat_mode == 'included_20' %}
+                        <div class="small text-muted">НДС 20%</div>
+                        {% else %}
+                        <div class="small text-muted">без НДС</div>
+                        {% endif %}
+                    </td>
+                    <td>{{ inv.user.username if inv.user else '—' }}</td>
+                    <td>{{ inv.lines|length }}</td>
+                    <td class="text-end">{{ '%.2f'|format(inv.amount|float) }} ₽</td>
+                    <td>
+                        {% if inv.status == 'approved' %}
+                        <span class="badge bg-success">согласован</span>
+                        {% else %}
+                        <span class="badge bg-secondary">черновик</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('orders.sale_invoice_pdf', inv_id=inv.id) }}">PDF</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="9" class="text-muted py-4 text-center">Счетов пока нет</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

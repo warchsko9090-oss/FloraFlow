@@ -80,13 +80,20 @@ def _db_ok() -> bool:
         return False
 
 
+def _can_sale_role(user: User | None) -> bool:
+    return bool(user) and (user.role or '') in ('admin', 'shop_manager')
+
+
 def _start_greeting(sender, tg_id) -> str:
     lines = ['FloraFlow на связи.']
     lines.append('База данных: ок' if _db_ok() else 'База данных: ошибка')
     lines.append('Токен бота: ок' if _get_bot_token() else 'Токен бота: НЕ ЗАДАН в Amvera (TG_BOT_TOKEN)')
     user = _user_from_telegram(sender) if sender else None
     if user:
-        if _can_edit(user):
+        if _can_sale_role(user):
+            lines.append(f'Вы: {tg_id} → {user.username} ({user.role})')
+            lines.append('Оплата — счета поставщикам. Выставить счёт — клиенту.')
+        elif _can_edit(user):
             lines.append(f'Вы: {tg_id} → {user.username} (черновики и планы)')
         else:
             lines.append(f'Вы: {tg_id} → {user.username}, роль {user.role}. Оплата счетов.')
@@ -94,7 +101,10 @@ def _start_greeting(sender, tg_id) -> str:
         lines.append(f'Вы: {tg_id} — не привязан к ERP.')
         lines.append(f'В Amvera одна строка: TG_USER_ID_MAP={tg_id}:admin')
     lines.append('')
-    lines.append('Пришлите PDF — попадёт в черновики администратора.')
+    if _can_sale_role(user):
+        lines.append('Кнопки ниже открывают Mini App.')
+    else:
+        lines.append('Пришлите PDF — попадёт в черновики администратора.')
     return '\n'.join(lines)
 
 
@@ -212,6 +222,12 @@ def _dev_user(as_role: str) -> User | None:
             or User.query.filter(User.role.in_(['user', 'executive'])).first()
             or User.query.first()
         )
+    if as_role == 'shop_manager':
+        return (
+            User.query.filter_by(role='shop_manager').first()
+            or User.query.filter_by(role='admin').first()
+            or User.query.first()
+        )
     return User.query.filter_by(role='admin').first() or User.query.first()
 
 
@@ -235,11 +251,13 @@ def resolve_user() -> tuple[User | None, bool, dict | None]:
         return None, False, None
     as_role = (
         request.headers.get('X-Tg-Pay-As')
+        or request.headers.get('X-Tg-Sale-As')
         or request.cookies.get(_DEV_COOKIE)
+        or request.cookies.get('tg_sale_as')
         or request.args.get('as')
         or 'admin'
     )
-    if as_role not in ('admin', 'payer'):
+    if as_role not in ('admin', 'payer', 'shop_manager'):
         as_role = 'admin'
     return _dev_user(as_role), True, None
 
@@ -943,15 +961,23 @@ def handle_private_update(msg: dict) -> bool:
 
     if text.startswith('/start') or text in ('счета', 'Счета', '/pay'):
         note_telegram_update('start', tg_id)
-        url = _public_miniapp_url()
-        markup = None
-        if url.startswith('https://'):
-            markup = {
-                'inline_keyboard': [[{
-                    'text': 'Счета на оплату',
-                    'web_app': {'url': url},
-                }]]
-            }
+        user = _user_from_telegram(sender) if sender else None
+        pay_url = _public_miniapp_url()
+        rows = []
+        if pay_url.startswith('https://'):
+            pay_label = 'Оплата' if _can_sale_role(user) else 'Счета на оплату'
+            rows.append([{'text': pay_label, 'web_app': {'url': pay_url}}])
+        if _can_sale_role(user):
+            from app.tg_sale import public_sale_url
+            sale_url = public_sale_url()
+            if sale_url.startswith('https://'):
+                rows.append([{'text': 'Выставить счёт', 'web_app': {'url': sale_url}}])
+                try:
+                    from app.telegram import set_pay_menu_button
+                    set_pay_menu_button(url=sale_url, chat_id=chat_id, text='Счёт')
+                except Exception:
+                    current_app.logger.exception('sale menu button')
+        markup = {'inline_keyboard': rows} if rows else None
         _tg_reply(chat_id, _start_greeting(sender, tg_id), reply_markup=markup)
         return True
 

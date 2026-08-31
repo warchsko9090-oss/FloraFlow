@@ -378,22 +378,25 @@ def get_webhook_info():
         return {'ok': False, 'error': str(exc)}
 
 
-def set_pay_menu_button(url=None):
-    """Кнопка меню бота → Mini App «Счета на оплату»."""
+def set_pay_menu_button(url=None, chat_id=None, text='Счета'):
+    """Кнопка меню бота → Mini App. chat_id — только для этого пользователя."""
     bot_token = _get_bot_token()
     url = (url or default_miniapp_url() or '').rstrip('/')
     if not bot_token or not url.startswith('https://'):
         return False, 'skip'
+    payload = {
+        'menu_button': {
+            'type': 'web_app',
+            'text': text or 'Счета',
+            'web_app': {'url': url},
+        }
+    }
+    if chat_id:
+        payload['chat_id'] = chat_id
     try:
         r = requests.post(
             f'https://api.telegram.org/bot{bot_token}/setChatMenuButton',
-            json={
-                'menu_button': {
-                    'type': 'web_app',
-                    'text': 'Счета',
-                    'web_app': {'url': url},
-                }
-            },
+            json=payload,
             timeout=8,
         )
         if not r.ok:

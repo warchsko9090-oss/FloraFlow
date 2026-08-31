@@ -68,6 +68,13 @@ class Client(db.Model):
     name = db.Column(db.String(200), nullable=False)
     fixed_balance = db.Column(db.Numeric(15, 2), nullable=True)
     fixed_balance_date = db.Column(db.Date, nullable=True)
+    inn = db.Column(db.String(20), nullable=True, index=True)
+    kpp = db.Column(db.String(20), nullable=True)
+    address = db.Column(db.String(500), nullable=True)
+    bank_name = db.Column(db.String(200), nullable=True)
+    rs = db.Column(db.String(40), nullable=True)
+    bik = db.Column(db.String(20), nullable=True)
+    ks = db.Column(db.String(40), nullable=True)
 
 class Field(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1769,3 +1776,76 @@ class ShopOnRequestLog(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.now, index=True)
 
     user = db.relationship('User', foreign_keys=[user_id])
+
+
+class SaleCompany(db.Model):
+    """Юрлицо, с которого выставляем счета клиентам (две фирмы: с НДС и без)."""
+    __tablename__ = 'sale_company'
+
+    id = db.Column(db.Integer, primary_key=True)
+    short_name = db.Column(db.String(120), nullable=False)
+    legal_name = db.Column(db.String(300), nullable=False, default='')
+    inn = db.Column(db.String(20), nullable=False, default='')
+    kpp = db.Column(db.String(20), nullable=True)
+    ogrn = db.Column(db.String(20), nullable=True)
+    legal_address = db.Column(db.String(500), nullable=True)
+    fact_address = db.Column(db.String(500), nullable=True)
+    bank_name = db.Column(db.String(200), nullable=True)
+    bik = db.Column(db.String(20), nullable=True)
+    rs = db.Column(db.String(40), nullable=True)
+    ks = db.Column(db.String(40), nullable=True)
+    director = db.Column(db.String(200), nullable=True)
+    vat_mode = db.Column(db.String(20), nullable=False, default='none')  # none | included_20
+    is_active = db.Column(db.Boolean, default=True)
+    sort_order = db.Column(db.Integer, default=0)
+
+
+class SaleInvoice(db.Model):
+    """Исходящий счёт клиенту из Mini App (черновик / согласован)."""
+    __tablename__ = 'sale_invoice'
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, index=True)
+    approved_at = db.Column(db.DateTime, nullable=True)
+    company_id = db.Column(db.Integer, db.ForeignKey('sale_company.id'), nullable=False)
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='draft')  # draft | approved | discarded
+    amount = db.Column(db.Numeric(12, 2), default=0)
+    comment = db.Column(db.String(500), nullable=True)
+    buyer_name = db.Column(db.String(300), nullable=False, default='')
+    buyer_inn = db.Column(db.String(20), nullable=True)
+    buyer_kpp = db.Column(db.String(20), nullable=True)
+    buyer_address = db.Column(db.String(500), nullable=True)
+    buyer_bank = db.Column(db.String(200), nullable=True)
+    buyer_rs = db.Column(db.String(40), nullable=True)
+    buyer_bik = db.Column(db.String(20), nullable=True)
+    buyer_ks = db.Column(db.String(40), nullable=True)
+    file_blob = db.Column(db.LargeBinary)
+    file_name = db.Column(db.String(255), nullable=True)
+
+    company = db.relationship('SaleCompany')
+    client = db.relationship('Client')
+    user = db.relationship('User')
+    lines = db.relationship(
+        'SaleInvoiceLine',
+        backref='invoice',
+        cascade='all, delete-orphan',
+        order_by='SaleInvoiceLine.id',
+    )
+
+
+class SaleInvoiceLine(db.Model):
+    __tablename__ = 'sale_invoice_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('sale_invoice.id'), nullable=False, index=True)
+    plant_id = db.Column(db.Integer, db.ForeignKey('plant.id'), nullable=True)
+    size_id = db.Column(db.Integer, db.ForeignKey('size.id'), nullable=True)
+    plant_name = db.Column(db.String(200), nullable=False, default='')
+    size_name = db.Column(db.String(120), nullable=False, default='')
+    qty = db.Column(db.Integer, nullable=False, default=1)
+    price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+
+    plant = db.relationship('Plant')
+    size = db.relationship('Size')

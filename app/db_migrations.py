@@ -19,6 +19,13 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('expense', 'barter_order_id', 'INTEGER', 'INTEGER'),
     ('client', 'fixed_balance', 'NUMERIC(15, 2)', 'NUMERIC(15, 2)'),
     ('client', 'fixed_balance_date', 'DATE', 'DATE'),
+    ('client', 'inn', 'VARCHAR(20)', 'VARCHAR(20)'),
+    ('client', 'kpp', 'VARCHAR(20)', 'VARCHAR(20)'),
+    ('client', 'address', 'VARCHAR(500)', 'VARCHAR(500)'),
+    ('client', 'bank_name', 'VARCHAR(200)', 'VARCHAR(200)'),
+    ('client', 'rs', 'VARCHAR(40)', 'VARCHAR(40)'),
+    ('client', 'bik', 'VARCHAR(20)', 'VARCHAR(20)'),
+    ('client', 'ks', 'VARCHAR(40)', 'VARCHAR(40)'),
     ('tg_task', 'completed_at', 'TIMESTAMP', 'DATETIME'),
     ('tg_task', 'completed_by_id', 'INTEGER', 'INTEGER'),
     ('tg_task', 'dedup_key', 'VARCHAR(255)', 'VARCHAR(255)'),
@@ -168,6 +175,7 @@ def ensure_legacy_schema(logger=None) -> None:
             db.session.rollback()
 
     _backfill_registration_periods(logger)
+    _ensure_sale_companies(logger)
     try:
         from app.invoice_files import backfill_blobs
         backfill_blobs(logger)
@@ -241,6 +249,36 @@ def _ensure_changelog_releases(logger=None) -> None:
     except Exception as exc:
         if logger:
             logger.warning('changelog: skip seed — %s', exc)
+        db.session.rollback()
+
+
+def _ensure_sale_companies(logger=None) -> None:
+    """Две фирмы для исходящих счетов: с НДС и без."""
+    try:
+        from app.models import SaleCompany
+        insp = inspect(db.engine)
+        if not insp.has_table('sale_company'):
+            return
+        if SaleCompany.query.count() > 0:
+            return
+        db.session.add(SaleCompany(
+            short_name='Княжество (НДС)',
+            legal_name='ООО «Княжество»',
+            vat_mode='included_20',
+            sort_order=0,
+        ))
+        db.session.add(SaleCompany(
+            short_name='Княжество (без НДС)',
+            legal_name='ИП / вторая фирма',
+            vat_mode='none',
+            sort_order=1,
+        ))
+        db.session.commit()
+        if logger:
+            logger.info('legacy schema: seeded sale_company rows')
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: sale_company seed skipped — %s', exc)
         db.session.rollback()
 
 

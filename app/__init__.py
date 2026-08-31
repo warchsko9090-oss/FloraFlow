@@ -10,6 +10,7 @@ from . import main, auth, directory, orders, stock, finance, hr, crm, chat # <--
 import sqlite3 # <--- Добавлено
 from sqlalchemy import event # <--- Добавлено
 from sqlalchemy.engine import Engine # <--- Добавлено
+from sqlalchemy.exc import OperationalError
 
 login_manager = LoginManager()
 login_manager.login_view = 'auth.login'
@@ -126,6 +127,8 @@ def create_app():
     app.register_blueprint(finance.bp)
     from . import tg_pay
     app.register_blueprint(tg_pay.bp)
+    from . import tg_sale
+    app.register_blueprint(tg_sale.bp)
     app.register_blueprint(hr.bp)
     app.register_blueprint(crm.bp)
     app.register_blueprint(chat.bp)
@@ -162,11 +165,21 @@ def create_app():
     def _restrict_shop_manager():
         from flask import request, redirect, url_for
         from flask_login import current_user
-        if not getattr(current_user, 'is_authenticated', False):
+        ep = request.endpoint or ''
+        path = request.path or ''
+        # Статика и оболочка PWA не должны ходить в Postgres: иначе при падении
+        # CNPG даже /static/icon-192.png отдаёт 500 и service worker долбит логи.
+        if ep in ('static', 'main.service_worker', 'main.manifest', 'main.app_icon', 'main.offline'):
+            return None
+        if path.startswith('/static/'):
+            return None
+        try:
+            if not getattr(current_user, 'is_authenticated', False):
+                return None
+        except OperationalError:
             return None
         if (getattr(current_user, 'role', None) or '') != 'shop_manager':
             return None
-        ep = request.endpoint or ''
         if ep in SHOP_MANAGER_ALLOWED_EXACT:
             return None
         if any(ep.startswith(p) for p in SHOP_MANAGER_ALLOWED_PREFIXES):
@@ -240,6 +253,15 @@ def create_app():
         from flask import request, flash, redirect, url_for
         flash(f'Файл слишком большой. Лимит: {max_upload_mb} MB.')
         return redirect(request.referrer or url_for('directory.directory'))
+
+    @app.errorhandler(OperationalError)
+    def handle_db_unavailable(_e):
+        app.logger.error('database unavailable: %s', _e)
+        return (
+            'База данных временно недоступна. Подождите минуту и обновите страницу.',
+            503,
+            {'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '30'},
+        )
 
     # --- СОЗДАНИЕ БД ---
     with app.app_context():
@@ -347,4 +369,7 @@ def create_app():
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    try:
+        return db.session.get(User, int(user_id))
+    except OperationalError:
+        return None

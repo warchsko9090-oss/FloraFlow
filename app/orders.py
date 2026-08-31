@@ -701,6 +701,44 @@ def client_drafts_list():
     )
 
 
+@bp.route('/orders/sale_invoices')
+@login_required
+def sale_invoices_list():
+    if current_user.role != 'admin':
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+    from app.models import SaleInvoice
+    status = request.args.get('status', 'all')
+    q = SaleInvoice.query.filter(SaleInvoice.status != 'discarded')
+    if status in ('draft', 'approved'):
+        q = q.filter(SaleInvoice.status == status)
+    invoices = q.order_by(SaleInvoice.id.desc()).limit(200).all()
+    return render_template('orders/sale_invoices.html', invoices=invoices, status=status)
+
+
+@bp.route('/orders/sale_invoices/<int:inv_id>/pdf')
+@login_required
+def sale_invoice_pdf(inv_id):
+    if current_user.role != 'admin':
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+    from app.models import SaleInvoice
+    from app.tg_sale import render_sale_pdf
+    inv = SaleInvoice.query.get_or_404(inv_id)
+    blob = inv.file_blob
+    if not blob:
+        blob = render_sale_pdf(inv)
+    if not blob:
+        flash('Не удалось собрать PDF')
+        return redirect(url_for('orders.sale_invoices_list'))
+    return send_file(
+        io.BytesIO(bytes(blob)),
+        mimetype='application/pdf',
+        as_attachment=False,
+        download_name=inv.file_name or f'schet_{inv.id}.pdf',
+    )
+
+
 @bp.route('/orders/client_draft/<int:doc_id>', methods=['GET', 'POST'])
 @login_required
 def client_draft_detail(doc_id):

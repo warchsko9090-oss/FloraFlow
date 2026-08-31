@@ -1213,10 +1213,17 @@
                 {% endif %}
             </a>
 
-            <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('orders.') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
+            <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('orders.') and request.endpoint not in ('orders.client_drafts_list', 'orders.client_draft_detail', 'orders.sale_invoices_list', 'orders.sale_invoice_pdf') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
                 <span class="sl-icon"><i class="fas fa-shopping-basket"></i></span>
                 <span class="sl-label">Заказы</span>
             </a>
+
+            {% if current_user.role == 'admin' %}
+            <a class="sidebar-link {% if request.endpoint in ('orders.sale_invoices_list', 'orders.sale_invoice_pdf') %}active{% endif %}" href="{{ url_for('orders.sale_invoices_list') }}">
+                <span class="sl-icon"><i class="fas fa-file-invoice-dollar"></i></span>
+                <span class="sl-label">Счета клиентам</span>
+            </a>
+            {% endif %}
 
             {# ---------- СКЛАД ---------- #}
             <div class="sidebar-group {% if request.endpoint and request.endpoint.startswith('stock.') %}open has-active{% endif %}">
@@ -1580,7 +1587,7 @@
             </span>
             {% endif %}
         </a>
-        <a class="bn-link {% if request.endpoint and request.endpoint.startswith('orders.') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
+        <a class="bn-link {% if request.endpoint and request.endpoint.startswith('orders.') and request.endpoint not in ('orders.sale_invoices_list', 'orders.sale_invoice_pdf') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
             <i class="fas fa-shopping-basket"></i><span>Заказы</span>
         </a>
         <a class="bn-link {% if request.endpoint and request.endpoint.startswith('stock.') %}active{% endif %}" href="{{ url_for('stock.documents') }}" data-hx-boost="false">
@@ -1628,6 +1635,9 @@
         <div class="drawer-group">
             <div class="drawer-group-title">Аналитика</div>
             <a class="drawer-link" href="{{ url_for('main.analytics') }}"><i class="fas fa-chart-line"></i> Отчёты и метрики</a>
+            {% if current_user.role == 'admin' %}
+            <a class="drawer-link" href="{{ url_for('orders.sale_invoices_list') }}"><i class="fas fa-file-invoice-dollar"></i> Счета клиентам</a>
+            {% endif %}
             <a class="drawer-link" href="{{ url_for('crm.crm_client_analytics') }}"><i class="fas fa-users-viewfinder"></i> CRM — клиенты</a>
             <a class="drawer-link" href="{{ url_for('crm.crm_abc') }}"><i class="fas fa-sort-amount-down"></i> ABC / XYZ</a>
             <a class="drawer-link" href="{{ url_for('finance.invoices_summary') }}"><i class="fas fa-coins"></i> Финансы</a>
