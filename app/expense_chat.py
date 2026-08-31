@@ -463,6 +463,10 @@ def ingest_message(msg: dict) -> dict:
         if not tg_chat_id or not tg_message_id or not text:
             return {"ok": False, "error": "empty"}
 
+        sender = msg.get("from") or {}
+        if sender.get("is_bot"):
+            return {"ok": True, "status": "bot_skip"}
+
         # Идемпотентность: если это сообщение уже видели — ничего не делаем.
         existing = ChatExpenseMessage.query.filter_by(
             tg_chat_id=tg_chat_id, tg_message_id=tg_message_id,

@@ -178,17 +178,24 @@ def expenses():
                     inv.status = 'paid'
                     flash('Счет помечен как оплаченный')
                     log_action(f"Пометил счет как оплаченный: {inv.original_name}")
+                    exp = None
                     try:
                         from app.invoice_files import ensure_expense_for_paid_invoice
-                        ensure_expense_for_paid_invoice(inv)
+                        exp = ensure_expense_for_paid_invoice(inv)
                     except Exception:
                         current_app.logger.exception('expense from mark_paid')
                     try:
                         from app.vium_inbox import maybe_enqueue as _vium_enqueue
-                        _vium_enqueue(inv)
+                        _vium_enqueue(inv, expense=exp)
                     except Exception:
                         current_app.logger.exception('vium_inbox.maybe_enqueue (mark_paid) failed')
                 db.session.commit()
+                if inv and request.form.get('action') == 'mark_paid':
+                    try:
+                        from app.invoice_files import notify_invoice_paid_chat
+                        notify_invoice_paid_chat(inv)
+                    except Exception:
+                        current_app.logger.exception('notify invoice paid chat')
             return redirect(url_for('finance.expenses', tab='invoices'))
 
         elif 'due_date' in request.form or 'add_invoice' in request.form:

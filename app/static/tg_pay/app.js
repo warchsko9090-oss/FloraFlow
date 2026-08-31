@@ -178,6 +178,10 @@
     const payBtn = inv.status === 'paid'
       ? ''
       : '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>';
+    const fileBtns = inv.has_file ? `
+        <button class="btn btn-brass" type="button" id="btnDl">Скачать счёт</button>
+        <button class="btn btn-quiet" type="button" id="btnTg">Прислать в Telegram</button>
+      ` : '<p class="warn">Файл счёта не найден.</p>';
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
@@ -185,16 +189,18 @@
         <div class="amount-xl">${money(inv.amount)}</div>
         <p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
         ${editor}
-        ${inv.has_file ? '' : '<p class="warn">PDF счёта не найден.</p>'}
-        ${can ? '<button class="btn btn-ink" type="button" id="btnSave">Сохранить</button>' : ''}
-        <button class="btn btn-brass" type="button" id="btnPdf">Скачать PDF</button>
+        ${can ? '<button class="btn btn-quiet" type="button" id="btnSave">Сохранить правки</button>' : ''}
+        ${fileBtns}
         ${payBtn}
         ${lines}
         ${can ? '<button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>' : ''}
       </div>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
-    document.getElementById('btnPdf').onclick = () => sendPdf(inv);
+    const dl = document.getElementById('btnDl');
+    if (dl) dl.onclick = () => downloadPdf(inv);
+    const tgBtn = document.getElementById('btnTg');
+    if (tgBtn) tgBtn.onclick = () => sendPdf(inv);
     const save = document.getElementById('btnSave');
     if (save) save.onclick = () => saveInv(inv.id, false);
     const paid = document.getElementById('btnPaid');
@@ -245,6 +251,28 @@
     }
   }
 
+  async function downloadPdf(inv) {
+    haptic();
+    const res = await fetch(withAuth('/tg/pay/api/invoices/' + inv.id + '/file'), {
+      credentials: 'same-origin',
+      headers: headers(),
+    });
+    if (!res.ok) {
+      alert('Не удалось скачать счёт');
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = inv.original_name || 'invoice.pdf';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.open(url, '_blank');
+  }
+
   async function sendPdf(inv) {
     haptic();
     try {
@@ -272,7 +300,7 @@
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
       <div class="card">
-        <p class="hint">PDF счёта — бот разберёт позиции, статью и сумму. Потом подтвердите.</p>
+        <p class="hint">PDF или фото счёта — разберём сумму и позиции. Счёт сразу попадёт к оплате.</p>
         <div class="field"><label>Файл</label>
           <input id="fFile" type="file" accept="application/pdf,image/*"></div>
         <button class="btn btn-ink" type="button" id="btnUp">Разобрать</button>

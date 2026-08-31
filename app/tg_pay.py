@@ -596,17 +596,23 @@ def api_mark_paid(user: User, inv_id: int):
     if inv.status not in ('new', 'draft'):
         return jsonify({'error': 'not_open'}), 400
     inv.status = 'paid'
+    exp = None
     try:
         from app.invoice_files import ensure_expense_for_paid_invoice
-        ensure_expense_for_paid_invoice(inv)
+        exp = ensure_expense_for_paid_invoice(inv)
     except Exception:
         current_app.logger.exception('expense from miniapp mark_paid')
     try:
         from app.vium_inbox import maybe_enqueue
-        maybe_enqueue(inv)
+        maybe_enqueue(inv, expense=exp)
     except Exception:
         current_app.logger.exception('vium_inbox.maybe_enqueue (miniapp mark_paid)')
     db.session.commit()
+    try:
+        from app.invoice_files import notify_invoice_paid_chat
+        notify_invoice_paid_chat(inv)
+    except Exception:
+        current_app.logger.exception('notify invoice paid chat')
     return jsonify({'ok': True, 'id': inv.id})
 
 

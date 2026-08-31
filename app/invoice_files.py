@@ -130,6 +130,32 @@ def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
     return exp
 
 
+def notify_invoice_paid_chat(inv: PaymentInvoice) -> None:
+    """Пишет в чат «Расходы», что счёт оплачен. Сообщения бота ingest пропускает."""
+    from app.telegram import send_message
+
+    purpose = (inv.summary or inv.comment or inv.original_name or 'Счёт').strip()
+    purpose = purpose.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    article = inv.item.name if getattr(inv, 'item', None) else ''
+    article = (article or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    try:
+        amount = f"{float(inv.amount or 0):,.2f}".replace(',', ' ').replace('.', ',')
+    except (TypeError, ValueError):
+        amount = str(inv.amount or 0)
+    text = (
+        f'Оплачен счёт\n'
+        f'<b>{purpose}</b>\n'
+        f'{amount} ₽ · безнал'
+        + (f' · {article}' if article else '')
+    )
+    ok, err = send_message(text, chat_type='expenses')
+    if not ok:
+        try:
+            current_app.logger.warning('notify invoice paid chat failed: %s', err)
+        except Exception:
+            pass
+
+
 def backfill_blobs(logger=None) -> int:
     """Копирует PDF с диска в БД, если blob ещё пустой."""
     n = 0
