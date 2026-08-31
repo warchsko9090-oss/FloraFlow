@@ -150,7 +150,8 @@
     setTitle('Счета на оплату');
     const data = await api('/tg/pay/api/invoices');
     const rows = data.invoices || [];
-    const shown = me.can_edit ? rows : rows.filter((x) => x.status === 'new');
+    const isFact = (x) => (Number(x.fact_amount) || 0) > 0 || (x.kind !== 'plan' && (Number(x.amount) || 0) > 0);
+    const shown = me.can_edit ? rows : rows.filter((x) => x.status === 'new' && isFact(x));
     const cash = shown.filter((x) => x.payment_type === 'cash');
     const cashless = shown.filter((x) => x.payment_type !== 'cash');
     const plan = Number(data.total_plan) || 0;
@@ -170,7 +171,7 @@
           <span>Безнал ${money(data.total_cashless || 0)}</span>
           <span>Нал ${money(data.total_cash || 0)}</span>
         </div>
-        ${plan ? `<div class="meta">план ${money(plan)}${fact ? ' · факт ' + money(fact) : ''}${delta ? ' · ' + delta : ''}</div>` : `<div class="meta">${shown.length} счёт(ов)</div>`}
+        ${plan ? `<div class="meta">план на неделю ${money(plan)}${fact ? ' · факт ' + money(fact) : ''}${delta ? ' · ' + delta : ''}</div>` : `<div class="meta">${shown.filter(isFact).length} счёт(ов)</div>`}
       </div>
     `;
     if (me.can_inbox && data.inbox_count) {

@@ -509,11 +509,17 @@ def api_invoices(user: User):
     ))
     invoices = [serialize_invoice(inv) for inv in rows]
     unpaid = [x for x in invoices if x['status'] != 'paid' and not x.get('plan_id')]
-    total = sum(x.get('pay_amount') or x['amount'] for x in unpaid)
-    cash = sum((x.get('pay_amount') or 0) for x in unpaid if x.get('payment_type') == 'cash')
-    cashless = sum((x.get('pay_amount') or 0) for x in unpaid if x.get('payment_type') != 'cash')
+    due = [
+        x for x in unpaid
+        if (x.get('fact_amount') or 0) > 0 or (x.get('kind') != 'plan' and (x.get('amount') or 0) > 0)
+    ]
+    def _due_amt(x):
+        return float(x.get('fact_amount') or x.get('amount') or 0)
+    total = sum(_due_amt(x) for x in due)
+    cash = sum(_due_amt(x) for x in due if x.get('payment_type') == 'cash')
+    cashless = sum(_due_amt(x) for x in due if x.get('payment_type') != 'cash')
     plan_sum = sum((x.get('planned_amount') or 0) for x in unpaid if x.get('planned_amount'))
-    fact_sum = sum((x.get('fact_amount') or 0) for x in unpaid)
+    fact_sum = sum(_due_amt(x) for x in due)
     inbox_count = 0
     if _can_inbox(user):
         inbox_count = ChatExpenseMessage.query.filter(

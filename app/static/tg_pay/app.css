@@ -94,6 +94,13 @@ h1 {
 }
 .hero .split span { white-space: nowrap; }
 
+.hero .meta {
+    color: #9a958c;
+    font-size: 12px;
+    margin-top: 10px;
+    line-height: 1.35;
+}
+
 .sec {
     font-size: 11px;
     letter-spacing: 0.14em;
