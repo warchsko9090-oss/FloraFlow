@@ -68,6 +68,7 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('document', 'project_id', 'INTEGER', 'INTEGER'),
     ('document', 'supplier_id', 'INTEGER', 'INTEGER'),
     ('document_row', 'purchase_price', 'NUMERIC(10, 2)', 'NUMERIC(10,2)'),
+    ('document_row', 'qty_before', 'INTEGER', 'INTEGER'),
     ('project', 'potting_stock_field_id', 'INTEGER', 'INTEGER'),
     ('stock_purchase_lot', 'supplier_id', 'INTEGER', 'INTEGER'),
     ('stock_purchase_lot', 'purchase_price', 'NUMERIC(10, 2)', 'NUMERIC(10,2)'),

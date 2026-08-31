@@ -6,6 +6,7 @@
     .nav-tabs .nav-link.active { color: #198754 !important; font-weight: bold; background-color: #fff; border-color: #dee2e6 #dee2e6 #fff; }
     .nav-tabs .nav-link:hover { border-color: #e9ecef #e9ecef #dee2e6; color: #1b5e20 !important; }
     .row-remove-btn { color: #dc3545; cursor: pointer; }
+    #fieldRecountTable tfoot td { background: #f8f9fa; }
 
     /* ==============================================================
        ДВИЖОК БЕСКОНЕЧНОЙ КАРТЫ (Figma / Map style) — для Drag & Drop режима
@@ -1053,26 +1054,39 @@
               <table class="table table-sm table-bordered align-middle" id="fieldRecountTable">
                   <thead class="table-light">
                       <tr>
+                          <th class="text-center" style="width:44px;">№</th>
                           <th>Наименование</th>
                           <th>Размер</th>
                           <th>Год партии</th>
-                          <th class="text-center" style="font-size:14px;">Всего</th>
+                          <th class="text-center" style="font-size:14px;">Было</th>
                           <th class="text-center text-warning" style="font-size:13px;">Резерв</th>
                           <th class="text-center text-success" style="font-size:13px;">Свободно</th>
-                          <th class="text-center">Факт после пересчета</th>
+                          <th class="text-center">Стало (факт)</th>
                       </tr>
                   </thead>
                   <tbody id="fieldRecountBody">
                       <tr>
-                          <td colspan="7" class="text-center text-muted py-3">Выберите поле, чтобы загрузить остатки</td>
+                          <td colspan="8" class="text-center text-muted py-3">Выберите поле, чтобы загрузить остатки</td>
                       </tr>
                   </tbody>
+                  <tfoot id="fieldRecountFoot" class="table-light" style="display:none;">
+                      <tr>
+                          <td colspan="4" class="text-end fw-bold small text-secondary">Итого, шт:</td>
+                          <td class="text-center fw-bolder" id="recountSumBefore">0</td>
+                          <td colspan="2" class="text-muted small text-center">было → стало</td>
+                          <td class="text-center fw-bolder text-primary" id="recountSumAfter">0</td>
+                      </tr>
+                  </tfoot>
               </table>
           </div>
-          <div class="d-flex justify-content-between mt-2">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2">
             <button type="button" class="btn btn-sm btn-outline-primary" onclick="addRecountRow()">
                 <i class="fas fa-plus"></i> Добавить отсутствующую позицию
             </button>
+            <div class="small text-muted" id="recountSumsHint" style="display:none;">
+                Было: <strong id="recountSumBeforeHint">0</strong> шт
+                · Стало: <strong class="text-primary" id="recountSumAfterHint">0</strong> шт
+            </div>
             <button type="submit" class="btn btn-primary btn-sm shadow-sm">
                 <i class="fas fa-save me-1"></i> Сохранить карточку пересчета
             </button>
@@ -1080,27 +1094,30 @@
 
           <!-- Скрытый шаблон для новой строки пересчета -->
           <template id="recountRowTemplate">
-              <tr>
+              <tr class="recount-manual-row">
+                  <td class="text-center text-muted recount-row-num small">—</td>
                   <td>
-                      <select name="recount_plant_id[]" class="form-select form-select-sm select-search" required>
+                      <select name="recount_plant_id[]" class="form-select form-select-sm select-search recount-plant-select" required>
                           <option value="" disabled selected>Выберите растение...</option>
                           {% for p in plants %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
                       </select>
                   </td>
                   <td>
-                      <select name="recount_size_id[]" class="form-select form-select-sm select-search" required>
+                      <select name="recount_size_id[]" class="form-select form-select-sm select-search recount-size-select" required>
                           <option value="" disabled selected>Размер...</option>
                           {% for s in sizes %}<option value="{{ s.id }}" {% if s.name == 'Саженцы' %}class="seedling-option"{% endif %}>{{ s.name }}</option>{% endfor %}
                       </select>
                   </td>
                   <td>
-                      <input type="number" name="recount_year[]" class="form-control form-control-sm" value="{{ current_year }}" required>
+                      <input type="number" name="recount_year[]" class="form-control form-control-sm recount-year-input" min="2000" max="2100" placeholder="год" required>
                   </td>
-                  <td class="text-center align-middle text-muted fw-bold">0</td>
+                  <td class="text-center align-middle text-muted fw-bold recount-before-qty" data-before="0">0</td>
+                  <td class="text-center align-middle text-muted">0</td>
+                  <td class="text-center align-middle text-muted">0</td>
                   <td>
                       <div class="d-flex align-items-center gap-2">
-                          <input type="number" name="recount_fact_qty[]" class="form-control form-control-sm text-center border-primary" min="0" required placeholder="Факт шт">
-                          <i class="fas fa-times text-danger" style="cursor:pointer;" onclick="this.closest('tr').remove();" title="Удалить"></i>
+                          <input type="number" name="recount_fact_qty[]" class="form-control form-control-sm text-center border-primary" min="0" value="0" required placeholder="Факт шт" oninput="validateClassicRecountInput(this)">
+                          <i class="fas fa-times text-danger" style="cursor:pointer;" onclick="removeRecountRow(this)" title="Удалить"></i>
                       </div>
                   </td>
               </tr>
@@ -1164,36 +1181,48 @@
                   <table class="table table-sm mb-0">
                       <thead class="table-light">
                           <tr>
+                              <th class="text-center" style="width:40px;">№</th>
                               <th>Позиция</th>
                               <th>Год</th>
+                              <th class="text-center">Было</th>
+                              <th class="text-center">Стало</th>
                               <th class="text-center text-success">Приход</th>
                               <th class="text-center text-danger">Списание</th>
                           </tr>
                       </thead>
                       <tbody>
+                          {% set ns = namespace(n=0) %}
                           {% for r in card.rows_in %}
+                          {% set ns.n = ns.n + 1 %}
                           <tr>
+                              <td class="text-center text-muted small">{{ ns.n }}</td>
                               <td>{{ r.plant_name }} ({{ r.size_name }})</td>
                               <td>{{ r.year }}</td>
+                              <td class="text-center">{{ r.qty_before if r.qty_before is not none else '—' }}</td>
+                              <td class="text-center fw-bold">{{ r.qty_after if r.qty_after is not none else '—' }}</td>
                               <td class="text-center text-success fw-bold">+{{ r.qty }}</td>
                               <td class="text-center text-muted">-</td>
                           </tr>
                           {% endfor %}
                           {% for r in card.rows_out %}
+                          {% set ns.n = ns.n + 1 %}
                           <tr>
+                              <td class="text-center text-muted small">{{ ns.n }}</td>
                               <td>{{ r.plant_name }} ({{ r.size_name }})</td>
                               <td>{{ r.year }}</td>
+                              <td class="text-center">{{ r.qty_before if r.qty_before is not none else '—' }}</td>
+                              <td class="text-center fw-bold">{{ r.qty_after if r.qty_after is not none else '—' }}</td>
                               <td class="text-center text-muted">-</td>
                               <td class="text-center text-danger fw-bold">-{{ r.qty }}</td>
                           </tr>
                           {% endfor %}
                           {% if not card.rows_in and not card.rows_out %}
-                          <tr><td colspan="4" class="text-center text-muted">Нет изменений</td></tr>
+                          <tr><td colspan="7" class="text-center text-muted">Нет изменений</td></tr>
                           {% endif %}
                       </tbody>
                       <tfoot class="table-light">
                           <tr>
-                              <td colspan="2" class="text-end fw-bold">Итог:</td>
+                              <td colspan="5" class="text-end fw-bold">Итог:</td>
                               <td class="text-center text-success fw-bold">+{{ card.total_in }}</td>
                               <td class="text-center text-danger fw-bold">-{{ card.total_out }}</td>
                           </tr>
@@ -1807,11 +1836,15 @@
         
         if(p && s && f && yearSel) {
             try {
-                const res = await fetch(`/api/stock_info?plant=${p}&size=${s}&field=${f}`);
+                const res = await fetch(`/api/stock_info?plant=${p}&size=${s}&field=${f}`, {
+                    cache: 'no-store',
+                    credentials: 'same-origin'
+                });
                 const data = await res.json();
                 yearSel.innerHTML = '';
                 const freeByYear = {};
                 if(data.batches && data.batches.length > 0) {
+                    // API отдаёт года ASC — первый = самая старая партия на поле
                     data.batches.forEach(b => {
                         const opt = document.createElement('option');
                         opt.value = b.year;
@@ -1880,6 +1913,132 @@
         updateBatchSelect(this);
     });
 
+    let recountPlantYears = {};
+
+    function getRecountDataRows() {
+        const tbody = document.getElementById('fieldRecountBody');
+        if (!tbody) return [];
+        return Array.from(tbody.querySelectorAll('tr')).filter(tr =>
+            tr.querySelector('input[name="recount_fact_qty[]"]')
+        );
+    }
+
+    function renumberRecountRows() {
+        getRecountDataRows().forEach((tr, idx) => {
+            let numCell = tr.querySelector('.recount-row-num');
+            if (!numCell) {
+                numCell = document.createElement('td');
+                numCell.className = 'text-center text-muted recount-row-num small';
+                tr.insertBefore(numCell, tr.firstElementChild);
+            }
+            numCell.textContent = String(idx + 1);
+        });
+    }
+
+    function typicalRecountYear(years) {
+        const counts = {};
+        (years || []).forEach(y => {
+            const n = Number(y);
+            if (!Number.isFinite(n)) return;
+            counts[n] = (counts[n] || 0) + 1;
+        });
+        let best = null;
+        let bestN = -1;
+        Object.keys(counts).forEach(k => {
+            const n = Number(k);
+            const c = counts[k];
+            if (c > bestN || (c === bestN && (best == null || n < best))) {
+                best = n;
+                bestN = c;
+            }
+        });
+        return best;
+    }
+
+    function yearsForPlantInRecountTable(plantId, exceptRow) {
+        const years = [];
+        getRecountDataRows().forEach(tr => {
+            if (exceptRow && tr === exceptRow) return;
+            const pidEl = tr.querySelector('[name="recount_plant_id[]"]');
+            if (!pidEl || String(pidEl.value) !== String(plantId)) return;
+            const yEl = tr.querySelector('[name="recount_year[]"]');
+            const y = yEl ? Number(yEl.value) : NaN;
+            if (Number.isFinite(y) && y > 0) years.push(y);
+        });
+        return years;
+    }
+
+    function updateRecountSums() {
+        const rows = getRecountDataRows();
+        const foot = document.getElementById('fieldRecountFoot');
+        const hint = document.getElementById('recountSumsHint');
+        let before = 0;
+        let after = 0;
+        rows.forEach(tr => {
+            const beforeCell = tr.querySelector('.recount-before-qty');
+            const factInp = tr.querySelector('input[name="recount_fact_qty[]"]');
+            const beforeVal = beforeCell
+                ? parseFloat(beforeCell.dataset.before || beforeCell.textContent || '0')
+                : parseFloat(factInp && factInp.dataset.orig || '0');
+            if (!isNaN(beforeVal)) before += beforeVal;
+            const afterVal = factInp ? parseFloat(factInp.value || '0') : 0;
+            if (!isNaN(afterVal)) after += afterVal;
+        });
+        const show = rows.length > 0;
+        if (foot) foot.style.display = show ? '' : 'none';
+        if (hint) hint.style.display = show ? '' : 'none';
+        const fmt = (n) => String(Math.round(n));
+        ['recountSumBefore', 'recountSumBeforeHint'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = fmt(before);
+        });
+        ['recountSumAfter', 'recountSumAfterHint'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = fmt(after);
+        });
+    }
+
+    function removeRecountRow(el) {
+        const tr = el.closest('tr');
+        if (tr) tr.remove();
+        renumberRecountRows();
+        updateRecountSums();
+        validateClassicRecountForm();
+    }
+    window.removeRecountRow = removeRecountRow;
+
+    /** Год партии как у других позиций этого растения на поле. Можно править вручную. */
+    async function autoFillRecountYear(row, { force } = {}) {
+        if (!row) return;
+        const fieldId = document.getElementById('recountFieldSelect')?.value;
+        const plantId = $(row).find('.recount-plant-select, select[name="recount_plant_id[]"]').val();
+        const yearInp = row.querySelector('.recount-year-input, input[name="recount_year[]"]');
+        if (!fieldId || !plantId || !yearInp) return;
+        if (!force && yearInp.dataset.locked === '1') return;
+
+        let year = typicalRecountYear(yearsForPlantInRecountTable(plantId, row));
+        if (year == null) {
+            year = typicalRecountYear(recountPlantYears[String(plantId)] || []);
+        }
+        if (year == null) {
+            try {
+                const res = await fetch(
+                    `/api/inventory/get_years?plant_id=${plantId}&field_id=${fieldId}`,
+                    { cache: 'no-store', credentials: 'same-origin' }
+                );
+                const data = await res.json();
+                year = typicalRecountYear(data.years || []);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+        if (year != null && !isNaN(year)) {
+            yearInp.value = year;
+        } else if (!yearInp.value) {
+            yearInp.value = new Date().getFullYear();
+        }
+    }
+
     // Функция добавления новой строки в карточку пересчета
     function addRecountRow() {
         const fieldSelect = document.getElementById('recountFieldSelect');
@@ -1904,26 +2063,54 @@
         // Инициализируем Select2 для выпадающих списков только в новой строке
         const newRow = tbody.lastElementChild;
         initSelect2(newRow);
+        const yearInp = newRow.querySelector('.recount-year-input');
+        if (yearInp) {
+            yearInp.addEventListener('input', () => { yearInp.dataset.locked = '1'; });
+        }
+        renumberRecountRows();
+        updateRecountSums();
     }
+    window.addRecountRow = addRecountRow;
+
+    $(document).on('select2:select change', '#fieldRecountBody .recount-plant-select', function() {
+        const row = this.closest('tr');
+        const yearInp = row && row.querySelector('.recount-year-input');
+        if (yearInp) yearInp.dataset.locked = '';
+        autoFillRecountYear(row, { force: true });
+    });
+    $(document).on('select2:select change', '#fieldRecountBody .recount-size-select', function() {
+        autoFillRecountYear(this.closest('tr'));
+    });
+    $(document).on('input', '#fieldRecountBody input[name="recount_fact_qty[]"]', function() {
+        validateClassicRecountInput(this);
+    });
 
     async function loadFieldRecountItems(fieldId) {
         const tbody = document.getElementById('fieldRecountBody');
         if (!tbody) return;
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">Загрузка...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Загрузка...</td></tr>';
+        const foot = document.getElementById('fieldRecountFoot');
+        if (foot) foot.style.display = 'none';
         try {
-            const res = await fetch(`/api/field_recount/items?field_id=${fieldId}`);
+            const res = await fetch(`/api/field_recount/items?field_id=${fieldId}`, {
+                cache: 'no-store',
+                credentials: 'same-origin'
+            });
             const data = await res.json();
             tbody.innerHTML = '';
+            recountPlantYears = data.plant_years || {};
             if (!data.items || data.items.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">По этому полю нет остатков</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">По этому полю нет остатков</td></tr>';
+                updateRecountSums();
                 return;
             }
 
-            data.items.forEach(item => {
+            data.items.forEach((item, idx) => {
                 const reserved = item.reserved || 0;
                 const free = item.free != null ? item.free : Math.max(0, item.current_qty - reserved);
                 const row = document.createElement('tr');
                 row.innerHTML = `
+                    <td class="text-center text-muted recount-row-num small">${idx + 1}</td>
                     <td>
                         <span class="fw-bold">${item.plant_name}</span>
                         <input type="hidden" name="recount_plant_id[]" value="${item.plant_id}">
@@ -1936,7 +2123,7 @@
                         ${item.year}
                         <input type="hidden" name="recount_year[]" value="${item.year}">
                     </td>
-                    <td class="text-center fw-bolder text-dark" style="font-size:18px;">${item.current_qty}</td>
+                    <td class="text-center fw-bolder text-dark recount-before-qty" style="font-size:18px;" data-before="${item.current_qty}">${item.current_qty}</td>
                     <td class="text-center fw-bold text-warning" style="font-size:15px;">${reserved}</td>
                     <td class="text-center fw-bold text-success" style="font-size:15px;">${free}</td>
                     <td>
@@ -1950,9 +2137,12 @@
                 `;
                 tbody.appendChild(row);
             });
+            renumberRecountRows();
+            updateRecountSums();
             validateClassicRecountForm();
         } catch (e) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-3">Ошибка загрузки остатков</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-danger py-3">Ошибка загрузки остатков</td></tr>';
+            updateRecountSums();
         }
     }
 
@@ -1963,6 +2153,7 @@
         const isBad = !isNaN(val) && val < reserved;
         inp.classList.toggle('is-invalid', isBad);
         if (warn) warn.style.display = isBad ? '' : 'none';
+        updateRecountSums();
         validateClassicRecountForm();
     }
     window.validateClassicRecountInput = validateClassicRecountInput;
@@ -1977,6 +2168,37 @@
             if (btn) btn.disabled = bad;
         }
         return !bad;
+    }
+
+    function bindRecountFieldSelect() {
+        const recountFieldSelect = document.getElementById('recountFieldSelect');
+        if (!recountFieldSelect) return;
+
+        const handleRecountFieldChange = function() {
+            const value = recountFieldSelect.value;
+            if (value) loadFieldRecountItems(value);
+        };
+
+        // Нативный change (на случай без Select2)
+        if (recountFieldSelect.dataset.bound !== '1') {
+            recountFieldSelect.addEventListener('change', handleRecountFieldChange);
+            recountFieldSelect.dataset.bound = '1';
+        }
+
+        const $sel = $(recountFieldSelect);
+        $sel.off('select2:select.recount select2:clear.recount change.recount');
+        $sel.on('select2:select.recount', handleRecountFieldChange);
+        $sel.on('change.recount', handleRecountFieldChange);
+
+        // Если Select2 ещё не инициализирован — инициализируем и вешаем снова
+        if (!$sel.hasClass('select2-hidden-accessible') && typeof initSelect2 === 'function') {
+            initSelect2(recountFieldSelect.parentElement || document);
+            $sel.off('select2:select.recount').on('select2:select.recount', handleRecountFieldChange);
+        }
+
+        if (recountFieldSelect.value) {
+            loadFieldRecountItems(recountFieldSelect.value);
+        }
     }
 
     function initDocumentsPage() {
@@ -2003,6 +2225,7 @@
 
                 // Если открыли вкладку пересчета и поле уже выбрано — подгружаем сразу.
                 if (target === '#regrading') {
+                    bindRecountFieldSelect();
                     const recountFieldSelect = document.getElementById('recountFieldSelect');
                     if (recountFieldSelect && recountFieldSelect.value) {
                         loadFieldRecountItems(recountFieldSelect.value);
@@ -2018,37 +2241,23 @@
             activeTabInput.value = currentActive.getAttribute('data-bs-target');
         }
 
-        // Загрузка строк пересчета по выбранному полю
-        const recountFieldSelect = document.getElementById('recountFieldSelect');
-        if (recountFieldSelect) {
-            const handleRecountFieldChange = function() {
-                const value = recountFieldSelect.value;
-                if (value) loadFieldRecountItems(value);
-            };
-
-            if (recountFieldSelect.dataset.bound !== '1') {
-                recountFieldSelect.addEventListener('change', handleRecountFieldChange);
-                recountFieldSelect.dataset.bound = '1';
-            }
-            // Для select2 в HTMX-страницах вешаем namespaced-обработчик.
-            $(recountFieldSelect)
-                .off('select2:select.recount')
-                .on('select2:select.recount', handleRecountFieldChange);
-
-            // Если поле уже выбрано (например, после swap) — загружаем список сразу.
-            if (recountFieldSelect.value) {
-                loadFieldRecountItems(recountFieldSelect.value);
-            }
-        }
+        bindRecountFieldSelect();
     }
 
 // --- Инициализация страницы при обычной и HTMX-навигации ---
     document.addEventListener('DOMContentLoaded', initDocumentsPage);
-    document.addEventListener('htmx:afterSwap', function() {
-        if (document.getElementById('docFilterForm')) {
+    document.addEventListener('htmx:afterSwap', function(evt) {
+        if (document.getElementById('docFilterForm') || document.getElementById('recountFieldSelect')) {
+            // После swap Select2 может инициализироваться чуть позже — повторяем бинд
             initDocumentsPage();
+            setTimeout(bindRecountFieldSelect, 0);
+            setTimeout(bindRecountFieldSelect, 150);
         }
     });
+    // На случай, если скрипт вставлен после DOMContentLoaded (редко) или сразу после boost
+    if (document.readyState !== 'loading') {
+        initDocumentsPage();
+    }
 </script>
 
 <!-- ==========================================================

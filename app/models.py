@@ -280,6 +280,8 @@ class DocumentRow(db.Model):
     quantity = db.Column(db.Integer, nullable=False)
     size_to_id = db.Column(db.Integer, db.ForeignKey('size.id'), nullable=True)
     purchase_price = db.Column(db.Numeric(10, 2), nullable=True)
+    # Для карточки пересчёта: остаток «было» до правки. quantity — дельта (стало − было).
+    qty_before = db.Column(db.Integer, nullable=True)
     
     plant = db.relationship('Plant')
     size = db.relationship('Size', foreign_keys=[size_id])

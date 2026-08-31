@@ -3398,6 +3398,7 @@ def api_visual_field_recount():
                 field_to_id=field_id,
                 year=yr,
                 quantity=delta,
+                qty_before=current_qty,
             ))
             changed_rows += 1
 

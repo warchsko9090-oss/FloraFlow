@@ -77,6 +77,8 @@ def _group_recount_rows(doc):
             'year': row.year,
             'qty': abs(qty),
             'delta': qty,
+            'qty_before': int(row.qty_before) if row.qty_before is not None else None,
+            'qty_after': (int(row.qty_before) + qty) if row.qty_before is not None else None,
             'row': row
         }
         if qty >= 0:
@@ -1409,7 +1411,10 @@ def api_field_recount_items():
             'free': free,
         })
     items.sort(key=lambda x: (natural_key(x['plant_name']), natural_key(x['size_name']), x['year'] or 0))
-    return jsonify({'items': items})
+    plant_years = {}
+    for it in items:
+        plant_years.setdefault(str(it['plant_id']), []).append(it['year'])
+    return jsonify({'items': items, 'plant_years': plant_years})
 
 @bp.route('/documents', methods=['GET', 'POST'])
 @login_required
@@ -1490,7 +1495,8 @@ def documents():
                         size_id=sid,
                         field_to_id=field_id,
                         year=yr,
-                        quantity=delta
+                        quantity=delta,
+                        qty_before=current_qty,
                     ))
                     changed_rows += 1
 
