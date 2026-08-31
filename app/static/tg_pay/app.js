@@ -69,7 +69,10 @@
     if (parts[0] === 'new') return renderNew();
     if (parts[0] === 'plan') return renderPlan();
     if (parts[0] === 'file') return renderUpload();
-    if (parts[0] === 'inbox') return renderInbox();
+    if (parts[0] === 'inbox') {
+      if (!me.can_inbox) return renderList();
+      return renderInbox();
+    }
     return renderList();
   }
 
@@ -98,38 +101,19 @@
     route();
   }
 
-  function compact(n) {
-    const v = Number(n) || 0;
-    if (v >= 1000000) {
-      const s = (v / 1000000).toFixed(1).replace('.', ',').replace(',0', '');
-      return s + '\u00a0млн';
-    }
-    return Math.round(v).toLocaleString('ru-RU');
-  }
-
-  function gaugeHtml(inv) {
+  function rowFill(inv) {
     const plan = Number(inv.planned_amount);
     const fact = Number(inv.fact_amount || 0);
-    const hasPlan = Number.isFinite(plan) && plan > 0;
-    if (!hasPlan) {
-      return `<div class="gauge gauge-none"><span>${compact(inv.pay_amount || inv.amount)}</span></div>`;
-    }
-    let pct = 0;
-    let tone = 'wait';
-    if (fact > 0 && fact <= plan) {
-      tone = 'ok';
-      pct = Math.max(6, Math.round((fact / plan) * 100));
-    } else if (fact > plan) {
-      tone = 'bad';
-      pct = 100;
-    }
-    const label = fact > 0 ? compact(fact) : 'план';
-    return `<div class="gauge gauge-${tone}" style="--p:${pct}"><span>${label}</span></div>`;
+    if (!(plan > 0)) return { cls: '', fill: 0 };
+    if (fact <= 0) return { cls: 'row-wait', fill: 0 };
+    if (fact > plan) return { cls: 'row-over', fill: 100 };
+    return { cls: '', fill: Math.max(6, Math.round((fact / plan) * 100)) };
   }
 
   function rowHtml(inv) {
     const plan = Number(inv.planned_amount);
     const fact = Number(inv.fact_amount || 0);
+    const { cls, fill } = rowFill(inv);
     let sub = esc((inv.budget && inv.budget.name) || 'без статьи');
     if (Number.isFinite(plan) && plan > 0) {
       sub = 'план ' + money(plan) + (fact > 0 ? ' · факт ' + money(fact) : ' · ждём счёт');
@@ -137,12 +121,13 @@
       if (fact > plan) sub += ' · +' + money(fact - plan);
     }
     const ptype = inv.payment_type === 'cash' ? 'нал' : 'безнал';
-    return `<a class="row row-bubble${inv.priority === 'high' ? ' row-high' : ''}${fact > plan && plan > 0 ? ' row-over' : ''}" href="#/inv/${inv.id}">
-      ${gaugeHtml(inv)}
+    const shownAmt = fact > 0 ? fact : (inv.amount || plan || 0);
+    return `<a class="row${inv.priority === 'high' ? ' row-high' : ''}${inv.status === 'draft' ? ' row-draft' : ''} ${cls}" style="--fill:${fill}%" href="#/inv/${inv.id}">
       <div>
-        <div class="name">${prioBadge(inv.priority)}${esc(inv.summary)} <span class="ptype">${ptype}</span></div>
+        <div class="name">${inv.status === 'draft' ? '<span class="badge">черновик</span>' : ''}${prioBadge(inv.priority)}${esc(inv.summary)} <span class="ptype">${ptype}</span></div>
         <div class="sub">${sub}</div>
       </div>
+      <div class="amt">${money(shownAmt)}</div>
     </a>`;
   }
 
@@ -151,7 +136,9 @@
     const data = await api('/tg/pay/api/invoices');
     const rows = data.invoices || [];
     const isFact = (x) => (Number(x.fact_amount) || 0) > 0 || (x.kind !== 'plan' && (Number(x.amount) || 0) > 0);
-    const shown = me.can_edit ? rows : rows.filter((x) => x.status === 'new' && isFact(x));
+    const drafts = me.can_edit ? rows.filter((x) => x.status === 'draft') : [];
+    const live = rows.filter((x) => x.status !== 'draft');
+    const shown = me.can_edit ? live : live.filter((x) => x.status === 'new' && isFact(x));
     const cash = shown.filter((x) => x.payment_type === 'cash');
     const cashless = shown.filter((x) => x.payment_type !== 'cash');
     const plan = Number(data.total_plan) || 0;
@@ -179,8 +166,11 @@
     } else if (me.can_inbox) {
       html += `<a class="inbox-link" href="#/inbox">Входящие из чата</a>`;
     }
-    if (!shown.length) {
-      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План на неделю или PDF счёта.' : 'Неоплаченных счетов нет.'}</p></div>`;
+    if (drafts.length) {
+      html += '<h2 class="sec">Черновики</h2><div class="list">' + drafts.map(rowHtml).join('') + '</div>';
+    }
+    if (!shown.length && !drafts.length) {
+      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План на неделю или PDF боту.' : 'Неоплаченных счетов нет.'}</p></div>`;
     } else {
       if (cashless.length) {
         html += '<h2 class="sec">Безнал</h2><div class="list">' + cashless.map(rowHtml).join('') + '</div>';
@@ -215,8 +205,26 @@
       lines = '<p class="hint">Состав не распознан — смотрите PDF.</p>';
     }
 
+    const isDraft = inv.status === 'draft';
+    const shownAmt = (Number(inv.fact_amount) || 0) > 0
+      ? inv.fact_amount
+      : (inv.amount || inv.planned_amount || 0);
     const payHint = `<p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
-      <p class="ptype" style="margin-top:8px">${inv.payment_type === 'cash' ? 'Нал' : 'Безнал'}</p>`;
+      <p class="ptype" style="margin-top:8px">${inv.payment_type === 'cash' ? 'Нал' : 'Безнал'}${isDraft ? ' · черновик' : ''}</p>`;
+
+    let assignPanel = '';
+    if (can && isDraft) {
+      const plans = inv.open_plans || [];
+      assignPanel = `
+        <div class="field"><label>К плану</label>
+          <select id="fAssignPlan">
+            <option value="">— как новый счёт —</option>
+            ${plans.map((p) => `<option value="${p.id}">${esc(p.summary)} · план ${money(p.planned_amount)}</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn btn-ink" type="button" id="btnAssign">В оплату</button>
+      `;
+    }
 
     let editPanel = '';
     if (can) {
@@ -257,9 +265,9 @@
       `;
     }
 
-    const payBtn = inv.status === 'paid'
-      ? ''
-      : '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>';
+    const payBtn = (!isDraft && inv.status !== 'paid')
+      ? '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>'
+      : '';
     const fileBtns = inv.has_file
       ? '<button class="btn btn-brass" type="button" id="btnOpen">Открыть счёт</button>'
       : '<p class="warn">Файл счёта не найден.</p>';
@@ -267,9 +275,10 @@
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
       <div class="card">
-        <div class="amount-xl">${money(inv.amount)}</div>
+        <div class="amount-xl">${money(shownAmt)}</div>
         ${payHint}
         ${fileBtns}
+        ${assignPanel}
         ${payBtn}
         ${editPanel}
         ${lines}
@@ -294,12 +303,34 @@
     if (attach) attach.onclick = () => attachToPlan(inv.id);
     const paid = document.getElementById('btnPaid');
     if (paid) paid.onclick = () => markPaid(inv.id);
+    const assignBtn = document.getElementById('btnAssign');
+    if (assignBtn) assignBtn.onclick = () => assignDraft(inv.id);
     const drop = document.getElementById('btnDrop');
     if (drop) drop.onclick = async () => {
       if (!confirm('Удалить счёт?')) return;
       await api('/tg/pay/api/invoices/' + inv.id + '/discard', { method: 'POST' });
       location.hash = '#/';
     };
+  }
+
+  async function assignDraft(id) {
+    const sel = document.getElementById('fAssignPlan');
+    const planId = sel && sel.value;
+    view.classList.add('busy');
+    try {
+      const body = planId ? { plan_id: planId } : { as_new: true };
+      const inv = await api('/tg/pay/api/invoices/' + id + '/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      haptic('medium');
+      location.hash = '#/inv/' + inv.id;
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      view.classList.remove('busy');
+    }
   }
 
   async function markPaid(id) {

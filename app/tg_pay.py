@@ -87,17 +87,14 @@ def _start_greeting(sender, tg_id) -> str:
     user = _user_from_telegram(sender) if sender else None
     if user:
         if _can_edit(user):
-            lines.append(f'Вы: {tg_id} → {user.username} (можно загружать PDF)')
+            lines.append(f'Вы: {tg_id} → {user.username} (черновики и планы)')
         else:
-            lines.append(
-                f'Вы: {tg_id} → {user.username}, роль {user.role}. '
-                f'Загружать PDF может только admin.'
-            )
+            lines.append(f'Вы: {tg_id} → {user.username}, роль {user.role}. Оплата счетов.')
     else:
         lines.append(f'Вы: {tg_id} — не привязан к ERP.')
         lines.append(f'В Amvera одна строка: TG_USER_ID_MAP={tg_id}:admin')
     lines.append('')
-    lines.append('Пришлите PDF счёта или откройте кнопку «Счета».')
+    lines.append('Пришлите PDF — попадёт в черновики администратора.')
     return '\n'.join(lines)
 
 
@@ -252,13 +249,23 @@ def _can_edit(user: User) -> bool:
 
 
 def _can_inbox(user: User) -> bool:
-    return (user.role or '') in ('admin', 'executive')
+    return (user.role or '') == 'admin'
+
+
+def _notify_admins(text: str, except_user: User | None = None):
+    q = User.query.filter_by(role='admin').filter(User.telegram_id.isnot(None))
+    for u in q.all():
+        if except_user is not None and u.id == except_user.id:
+            continue
+        send_chat_message(u.telegram_id, text)
 
 
 def _notify_watchers(inv: PaymentInvoice, except_user: User | None = None):
+    if (inv.status or '') == 'draft':
+        return
     purpose = _purpose(inv)
     amount = f"{_pay_amount(inv):,.0f}".replace(',', ' ')
-    kind = 'План' if (inv.kind or '') == 'plan' and not invoice_has_file(inv) else 'К оплате'
+    kind = 'План' if (inv.kind or '') == 'plan' and _fact_amount(inv) <= 0 else 'К оплате'
     ptype = 'нал' if (inv.payment_type or '') == 'cash' else 'безнал'
     text = f"{kind}: {purpose}\n{amount} ₽ · {ptype}"
     q = User.query.filter(User.telegram_id.isnot(None))
@@ -322,10 +329,10 @@ def _parse_money(value) -> Decimal:
 
 def _fact_amount(inv: PaymentInvoice) -> float:
     kids = list(getattr(inv, 'fact_invoices', None) or [])
-    if kids:
-        return float(sum((k.amount or 0) for k in kids))
-    if (inv.kind or 'invoice') == 'plan' and not invoice_has_file(inv):
-        return 0.0
+    kid_sum = float(sum((k.amount or 0) for k in kids))
+    if (inv.kind or 'invoice') == 'plan':
+        own = float(inv.amount or 0) if invoice_has_file(inv) else 0.0
+        return own + kid_sum
     return float(inv.amount or 0)
 
 
@@ -375,21 +382,27 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
     }
     if detail:
         data['comment'] = inv.comment or ''
-        data['lines'] = _lines_of(inv)
+        data['lines'] = _lines_of(inv) or (linked and _lines_of(linked)) or []
         data['budget_item_id'] = inv.budget_item_id
         open_plans = [
-            {'id': p.id, 'summary': _purpose(p), 'planned_amount': float(p.planned_amount or 0)}
+            {
+                'id': p.id,
+                'summary': _purpose(p),
+                'planned_amount': float(p.planned_amount or 0),
+                'fact_amount': _fact_amount(p),
+            }
             for p in PaymentInvoice.query.filter_by(kind='plan').filter(
                 PaymentInvoice.status != 'paid',
                 PaymentInvoice.id != inv.id,
             ).order_by(PaymentInvoice.id.desc()).limit(40).all()
-            if not list(getattr(p, 'fact_invoices', None) or []) and not invoice_has_file(p)
         ]
         data['open_plans'] = open_plans
     return data
 
 
-def _save_parsed_invoice(filename: str, original_name: str, parsed: dict, source: str) -> PaymentInvoice:
+def _save_parsed_invoice(
+    filename: str, original_name: str, parsed: dict, source: str, *, status: str = 'new',
+) -> PaymentInvoice:
     amount = parsed.get('amount') or Decimal('0')
     if not isinstance(amount, Decimal):
         try:
@@ -411,7 +424,7 @@ def _save_parsed_invoice(filename: str, original_name: str, parsed: dict, source
         source=source,
         budget_item_id=budget_id,
         amount=amount,
-        status='new',
+        status=status or 'new',
         priority='normal',
         comment=summary[:500],
         payment_type='cashless',
@@ -509,8 +522,9 @@ def api_invoices(user: User):
     ))
     invoices = [serialize_invoice(inv) for inv in rows]
     unpaid = [x for x in invoices if x['status'] != 'paid' and not x.get('plan_id')]
+    live = [x for x in unpaid if x.get('status') != 'draft']
     due = [
-        x for x in unpaid
+        x for x in live
         if (x.get('fact_amount') or 0) > 0 or (x.get('kind') != 'plan' and (x.get('amount') or 0) > 0)
     ]
     def _due_amt(x):
@@ -518,7 +532,7 @@ def api_invoices(user: User):
     total = sum(_due_amt(x) for x in due)
     cash = sum(_due_amt(x) for x in due if x.get('payment_type') == 'cash')
     cashless = sum(_due_amt(x) for x in due if x.get('payment_type') != 'cash')
-    plan_sum = sum((x.get('planned_amount') or 0) for x in unpaid if x.get('planned_amount'))
+    plan_sum = sum((x.get('planned_amount') or 0) for x in live if x.get('planned_amount'))
     fact_sum = sum(_due_amt(x) for x in due)
     inbox_count = 0
     if _can_inbox(user):
@@ -684,7 +698,7 @@ def api_save(user: User, inv_id: int):
         pid = body.get('plan_id')
         inv.plan_id = int(pid) if pid else None
     became_new = False
-    if body.get('confirm') or inv.status == 'draft':
+    if body.get('confirm'):
         if inv.status != 'new':
             became_new = True
         inv.status = 'new'
@@ -694,6 +708,44 @@ def api_save(user: User, inv_id: int):
         return jsonify(serialize_invoice(inv, detail=True))
     db.session.commit()
     return jsonify(serialize_invoice(inv, detail=True))
+
+
+@bp.route('/api/invoices/<int:inv_id>/assign', methods=['POST'])
+@require_user
+def api_assign(user: User, inv_id: int):
+    if not _can_edit(user):
+        return jsonify({'error': 'forbidden'}), 403
+    inv = PaymentInvoice.query.get_or_404(inv_id)
+    if inv.status not in ('draft', 'new'):
+        return jsonify({'error': 'locked'}), 400
+    body = request.get_json(silent=True) or {}
+    if body.get('as_new'):
+        inv.status = 'new'
+        inv.plan_id = None
+        if (inv.kind or '') == 'plan':
+            inv.kind = 'invoice'
+        db.session.commit()
+        _notify_watchers(inv, except_user=user)
+        return jsonify(serialize_invoice(inv, detail=True))
+    try:
+        pid = int(body.get('plan_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'need_plan'}), 400
+    plan = PaymentInvoice.query.get(pid)
+    if not plan or (plan.kind or '') != 'plan' or plan.status == 'paid':
+        return jsonify({'error': 'bad_plan'}), 400
+    if plan.id == inv.id:
+        return jsonify({'error': 'bad_plan'}), 400
+    inv.plan_id = plan.id
+    inv.status = 'new'
+    inv.kind = 'invoice'
+    if not inv.budget_item_id:
+        inv.budget_item_id = plan.budget_item_id
+    if plan.payment_type in ('cash', 'cashless'):
+        inv.payment_type = plan.payment_type
+    db.session.commit()
+    _notify_watchers(plan, except_user=user)
+    return jsonify(serialize_invoice(plan, detail=True))
 
 
 @bp.route('/api/invoices/plan', methods=['POST'])
@@ -764,7 +816,7 @@ def api_discard(user: User, inv_id: int):
 @require_user
 def api_mark_paid(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
-    if inv.status not in ('new', 'draft'):
+    if inv.status != 'new':
         return jsonify({'error': 'not_open'}), 400
     inv.status = 'paid'
     for kid in list(getattr(inv, 'fact_invoices', None) or []):
@@ -937,13 +989,6 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
             )
         _tg_reply(chat_id, hint)
         return True
-    if not _can_edit(user):
-        _tg_reply(
-            chat_id,
-            f'Сейчас вы как <b>{user.username}</b> ({user.role}). '
-            f'Загружать PDF может только admin.',
-        )
-        return True
 
     name = doc.get('file_name') or 'invoice.pdf'
     blob, err = download_bot_file(doc.get('file_id'))
@@ -953,29 +998,35 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
 
     save_name, path = _store_upload(blob, name)
     parsed = parse_invoice_file(path, name)
-    inv = _save_parsed_invoice(save_name, name, parsed, source='tg')
+    inv = _save_parsed_invoice(save_name, name, parsed, source='tg', status='draft')
     attach_file(inv, blob, save_name)
     db.session.commit()
-    _notify_watchers(inv, except_user=user)
     purpose = _purpose(inv)
     amount = f"{inv.amount:,.2f}".replace(',', ' ').replace('.', ',')
-    article = inv.item.name if inv.item else 'статья не выбрана'
     extra = f"\n{parsed['error']}" if parsed.get('error') else ''
     app_url = _public_miniapp_url()
     markup = None
-    if app_url.startswith('https://'):
+    if app_url.startswith('https://') and _can_edit(user):
         markup = {
             'inline_keyboard': [[{
-                'text': 'Открыть счёт',
+                'text': 'Раскидать по планам',
                 'web_app': {'url': app_url},
             }]]
         }
+    if _can_edit(user):
+        next_hint = 'Черновик. В приложении привяжите к плану или оставьте как новый счёт.'
+    else:
+        next_hint = 'Черновик у администратора — он привяжет к плану.'
     _tg_reply(
         chat_id,
-        f'Счёт #{inv.id} в оплате\n'
+        f'Черновик #{inv.id}\n'
         f'<b>{purpose}</b>\n'
-        f'{amount} ₽ · {article}{extra}\n\n'
-        f'Когда переведёте — в приложении нажмите «Оплачено».',
+        f'{amount} ₽{extra}\n\n'
+        f'{next_hint}',
         reply_markup=markup,
+    )
+    _notify_admins(
+        f'Черновик #{inv.id}: {purpose}\n{amount} ₽',
+        except_user=user,
     )
     return True
