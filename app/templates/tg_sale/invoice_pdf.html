@@ -2,117 +2,144 @@
 <html lang="ru" xmlns:pdf="http://www.xhtml2pdf.com">
 <head>
     <meta charset="UTF-8">
-    <title>Счёт №{{ inv.id }}</title>
+    <title>Счет на оплату №{{ inv.id }}</title>
     <style>
-        @page { size: A4 portrait; margin: 12mm; }
+        @page { size: A4 portrait; margin: 10mm; }
         * { margin: 0; padding: 0; }
         body {
             font-family: DejaVuSans, sans-serif;
             font-size: 9pt;
-            color: #111814;
+            color: #000;
         }
-        .top { width: 100%; }
-        .brand { font-size: 16pt; font-weight: bold; letter-spacing: 1.4pt; color: #111814; }
-        .tag { font-size: 7.5pt; color: #B69A6D; letter-spacing: 1.2pt; text-transform: uppercase; }
-        .bar { background-color: #B69A6D; height: 2.5pt; font-size: 1pt; margin: 8pt 0 12pt; }
-        .title { font-size: 14pt; font-weight: bold; text-align: center; margin-bottom: 4pt; }
-        .sub { font-size: 8pt; color: #7A7E78; text-align: center; margin-bottom: 12pt; }
-        .box td { vertical-align: top; font-size: 8pt; line-height: 1.35; }
-        .lbl { color: #8A7555; font-size: 7pt; letter-spacing: 0.6pt; text-transform: uppercase; }
-        table.items { width: 100%; border-collapse: collapse; margin-top: 10pt; }
-        table.items th {
-            font-size: 7.5pt; letter-spacing: 0.6pt; text-transform: uppercase;
-            color: #8A7555; border-bottom: 0.6pt solid #E8D4A8; padding: 4pt 3pt; text-align: left;
-        }
-        table.items td { padding: 5pt 3pt; border-bottom: 0.4pt solid #EDE8DC; font-size: 8.5pt; }
-        .num { text-align: right; font-variant-numeric: tabular-nums; }
-        .tot { font-size: 12pt; font-weight: bold; text-align: right; padding-top: 10pt; }
-        .vat { font-size: 8pt; color: #3D4741; text-align: right; padding-top: 3pt; }
-        .foot td { vertical-align: bottom; padding-top: 16pt; }
-        .qr { width: 92pt; height: 92pt; }
-        .mark { width: 36pt; height: 36pt; }
-        .mute { color: #7A7E78; font-size: 7.5pt; }
+        table { border-collapse: collapse; }
+        .pay { width: 100%; }
+        .box { width: 100%; border: 0.8pt solid #000; }
+        .box td { border: 0.8pt solid #000; padding: 3pt 4pt; font-size: 8.5pt; vertical-align: top; }
+        .hint { font-size: 7pt; color: #333; }
+        .qr { width: 88pt; height: 88pt; }
+        .qr-cap { font-size: 7pt; text-align: center; margin-top: 3pt; }
+        .title { font-size: 13pt; font-weight: bold; margin: 10pt 0 8pt; }
+        .party { width: 100%; margin-bottom: 4pt; }
+        .party td { font-size: 8.5pt; vertical-align: top; padding: 1pt 0; }
+        .lbl { width: 92pt; }
+        table.items { width: 100%; margin-top: 8pt; }
+        table.items th, table.items td { border: 0.8pt solid #000; padding: 3pt 4pt; font-size: 8.5pt; }
+        table.items th { text-align: center; font-weight: bold; }
+        .num { text-align: right; }
+        .cen { text-align: center; }
+        .tot { width: 100%; margin-top: 6pt; }
+        .tot td { font-size: 9pt; padding: 1pt 0; }
+        .words { font-size: 9pt; margin-top: 8pt; }
+        .legal { font-size: 8pt; margin-top: 8pt; line-height: 1.35; }
+        .sign { margin-top: 16pt; font-size: 9pt; }
     </style>
 </head>
 <body>
-    <table class="top" cellpadding="0" cellspacing="0">
+    <table class="pay" cellpadding="0" cellspacing="0">
         <tr>
-            <td width="44">
-                {% if logo_uri %}<img class="mark" src="{{ logo_uri }}" />{% endif %}
+            <td width="78%" valign="top">
+                <table class="box" cellpadding="0" cellspacing="0">
+                    <tr>
+                        <td colspan="2" width="58%">
+                            {{ company.bank_name or '—' }}<br/>
+                            <span class="hint">Банк получателя</span>
+                        </td>
+                        <td width="12%">БИК</td>
+                        <td width="30%">{{ company.bik or '' }}</td>
+                    </tr>
+                    <tr>
+                        <td colspan="2"></td>
+                        <td>Сч. №</td>
+                        <td>{{ company.ks or '' }}</td>
+                    </tr>
+                    <tr>
+                        <td width="29%">ИНН {{ company.inn or '' }}</td>
+                        <td width="29%">КПП {{ company.kpp or '' }}</td>
+                        <td>Сч. №</td>
+                        <td>{{ company.rs or '' }}</td>
+                    </tr>
+                    <tr>
+                        <td colspan="4">
+                            {{ company.legal_name or company.short_name }}<br/>
+                            <span class="hint">Получатель</span>
+                        </td>
+                    </tr>
+                </table>
             </td>
-            <td>
-                <div class="brand">КНЯЖЕСТВО</div>
-                <div class="tag">архитектурный питомник</div>
-            </td>
-            <td align="right" class="mute">
-                {{ doc_date.strftime('%d.%m.%Y') }}
+            <td width="22%" valign="top" align="center">
+                {% if qr_uri %}
+                <img class="qr" src="{{ qr_uri }}" />
+                <div class="qr-cap">Отсканируйте для<br/>оплаты</div>
+                {% endif %}
             </td>
         </tr>
     </table>
-    <div class="bar">&nbsp;</div>
-    <div class="title">Счёт на оплату №{{ inv.id }}</div>
-    <div class="sub">от {{ doc_date.strftime('%d.%m.%Y') }}</div>
 
-    <table class="box" width="100%" cellpadding="0" cellspacing="0">
+    <div class="title">Счет на оплату № {{ inv.id }} от {{ date_long }}</div>
+
+    <table class="party" cellpadding="0" cellspacing="0">
         <tr>
-            <td width="50%" style="padding-right:10pt;">
-                <div class="lbl">Поставщик</div>
-                <div><b>{{ company.legal_name or company.short_name }}</b></div>
-                <div>ИНН {{ company.inn or '—' }}{% if company.kpp %} · КПП {{ company.kpp }}{% endif %}</div>
-                {% if company.ogrn %}<div>ОГРН {{ company.ogrn }}</div>{% endif %}
-                {% if company.legal_address %}<div>{{ company.legal_address }}</div>{% endif %}
-                {% if company.rs %}<div>р/с {{ company.rs }}</div>{% endif %}
-                {% if company.bank_name %}<div>{{ company.bank_name }}{% if company.bik %}, БИК {{ company.bik }}{% endif %}</div>{% endif %}
-                {% if company.ks %}<div>к/с {{ company.ks }}</div>{% endif %}
-            </td>
-            <td width="50%">
-                <div class="lbl">Покупатель</div>
-                <div><b>{{ inv.buyer_name or '—' }}</b></div>
-                {% if inv.buyer_inn %}<div>ИНН {{ inv.buyer_inn }}{% if inv.buyer_kpp %} · КПП {{ inv.buyer_kpp }}{% endif %}</div>{% endif %}
-                {% if inv.buyer_address %}<div>{{ inv.buyer_address }}</div>{% endif %}
-                {% if inv.buyer_rs %}<div>р/с {{ inv.buyer_rs }}</div>{% endif %}
-                {% if inv.buyer_bank %}<div>{{ inv.buyer_bank }}{% if inv.buyer_bik %}, БИК {{ inv.buyer_bik }}{% endif %}</div>{% endif %}
-            </td>
+            <td class="lbl">Поставщик<br/>(Исполнитель):</td>
+            <td><b>{{ supplier_line }}</b></td>
+        </tr>
+        <tr>
+            <td class="lbl">Покупатель<br/>(Заказчик):</td>
+            <td><b>{{ buyer_line }}</b></td>
+        </tr>
+        <tr>
+            <td class="lbl">Основание:</td>
+            <td>{{ basis }}</td>
         </tr>
     </table>
 
     <table class="items">
         <tr>
             <th width="28">№</th>
-            <th>Наименование</th>
-            <th>Размер</th>
-            <th class="num" width="50">Кол-во</th>
-            <th class="num" width="72">Цена</th>
-            <th class="num" width="80">Сумма</th>
+            <th>Товары (работы, услуги)</th>
+            <th width="48">Кол-во</th>
+            <th width="32">Ед.</th>
+            <th width="72">Цена</th>
+            <th width="80">Сумма</th>
         </tr>
         {% for ln in lines %}
         <tr>
-            <td>{{ loop.index }}</td>
-            <td>{{ ln.plant_name }}</td>
-            <td>{{ ln.size_name }}</td>
-            <td class="num">{{ ln.qty }}</td>
-            <td class="num">{{ '%.2f'|format(ln.price|float) }}</td>
-            <td class="num">{{ '%.2f'|format((ln.qty|float) * (ln.price|float)) }}</td>
+            <td class="cen">{{ ln.n }}</td>
+            <td>{{ ln.name }}</td>
+            <td class="cen">{{ ln.qty }}</td>
+            <td class="cen">шт</td>
+            <td class="num">{{ ln.price }}</td>
+            <td class="num">{{ ln.sum }}</td>
         </tr>
         {% endfor %}
     </table>
-    <div class="tot">Итого: {{ '%.2f'|format(amount|float) }} ₽</div>
-    {% if vat_mode == 'included_20' %}
-    <div class="vat">в т.ч. НДС 20% — {{ '%.2f'|format(vat|float) }} ₽</div>
-    {% else %}
-    <div class="vat">НДС не облагается</div>
-    {% endif %}
 
-    <table class="foot" width="100%">
+    <table class="tot" cellpadding="0" cellspacing="0">
         <tr>
-            <td width="110">
-                {% if qr_uri %}<img class="qr" src="{{ qr_uri }}" />{% endif %}
-            </td>
-            <td>
-                <div class="mute">{{ purpose }}</div>
-                {% if company.director %}<div style="margin-top:10pt;">{{ company.director }}</div>{% endif %}
-            </td>
+            <td align="right"><b>Итого:</b></td>
+            <td width="90" align="right"><b>{{ amount_fmt }}</b></td>
+        </tr>
+        <tr>
+            <td align="right">{% if vat_included %}в т.ч. НДС 22%:{% else %}Без налога (НДС){% endif %}</td>
+            <td align="right">{% if vat_included %}{{ vat_fmt }}{% else %}—{% endif %}</td>
+        </tr>
+        <tr>
+            <td align="right"><b>Всего к оплате:</b></td>
+            <td align="right"><b>{{ amount_fmt }}</b></td>
         </tr>
     </table>
+
+    <div class="words">
+        Всего наименований {{ lines|length }}, на сумму {{ amount_fmt }} руб.<br/>
+        <b>{{ amount_words }}</b>
+    </div>
+    <div class="legal">Оплатить не позднее {{ pay_until }}</div>
+    <div class="legal">
+        Оплата данного счета означает согласие с условиями поставки товара.
+        Уведомление об оплате обязательно, в противном случае не гарантируется наличие товара на складе.
+        Товар отпускается по факту прихода денег на р/с Поставщика, самовывозом, при наличии доверенности и паспорта.
+    </div>
+    {% if sign_line %}
+    <div class="sign">{{ sign_line }}</div>
+    {% endif %}
 </body>
 </html>

@@ -4,14 +4,22 @@
     const initData = (tg && tg.initData) || "";
     const view = document.getElementById("view");
     const titleEl = document.getElementById("screenTitle");
-    const state = { me: null, companies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockHits: [] };
+    const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockHits: [], lastQ: "" };
 
     function emptyDraft() {
         return {
             company_id: null,
-            buyer: { name: "", inn: "", kpp: "", address: "", bank: "", rs: "", bik: "", ks: "" },
+            buyer: { name: "", inn: "", kpp: "", ogrn: "", address: "", phone: "", bank: "", rs: "", bik: "", ks: "" },
             lines: [],
         };
+    }
+
+    function vatIncluded(mode) {
+        return mode === "included_20" || mode === "included_22";
+    }
+
+    function vatLabel(mode) {
+        return vatIncluded(mode) ? "с НДС 22%" : "без НДС";
     }
 
     function money(n) {
@@ -85,7 +93,8 @@
 
     function buyerFields(b) {
         const f = (k, l) => `<div class="label">${l}</div><input class="input" data-b="${k}" value="${esc(b[k] || "")}">`;
-        return f("name", "Название") + f("inn", "ИНН") + f("kpp", "КПП") + f("address", "Адрес")
+        return f("name", "Название") + f("inn", "ИНН") + f("kpp", "КПП") + f("ogrn", "ОГРН")
+            + f("address", "Адрес") + f("phone", "Телефон")
             + f("bank", "Банк") + f("rs", "Расчётный счёт") + f("bik", "БИК") + f("ks", "Корр. счёт");
     }
 
@@ -95,18 +104,25 @@
         const firms = state.companies.map((c) => `
             <button type="button" class="card firm ${Number(d.company_id) === Number(c.id) ? "on" : ""}" data-co="${c.id}">
                 <div><b>${esc(c.short_name)}</b></div>
-                <div class="muted">${c.vat_mode === "included_20" ? "с НДС 20%" : "без НДС"}</div>
+                <div class="muted">${vatLabel(c.vat_mode)}</div>
             </button>`).join("") || `<p class="muted">Сначала заполните фирмы (админ)</p>`;
         const lines = d.lines.map((ln, i) => `
             <div class="list-item">
                 <div><b>${esc(ln.plant_name)}</b> · ${esc(ln.size_name)}</div>
                 <div class="grid2" style="margin-top:8px">
-                    <input class="input" data-qty="${i}" type="number" min="1" max="${ln.free_qty || 9999}" value="${ln.qty}">
-                    <input class="input" data-price="${i}" type="number" min="0" step="1" value="${ln.price}">
+                    <div>
+                        <div class="label">Кол-во, шт</div>
+                        <input class="input" data-qty="${i}" type="number" min="1" max="${ln.free_qty || 9999}" inputmode="numeric" value="${ln.qty}">
+                        <div class="muted" style="margin-top:4px">свободно ${ln.free_qty || "—"}</div>
+                    </div>
+                    <div>
+                        <div class="label">Цена, ₽</div>
+                        <input class="input" data-price="${i}" type="number" min="0" step="1" inputmode="numeric" value="${ln.price}">
+                    </div>
                 </div>
-                <div class="row" style="margin-top:6px">
-                    <span class="muted">свободно ${ln.free_qty || "—"}</span>
-                    <button class="btn sm danger" data-del="${i}">убрать</button>
+                <div class="row" style="margin-top:8px">
+                    <span></span>
+                    <button class="btn sm danger" data-del="${i}">Удалить</button>
                 </div>
             </div>`).join("");
         const sum = d.lines.reduce((s, ln) => s + Number(ln.qty) * Number(ln.price), 0);
@@ -123,7 +139,7 @@
             ${firms}
             <div class="label">Позиции</div>
             <div class="card">
-                <input class="input" id="q" placeholder="Поиск по остаткам">
+                <input class="input" id="q" placeholder="Поиск по остаткам" value="${esc(state.lastQ || "")}">
                 <div id="suggest" class="suggest"></div>
                 ${lines || `<p class="muted">Добавьте растение и размер</p>`}
             </div>
@@ -157,6 +173,7 @@
             clearTimeout(t);
             t = setTimeout(() => searchStock(q.value), 220);
         };
+        if (state.lastQ) searchStock(state.lastQ);
         document.getElementById("buyerFile").onchange = parseBuyer;
         document.getElementById("save").onclick = saveDraft;
         const pdf = document.getElementById("pdf");
@@ -185,20 +202,28 @@
 
     function renderFirms() {
         setTitle("Фирмы");
-        view.innerHTML = `<button class="btn ghost" id="back">← Назад</button>` + state.companies.map((c) => `
+        const rows = state.allCompanies.length ? state.allCompanies : state.companies;
+        view.innerHTML = `<button class="btn ghost" id="back">← Назад</button>` + rows.map((c) => `
             <div class="card">
-                <div class="chip gold">${c.vat_mode === "included_20" ? "с НДС 20%" : "без НДС"}</div>
+                <div class="chip gold">${vatLabel(c.vat_mode)}</div>
+                ${!c.filled ? `<p class="muted" style="margin-top:6px">Не заполнена: нет ИНН / р/с / БИК — в счёте не показывается</p>` : ""}
                 ${field("short_name", "Короткое имя", c)}
                 ${field("legal_name", "Юридическое имя", c)}
                 ${field("inn", "ИНН", c)}
                 ${field("kpp", "КПП", c)}
                 ${field("ogrn", "ОГРН", c)}
                 ${field("legal_address", "Юр. адрес", c)}
+                ${field("phone", "Телефон", c)}
                 ${field("bank_name", "Банк", c)}
                 ${field("bik", "БИК", c)}
                 ${field("rs", "р/с", c)}
                 ${field("ks", "к/с", c)}
                 ${field("director", "Подпись", c)}
+                <div class="label">НДС</div>
+                <select class="input" data-k="vat_mode">
+                    <option value="none" ${vatIncluded(c.vat_mode) ? "" : "selected"}>без НДС</option>
+                    <option value="included_22" ${vatIncluded(c.vat_mode) ? "selected" : ""}>с НДС 22%</option>
+                </select>
                 <button class="btn" data-save-co="${c.id}" style="margin-top:10px">Сохранить</button>
             </div>`).join("");
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
@@ -223,12 +248,20 @@
     async function searchStock(q) {
         const box = document.getElementById("suggest");
         if (!box) return;
+        state.lastQ = q || "";
         if (!q || q.length < 2) { box.innerHTML = ""; state.stockHits = []; return; }
         const data = await api(`/tg/sale/api/stock?q=${encodeURIComponent(q)}`);
         state.stockHits = data.items || [];
-        box.innerHTML = state.stockHits.map((it, i) =>
-            `<button type="button" data-add="${i}">${esc(it.plant_name)} · ${esc(it.size_name)} · ${it.free_qty || it.free} шт · ${money(it.price)}</button>`
-        ).join("") || `<div class="muted" style="padding:10px">Ничего не найдено</div>`;
+        box.innerHTML = state.stockHits.map((it, i) => `
+            <button type="button" class="hit ${it.is_seedling ? "hit-seed" : ""}" data-add="${i}">
+                <div class="hit-name">${esc(it.plant_name)}</div>
+                <div class="hit-meta">
+                    <span class="hit-chip"><span class="hit-k">размер</span> ${esc(it.size_name)}</span>
+                    <span class="hit-chip price"><span class="hit-k">цена</span> ${money(it.price)}</span>
+                    <span class="hit-chip"><span class="hit-k">остаток</span> ${it.free_qty || it.free} шт</span>
+                    ${it.is_seedling ? `<span class="hit-chip seed">контейнер</span>` : ""}
+                </div>
+            </button>`).join("") || `<div class="muted" style="padding:10px">Ничего не найдено</div>`;
         box.querySelectorAll("[data-add]").forEach((btn) => {
             btn.onclick = () => {
                 const it = state.stockHits[Number(btn.dataset.add)];
@@ -267,7 +300,9 @@
             buyer_name: b.name,
             buyer_inn: b.inn,
             buyer_kpp: b.kpp,
+            buyer_ogrn: b.ogrn,
             buyer_address: b.address,
+            buyer_phone: b.phone,
             buyer_bank: b.bank,
             buyer_rs: b.rs,
             buyer_bik: b.bik,
@@ -348,7 +383,8 @@
             company_id: full.company_id,
             buyer: {
                 name: full.buyer_name || "", inn: full.buyer_inn || "", kpp: full.buyer_kpp || "",
-                address: full.buyer_address || "", bank: full.buyer_bank || "", rs: full.buyer_rs || "",
+                ogrn: full.buyer_ogrn || "", address: full.buyer_address || "", phone: full.buyer_phone || "",
+                bank: full.buyer_bank || "", rs: full.buyer_rs || "",
                 bik: full.buyer_bik || "", ks: full.buyer_ks || "",
             },
             lines: (full.lines || []).map((ln) => Object.assign({ free_qty: ln.free_qty || 0 }, ln)),
@@ -369,6 +405,7 @@
         ]);
         state.me = me;
         state.companies = cos.companies || cos.items || [];
+        state.allCompanies = cos.all || [];
         state.invoices = invs.invoices || invs.items || [];
         if (!state.draft.company_id && state.companies[0]) state.draft.company_id = state.companies[0].id;
     }

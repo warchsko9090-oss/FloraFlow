@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import time
 from werkzeug.utils import secure_filename
 from flask import Blueprint, render_template, request, redirect, url_for, flash, send_file, current_app, send_from_directory, jsonify
@@ -9,6 +10,54 @@ from app.models import db, Plant, Size, Field, Client, Supplier, Document, Docum
 from app.utils import log_action, get_or_create_stock, msk_now, natural_key
 
 bp = Blueprint('directory', __name__)
+
+_CLIENT_REQ_KEYS = ('inn', 'kpp', 'ogrn', 'address', 'phone', 'bank_name', 'rs', 'bik', 'ks')
+
+
+def _digits_only(value, n=None) -> str:
+    s = re.sub(r'\D+', '', str(value or ''))
+    return s[:n] if n else s
+
+
+def _client_req_from_form(form) -> dict:
+    return {
+        'inn': _digits_only(form.get('inn'), 12) or None,
+        'kpp': _digits_only(form.get('kpp'), 9) or None,
+        'ogrn': _digits_only(form.get('ogrn'), 15) or None,
+        'address': (form.get('address') or '').strip()[:500] or None,
+        'phone': (form.get('phone') or '').strip()[:40] or None,
+        'bank_name': (form.get('bank_name') or '').strip()[:200] or None,
+        'rs': _digits_only(form.get('rs'), 20) or None,
+        'bik': _digits_only(form.get('bik'), 9) or None,
+        'ks': _digits_only(form.get('ks'), 20) or None,
+    }
+
+
+def _client_req_from_row(row) -> dict:
+    def cell(i):
+        return str(row[i]).strip() if row and len(row) > i and row[i] is not None else ''
+
+    return {
+        'inn': _digits_only(cell(1), 12) or None,
+        'kpp': _digits_only(cell(2), 9) or None,
+        'ogrn': _digits_only(cell(3), 15) or None,
+        'address': cell(4)[:500] or None,
+        'phone': cell(5)[:40] or None,
+        'bank_name': cell(6)[:200] or None,
+        'rs': _digits_only(cell(7), 20) or None,
+        'bik': _digits_only(cell(8), 9) or None,
+        'ks': _digits_only(cell(9), 20) or None,
+    }
+
+
+def _apply_client_req(client: Client, data: dict, *, overwrite: bool = True):
+    for key in _CLIENT_REQ_KEYS:
+        val = data.get(key)
+        if val:
+            setattr(client, key, val)
+        elif overwrite:
+            setattr(client, key, None)
+
 
 @bp.route('/directory', methods=['GET', 'POST'])
 @login_required
@@ -39,7 +88,9 @@ def directory():
                     from datetime import datetime
                     fb_val = float(fixed_balance) if fixed_balance else None
                     fbd_val = datetime.strptime(fixed_balance_date, '%Y-%m-%d').date() if fixed_balance_date else None
-                    db.session.add(model(name=name, fixed_balance=fb_val, fixed_balance_date=fbd_val))
+                    client = model(name=name, fixed_balance=fb_val, fixed_balance_date=fbd_val)
+                    _apply_client_req(client, _client_req_from_form(request.form))
+                    db.session.add(client)
                 else: 
                     db.session.add(model(name=name))
                 db.session.commit()
@@ -60,6 +111,7 @@ def directory():
                         from datetime import datetime
                         item.fixed_balance = float(fixed_balance) if fixed_balance else None
                         item.fixed_balance_date = datetime.strptime(fixed_balance_date, '%Y-%m-%d').date() if fixed_balance_date else None
+                        _apply_client_req(item, _client_req_from_form(request.form))
                     db.session.commit()
                     flash('Обновлено')
                     log_action(f"Изменил {type_}: {old_name} -> {item.name}")
@@ -200,7 +252,10 @@ def download_directory_template():
     if 'Sheet' in wb.sheetnames: del wb['Sheet']
     ws1 = wb.create_sheet("Plant"); ws1.append(["Наименование", "Характеристика"])
     ws2 = wb.create_sheet("Field"); ws2.append(["Наименование", "Партнер (Имя Клиента)", "Год посадки (число)"])
-    for name in ['Size', 'Client', 'Supplier']: wb.create_sheet(name).append(["Наименование"])
+    wb.create_sheet('Size').append(['Наименование'])
+    wb.create_sheet('Supplier').append(['Наименование'])
+    ws_client = wb.create_sheet('Client')
+    ws_client.append(['Наименование', 'ИНН', 'КПП', 'ОГРН', 'Адрес', 'Телефон', 'Банк', 'р/с', 'БИК', 'к/с'])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -223,11 +278,24 @@ def import_directory():
                 if row and row[0] and not Field.query.filter_by(name=str(row[0]).strip()).first():
                     inv = Client.query.filter_by(name=str(row[1])).first() if len(row)>1 and row[1] else None
                     db.session.add(Field(name=str(row[0]).strip(), investor_id=inv.id if inv else None, planting_year=int(row[2]) if len(row)>2 and row[2] else 2017))
-        for m_name, model in {'Size':Size, 'Client':Client, 'Supplier':Supplier}.items():
+        for m_name, model in {'Size': Size, 'Supplier': Supplier}.items():
             if m_name in wb.sheetnames:
                 for row in wb[m_name].iter_rows(min_row=2, values_only=True):
                     if row and row[0] and not model.query.filter_by(name=str(row[0]).strip()).first():
                         db.session.add(model(name=str(row[0]).strip()))
+        if 'Client' in wb.sheetnames:
+            for row in wb['Client'].iter_rows(min_row=2, values_only=True):
+                if not row or not row[0]:
+                    continue
+                name = str(row[0]).strip()
+                req = _client_req_from_row(row)
+                existing = Client.query.filter_by(name=name).first()
+                if existing:
+                    _apply_client_req(existing, req, overwrite=False)
+                else:
+                    client = Client(name=name)
+                    _apply_client_req(client, req)
+                    db.session.add(client)
         db.session.commit()
         flash('Справочники импортированы')
         log_action("Импорт справочников Excel")

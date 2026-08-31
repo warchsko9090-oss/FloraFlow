@@ -70,7 +70,9 @@ class Client(db.Model):
     fixed_balance_date = db.Column(db.Date, nullable=True)
     inn = db.Column(db.String(20), nullable=True, index=True)
     kpp = db.Column(db.String(20), nullable=True)
+    ogrn = db.Column(db.String(20), nullable=True)
     address = db.Column(db.String(500), nullable=True)
+    phone = db.Column(db.String(40), nullable=True)
     bank_name = db.Column(db.String(200), nullable=True)
     rs = db.Column(db.String(40), nullable=True)
     bik = db.Column(db.String(20), nullable=True)
@@ -1794,8 +1796,9 @@ class SaleCompany(db.Model):
     bik = db.Column(db.String(20), nullable=True)
     rs = db.Column(db.String(40), nullable=True)
     ks = db.Column(db.String(40), nullable=True)
+    phone = db.Column(db.String(40), nullable=True)
     director = db.Column(db.String(200), nullable=True)
-    vat_mode = db.Column(db.String(20), nullable=False, default='none')  # none | included_20
+    vat_mode = db.Column(db.String(20), nullable=False, default='none')  # none | included_22
     is_active = db.Column(db.Boolean, default=True)
     sort_order = db.Column(db.Integer, default=0)
 
@@ -1821,6 +1824,8 @@ class SaleInvoice(db.Model):
     buyer_rs = db.Column(db.String(40), nullable=True)
     buyer_bik = db.Column(db.String(20), nullable=True)
     buyer_ks = db.Column(db.String(40), nullable=True)
+    buyer_ogrn = db.Column(db.String(20), nullable=True)
+    buyer_phone = db.Column(db.String(40), nullable=True)
     file_blob = db.Column(db.LargeBinary)
     file_name = db.Column(db.String(255), nullable=True)
 

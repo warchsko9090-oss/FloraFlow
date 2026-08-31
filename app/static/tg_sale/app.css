@@ -53,9 +53,27 @@ h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.
 .chip.gold { background: #efe4cc; color: #7a6238; }
 .list-item { padding: 12px 0; border-bottom: 1px solid #eee7d8; }
 .list-item:last-child { border-bottom: 0; }
-.suggest { background: var(--white); border-radius: 12px; margin-top: 6px; overflow: hidden; }
+.suggest { background: transparent; border-radius: 0; margin-top: 8px; overflow: visible; }
 .suggest button { width: 100%; text-align: left; background: none; border: 0; padding: 10px 12px; font-size: 14px; }
 .suggest button:active { background: var(--paper-2); }
+.hit {
+    display: block; width: 100%; text-align: left; background: var(--paper);
+    border: 1px solid #e4dcc8; border-radius: 14px; padding: 10px 12px; margin-bottom: 8px;
+}
+.hit:active { background: var(--paper-2); }
+.hit-name { font-weight: 700; font-size: 14px; line-height: 1.3; margin-bottom: 8px; }
+.hit-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.hit-chip {
+    font-size: 11px; padding: 5px 8px; border-radius: 8px;
+    background: var(--white); border: 1px solid #eee7d8; color: var(--ink);
+}
+.hit-chip .hit-k {
+    display: block; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--mute); margin-bottom: 1px;
+}
+.hit-chip.price { background: #efe4cc; border-color: transparent; }
+.hit-chip.seed { background: #e8efe9; border-color: transparent; color: var(--ok); }
+.hit-seed { opacity: 0.95; }
 .firm { border: 2px solid transparent; }
 .firm.on { border-color: var(--brass); }
 .err { color: var(--danger); font-size: 13px; margin: 8px 0; }

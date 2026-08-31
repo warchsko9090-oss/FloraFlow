@@ -26,6 +26,11 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('client', 'rs', 'VARCHAR(40)', 'VARCHAR(40)'),
     ('client', 'bik', 'VARCHAR(20)', 'VARCHAR(20)'),
     ('client', 'ks', 'VARCHAR(40)', 'VARCHAR(40)'),
+    ('client', 'ogrn', 'VARCHAR(20)', 'VARCHAR(20)'),
+    ('client', 'phone', 'VARCHAR(40)', 'VARCHAR(40)'),
+    ('sale_company', 'phone', 'VARCHAR(40)', 'VARCHAR(40)'),
+    ('sale_invoice', 'buyer_ogrn', 'VARCHAR(20)', 'VARCHAR(20)'),
+    ('sale_invoice', 'buyer_phone', 'VARCHAR(40)', 'VARCHAR(40)'),
     ('tg_task', 'completed_at', 'TIMESTAMP', 'DATETIME'),
     ('tg_task', 'completed_by_id', 'INTEGER', 'INTEGER'),
     ('tg_task', 'dedup_key', 'VARCHAR(255)', 'VARCHAR(255)'),
@@ -176,6 +181,7 @@ def ensure_legacy_schema(logger=None) -> None:
 
     _backfill_registration_periods(logger)
     _ensure_sale_companies(logger)
+    _migrate_vat_22(logger)
     try:
         from app.invoice_files import backfill_blobs
         backfill_blobs(logger)
@@ -204,6 +210,27 @@ def _publish_invoice_drafts(logger=None) -> None:
 
 
 _CHANGELOG_RELEASES = (
+    {
+        'version': 'v1.3.7',
+        'date': '2026-09-01',
+        'content': (
+            'Сделано:\n'
+            'Telegram: входящие счета на оплату. Кнопки в боте, PDF в базе, админ разбирает черновики, исполнитель отмечает оплату — создаётся расход, сумма сразу в «к оплате». На главном экране план/факт недели и безнал/наличные.\n'
+            'Telegram: выставить счёт клиенту (админ и менеджер продаж). Фирмы, позиции с остатков, согласование без заказа и резерва. В ERP — вкладка «Счета клиентам».\n'
+            'Счёт печатается как в 1С: шапка с банком и QR, поставщик/покупатель, таблица, сумма прописью, срок оплаты.\n'
+            'Справочник клиентов: полные реквизиты (ИНН, КПП, ОГРН, адрес, банк). При согласовании счёта карточка заполняется или создаётся по ИНН.\n'
+            'НДС в счетах — 22%.\n'
+            'Пересчёт поля: номер строки, было/стало, год партии подставляется сам.\n'
+            'Отчёты по копке уходят в чат отгрузок.\n'
+            '\n'
+            'Исправлено:\n'
+            'В счёт попадают только заполненные фирмы (ИНН, банк, р/с, БИК).\n'
+            'Поиск растений: название, размер, цена и остаток отдельными блоками; контейнерные позиции в конце списка.\n'
+            'QR на оплату — ГОСТ для юрлица; обычная камера телефона его не платит, нужен банк для бизнеса.\n'
+            'Если Postgres недоступен, оболочка Mini App больше не падает с 500.\n'
+            'Бот стабильно отвечает на /start на Amvera (опрос обновлений, если вебхук не доходит).'
+        ),
+    },
     {
         'version': 'v1.3.6',
         'date': '2026-08-17',
@@ -264,7 +291,7 @@ def _ensure_sale_companies(logger=None) -> None:
         db.session.add(SaleCompany(
             short_name='Княжество (НДС)',
             legal_name='ООО «Княжество»',
-            vat_mode='included_20',
+            vat_mode='included_22',
             sort_order=0,
         ))
         db.session.add(SaleCompany(
@@ -279,6 +306,22 @@ def _ensure_sale_companies(logger=None) -> None:
     except Exception as exc:
         if logger:
             logger.warning('legacy schema: sale_company seed skipped — %s', exc)
+        db.session.rollback()
+
+
+def _migrate_vat_22(logger=None) -> None:
+    """С 2026 в РФ ставка НДС 22%. Старые фирмы с included_20 считаем как 22%."""
+    try:
+        insp = inspect(db.engine)
+        if not insp.has_table('sale_company'):
+            return
+        db.session.execute(text(
+            "UPDATE sale_company SET vat_mode = 'included_22' WHERE vat_mode = 'included_20'"
+        ))
+        db.session.commit()
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: vat 22 migrate skipped — %s', exc)
         db.session.rollback()
 
 

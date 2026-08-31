@@ -39,6 +39,42 @@
                     </div>
                     <div id="clientOptionsDiv" style="display:none;">
                         <div class="mb-2">
+                            <label class="small text-muted fw-bold">ИНН</label>
+                            <input type="text" name="inn" class="form-control form-control-sm" inputmode="numeric" placeholder="10 или 12 цифр">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">КПП</label>
+                            <input type="text" name="kpp" class="form-control form-control-sm" inputmode="numeric">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">ОГРН / ОГРНИП</label>
+                            <input type="text" name="ogrn" class="form-control form-control-sm" inputmode="numeric">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">Адрес</label>
+                            <input type="text" name="address" class="form-control form-control-sm">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">Телефон</label>
+                            <input type="text" name="phone" class="form-control form-control-sm">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">Банк</label>
+                            <input type="text" name="bank_name" class="form-control form-control-sm">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">Расчётный счёт</label>
+                            <input type="text" name="rs" class="form-control form-control-sm" inputmode="numeric">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">БИК</label>
+                            <input type="text" name="bik" class="form-control form-control-sm" inputmode="numeric">
+                        </div>
+                        <div class="mb-2">
+                            <label class="small text-muted fw-bold">Корр. счёт</label>
+                            <input type="text" name="ks" class="form-control form-control-sm" inputmode="numeric">
+                        </div>
+                        <div class="mb-2">
                             <label class="small text-muted fw-bold">Фикс. сальдо (нач. долг)</label>
                             <input type="number" step="0.01" name="fixed_balance" class="form-control form-control-sm" placeholder="Например: 1950000">
                         </div>
@@ -106,8 +142,11 @@
                                     {% if current_user.role == 'admin' %}
                                     <input class="form-check-input me-2" type="checkbox" name="ids[]" value="{{ item.id }}">
                                     {% endif %}
-                                    <span class="text-truncate" title="{{ item.name }}">
+                                    <span class="text-truncate" title="{{ item.name }}{% if type == 'client' and item.inn %} · ИНН {{ item.inn }}{% endif %}">
                                         {{ item.name }}
+                                        {% if type == 'client' and item.inn %}
+                                        <br><span class="text-muted" style="font-size: 10px;">ИНН {{ item.inn }}</span>
+                                        {% endif %}
                                         {% if type == 'field' %}
                                         <br><span class="badge bg-{{ item.planting_year|year_class }}" style="font-size: 9px;">{{ item.planting_year }}</span>
                                         {% if item.investor %}<span class="badge bg-primary" style="font-size: 9px;">{{ item.investor.name }}</span>{% endif %}
@@ -121,10 +160,28 @@
                                         <i class="fas fa-camera" style="font-size: 12px;"></i>
                                     </button>
                                     {% endif %}
+                                    {% if type == 'client' %}
+                                    <button type="button" class="btn btn-link p-0 text-secondary js-edit-client"
+                                        data-id="{{ item.id }}"
+                                        data-name="{{ item.name }}"
+                                        data-inn="{{ item.inn or '' }}"
+                                        data-kpp="{{ item.kpp or '' }}"
+                                        data-ogrn="{{ item.ogrn or '' }}"
+                                        data-address="{{ (item.address or '')|replace('\n', ' ') }}"
+                                        data-phone="{{ item.phone or '' }}"
+                                        data-bank="{{ item.bank_name or '' }}"
+                                        data-rs="{{ item.rs or '' }}"
+                                        data-bik="{{ item.bik or '' }}"
+                                        data-ks="{{ item.ks or '' }}"
+                                        data-fb="{{ item.fixed_balance if item.fixed_balance is not none else '' }}"
+                                        data-fbd="{{ item.fixed_balance_date.strftime('%Y-%m-%d') if item.fixed_balance_date else '' }}"
+                                        title="Изменить"><i class="fas fa-pen" style="font-size: 10px;"></i></button>
+                                    {% else %}
                                     <button type="button" class="btn btn-link p-0 text-secondary" 
                                         onclick="editItem('{{ type }}', {{ item.id }}, '{{ item.name }}', 
-                                        {% if type == 'field' %}{{ item.investor_id or 'null' }}, {{ item.planting_year or 2017 }}, null, null{% elif type == 'client' %}null, null, {{ item.fixed_balance or 'null' }}, '{{ item.fixed_balance_date.strftime('%Y-%m-%d') if item.fixed_balance_date else '' }}'{% else %}null, null, null, null{% endif %})" 
+                                        {% if type == 'field' %}{{ item.investor_id or 'null' }}, {{ item.planting_year or 2017 }}, null, null{% else %}null, null, null, null{% endif %})" 
                                         title="Изменить"><i class="fas fa-pen" style="font-size: 10px;"></i></button>
+                                    {% endif %}
                                 </div>
                                 {% endif %}
                             </li>
@@ -144,7 +201,7 @@
 </div>
 
 <div class="modal fade" id="editModal" tabindex="-1">
-  <div class="modal-dialog modal-sm">
+  <div class="modal-dialog modal-sm" id="editModalDialog">
     <div class="modal-content">
       <form method="POST">
           <div class="modal-header py-2"><h6 class="modal-title">Редактирование</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
@@ -161,6 +218,42 @@
             <div class="mb-2 field-only" style="display:none;">
                 <label class="small text-muted">Год посадки</label>
                 <input type="number" name="planting_year" id="editPlantingYear" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">ИНН</label>
+                <input type="text" name="inn" id="editInn" class="form-control form-control-sm" inputmode="numeric">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">КПП</label>
+                <input type="text" name="kpp" id="editKpp" class="form-control form-control-sm" inputmode="numeric">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">ОГРН / ОГРНИП</label>
+                <input type="text" name="ogrn" id="editOgrn" class="form-control form-control-sm" inputmode="numeric">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">Адрес</label>
+                <input type="text" name="address" id="editAddress" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">Телефон</label>
+                <input type="text" name="phone" id="editPhone" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">Банк</label>
+                <input type="text" name="bank_name" id="editBank" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">Расчётный счёт</label>
+                <input type="text" name="rs" id="editRs" class="form-control form-control-sm" inputmode="numeric">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">БИК</label>
+                <input type="text" name="bik" id="editBik" class="form-control form-control-sm" inputmode="numeric">
+            </div>
+            <div class="mb-2 client-only" style="display:none;">
+                <label class="small text-muted fw-bold">Корр. счёт</label>
+                <input type="text" name="ks" id="editKs" class="form-control form-control-sm" inputmode="numeric">
             </div>
             <div class="mb-2 client-only" style="display:none;">
                 <label class="small text-muted fw-bold">Фикс. сальдо (нач. долг)</label>
@@ -284,9 +377,12 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('editName').value = name;
         const fieldOnly = document.querySelectorAll('.field-only');
         const clientOnly = document.querySelectorAll('.client-only');
+        const dialog = document.getElementById('editModalDialog');
         
         fieldOnly.forEach(el => el.style.display = 'none');
         clientOnly.forEach(el => el.style.display = 'none');
+        dialog.classList.remove('modal-lg', 'modal-dialog-scrollable');
+        dialog.classList.add('modal-sm');
 
         if (type === 'field') {
             fieldOnly.forEach(el => el.style.display = 'block');
@@ -294,10 +390,27 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('editPlantingYear').value = plantingYear ? plantingYear : 2017;
         } else if (type === 'client') {
             clientOnly.forEach(el => el.style.display = 'block');
+            dialog.classList.remove('modal-sm');
+            dialog.classList.add('modal-lg', 'modal-dialog-scrollable');
             document.getElementById('editFixedBalance').value = fixedBalance ? fixedBalance : "";
             document.getElementById('editFixedBalanceDate').value = fixedBalanceDate ? fixedBalanceDate : "";
         }
         new bootstrap.Modal(document.getElementById('editModal')).show();
     }
+
+    document.querySelectorAll('.js-edit-client').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            editItem('client', Number(btn.dataset.id), btn.dataset.name || '', null, null, btn.dataset.fb || '', btn.dataset.fbd || '');
+            document.getElementById('editInn').value = btn.dataset.inn || '';
+            document.getElementById('editKpp').value = btn.dataset.kpp || '';
+            document.getElementById('editOgrn').value = btn.dataset.ogrn || '';
+            document.getElementById('editAddress').value = btn.dataset.address || '';
+            document.getElementById('editPhone').value = btn.dataset.phone || '';
+            document.getElementById('editBank').value = btn.dataset.bank || '';
+            document.getElementById('editRs').value = btn.dataset.rs || '';
+            document.getElementById('editBik').value = btn.dataset.bik || '';
+            document.getElementById('editKs').value = btn.dataset.ks || '';
+        });
+    });
 </script>
 {% endblock %}

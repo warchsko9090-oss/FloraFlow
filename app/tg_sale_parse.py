@@ -10,14 +10,14 @@ import re
 log = logging.getLogger(__name__)
 
 _FIELDS = (
-    'name', 'inn', 'kpp', 'address', 'bank', 'rs', 'bik', 'ks',
+    'name', 'inn', 'kpp', 'ogrn', 'address', 'phone', 'bank', 'rs', 'bik', 'ks',
 )
 
 _SYSTEM = (
     'Из текста или изображения реквизитов российской организации верни JSON: '
-    '{"name":"","inn":"","kpp":"","address":"","bank":"","rs":"","bik":"","ks":""}. '
-    'name — юрлицо или ФИО ИП. inn 10 или 12 цифр. kpp 9 цифр. '
-    'rs — расчётный счёт 20 цифр. bik 9 цифр. ks — корсчёт. '
+    '{"name":"","inn":"","kpp":"","ogrn":"","address":"","phone":"","bank":"","rs":"","bik":"","ks":""}. '
+    'name — юрлицо или ФИО ИП. inn 10 или 12 цифр. kpp 9 цифр. ogrn 13 или 15 цифр. '
+    'phone — телефон. rs — расчётный счёт 20 цифр. bik 9 цифр. ks — корсчёт. '
     'Пустая строка если поля нет. Без комментариев.'
 )
 
@@ -33,6 +33,7 @@ def _clean(data: dict) -> dict:
     out = {k: str(data.get(k) or '').strip()[:500] for k in _FIELDS}
     out['inn'] = _digits(out['inn'])[:12]
     out['kpp'] = _digits(out['kpp'])[:9]
+    out['ogrn'] = _digits(out['ogrn'])[:15]
     out['rs'] = _digits(out['rs'])[:20]
     out['bik'] = _digits(out['bik'])[:9]
     out['ks'] = _digits(out['ks'])[:20]

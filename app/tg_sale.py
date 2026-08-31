@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+from datetime import timedelta
 from html import escape as html_escape
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -28,11 +29,35 @@ from app.utils import msk_now, build_pdf_bytes
 from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
 from app.stock_helpers import get_reserved_map
 from app.shop_catalog import _price_history_map
+from app.seedlings import is_seedling_size_name
 
 bp = Blueprint('tg_sale', __name__, url_prefix='/tg/sale')
 
 _ALLOWED_EXT = {'.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.webp', '.bmp'}
 _DEV_COOKIE = 'tg_sale_as'
+_VAT_INCLUDED = ('included_20', 'included_22')
+_VAT_RATE = Decimal('22')
+_VAT_BASE = Decimal('122')
+_MONTHS_GEN = (
+    'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+    'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+)
+_ONES = (
+    ('', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'),
+    ('', 'одна', 'две', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'),
+)
+_TEENS = (
+    'десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать',
+    'пятнадцать', 'шестнадцать', 'семнадцать', 'восемнадцать', 'девятнадцать',
+)
+_TENS = (
+    '', '', 'двадцать', 'тридцать', 'сорок', 'пятьдесят',
+    'шестьдесят', 'семьдесят', 'восемьдесят', 'девяносто',
+)
+_HUNDREDS = (
+    '', 'сто', 'двести', 'триста', 'четыреста', 'пятьсот',
+    'шестьсот', 'семьсот', 'восемьсот', 'девятьсот',
+)
 
 
 def public_sale_url() -> str:
@@ -88,6 +113,140 @@ def _money(value) -> Decimal:
     return Decimal(str(value or 0).replace(',', '.').replace(' ', '').replace('\xa0', '') or 0)
 
 
+def _vat_included(mode: str | None) -> bool:
+    return (mode or '') in _VAT_INCLUDED
+
+
+def _vat_mode_norm(mode: str | None) -> str:
+    if _vat_included(mode):
+        return 'included_22'
+    return (mode or 'none') or 'none'
+
+
+def _vat_amount(amount: Decimal, mode: str | None) -> Decimal:
+    if _vat_included(mode) and amount > 0:
+        return (amount * _VAT_RATE / _VAT_BASE).quantize(Decimal('0.01'))
+    return Decimal('0')
+
+
+def _inn_digits(value: str | None) -> str:
+    return re.sub(r'\D+', '', str(value or ''))[:12]
+
+
+def _digits(value: str | None, n: int | None = None) -> str:
+    s = re.sub(r'\D+', '', str(value or ''))
+    return s[:n] if n else s
+
+
+def _find_client_by_inn(inn: str | None) -> Client | None:
+    digits = _inn_digits(inn)
+    if len(digits) not in (10, 12):
+        return None
+    for client in Client.query.filter(Client.inn.isnot(None)).all():
+        if _inn_digits(client.inn) == digits:
+            return client
+    return None
+
+
+def _company_ready(c: SaleCompany) -> bool:
+    name = (c.legal_name or c.short_name or '').strip()
+    inn = _inn_digits(c.inn)
+    rs = _digits(c.rs, 20)
+    bik = _digits(c.bik, 9)
+    bank = (c.bank_name or '').strip()
+    return bool(name and bank and len(inn) in (10, 12) and len(rs) == 20 and len(bik) == 9)
+
+
+def _is_container_size(sname: str) -> bool:
+    if is_seedling_size_name(sname):
+        return True
+    n = (sname or '').strip()
+    if re.search(r'(?i)контейнер', n):
+        return True
+    if re.search(r'(?i)(^|[^A-Za-zА-Яа-я])[CС]\s*\d', n) and not re.search(r'\d{2,3}\s*-\s*\d{2,3}', n):
+        return True
+    return False
+
+
+def _fmt_money(value) -> str:
+    q = Decimal(str(value or 0)).quantize(Decimal('0.01'))
+    sign = '-' if q < 0 else ''
+    q = abs(q)
+    whole, frac = f'{q:.2f}'.split('.')
+    grouped = f'{int(whole):,}'.replace(',', ' ')
+    return f'{sign}{grouped},{frac}'
+
+
+def _date_long(dt) -> str:
+    if not dt:
+        return ''
+    return f'{dt.day} {_MONTHS_GEN[dt.month - 1]} {dt.year} г.'
+
+
+def _plural_ru(n: int, forms: tuple[str, str, str]) -> str:
+    n = abs(int(n)) % 100
+    if 10 < n < 20:
+        return forms[2]
+    n = n % 10
+    if n == 1:
+        return forms[0]
+    if 2 <= n <= 4:
+        return forms[1]
+    return forms[2]
+
+
+def _triad_words(n: int, feminine: bool = False) -> str:
+    n = int(n)
+    if n <= 0:
+        return ''
+    h, rest = divmod(n, 100)
+    parts = []
+    if h:
+        parts.append(_HUNDREDS[h])
+    if 10 <= rest <= 19:
+        parts.append(_TEENS[rest - 10])
+    else:
+        tens, ones = divmod(rest, 10)
+        if tens:
+            parts.append(_TENS[tens])
+        if ones:
+            parts.append(_ONES[1 if feminine else 0][ones])
+    return ' '.join(parts)
+
+
+def rubles_in_words(amount) -> str:
+    q = Decimal(str(amount or 0)).quantize(Decimal('0.01'))
+    rub = int(q)
+    kop = int((q - Decimal(rub)) * 100)
+    if kop < 0:
+        kop = 0
+    if rub == 0:
+        words = 'ноль'
+    else:
+        millions = rub // 1_000_000
+        thousands = (rub % 1_000_000) // 1000
+        rest = rub % 1000
+        chunks = []
+        if millions:
+            chunks.append(
+                f'{_triad_words(millions, False)} '
+                f'{_plural_ru(millions, ("миллион", "миллиона", "миллионов"))}'.strip()
+            )
+        if thousands:
+            chunks.append(
+                f'{_triad_words(thousands, True)} '
+                f'{_plural_ru(thousands, ("тысяча", "тысячи", "тысяч"))}'.strip()
+            )
+        if rest:
+            chunks.append(_triad_words(rest, False))
+        words = ' '.join(x for x in chunks if x)
+    if words:
+        words = words[0].upper() + words[1:]
+    rub_w = _plural_ru(rub, ('рубль', 'рубля', 'рублей'))
+    kop_w = _plural_ru(kop, ('копейка', 'копейки', 'копеек'))
+    return f'{words} {rub_w} {kop:02d} {kop_w}'
+
+
 def _serialize_company(c: SaleCompany) -> dict:
     return {
         'id': c.id,
@@ -102,10 +261,12 @@ def _serialize_company(c: SaleCompany) -> dict:
         'bik': c.bik or '',
         'rs': c.rs or '',
         'ks': c.ks or '',
+        'phone': c.phone or '',
         'director': c.director or '',
-        'vat_mode': c.vat_mode or 'none',
+        'vat_mode': _vat_mode_norm(c.vat_mode),
         'is_active': bool(c.is_active),
         'sort_order': c.sort_order or 0,
+        'filled': _company_ready(c),
     }
 
 
@@ -142,6 +303,8 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
             'buyer_rs': inv.buyer_rs or '',
             'buyer_bik': inv.buyer_bik or '',
             'buyer_ks': inv.buyer_ks or '',
+            'buyer_ogrn': inv.buyer_ogrn or '',
+            'buyer_phone': inv.buyer_phone or '',
             'client_id': inv.client_id,
             'lines': [
                 {
@@ -174,13 +337,16 @@ def _apply_buyer(inv: SaleInvoice, body: dict):
         'buyer_rs': 'buyer_rs', 'rs': 'buyer_rs',
         'buyer_bik': 'buyer_bik', 'bik': 'buyer_bik',
         'buyer_ks': 'buyer_ks', 'ks': 'buyer_ks',
+        'buyer_ogrn': 'buyer_ogrn', 'ogrn': 'buyer_ogrn',
+        'buyer_phone': 'buyer_phone', 'phone': 'buyer_phone',
     }
     for src, dest in mapping.items():
         if src in body and body.get(src) is not None:
             setattr(inv, dest, str(body.get(src) or '').strip()[:500])
-    inn = (inv.buyer_inn or '').strip()
+    inn = _inn_digits(inv.buyer_inn)
     if inn:
-        found = Client.query.filter_by(inn=inn).first()
+        inv.buyer_inn = inn
+        found = _find_client_by_inn(inn)
         if found:
             inv.client_id = found.id
             if not (inv.buyer_name or '').strip():
@@ -188,17 +354,16 @@ def _apply_buyer(inv: SaleInvoice, body: dict):
 
 
 def _sync_client(inv: SaleInvoice):
+    """При согласовании: найти клиента по ИНН или создать карточку и заполнить реквизиты."""
     name = (inv.buyer_name or '').strip()
-    inn = (inv.buyer_inn or '').strip()
+    inn = _inn_digits(inv.buyer_inn)
+    if inn:
+        inv.buyer_inn = inn
     if not name and not inn:
         return
-    client = None
-    if inn:
-        client = Client.query.filter_by(inn=inn).first()
-    if not client and name:
-        client = Client.query.filter(func.lower(Client.name) == name.lower()).first()
+    client = _find_client_by_inn(inn) if inn else None
     if not client:
-        client = Client(name=name or inn)
+        client = Client(name=(name or inn)[:200])
         db.session.add(client)
         db.session.flush()
     if name:
@@ -206,17 +371,21 @@ def _sync_client(inv: SaleInvoice):
     if inn:
         client.inn = inn[:20]
     if inv.buyer_kpp:
-        client.kpp = inv.buyer_kpp[:20]
+        client.kpp = _digits(inv.buyer_kpp, 9)[:20]
+    if getattr(inv, 'buyer_ogrn', None):
+        client.ogrn = _digits(inv.buyer_ogrn, 15)[:20]
     if inv.buyer_address:
         client.address = inv.buyer_address[:500]
+    if getattr(inv, 'buyer_phone', None):
+        client.phone = str(inv.buyer_phone)[:40]
     if inv.buyer_bank:
         client.bank_name = inv.buyer_bank[:200]
     if inv.buyer_rs:
-        client.rs = inv.buyer_rs[:40]
+        client.rs = _digits(inv.buyer_rs, 20)[:40]
     if inv.buyer_bik:
-        client.bik = inv.buyer_bik[:20]
+        client.bik = _digits(inv.buyer_bik, 9)[:20]
     if inv.buyer_ks:
-        client.ks = inv.buyer_ks[:40]
+        client.ks = _digits(inv.buyer_ks, 20)[:40]
     inv.client_id = client.id
 
 
@@ -285,6 +454,14 @@ def _logo_uri() -> str:
 
 
 def _qr_payload(company: SaleCompany, amount, purpose: str) -> str:
+    """ГОСТ Р 56042 ST00012 (UTF-8). Пустая строка, если нет обязательных полей."""
+    name = re.sub(r'[|\n\r]+', ' ', (company.legal_name or company.short_name or '')).strip()[:160]
+    bank = re.sub(r'[|\n\r]+', ' ', (company.bank_name or '')).strip()[:160]
+    rs = _digits(company.rs, 20)
+    bik = _digits(company.bik, 9)
+    inn = _inn_digits(company.inn)
+    if not (name and bank and len(rs) == 20 and len(bik) == 9 and len(inn) in (10, 12)):
+        return ''
     parts = ['ST00012']
 
     def add(key, val):
@@ -292,22 +469,27 @@ def _qr_payload(company: SaleCompany, amount, purpose: str) -> str:
         if v:
             parts.append(f'{key}={v}')
 
-    add('Name', company.legal_name or company.short_name)
-    add('PersonalAcc', company.rs)
-    add('BankName', company.bank_name)
-    add('BIC', company.bik)
-    add('CorrespAcc', company.ks)
-    add('PayeeINN', company.inn)
-    add('KPP', company.kpp)
+    add('Name', name)
+    add('PersonalAcc', rs)
+    add('BankName', bank)
+    add('BIC', bik)
+    add('CorrespAcc', _digits(company.ks, 20))
+    add('PayeeINN', inn)
+    kpp = _digits(company.kpp, 9)
+    if len(inn) == 10 and len(kpp) == 9:
+        add('KPP', kpp)
     kop = int(round(float(amount or 0) * 100))
     if kop > 0:
         add('Sum', str(kop))
-    add('Purpose', purpose[:210])
+    clean_purpose = purpose.replace('№', 'N').replace('ё', 'е').replace('Ё', 'Е')
+    add('Purpose', clean_purpose[:210])
     return '|'.join(parts)
 
 
 def _qr_temp_png(payload: str) -> tuple[str, str]:
     """PNG на диск для xhtml2pdf. Возвращает (file_uri, path)."""
+    if not payload:
+        return '', ''
     try:
         import qrcode
         qr = qrcode.QRCode(
@@ -327,32 +509,98 @@ def _qr_temp_png(payload: str) -> tuple[str, str]:
         return '', ''
 
 
+def _supplier_line(company: SaleCompany | None) -> str:
+    if not company:
+        return ''
+    parts = [(company.legal_name or company.short_name or '').strip()]
+    if company.inn:
+        parts.append(f'ИНН {company.inn}')
+    if company.kpp:
+        parts.append(f'КПП {company.kpp}')
+    addr = (company.legal_address or company.fact_address or '').strip()
+    if addr:
+        parts.append(addr)
+    if company.phone:
+        parts.append(f'тел.: {company.phone}')
+    return ', '.join(p for p in parts if p)
+
+
+def _buyer_line(inv: SaleInvoice) -> str:
+    parts = [(inv.buyer_name or '').strip()]
+    if inv.buyer_inn:
+        inn = f'ИНН {inv.buyer_inn}'
+        if inv.buyer_kpp:
+            inn += f', КПП {inv.buyer_kpp}'
+        parts.append(inn)
+    return ', '.join(p for p in parts if p)
+
+
+def _sign_line(company: SaleCompany | None) -> str:
+    if not company:
+        return ''
+    director = (company.director or '').strip()
+    if director:
+        return director
+    name = (company.legal_name or company.short_name or '').strip()
+    if len(_inn_digits(company.inn)) == 12:
+        return f'Предприниматель {name}'
+    return name
+
+
 def render_sale_pdf(inv: SaleInvoice) -> bytes | None:
     company = inv.company
-    vat_mode = (company.vat_mode if company else 'none') or 'none'
+    if not company:
+        return None
+    vat_mode = _vat_mode_norm(company.vat_mode)
     amount = Decimal(str(inv.amount or 0))
-    vat = Decimal('0')
-    if vat_mode == 'included_20' and amount > 0:
-        vat = (amount * Decimal('20') / Decimal('120')).quantize(Decimal('0.01'))
-    purpose = f'Оплата по счёту №{inv.id} от {inv.created_at.strftime("%d.%m.%Y") if inv.created_at else ""}'
+    vat = _vat_amount(amount, vat_mode)
+    doc_date = inv.created_at or msk_now()
+    purpose = f'Оплата по счету N {inv.id} от {doc_date.strftime("%d.%m.%Y")}'
+    pay_until = (doc_date + timedelta(days=3)).strftime('%d.%m.%Y')
     qr_uri, qr_path = '', ''
+    pdf_lines = []
+    for i, ln in enumerate(inv.lines or [], 1):
+        sm = Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0))
+        title = f'{ln.plant_name} {ln.size_name}'.strip()
+        pdf_lines.append({
+            'n': i,
+            'name': title,
+            'qty': ln.qty,
+            'price': _fmt_money(ln.price),
+            'sum': _fmt_money(sm),
+        })
     try:
-        if company:
-            qr_uri, qr_path = _qr_temp_png(_qr_payload(company, amount, purpose))
+        payload = _qr_payload(company, amount, purpose) if company else ''
+        if payload:
+            qr_uri, qr_path = _qr_temp_png(payload)
+        elif company:
+            current_app.logger.warning(
+                'sale qr skipped: incomplete company requisites id=%s', company.id
+            )
         html = render_template(
             'tg_sale/invoice_pdf.html',
             inv=inv,
             company=company,
-            lines=inv.lines,
+            lines=pdf_lines,
             amount=amount,
+            amount_fmt=_fmt_money(amount),
+            amount_words=rubles_in_words(amount),
             vat=vat,
+            vat_fmt=_fmt_money(vat),
+            vat_included=_vat_included(vat_mode),
             vat_mode=vat_mode,
             purpose=purpose,
+            date_long=_date_long(doc_date),
+            pay_until=pay_until,
+            supplier_line=_supplier_line(company),
+            buyer_line=_buyer_line(inv),
+            basis=(inv.comment or '').strip() or 'Без договора',
+            sign_line=_sign_line(company),
             logo_uri=_logo_uri(),
             qr_uri=qr_uri,
-            doc_date=inv.created_at or msk_now(),
+            doc_date=doc_date,
         )
-        return build_pdf_bytes(html, page_margin='12mm')
+        return build_pdf_bytes(html, page_margin='10mm')
     finally:
         if qr_path:
             try:
@@ -400,11 +648,15 @@ def api_me(user: User):
 
 @bp.route('/api/companies')
 @require_sale
-def api_companies(_user: User):
-    rows = SaleCompany.query.filter_by(is_active=True).order_by(
+def api_companies(user: User):
+    rows = SaleCompany.query.order_by(
         SaleCompany.sort_order, SaleCompany.id
     ).all()
-    return jsonify({'companies': [_serialize_company(c) for c in rows]})
+    filled = [c for c in rows if c.is_active and _company_ready(c)]
+    payload = {'companies': [_serialize_company(c) for c in filled]}
+    if _can_firms(user):
+        payload['all'] = [_serialize_company(c) for c in rows]
+    return jsonify(payload)
 
 
 @bp.route('/api/companies/<int:cid>', methods=['POST'])
@@ -416,12 +668,12 @@ def api_company_save(user: User, cid: int):
     body = request.get_json(silent=True) or {}
     for field in (
         'short_name', 'legal_name', 'inn', 'kpp', 'ogrn', 'legal_address',
-        'fact_address', 'bank_name', 'bik', 'rs', 'ks', 'director',
+        'fact_address', 'bank_name', 'bik', 'rs', 'ks', 'director', 'phone',
     ):
         if field in body:
             setattr(c, field, str(body.get(field) or '').strip()[:500])
-    if body.get('vat_mode') in ('none', 'included_20'):
-        c.vat_mode = body['vat_mode']
+    if body.get('vat_mode') in ('none', 'included_20', 'included_22'):
+        c.vat_mode = 'included_22' if _vat_included(body['vat_mode']) else 'none'
     db.session.commit()
     return jsonify(_serialize_company(c))
 
@@ -441,6 +693,7 @@ def api_stock(_user: User):
         hay = f'{pname} {sname}'.lower()
         if q and q not in hay:
             continue
+        is_seedling = _is_container_size(sname)
         items.append({
             'plant_id': pid,
             'size_id': sid,
@@ -449,8 +702,13 @@ def api_stock(_user: User):
             'free': free,
             'free_qty': free,
             'price': float(prices.get((pid, sid)) or 0),
+            'is_seedling': is_seedling,
         })
-    items.sort(key=lambda x: (x['plant_name'].lower(), x['size_name'].lower()))
+    items.sort(key=lambda x: (
+        1 if x['is_seedling'] else 0,
+        x['plant_name'].lower(),
+        x['size_name'].lower(),
+    ))
     return jsonify({'items': items[:80]})
 
 
@@ -479,30 +737,34 @@ def api_parse_buyer(_user: User):
             pass
     fields = parsed.get('fields') or {}
     match = None
-    inn = (fields.get('inn') or '').strip()
+    inn = _inn_digits(fields.get('inn'))
     if inn:
-        found = Client.query.filter_by(inn=inn).first()
+        found = _find_client_by_inn(inn)
         if found:
             match = {
                 'id': found.id,
                 'name': found.name,
                 'inn': found.inn or inn,
                 'kpp': found.kpp or fields.get('kpp') or '',
+                'ogrn': found.ogrn or fields.get('ogrn') or '',
                 'address': found.address or fields.get('address') or '',
+                'phone': found.phone or fields.get('phone') or '',
                 'bank': found.bank_name or fields.get('bank') or '',
                 'rs': found.rs or fields.get('rs') or '',
                 'bik': found.bik or fields.get('bik') or '',
                 'ks': found.ks or fields.get('ks') or '',
             }
             fields = {
-                'name': found.name or fields.get('name') or '',
-                'inn': found.inn or inn,
-                'kpp': match['kpp'],
-                'address': match['address'],
-                'bank': match['bank'],
-                'rs': match['rs'],
-                'bik': match['bik'],
-                'ks': match['ks'],
+                'name': fields.get('name') or found.name or '',
+                'inn': inn,
+                'kpp': fields.get('kpp') or found.kpp or '',
+                'ogrn': fields.get('ogrn') or found.ogrn or '',
+                'address': fields.get('address') or found.address or '',
+                'phone': fields.get('phone') or found.phone or '',
+                'bank': fields.get('bank') or found.bank_name or '',
+                'rs': fields.get('rs') or found.rs or '',
+                'bik': fields.get('bik') or found.bik or '',
+                'ks': fields.get('ks') or found.ks or '',
             }
     return jsonify({'fields': fields, 'buyer': fields, 'match': match, 'error': parsed.get('error')})
 
@@ -638,7 +900,7 @@ def api_approve(user: User, inv_id: int):
     inv.approved_at = msk_now()
     db.session.commit()
     company = html_escape(inv.company.short_name if inv.company else '')
-    vat = 'НДС' if inv.company and inv.company.vat_mode == 'included_20' else 'без НДС'
+    vat = 'НДС 22%' if inv.company and _vat_included(inv.company.vat_mode) else 'без НДС'
     text = (
         f'Согласован счёт №{inv.id}\n'
         f'{html_escape(inv.buyer_name or "")}\n'

@@ -45,8 +45,8 @@
                     </td>
                     <td>
                         {{ inv.company.short_name if inv.company else '—' }}
-                        {% if inv.company and inv.company.vat_mode == 'included_20' %}
-                        <div class="small text-muted">НДС 20%</div>
+                        {% if inv.company and inv.company.vat_mode in ('included_20', 'included_22') %}
+                        <div class="small text-muted">НДС 22%</div>
                         {% else %}
                         <div class="small text-muted">без НДС</div>
                         {% endif %}
