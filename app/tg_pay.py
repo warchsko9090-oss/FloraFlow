@@ -84,15 +84,27 @@ def _can_sale_role(user: User | None) -> bool:
     return bool(user) and (user.role or '') in ('admin', 'shop_manager')
 
 
+def _is_admin(user: User | None) -> bool:
+    return bool(user) and (user.role or '') == 'admin'
+
+
+def _can_pay_app(user: User | None) -> bool:
+    """Оплата поставщикам: админ и исполнители. Менеджеру продаж не нужна."""
+    return not (user and (user.role or '') == 'shop_manager')
+
+
 def _start_greeting(sender, tg_id) -> str:
     lines = ['FloraFlow на связи.']
     lines.append('База данных: ок' if _db_ok() else 'База данных: ошибка')
     lines.append('Токен бота: ок' if _get_bot_token() else 'Токен бота: НЕ ЗАДАН в Amvera (TG_BOT_TOKEN)')
     user = _user_from_telegram(sender) if sender else None
     if user:
-        if _can_sale_role(user):
+        if _is_admin(user):
             lines.append(f'Вы: {tg_id} → {user.username} ({user.role})')
             lines.append('Оплата — счета поставщикам. Выставить счёт — клиенту.')
+        elif _can_sale_role(user):
+            lines.append(f'Вы: {tg_id} → {user.username} ({user.role})')
+            lines.append('Выставить счёт клиенту.')
         elif _can_edit(user):
             lines.append(f'Вы: {tg_id} → {user.username} (черновики и планы)')
         else:
@@ -101,8 +113,10 @@ def _start_greeting(sender, tg_id) -> str:
         lines.append(f'Вы: {tg_id} — не привязан к ERP.')
         lines.append(f'В Amvera одна строка: TG_USER_ID_MAP={tg_id}:admin')
     lines.append('')
-    if _can_sale_role(user):
+    if _is_admin(user):
         lines.append('Кнопки внизу чата всегда под рукой: Оплата и Выставить счёт.')
+    elif _can_sale_role(user):
+        lines.append('Кнопка внизу чата: Выставить счёт.')
     else:
         lines.append('Пришлите PDF — попадёт в черновики администратора.')
     return '\n'.join(lines)
@@ -110,10 +124,10 @@ def _start_greeting(sender, tg_id) -> str:
 
 def _apps_reply_keyboard(user: User | None) -> dict | None:
     """Постоянные кнопки Mini App внизу чата — чтобы переключаться без /start."""
-    pay_url = _public_miniapp_url()
     row = []
-    if pay_url.startswith('https://'):
-        pay_label = 'Оплата' if _can_sale_role(user) else 'Счета на оплату'
+    pay_url = _public_miniapp_url()
+    if _can_pay_app(user) and pay_url.startswith('https://'):
+        pay_label = 'Оплата' if _is_admin(user) else 'Счета на оплату'
         row.append({'text': pay_label, 'web_app': {'url': pay_url}})
     if _can_sale_role(user):
         from app.tg_sale import public_sale_url
