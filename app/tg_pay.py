@@ -24,6 +24,7 @@ from flask import (
     Blueprint, current_app, jsonify, request, render_template,
     send_from_directory, make_response,
 )
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.utils import secure_filename
 
 from app.models import db, User, PaymentInvoice, BudgetItem, ChatExpenseMessage
@@ -39,6 +40,9 @@ bp = Blueprint('tg_pay', __name__, url_prefix='/tg/pay')
 
 _ALLOWED_EXT = {'.pdf', '.jpg', '.jpeg', '.png', '.webp'}
 _DEV_COOKIE = 'tg_pay_as'
+_MINI_COOKIE = 'tg_mini'
+_MINI_SALT = 'tg-mini-v1'
+_MINI_MAX_AGE = 7 * 24 * 3600
 _LAST_TG_FILE = '/data/tg_last_update.json'
 
 
@@ -170,23 +174,55 @@ def _public_miniapp_url() -> str:
     return ''
 
 
+def _parse_init_fields(init_data: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for part in (init_data or '').split('&'):
+        if not part or '=' not in part:
+            continue
+        key, val = part.split('=', 1)
+        fields[unquote(key)] = unquote(val)
+    return fields
+
+
+def _init_hmac_ok(fields: dict[str, str], bot_token: str, skip: tuple[str, ...]) -> bool:
+    got = fields.get('hash') or ''
+    if not got:
+        return False
+    check = '\n'.join(
+        f'{k}={v}' for k, v in sorted(fields.items()) if k not in skip
+    )
+    secret = hmac.new(b'WebAppData', bot_token.encode('utf-8'), hashlib.sha256).digest()
+    calc = hmac.new(secret, check.encode('utf-8'), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(calc, got)
+
+
+def _user_dict_from_fields(fields: dict[str, str]) -> dict | None:
+    raw = fields.get('user') or '{}'
+    user = {}
+    for candidate in (raw, unquote(raw)):
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            user = parsed
+            break
+    return user if user.get('id') else None
+
+
 def _validate_init_data(init_data: str, bot_token: str) -> dict | None:
     if not init_data or not bot_token:
         return None
-    parsed = dict(parse_qsl(init_data, keep_blank_values=True))
-    got_hash = parsed.pop('hash', '')
-    if not got_hash:
-        return None
-    check = '\n'.join(f'{k}={v}' for k, v in sorted(parsed.items()))
-    secret = hmac.new(b'WebAppData', bot_token.encode('utf-8'), hashlib.sha256).digest()
-    calc = hmac.new(secret, check.encode('utf-8'), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(calc, got_hash):
-        return None
-    try:
-        user = json.loads(unquote(parsed.get('user') or '{}'))
-    except Exception:
-        user = {}
-    return user if isinstance(user, dict) else None
+    variants = (
+        _parse_init_fields(init_data),
+        dict(parse_qsl(init_data, keep_blank_values=True)),
+    )
+    skip_sets = (('hash',), ('hash', 'signature'))
+    for fields in variants:
+        for skip in skip_sets:
+            if _init_hmac_ok(fields, bot_token, skip):
+                return _user_dict_from_fields(fields)
+    return None
 
 
 def _tg_user_id_map() -> dict[str, str]:
@@ -266,33 +302,93 @@ def _dev_user(as_role: str) -> User | None:
     return User.query.filter_by(role='admin').first() or User.query.first()
 
 
-def _init_data_from_request() -> str:
-    """initData с телефона часто не доходит в кастомном заголовке — читаем и query."""
-    header = (request.headers.get('X-Telegram-Init-Data') or '').strip()
-    if header:
-        return header
+def _mini_signer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(current_app.secret_key, salt=_MINI_SALT)
+
+
+def _mini_cookie_secure() -> bool:
+    return bool(os.environ.get('AMVERA') or os.path.isdir('/data') or request.is_secure)
+
+
+def set_mini_cookie(resp, user: User):
+    token = _mini_signer().dumps({'uid': int(user.id)})
+    resp.set_cookie(
+        _MINI_COOKIE,
+        token,
+        max_age=_MINI_MAX_AGE,
+        httponly=True,
+        secure=_mini_cookie_secure(),
+        samesite='Lax',
+        path='/',
+    )
+    return resp
+
+
+def _user_from_mini_cookie() -> User | None:
+    raw = request.cookies.get(_MINI_COOKIE) or ''
+    if not raw:
+        return None
+    try:
+        data = _mini_signer().loads(raw, max_age=_MINI_MAX_AGE)
+        return User.query.get(int(data.get('uid')))
+    except (BadSignature, SignatureExpired, TypeError, ValueError, Exception):
+        return None
+
+
+def _init_data_candidates() -> list[str]:
+    """Все источники initData: на iPhone заголовок может быть обрезан — пробуем каждый."""
+    out: list[str] = []
+
+    def add(value: str | None):
+        text = (value or '').strip()
+        if text and text not in out:
+            out.append(text)
+
+    add(request.headers.get('X-Telegram-Init-Data'))
     auth = (request.headers.get('Authorization') or '').strip()
     if auth.lower().startswith('tma '):
-        return auth[4:].strip()
+        add(auth[4:])
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        if isinstance(body, dict):
+            add(body.get('initData'))
+    add(request.form.get('initData'))
     qs = request.query_string.decode('utf-8', 'ignore')
     for part in qs.split('&'):
         if part.startswith('initData='):
-            return unquote(part[9:])
-    return (request.args.get('initData') or '').strip()
+            add(unquote(part[9:]))
+            break
+    add(request.args.get('initData'))
+    return out
+
+
+def _auth_fail_hint() -> str:
+    if not _get_bot_token():
+        return 'no_bot_token'
+    if _init_data_candidates():
+        return 'bad_signature'
+    return 'no_init_data'
 
 
 def resolve_user() -> tuple[User | None, bool, dict | None]:
     """(user, is_dev, pending_tg_user)."""
-    init_data = _init_data_from_request()
     token = _get_bot_token()
-    if init_data and token:
-        tg_user = _validate_init_data(init_data, token)
-        if tg_user:
+    pending = None
+    if token:
+        for init_data in _init_data_candidates():
+            tg_user = _validate_init_data(init_data, token)
+            if not tg_user:
+                continue
             user = _user_from_telegram(tg_user)
             if user:
                 return user, False, None
-            if not _dev_mode():
-                return None, False, tg_user
+            pending = tg_user
+            break
+    cookie_user = _user_from_mini_cookie()
+    if cookie_user and not pending:
+        return cookie_user, False, None
+    if pending and not _dev_mode():
+        return None, False, pending
     if not _dev_mode():
         return None, False, None
     as_role = (
@@ -351,7 +447,10 @@ def require_user(fn):
                     'username': (pending.get('username') or ''),
                     'hint': 'Этот Telegram не привязан к пользователю ERP. Добавьте id в TG_USER_ID_MAP.',
                 }), 403
-            return jsonify({'error': 'unauthorized', 'hint': 'Откройте из Telegram или /tg/pay при локальном debug'}), 401
+            return jsonify({
+                'error': 'unauthorized',
+                'hint': _auth_fail_hint(),
+            }), 401
         return fn(user, *args, **kwargs)
     return wrapped
 
@@ -546,6 +645,30 @@ def api_status():
     })
 
 
+@bp.route('/api/auth', methods=['POST'])
+def api_auth():
+    user, is_dev, pending = resolve_user()
+    if not user:
+        if pending:
+            return jsonify({
+                'error': 'not_linked',
+                'telegram_id': pending.get('id'),
+                'username': (pending.get('username') or ''),
+                'hint': 'Этот Telegram не привязан к пользователю ERP. Добавьте id в TG_USER_ID_MAP.',
+            }), 403
+        return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+    resp = jsonify({
+        'id': user.id,
+        'username': user.username,
+        'role': user.role,
+        'can_edit': _can_edit(user),
+        'can_inbox': _can_inbox(user),
+        'dev': is_dev,
+        'telegram_id': user.telegram_id,
+    })
+    return set_mini_cookie(resp, user)
+
+
 @bp.route('/api/me')
 @require_user
 def api_me(user: User):
@@ -555,7 +678,7 @@ def api_me(user: User):
         'role': user.role,
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
-        'dev': _dev_mode() and not _init_data_from_request(),
+        'dev': _dev_mode() and not _init_data_candidates(),
         'telegram_id': user.telegram_id,
     })
 

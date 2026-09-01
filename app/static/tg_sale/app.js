@@ -1,33 +1,12 @@
 (function () {
     function tgApp() {
-        return window.Telegram && window.Telegram.WebApp;
+        return (window.FFTg && window.FFTg.tgApp()) || (window.Telegram && window.Telegram.WebApp);
     }
     function getInitData() {
-        const w = tgApp();
-        if (w && w.initData) return w.initData;
-        const hash = String(location.hash || "");
-        const m = hash.match(/tgWebAppData=([^&]+)/);
-        if (m) {
-            try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
-        }
-        return "";
+        return window.FFTg ? window.FFTg.getInitData() : "";
     }
     function waitTelegram() {
-        return new Promise((resolve) => {
-            const start = Date.now();
-            const max = 4000;
-            const tick = () => {
-                const w = tgApp();
-                if (w) {
-                    try { w.ready(); w.expand(); } catch (_) {}
-                    if (w.initData || Date.now() - start > max) return resolve(w);
-                } else if (Date.now() - start > max) {
-                    return resolve(null);
-                }
-                setTimeout(tick, 50);
-            };
-            tick();
-        });
+        return window.FFTg ? window.FFTg.waitTelegram() : Promise.resolve(tgApp());
     }
     const view = document.getElementById("view");
     const titleEl = document.getElementById("screenTitle");
@@ -115,20 +94,8 @@
     }
 
     async function api(path, opts) {
-        const initData = getInitData();
-        const headers = Object.assign({}, (opts && opts.headers) || {});
-        if (initData) {
-            headers["X-Telegram-Init-Data"] = initData;
-            headers.Authorization = "tma " + initData;
-        }
-        if (opts && opts.body && !(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
-        const url = initData
-            ? path + (path.includes("?") ? "&" : "?") + "initData=" + encodeURIComponent(initData)
-            : path;
-        const res = await fetch(url, Object.assign({}, opts, { headers }));
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || data.hint || "Ошибка");
-        return data;
+        if (window.FFTg) return window.FFTg.api(path, opts);
+        throw new Error("Нет входа");
     }
 
     function setTitle(t) { titleEl.textContent = t; }
@@ -640,11 +607,13 @@
     async function boot() {
         await waitTelegram();
         try {
+            if (window.FFTg) await window.FFTg.handshake("/tg/sale/api/auth");
             await reload();
         } catch (e) {
-            if (!/unauthorized|Нет входа/i.test(String(e.message || ""))) throw e;
-            await new Promise((r) => setTimeout(r, 700));
+            if (!/unauthorized|Нет входа|не передал|Подпись/i.test(String(e.message || ""))) throw e;
+            await new Promise((r) => setTimeout(r, 800));
             await waitTelegram();
+            if (window.FFTg) await window.FFTg.handshake("/tg/sale/api/auth");
             await reload();
         }
         render();

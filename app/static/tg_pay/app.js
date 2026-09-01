@@ -1,33 +1,12 @@
 (() => {
   function tgApp() {
-    return window.Telegram && window.Telegram.WebApp;
+    return (window.FFTg && window.FFTg.tgApp()) || (window.Telegram && window.Telegram.WebApp);
   }
   function getInitData() {
-    const w = tgApp();
-    if (w && w.initData) return w.initData;
-    const hash = String(location.hash || '');
-    const m = hash.match(/tgWebAppData=([^&]+)/);
-    if (m) {
-      try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
-    }
-    return '';
+    return window.FFTg ? window.FFTg.getInitData() : '';
   }
   function waitTelegram() {
-    return new Promise((resolve) => {
-      const start = Date.now();
-      const max = 4000;
-      const tick = () => {
-        const w = tgApp();
-        if (w) {
-          try { w.ready(); w.expand(); w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } catch (_) {}
-          if (w.initData || Date.now() - start > max) return resolve(w);
-        } else if (Date.now() - start > max) {
-          return resolve(null);
-        }
-        setTimeout(tick, 50);
-      };
-      tick();
-    });
+    return window.FFTg ? window.FFTg.waitTelegram() : Promise.resolve(tgApp());
   }
 
   const view = document.getElementById('view');
@@ -48,40 +27,18 @@
 
   function headers() {
     const h = {};
-    const initData = getInitData();
-    if (initData) {
-      h['X-Telegram-Init-Data'] = initData;
-      h.Authorization = 'tma ' + initData;
-    }
     const m = document.cookie.match(/(?:^|; )tg_pay_as=([^;]*)/);
     if (m) h['X-Tg-Pay-As'] = decodeURIComponent(m[1]);
     return h;
   }
 
-  function withAuth(path) {
-    const initData = getInitData();
-    if (!initData) return path;
-    const sep = path.includes('?') ? '&' : '?';
-    return path + sep + 'initData=' + encodeURIComponent(initData);
-  }
-
   async function api(path, opts) {
-    const res = await fetch(withAuth(path), {
-      credentials: 'same-origin',
-      ...opts,
-      headers: { ...headers(), ...(opts && opts.headers || {}) },
-    });
-    if (res.status === 401) throw new Error('Нет входа. Откройте Mini App из бота или локально /tg/pay.');
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 403 && data.error === 'not_linked') {
-      throw new Error(
-        'Telegram не привязан к ERP. Ваш id: ' + data.telegram_id
-        + (data.username ? ' (@' + data.username + ')' : '')
-        + '. Добавьте в Amvera TG_USER_ID_MAP: ' + data.telegram_id + ':admin'
-      );
+    if (window.FFTg) {
+      const extra = headers();
+      const merged = Object.assign({}, extra, (opts && opts.headers) || {});
+      return window.FFTg.api(path, Object.assign({}, opts, { headers: merged }));
     }
-    if (!res.ok) throw new Error(data.error || data.hint || ('HTTP ' + res.status));
-    return data;
+    throw new Error('Нет входа');
   }
 
   function haptic(kind) {
@@ -145,17 +102,20 @@
 
   async function boot() {
     try {
-      try {
-        me = await api('/tg/pay/api/me');
-      } catch (e) {
-        if (!/Нет входа|unauthorized/i.test(String(e.message || ''))) throw e;
-        await new Promise((r) => setTimeout(r, 700));
-        await waitTelegram();
-        me = await api('/tg/pay/api/me');
-      }
+      await waitTelegram();
+      try { const w = tgApp(); if (w) { w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } } catch (_) {}
+      if (window.FFTg) me = await window.FFTg.handshake('/tg/pay/api/auth');
+      else me = await api('/tg/pay/api/me');
     } catch (e) {
-      view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e.message}</p></div>`;
-      return;
+      try {
+        await new Promise((r) => setTimeout(r, 800));
+        await waitTelegram();
+        if (window.FFTg) me = await window.FFTg.handshake('/tg/pay/api/auth');
+        else throw e;
+      } catch (e2) {
+        view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e2.message || e.message}</p></div>`;
+        return;
+      }
     }
     if (me.can_edit || me.can_inbox) {
       budgetItems = await api('/tg/pay/api/budget-items');
@@ -444,7 +404,7 @@
         return;
       }
     } catch (_) {}
-    const res = await fetch(withAuth('/tg/pay/api/invoices/' + inv.id + '/file'), {
+    const res = await fetch('/tg/pay/api/invoices/' + inv.id + '/file', {
       credentials: 'same-origin',
       headers: headers(),
     });
@@ -671,5 +631,5 @@
     }[c]));
   }
 
-  waitTelegram().then(() => boot());
+  boot();
 })();

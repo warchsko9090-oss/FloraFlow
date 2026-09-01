@@ -23,7 +23,7 @@ from app.models import (
     db, User, Client, Plant, Size, StockBalance,
     SaleCompany, SaleInvoice, SaleInvoiceLine,
 )
-from app.tg_pay import resolve_user
+from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie
 from app.tg_sale_parse import parse_buyer_file
 from app.utils import msk_now, build_pdf_bytes, size_natural_key
 from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
@@ -103,7 +103,7 @@ def require_sale(fn):
                     'telegram_id': pending.get('id'),
                     'username': (pending.get('username') or ''),
                 }), 403
-            return jsonify({'error': 'unauthorized'}), 401
+            return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
         if not _can_sale(user):
             return jsonify({'error': 'forbidden', 'hint': 'Только admin или активный менеджер продаж'}), 403
         return fn(user, *args, **kwargs)
@@ -706,6 +706,30 @@ def index():
     if is_dev and as_role in ('admin', 'shop_manager'):
         resp.set_cookie(_DEV_COOKIE, as_role, samesite='Lax')
     return resp
+
+
+@bp.route('/api/auth', methods=['POST'])
+def api_auth():
+    user, is_dev, pending = resolve_user()
+    if not user:
+        if pending:
+            return jsonify({
+                'error': 'not_linked',
+                'telegram_id': pending.get('id'),
+                'username': (pending.get('username') or ''),
+            }), 403
+        return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+    if not _can_sale(user):
+        return jsonify({'error': 'forbidden', 'hint': 'Только admin или активный менеджер продаж'}), 403
+    resp = jsonify({
+        'id': user.id,
+        'username': user.username,
+        'role': user.role,
+        'can_firms': _can_firms(user),
+        'can_edit_firms': _can_firms(user),
+        'dev': is_dev,
+    })
+    return set_mini_cookie(resp, user)
 
 
 @bp.route('/api/me')
