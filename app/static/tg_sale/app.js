@@ -6,6 +6,43 @@
     const titleEl = document.getElementById("screenTitle");
     const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "" };
 
+    function haptic(kind) {
+        try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (_) {}
+    }
+
+    (function bindPress() {
+        const sel = "button, .btn, .list-item[data-open], .firm, .size-row";
+        let cur = null;
+        let downAt = 0;
+        function clear() {
+            if (!cur) return;
+            const el = cur;
+            cur = null;
+            const wait = Math.max(0, 90 - (Date.now() - downAt));
+            setTimeout(() => el.classList.remove("is-pressed"), wait);
+        }
+        document.addEventListener("pointerdown", (e) => {
+            if (e.pointerType === "mouse" && e.button !== 0) return;
+            const t = e.target;
+            if (t.closest && t.closest("input, textarea, select")) return;
+            const el = t.closest && t.closest(sel);
+            if (!el || el.disabled || el.classList.contains("busy")) return;
+            if (cur) cur.classList.remove("is-pressed");
+            cur = el;
+            downAt = Date.now();
+            el.classList.add("is-pressed");
+            haptic("light");
+        }, { passive: true });
+        window.addEventListener("pointerup", clear, { passive: true });
+        window.addEventListener("pointercancel", clear, { passive: true });
+    })();
+
+    function armBusy(el) {
+        if (!el) return () => {};
+        el.classList.add("busy");
+        return () => el.classList.remove("busy");
+    }
+
     function emptyDraft() {
         return {
             company_id: null,
@@ -216,12 +253,18 @@
     }
 
     async function saveCompany(id, card) {
-        const payload = {};
-        card.querySelectorAll("[data-k]").forEach((el) => { payload[el.dataset.k] = el.value; });
-        await api(`/tg/sale/api/companies/${id}`, { method: "POST", body: JSON.stringify(payload) });
-        await reload();
-        state.screen = "firms";
-        render();
+        const done = armBusy(card.querySelector("[data-save-co]"));
+        try {
+            const payload = {};
+            card.querySelectorAll("[data-k]").forEach((el) => { payload[el.dataset.k] = el.value; });
+            await api(`/tg/sale/api/companies/${id}`, { method: "POST", body: JSON.stringify(payload) });
+            haptic("medium");
+            await reload();
+            state.screen = "firms";
+            render();
+        } finally {
+            done();
+        }
     }
 
     function bindInnLookup() {
@@ -248,6 +291,7 @@
         if (!force && state.lastInnLookup === inn) return;
         const hint = document.getElementById("innHint");
         if (hint) hint.textContent = "Ищем реквизиты…";
+        const done = armBusy(document.getElementById("innLookup"));
         try {
             const data = await api(`/tg/sale/api/lookup-inn?inn=${encodeURIComponent(inn)}`);
             const f = data.fields || {};
@@ -260,6 +304,8 @@
             render();
         } catch (ex) {
             if (hint) hint.textContent = ex.message || "Не удалось запросить ЕГРЮЛ";
+        } finally {
+            done();
         }
     }
 
@@ -439,6 +485,7 @@
     }
 
     async function saveDraft() {
+        const done = armBusy(document.getElementById("save"));
         try {
             const body = payloadFromDraft();
             let saved;
@@ -448,17 +495,22 @@
                 saved = await api("/tg/sale/api/invoices", { method: "POST", body: JSON.stringify(body) });
             }
             state.current = saved;
+            haptic("medium");
             await reload();
             render();
         } catch (ex) {
             showSaveErr(ex.message);
+        } finally {
+            done();
         }
     }
 
     async function sendPdf() {
         if (!state.current) return;
+        const done = armBusy(document.getElementById("pdf"));
         try {
             const data = await api(`/tg/sale/api/invoices/${state.current.id}/send-pdf`, { method: "POST", body: "{}" });
+            haptic("medium");
             if (!data.ok) {
                 window.open(`/tg/sale/api/invoices/${state.current.id}/pdf`, "_blank");
                 return;
@@ -466,18 +518,24 @@
             if (tg && tg.close) setTimeout(() => tg.close(), 400);
         } catch (e) {
             window.open(`/tg/sale/api/invoices/${state.current.id}/pdf`, "_blank");
+        } finally {
+            done();
         }
     }
 
     async function approveInv() {
         if (!state.current) return;
+        const done = armBusy(document.getElementById("approve"));
         try {
             await api(`/tg/sale/api/invoices/${state.current.id}/approve`, { method: "POST", body: "{}" });
+            haptic("medium");
             await reload();
             state.screen = "list";
             render();
         } catch (ex) {
             showSaveErr(ex.message);
+        } finally {
+            done();
         }
     }
 

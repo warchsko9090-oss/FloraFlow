@@ -59,6 +59,33 @@
     try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || 'light'); } catch (_) {}
   }
 
+  (function bindPress() {
+    const sel = 'button, .btn, .fab, .back, a.row, a.choice, a.inbox-banner, a.inbox-link';
+    let cur = null;
+    let downAt = 0;
+    function clear() {
+      if (!cur) return;
+      const el = cur;
+      cur = null;
+      const wait = Math.max(0, 90 - (Date.now() - downAt));
+      setTimeout(() => el.classList.remove('is-pressed'), wait);
+    }
+    document.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      const t = e.target;
+      if (t.closest && t.closest('input, textarea, select')) return;
+      const el = t.closest && t.closest(sel);
+      if (!el || el.disabled || el.classList.contains('busy')) return;
+      if (cur) cur.classList.remove('is-pressed');
+      cur = el;
+      downAt = Date.now();
+      el.classList.add('is-pressed');
+      haptic('light');
+    }, { passive: true });
+    window.addEventListener('pointerup', clear, { passive: true });
+    window.addEventListener('pointercancel', clear, { passive: true });
+  })();
+
   function setTitle(t) { titleEl.textContent = t; }
 
   function route() {
@@ -184,7 +211,7 @@
     }
     view.innerHTML = html;
     const fab = document.getElementById('fabAdd');
-    if (fab) fab.onclick = () => { haptic(); location.hash = '#/new'; };
+    if (fab) fab.onclick = () => { location.hash = '#/new'; };
   }
 
   async function renderDetail(id) {
@@ -374,7 +401,6 @@
   }
 
   async function openInvoice(inv) {
-    haptic();
     try {
       const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', { method: 'POST' });
       if (sent.ok) {

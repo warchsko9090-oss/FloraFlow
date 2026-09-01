@@ -12,6 +12,10 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+button, a, .fab, .back, .choice, .row, .inbox-banner, .inbox-link {
+    -webkit-tap-highlight-color: rgba(182, 154, 109, 0.35);
+    touch-action: manipulation;
+}
 
 html, body {
     min-height: 100%;
@@ -126,6 +130,8 @@ h1 {
     border-radius: 22px;
     padding: 18px 18px;
     margin-bottom: 10px;
+    cursor: pointer;
+    transition: transform 80ms ease, opacity 80ms ease, background-color 80ms ease;
 }
 .choice-k {
     font-size: 20px;
@@ -149,6 +155,8 @@ h1 {
     text-decoration: none;
     color: inherit;
     box-shadow: 0 1px 0 rgba(17, 24, 20, 0.04);
+    cursor: pointer;
+    transition: transform 80ms ease, opacity 80ms ease, background-color 80ms ease;
 }
 
 .row::before {
@@ -197,6 +205,8 @@ h1 {
     margin-bottom: 12px;
     font-weight: 600;
     font-size: 14px;
+    cursor: pointer;
+    transition: transform 80ms ease, opacity 80ms ease, filter 80ms ease;
 }
 .inbox-banner {
     background: var(--ink);
@@ -240,6 +250,8 @@ h1 {
     font-size: 32px;
     line-height: 1;
     box-shadow: 0 10px 24px rgba(17, 24, 20, 0.25);
+    cursor: pointer;
+    transition: transform 80ms ease, opacity 80ms ease, filter 80ms ease;
 }
 
 .back {
@@ -249,6 +261,8 @@ h1 {
     font-size: 15px;
     font-weight: 600;
     padding: 0 0 12px;
+    cursor: pointer;
+    transition: transform 80ms ease, opacity 80ms ease;
 }
 
 .card {
@@ -323,6 +337,8 @@ h1 {
     font-size: 16px;
     font-weight: 700;
     margin-top: 10px;
+    cursor: pointer;
+    transition: transform 80ms ease, filter 80ms ease, opacity 80ms ease;
 }
 .btn-ink { background: var(--ink); color: var(--white); }
 .btn-brass { background: var(--brass); color: var(--ink); }
@@ -338,3 +354,17 @@ h1 {
 .warn { color: var(--danger); font-size: 13px; margin-top: 8px; }
 
 .busy { opacity: 0.55; pointer-events: none; }
+.is-pressed {
+    transform: scale(0.96);
+    opacity: 0.72;
+}
+.btn-ink.is-pressed, .btn-ink:active, .fab.is-pressed, .fab:active,
+.inbox-banner.is-pressed, .inbox-banner:active {
+    filter: brightness(1.2);
+}
+.btn-brass.is-pressed, .btn-brass:active,
+.btn-quiet.is-pressed, .btn-quiet:active,
+.choice.is-pressed, .choice:active,
+.row.is-pressed, .row:active {
+    filter: brightness(0.93);
+}
