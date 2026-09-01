@@ -1,4 +1,4 @@
-/* Shared Telegram Mini App auth. iPhone: no initData in GET URL. */
+/* Shared Telegram Mini App auth. */
 (function (w) {
   function tgApp() {
     return w.Telegram && w.Telegram.WebApp;
@@ -9,16 +9,30 @@
     catch (_) { return String(v || ""); }
   }
 
-  function paramsFromHash(hash) {
-    const h = String(hash || "").replace(/^#/, "");
-    const out = {};
-    if (!h) return out;
-    h.split("&").forEach((part) => {
-      const eq = part.indexOf("=");
-      if (eq < 0) return;
-      out[decodeVal(part.slice(0, eq))] = part.slice(eq + 1);
-    });
-    return out;
+  function maybeDecode(s) {
+    let cur = String(s || "");
+    for (let n = 0; n < 2; n++) {
+      const next = decodeVal(cur);
+      if (next === cur) break;
+      cur = next;
+      if (cur.indexOf("hash=") >= 0 && (cur.indexOf("user=") >= 0 || cur.indexOf("query_id=") >= 0 || cur.indexOf("chat_instance=") >= 0)) {
+        break;
+      }
+    }
+    return cur;
+  }
+
+  /* iOS: #/?tgWebAppData=...  Desktop: #tgWebAppData=...
+     Value may be encoded (inner & as %26) or raw until &tgWebApp. */
+  function extractTgWebAppData(src) {
+    const s = String(src || "");
+    const key = "tgWebAppData=";
+    const i = s.indexOf(key);
+    if (i < 0) return "";
+    let rest = s.slice(i + key.length);
+    const next = rest.search(/&tgWebApp/);
+    if (next >= 0) rest = rest.slice(0, next);
+    return maybeDecode(rest);
   }
 
   function fromLaunchParams(raw) {
@@ -26,12 +40,10 @@
     if (typeof raw !== "string") {
       try { raw = JSON.stringify(raw); } catch (_) { return ""; }
     }
+    const fromKey = extractTgWebAppData(raw);
+    if (fromKey) return fromKey;
     if (raw.includes("hash=") && (raw.includes("user=") || raw.includes("user%3D"))) {
-      if (raw.indexOf("tgWebAppData=") >= 0) {
-        const p = paramsFromHash(raw);
-        return decodeVal(p.tgWebAppData || "");
-      }
-      return raw.indexOf("%") >= 0 ? decodeVal(raw) : raw;
+      return raw.indexOf("%") >= 0 ? maybeDecode(raw) : raw;
     }
     try {
       const o = JSON.parse(raw);
@@ -66,16 +78,25 @@
   function getInitData() {
     const web = tgApp();
     if (web && web.initData) return web.initData;
-    const hp = paramsFromHash(w.location.hash);
-    if (hp.tgWebAppData) return decodeVal(hp.tgWebAppData);
+    const launch = w.__ffLaunch || {};
+    const sources = [
+      w.location.hash,
+      w.location.href,
+      w.location.search,
+      launch.hash,
+      launch.href,
+      launch.search,
+    ];
+    for (const src of sources) {
+      const got = extractTgWebAppData(src);
+      if (got) return got;
+    }
     try {
       const sp = new URLSearchParams(w.location.search);
       const q = sp.get("tgWebAppData") || sp.get("initData") || "";
       if (q) return q;
     } catch (_) {}
-    const stored = fromStorage();
-    if (stored) return stored;
-    return "";
+    return fromStorage();
   }
 
   function remember(initData) {
@@ -83,16 +104,31 @@
     try { w.sessionStorage.setItem("telegram-web-app-init-data", initData); } catch (_) {}
   }
 
+  function debugInfo() {
+    const web = tgApp();
+    const hash = String((w.__ffLaunch && w.__ffLaunch.hash) || w.location.hash || "");
+    return {
+      hash_len: hash.length,
+      hash_head: hash.slice(0, 140),
+      href_head: String(w.location.href || "").split("#")[0].slice(-80),
+      has_tg: !!w.Telegram,
+      has_webapp: !!web,
+      init_len: web && web.initData ? String(web.initData).length : 0,
+      parsed_len: (getInitData() || "").length,
+      platform: (web && web.platform) || "",
+      has_proxy: !!(w.TelegramWebviewProxy || w.TelegramWebview),
+    };
+  }
+
   function waitTelegram(maxMs) {
-    const max = maxMs || 8000;
+    const max = maxMs || 1200;
     return new Promise((resolve) => {
       const start = Date.now();
       let done = false;
       const finish = (web) => {
         if (done) return;
         done = true;
-        const data = getInitData();
-        remember(data);
+        remember(getInitData());
         resolve(web || tgApp() || null);
       };
       const tick = () => {
@@ -101,7 +137,7 @@
           try { web.ready(); web.expand(); } catch (_) {}
         }
         if (getInitData() || Date.now() - start > max) return finish(web);
-        setTimeout(tick, 50);
+        setTimeout(tick, 40);
       };
       w.addEventListener("hashchange", () => {
         if (getInitData()) finish(tgApp());
@@ -119,10 +155,10 @@
       );
     }
     if (data && data.hint === "no_init_data") {
-      return "iPhone не передал вход Telegram. Закройте мини-приложение полностью и откройте его кнопкой в боте.";
+      return "Telegram не передал вход. Откройте мини-приложение кнопкой внизу чата с ботом (не ссылкой).";
     }
     if (data && data.hint === "bad_signature") {
-      return "Подпись Telegram не принята. Обновите мини-приложение: закройте и откройте из бота.";
+      return "Подпись Telegram не принята. Закройте мини-приложение и откройте его кнопкой в боте.";
     }
     return (data && (data.error || data.hint)) || "Нет входа. Откройте Mini App из бота.";
   }
@@ -134,7 +170,7 @@
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData: initData }),
+      body: JSON.stringify({ initData: initData, debug: debugInfo() }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(authErrorMessage(data, res.status));
@@ -173,5 +209,5 @@
     return data;
   }
 
-  w.FFTg = { tgApp, getInitData, waitTelegram, handshake, api, authErrorMessage, remember };
+  w.FFTg = { tgApp, getInitData, waitTelegram, handshake, api, authErrorMessage, remember, debugInfo };
 })(window);

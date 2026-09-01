@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
     <meta name="theme-color" content="#111814">
     <title>Счета на оплату</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>window.__ffLaunch={hash:String(location.hash||''),href:String(location.href||''),search:String(location.search||'')};</script>
+    <script src="{{ url_for('static', filename='tg_common/telegram-web-app.js') }}?v=20260901j"></script>
     <script>try{var _w=window.Telegram&&Telegram.WebApp;if(_w){_w.ready();_w.expand();}}catch(e){}</script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='tg_pay/app.css') }}?v=20260901d">
+    <link rel="stylesheet" href="{{ url_for('static', filename='tg_pay/app.css') }}?v=20260901e">
 </head>
 <body>
     <div id="app">
@@ -20,7 +21,7 @@
         </header>
         <main id="view"></main>
     </div>
-    <script src="{{ url_for('static', filename='tg_common/tg_auth.js') }}?v=20260901d"></script>
-    <script src="{{ url_for('static', filename='tg_pay/app.js') }}?v=20260901d"></script>
+    <script src="{{ url_for('static', filename='tg_common/tg_auth.js') }}?v=20260901e"></script>
+    <script src="{{ url_for('static', filename='tg_pay/app.js') }}?v=20260901e"></script>
 </body>
 </html>

@@ -23,7 +23,7 @@ from app.models import (
     db, User, Client, Plant, Size, StockBalance,
     SaleCompany, SaleInvoice, SaleInvoiceLine,
 )
-from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie
+from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail
 from app.tg_sale_parse import parse_buyer_file
 from app.utils import msk_now, build_pdf_bytes, size_natural_key
 from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
@@ -718,6 +718,7 @@ def api_auth():
                 'telegram_id': pending.get('id'),
                 'username': (pending.get('username') or ''),
             }), 403
+        log_mini_auth_fail()
         return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
     if not _can_sale(user):
         return jsonify({'error': 'forbidden', 'hint': 'Только admin или активный менеджер продаж'}), 403

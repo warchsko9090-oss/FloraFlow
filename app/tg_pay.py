@@ -370,6 +370,21 @@ def _auth_fail_hint() -> str:
     return 'no_init_data'
 
 
+def log_mini_auth_fail():
+    debug = {}
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        if isinstance(body, dict):
+            debug = body.get('debug') or {}
+    current_app.logger.warning(
+        'tg mini auth fail hint=%s candidates=%s ua=%s debug=%s',
+        _auth_fail_hint(),
+        len(_init_data_candidates()),
+        request.headers.get('User-Agent', ''),
+        debug,
+    )
+
+
 def resolve_user() -> tuple[User | None, bool, dict | None]:
     """(user, is_dev, pending_tg_user)."""
     token = _get_bot_token()
@@ -656,6 +671,7 @@ def api_auth():
                 'username': (pending.get('username') or ''),
                 'hint': 'Этот Telegram не привязан к пользователю ERP. Добавьте id в TG_USER_ID_MAP.',
             }), 403
+        log_mini_auth_fail()
         return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
     resp = jsonify({
         'id': user.id,
