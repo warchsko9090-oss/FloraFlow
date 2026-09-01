@@ -4,7 +4,7 @@
     const initData = (tg && tg.initData) || "";
     const view = document.getElementById("view");
     const titleEl = document.getElementById("screenTitle");
-    const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockHits: [], lastQ: "" };
+    const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "" };
 
     function emptyDraft() {
         return {
@@ -93,8 +93,14 @@
 
     function buyerFields(b) {
         const f = (k, l) => `<div class="label">${l}</div><input class="input" data-b="${k}" value="${esc(b[k] || "")}">`;
-        return f("name", "Название") + f("inn", "ИНН") + f("kpp", "КПП") + f("ogrn", "ОГРН")
-            + f("address", "Адрес") + f("phone", "Телефон")
+        return f("name", "Название")
+            + `<div class="label">ИНН</div>
+               <div class="inn-row">
+                 <input class="input" data-b="inn" inputmode="numeric" value="${esc(b.inn || "")}" placeholder="10 или 12 цифр">
+                 <button type="button" class="btn sm ghost" id="innLookup">По ИНН</button>
+               </div>
+               <div class="muted" id="innHint">${esc(b._hint || "Подставим название, КПП, ОГРН и адрес из ЕГРЮЛ")}</div>`
+            + f("kpp", "КПП") + f("ogrn", "ОГРН") + f("address", "Адрес") + f("phone", "Телефон")
             + f("bank", "Банк") + f("rs", "Расчётный счёт") + f("bik", "БИК") + f("ks", "Корр. счёт");
     }
 
@@ -106,32 +112,12 @@
                 <div><b>${esc(c.short_name)}</b></div>
                 <div class="muted">${vatLabel(c.vat_mode)}</div>
             </button>`).join("") || `<p class="muted">Сначала заполните фирмы (админ)</p>`;
-        const lines = d.lines.map((ln, i) => `
-            <div class="list-item">
-                <div><b>${esc(ln.plant_name)}</b> · ${esc(ln.size_name)}</div>
-                <div class="grid2" style="margin-top:8px">
-                    <div>
-                        <div class="label">Кол-во, шт</div>
-                        <input class="input" data-qty="${i}" type="number" min="1" max="${ln.free_qty || 9999}" inputmode="numeric" value="${ln.qty}">
-                        <div class="muted" style="margin-top:4px">свободно ${ln.free_qty || "—"}</div>
-                    </div>
-                    <div>
-                        <div class="label">Цена, ₽</div>
-                        <input class="input" data-price="${i}" type="number" min="0" step="1" inputmode="numeric" value="${ln.price}">
-                    </div>
-                </div>
-                <div class="row" style="margin-top:8px">
-                    <span></span>
-                    <button class="btn sm danger" data-del="${i}">Удалить</button>
-                </div>
-            </div>`).join("");
-        const sum = d.lines.reduce((s, ln) => s + Number(ln.qty) * Number(ln.price), 0);
         view.innerHTML = `
             <button class="btn ghost" id="back">← К списку</button>
             <div class="label">Клиент</div>
             <div class="card">
                 <input type="file" id="buyerFile" accept=".pdf,.doc,.docx,image/*">
-                <p class="muted" style="margin-top:8px">PDF, Word или фото реквизитов</p>
+                <p class="muted" style="margin-top:8px">PDF, Word или фото реквизитов — либо ИНН ниже</p>
                 <div id="parseErr" class="err hide"></div>
                 ${buyerFields(d.buyer)}
             </div>
@@ -139,11 +125,11 @@
             ${firms}
             <div class="label">Позиции</div>
             <div class="card">
-                <input class="input" id="q" placeholder="Поиск по остаткам" value="${esc(state.lastQ || "")}">
+                <input class="input" id="q" placeholder="Название или размер, например туя 160" value="${esc(state.lastQ || "")}">
                 <div id="suggest" class="suggest"></div>
-                ${lines || `<p class="muted">Добавьте растение и размер</p>`}
+                <div id="linesBox"></div>
             </div>
-            <div class="card row"><span class="muted">Итого</span><span class="tot">${money(sum)}</span></div>
+            <div class="card row"><span class="muted">Итого</span><span class="tot" id="totVal">0 ₽</span></div>
             <div id="saveErr" class="err hide"></div>
             <button class="btn gold" id="save">Сохранить черновик</button>
             ${state.current ? `<div class="grid2" style="margin-top:8px">
@@ -158,15 +144,8 @@
         view.querySelectorAll("[data-b]").forEach((el) => {
             el.oninput = () => { d.buyer[el.dataset.b] = el.value; };
         });
-        view.querySelectorAll("[data-qty]").forEach((el) => {
-            el.oninput = () => { d.lines[Number(el.dataset.qty)].qty = Number(el.value || 0); };
-        });
-        view.querySelectorAll("[data-price]").forEach((el) => {
-            el.oninput = () => { d.lines[Number(el.dataset.price)].price = Number(el.value || 0); };
-        });
-        view.querySelectorAll("[data-del]").forEach((el) => {
-            el.onclick = () => { d.lines.splice(Number(el.dataset.del), 1); render(); };
-        });
+        bindInnLookup();
+        refreshLines();
         const q = document.getElementById("q");
         let t = null;
         q.oninput = () => {
@@ -245,35 +224,174 @@
         render();
     }
 
+    function bindInnLookup() {
+        const btn = document.getElementById("innLookup");
+        const innEl = view.querySelector("[data-b=inn]");
+        if (btn) btn.onclick = (e) => { e.preventDefault(); lookupInn(true); };
+        if (innEl) {
+            innEl.addEventListener("blur", () => lookupInn(false));
+            let innT = null;
+            innEl.addEventListener("input", () => {
+                clearTimeout(innT);
+                innT = setTimeout(() => {
+                    const inn = String(innEl.value || "").replace(/\D/g, "");
+                    if (inn.length === 10 || inn.length === 12) lookupInn(false);
+                }, 700);
+            });
+        }
+    }
+
+    async function lookupInn(force) {
+        const b = state.draft.buyer;
+        const inn = String(b.inn || "").replace(/\D/g, "");
+        if (inn.length !== 10 && inn.length !== 12) return;
+        if (!force && state.lastInnLookup === inn) return;
+        const hint = document.getElementById("innHint");
+        if (hint) hint.textContent = "Ищем реквизиты…";
+        try {
+            const data = await api(`/tg/sale/api/lookup-inn?inn=${encodeURIComponent(inn)}`);
+            const f = data.fields || {};
+            const take = (k) => { if (!(b[k] || "").trim() && f[k]) b[k] = f[k]; };
+            take("name"); take("kpp"); take("ogrn"); take("address"); take("phone");
+            take("bank"); take("rs"); take("bik"); take("ks");
+            if (f.inn) b.inn = f.inn;
+            b._hint = data.hint || "";
+            if (data.ok) state.lastInnLookup = inn;
+            render();
+        } catch (ex) {
+            if (hint) hint.textContent = ex.message || "Не удалось запросить ЕГРЮЛ";
+        }
+    }
+
+    function lineQty(it) {
+        const ln = state.draft.lines.find((x) =>
+            Number(x.plant_id) === Number(it.plant_id) && Number(x.size_id) === Number(it.size_id)
+        );
+        return ln ? Number(ln.qty || 0) : 0;
+    }
+
+    function paintSizeRows() {
+        document.querySelectorAll(".size-row").forEach((btn) => {
+            const g = state.stockGroups[Number(btn.dataset.g)];
+            const it = g && g.sizes[Number(btn.dataset.s)];
+            if (!it) return;
+            const n = lineQty(it);
+            btn.classList.toggle("on", n > 0);
+            const mark = btn.querySelector(".addm");
+            if (mark) mark.textContent = n ? String(n) : "+";
+        });
+    }
+
+    function refreshLines() {
+        const box = document.getElementById("linesBox");
+        const tot = document.getElementById("totVal");
+        if (!box) return;
+        const d = state.draft;
+        const html = d.lines.map((ln, i) => `
+            <div class="list-item">
+                <div><b>${esc(ln.plant_name)}</b> · ${esc(ln.size_name)}</div>
+                <div class="grid2" style="margin-top:8px">
+                    <div>
+                        <div class="label">Кол-во, шт</div>
+                        <input class="input" data-qty="${i}" type="number" min="1" max="${ln.free_qty || 9999}" inputmode="numeric" value="${ln.qty}">
+                        <div class="muted" style="margin-top:4px">свободно ${ln.free_qty || "—"}</div>
+                    </div>
+                    <div>
+                        <div class="label">Цена, ₽</div>
+                        <input class="input" data-price="${i}" type="number" min="0" step="1" inputmode="numeric" value="${ln.price}">
+                    </div>
+                </div>
+                <div class="row" style="margin-top:8px">
+                    <span></span>
+                    <button class="btn sm danger" data-del="${i}">Удалить</button>
+                </div>
+            </div>`).join("");
+        box.innerHTML = html || `<p class="muted">Нажмите размер в поиске, чтобы добавить</p>`;
+        if (tot) {
+            const sum = d.lines.reduce((s, ln) => s + Number(ln.qty) * Number(ln.price), 0);
+            tot.textContent = money(sum);
+        }
+        box.querySelectorAll("[data-qty]").forEach((el) => {
+            el.oninput = () => {
+                d.lines[Number(el.dataset.qty)].qty = Number(el.value || 0);
+                if (tot) {
+                    const sum = d.lines.reduce((s, ln) => s + Number(ln.qty) * Number(ln.price), 0);
+                    tot.textContent = money(sum);
+                }
+                paintSizeRows();
+            };
+        });
+        box.querySelectorAll("[data-price]").forEach((el) => {
+            el.oninput = () => {
+                d.lines[Number(el.dataset.price)].price = Number(el.value || 0);
+                if (tot) {
+                    const sum = d.lines.reduce((s, ln) => s + Number(ln.qty) * Number(ln.price), 0);
+                    tot.textContent = money(sum);
+                }
+            };
+        });
+        box.querySelectorAll("[data-del]").forEach((el) => {
+            el.onclick = () => {
+                d.lines.splice(Number(el.dataset.del), 1);
+                refreshLines();
+                paintSizeRows();
+            };
+        });
+    }
+
+    function addStockLine(it) {
+        const existing = state.draft.lines.find((ln) =>
+            Number(ln.plant_id) === Number(it.plant_id) && Number(ln.size_id) === Number(it.size_id)
+        );
+        if (existing) existing.qty = Number(existing.qty || 0) + 1;
+        else {
+            state.draft.lines.push({
+                plant_id: it.plant_id, size_id: it.size_id, plant_name: it.plant_name,
+                size_name: it.size_name, qty: 1, price: it.price, free_qty: it.free_qty || it.free || 0,
+            });
+        }
+        refreshLines();
+        paintSizeRows();
+    }
+
     async function searchStock(q) {
         const box = document.getElementById("suggest");
         if (!box) return;
         state.lastQ = q || "";
-        if (!q || q.length < 2) { box.innerHTML = ""; state.stockHits = []; return; }
+        if (!q || q.length < 2) { box.innerHTML = ""; state.stockGroups = []; return; }
         const data = await api(`/tg/sale/api/stock?q=${encodeURIComponent(q)}`);
-        state.stockHits = data.items || [];
-        box.innerHTML = state.stockHits.map((it, i) => `
-            <button type="button" class="hit ${it.is_seedling ? "hit-seed" : ""}" data-add="${i}">
-                <div class="hit-name">${esc(it.plant_name)}</div>
-                <div class="hit-meta">
-                    <span class="hit-chip"><span class="hit-k">размер</span> ${esc(it.size_name)}</span>
-                    <span class="hit-chip price"><span class="hit-k">цена</span> ${money(it.price)}</span>
-                    <span class="hit-chip"><span class="hit-k">остаток</span> ${it.free_qty || it.free} шт</span>
-                    ${it.is_seedling ? `<span class="hit-chip seed">контейнер</span>` : ""}
-                </div>
-            </button>`).join("") || `<div class="muted" style="padding:10px">Ничего не найдено</div>`;
-        box.querySelectorAll("[data-add]").forEach((btn) => {
+        const groups = data.groups || [];
+        state.stockGroups = groups;
+        box.innerHTML = groups.map((g, gi) => {
+            const initial = esc((g.plant_name || "?").charAt(0));
+            const pic = g.photo_url
+                ? `<img class="plant-pic" src="${esc(g.photo_url)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="plant-pic ph" style="display:none">${initial}</div>`
+                : `<div class="plant-pic ph">${initial}</div>`;
+            const from = g.min_price ? `от ${money(g.min_price)}` : "без цены";
+            const rows = (g.sizes || []).map((it, si) => `
+                <button type="button" class="size-row ${it.is_seedling ? "seed" : ""}" data-g="${gi}" data-s="${si}">
+                    <span class="sz">${esc(it.size_name)}</span>
+                    <span class="pr">${it.price ? money(it.price) : "—"}</span>
+                    <span class="st">${it.free_qty || it.free} шт</span>
+                    <span class="addm">+</span>
+                </button>`).join("");
+            return `<div class="plant-card">
+                <div class="plant-head">${pic}<div>
+                    <div class="hit-name">${esc(g.plant_name)}</div>
+                    <div class="muted">${g.size_count} поз. · ${from}</div>
+                </div></div>
+                <div class="size-legend"><span>Размер</span><span>Цена</span><span>Остаток</span><span></span></div>
+                ${rows}
+            </div>`;
+        }).join("") || `<div class="muted" style="padding:10px">Ничего не найдено</div>`;
+        box.querySelectorAll("[data-g]").forEach((btn) => {
             btn.onclick = () => {
-                const it = state.stockHits[Number(btn.dataset.add)];
-                if (!it) return;
-                const free = it.free_qty || it.free || 0;
-                state.draft.lines.push({
-                    plant_id: it.plant_id, size_id: it.size_id, plant_name: it.plant_name,
-                    size_name: it.size_name, qty: 1, price: it.price, free_qty: free,
-                });
-                render();
+                const g = state.stockGroups[Number(btn.dataset.g)];
+                const it = g && g.sizes[Number(btn.dataset.s)];
+                if (it) addStockLine(it);
             };
         });
+        paintSizeRows();
     }
 
     async function parseBuyer(e) {

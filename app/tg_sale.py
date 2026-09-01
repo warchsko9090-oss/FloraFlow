@@ -25,11 +25,12 @@ from app.models import (
 )
 from app.tg_pay import resolve_user
 from app.tg_sale_parse import parse_buyer_file
-from app.utils import msk_now, build_pdf_bytes
+from app.utils import msk_now, build_pdf_bytes, size_natural_key
 from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
 from app.stock_helpers import get_reserved_map
 from app.shop_catalog import _price_history_map
 from app.seedlings import is_seedling_size_name
+from app.inn_lookup import lookup_requisites
 
 bp = Blueprint('tg_sale', __name__, url_prefix='/tg/sale')
 
@@ -678,6 +679,25 @@ def api_company_save(user: User, cid: int):
     return jsonify(_serialize_company(c))
 
 
+def _plant_photo_url(plant_id: int, plant_name: str, *, prefer_container: bool = False) -> str:
+    try:
+        from app.photo_storage import PHOTO_VARIANT_CONTAINER, PHOTO_VARIANT_GROUND, resolve_photo_source
+        from app.shop_images import SHOP_IMG_THUMB, shop_image_url
+        root = current_app.config['UPLOAD_FOLDER']
+        variants = (
+            (PHOTO_VARIANT_CONTAINER, PHOTO_VARIANT_GROUND)
+            if prefer_container else
+            (PHOTO_VARIANT_GROUND, PHOTO_VARIANT_CONTAINER)
+        )
+        for variant in variants:
+            rel_dir, files = resolve_photo_source(root, plant_id, plant_name, variant=variant)
+            if files:
+                return shop_image_url(f'{rel_dir}/{files[0]}', SHOP_IMG_THUMB) or ''
+    except Exception:
+        current_app.logger.exception('sale plant photo')
+    return ''
+
+
 @bp.route('/api/stock')
 @require_sale
 def api_stock(_user: User):
@@ -691,7 +711,8 @@ def api_stock(_user: User):
         pname = plants.get(pid) or ''
         sname = sizes.get(sid) or ''
         hay = f'{pname} {sname}'.lower()
-        if q and q not in hay:
+        tokens = [t for t in q.split() if t] if q else []
+        if tokens and not all(t in hay for t in tokens):
             continue
         is_seedling = _is_container_size(sname)
         items.append({
@@ -704,12 +725,32 @@ def api_stock(_user: User):
             'price': float(prices.get((pid, sid)) or 0),
             'is_seedling': is_seedling,
         })
-    items.sort(key=lambda x: (
-        1 if x['is_seedling'] else 0,
-        x['plant_name'].lower(),
-        x['size_name'].lower(),
-    ))
-    return jsonify({'items': items[:80]})
+    grouped: dict[int, list] = {}
+    for it in items:
+        grouped.setdefault(it['plant_id'], []).append(it)
+    groups = []
+    for pid, rows in grouped.items():
+        rows.sort(key=lambda x: (1 if x['is_seedling'] else 0, size_natural_key(x['size_name'])))
+        priced = [x['price'] for x in rows if x['price'] > 0]
+        seedling_only = all(x['is_seedling'] for x in rows)
+        groups.append({
+            'plant_id': pid,
+            'plant_name': rows[0]['plant_name'],
+            'photo_url': _plant_photo_url(pid, rows[0]['plant_name'], prefer_container=seedling_only),
+            'size_count': len(rows),
+            'min_price': min(priced) if priced else 0,
+            'seedling_only': seedling_only,
+            'sizes': rows,
+        })
+    groups.sort(key=lambda g: (1 if g['seedling_only'] else 0, g['plant_name'].lower()))
+    return jsonify({'groups': groups[:20], 'items': items[:120]})
+
+
+@bp.route('/api/lookup-inn')
+@require_sale
+def api_lookup_inn(_user: User):
+    data = lookup_requisites(request.args.get('inn') or '')
+    return jsonify(data)
 
 
 @bp.route('/api/parse-buyer', methods=['POST'])
@@ -739,33 +780,17 @@ def api_parse_buyer(_user: User):
     match = None
     inn = _inn_digits(fields.get('inn'))
     if inn:
-        found = _find_client_by_inn(inn)
-        if found:
-            match = {
-                'id': found.id,
-                'name': found.name,
-                'inn': found.inn or inn,
-                'kpp': found.kpp or fields.get('kpp') or '',
-                'ogrn': found.ogrn or fields.get('ogrn') or '',
-                'address': found.address or fields.get('address') or '',
-                'phone': found.phone or fields.get('phone') or '',
-                'bank': found.bank_name or fields.get('bank') or '',
-                'rs': found.rs or fields.get('rs') or '',
-                'bik': found.bik or fields.get('bik') or '',
-                'ks': found.ks or fields.get('ks') or '',
-            }
-            fields = {
-                'name': fields.get('name') or found.name or '',
-                'inn': inn,
-                'kpp': fields.get('kpp') or found.kpp or '',
-                'ogrn': fields.get('ogrn') or found.ogrn or '',
-                'address': fields.get('address') or found.address or '',
-                'phone': fields.get('phone') or found.phone or '',
-                'bank': fields.get('bank') or found.bank_name or '',
-                'rs': fields.get('rs') or found.rs or '',
-                'bik': fields.get('bik') or found.bik or '',
-                'ks': fields.get('ks') or found.ks or '',
-            }
+        looked = lookup_requisites(inn)
+        extra = looked.get('fields') or {}
+        for key, val in extra.items():
+            if val and not str(fields.get(key) or '').strip():
+                fields[key] = val
+        fields['inn'] = inn
+        if looked.get('hint'):
+            fields['_hint'] = looked['hint']
+        if looked.get('client_id'):
+            match = dict(extra)
+            match['id'] = looked['client_id']
     return jsonify({'fields': fields, 'buyer': fields, 'match': match, 'error': parsed.get('error')})
 
 

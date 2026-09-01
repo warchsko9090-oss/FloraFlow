@@ -20,7 +20,7 @@
                         </select>
                     </div>
                     <div class="mb-2">
-                        <input type="text" name="name" class="form-control form-control-sm" placeholder="Наименование" required>
+                        <input type="text" name="name" id="addItemName" class="form-control form-control-sm" placeholder="Наименование" required>
                     </div>
                     <div id="fieldOptionsDiv" style="display:none;">
                         <div class="mb-2">
@@ -40,39 +40,43 @@
                     <div id="clientOptionsDiv" style="display:none;">
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">ИНН</label>
-                            <input type="text" name="inn" class="form-control form-control-sm" inputmode="numeric" placeholder="10 или 12 цифр">
+                            <div class="input-group input-group-sm">
+                                <input type="text" name="inn" id="addInn" class="form-control form-control-sm" inputmode="numeric" placeholder="10 или 12 цифр">
+                                <button type="button" class="btn btn-outline-secondary" id="addInnLookup">По ИНН</button>
+                            </div>
+                            <div class="small text-muted mt-1" id="addInnHint">Подставит название, КПП, ОГРН и адрес</div>
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">КПП</label>
-                            <input type="text" name="kpp" class="form-control form-control-sm" inputmode="numeric">
+                            <input type="text" name="kpp" id="addKpp" class="form-control form-control-sm" inputmode="numeric">
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">ОГРН / ОГРНИП</label>
-                            <input type="text" name="ogrn" class="form-control form-control-sm" inputmode="numeric">
+                            <input type="text" name="ogrn" id="addOgrn" class="form-control form-control-sm" inputmode="numeric">
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">Адрес</label>
-                            <input type="text" name="address" class="form-control form-control-sm">
+                            <input type="text" name="address" id="addAddress" class="form-control form-control-sm">
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">Телефон</label>
-                            <input type="text" name="phone" class="form-control form-control-sm">
+                            <input type="text" name="phone" id="addPhone" class="form-control form-control-sm">
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">Банк</label>
-                            <input type="text" name="bank_name" class="form-control form-control-sm">
+                            <input type="text" name="bank_name" id="addBank" class="form-control form-control-sm">
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">Расчётный счёт</label>
-                            <input type="text" name="rs" class="form-control form-control-sm" inputmode="numeric">
+                            <input type="text" name="rs" id="addRs" class="form-control form-control-sm" inputmode="numeric">
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">БИК</label>
-                            <input type="text" name="bik" class="form-control form-control-sm" inputmode="numeric">
+                            <input type="text" name="bik" id="addBik" class="form-control form-control-sm" inputmode="numeric">
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">Корр. счёт</label>
-                            <input type="text" name="ks" class="form-control form-control-sm" inputmode="numeric">
+                            <input type="text" name="ks" id="addKs" class="form-control form-control-sm" inputmode="numeric">
                         </div>
                         <div class="mb-2">
                             <label class="small text-muted fw-bold">Фикс. сальдо (нач. долг)</label>
@@ -221,7 +225,11 @@
             </div>
             <div class="mb-2 client-only" style="display:none;">
                 <label class="small text-muted fw-bold">ИНН</label>
-                <input type="text" name="inn" id="editInn" class="form-control form-control-sm" inputmode="numeric">
+                <div class="input-group input-group-sm">
+                    <input type="text" name="inn" id="editInn" class="form-control form-control-sm" inputmode="numeric">
+                    <button type="button" class="btn btn-outline-secondary" id="editInnLookup">По ИНН</button>
+                </div>
+                <div class="small text-muted mt-1" id="editInnHint"></div>
             </div>
             <div class="mb-2 client-only" style="display:none;">
                 <label class="small text-muted fw-bold">КПП</label>
@@ -412,5 +420,64 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('editKs').value = btn.dataset.ks || '';
         });
     });
+
+    async function fillClientFromInn(innEl, hintEl, map) {
+        const inn = (innEl && innEl.value || '').replace(/\D/g, '');
+        if (hintEl) hintEl.textContent = 'Ищем…';
+        try {
+            const res = await fetch(`/directory/lookup-inn?inn=${encodeURIComponent(inn)}`);
+            const data = await res.json();
+            const f = data.fields || {};
+            Object.entries(map).forEach(([key, id]) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (key === 'name' && (el.value || '').trim()) return;
+                if (!(el.value || '').trim() && f[key]) el.value = f[key];
+                if (key === 'inn' && f.inn) el.value = f.inn;
+            });
+            if (hintEl) hintEl.textContent = data.hint || (data.ok ? 'Готово' : 'Не нашли');
+        } catch (e) {
+            if (hintEl) hintEl.textContent = 'Не удалось запросить ЕГРЮЛ';
+        }
+    }
+
+    const addInnBtn = document.getElementById('addInnLookup');
+    if (addInnBtn) {
+        addInnBtn.addEventListener('click', () => fillClientFromInn(
+            document.getElementById('addInn'),
+            document.getElementById('addInnHint'),
+            { name: 'addItemName', inn: 'addInn', kpp: 'addKpp', ogrn: 'addOgrn', address: 'addAddress', phone: 'addPhone', bank: 'addBank', rs: 'addRs', bik: 'addBik', ks: 'addKs' }
+        ));
+    }
+    const addInn = document.getElementById('addInn');
+    if (addInn) {
+        addInn.addEventListener('blur', () => {
+            const inn = (addInn.value || '').replace(/\D/g, '');
+            if (inn.length === 10 || inn.length === 12) {
+                fillClientFromInn(addInn, document.getElementById('addInnHint'), {
+                    name: 'addItemName', inn: 'addInn', kpp: 'addKpp', ogrn: 'addOgrn', address: 'addAddress', phone: 'addPhone', bank: 'addBank', rs: 'addRs', bik: 'addBik', ks: 'addKs'
+                });
+            }
+        });
+    }
+    const editInnBtn = document.getElementById('editInnLookup');
+    if (editInnBtn) {
+        editInnBtn.addEventListener('click', () => fillClientFromInn(
+            document.getElementById('editInn'),
+            document.getElementById('editInnHint'),
+            { name: 'editName', inn: 'editInn', kpp: 'editKpp', ogrn: 'editOgrn', address: 'editAddress', phone: 'editPhone', bank: 'editBank', rs: 'editRs', bik: 'editBik', ks: 'editKs' }
+        ));
+    }
+    const editInn = document.getElementById('editInn');
+    if (editInn) {
+        editInn.addEventListener('blur', () => {
+            const inn = (editInn.value || '').replace(/\D/g, '');
+            if (inn.length === 10 || inn.length === 12) {
+                fillClientFromInn(editInn, document.getElementById('editInnHint'), {
+                    name: 'editName', inn: 'editInn', kpp: 'editKpp', ogrn: 'editOgrn', address: 'editAddress', phone: 'editPhone', bank: 'editBank', rs: 'editRs', bik: 'editBik', ks: 'editKs'
+                });
+            }
+        });
+    }
 </script>
 {% endblock %}

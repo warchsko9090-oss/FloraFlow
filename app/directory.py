@@ -160,6 +160,15 @@ def directory():
                            suppliers=sorted(Supplier.query.all(), key=lambda x: x.name))
 
 
+@bp.route('/directory/lookup-inn')
+@login_required
+def lookup_inn():
+    if current_user.role != 'admin':
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    from app.inn_lookup import lookup_requisites
+    return jsonify(lookup_requisites(request.args.get('inn') or ''))
+
+
 @bp.route('/directory/download_stock_template')
 @login_required
 def download_stock_template():
