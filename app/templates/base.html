@@ -1127,7 +1127,7 @@
         .app-shell.sidebar-collapsed .sidebar-group.open > .sidebar-sub { display: flex !important; }
 
         .app-sidebar.open { transform: translateX(0); }
-        .mobile-menu-btn { display: inline-flex; }
+        .mobile-menu-btn { display: none !important; }
         .mobile-brand { display: inline-flex; }
         .sidebar-collapse-btn { display: none; }
         .sidebar-toggle-top { display: none !important; } /* на мобиле «свернуть/развернуть» не нужен */
@@ -1494,9 +1494,6 @@
 
     {# ---------- TOP HEADER ---------- #}
     <header class="app-header">
-        <button type="button" class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Меню">
-            <i class="fas fa-bars"></i>
-        </button>
         <a class="mobile-brand" href="{{ url_for('main.index') }}" data-hx-boost="false">
             <span class="brand-logo"><i class="fas fa-leaf"></i></span>
             <span>Зелёный Фонд</span>
@@ -1577,6 +1574,9 @@
         <a class="bn-link {% if request.endpoint and request.endpoint.startswith('shop_admin.') %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index') }}">
             <i class="fas fa-store"></i><span>Сайт</span>
         </a>
+        <button type="button" class="bn-link" id="bnMoreBtn" aria-label="Открыть все разделы">
+            <i class="fas fa-bars"></i><span>Ещё</span>
+        </button>
     {% else %}
         <a class="bn-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index') }}">
             <i class="fas fa-gauge-high"></i><span>Дашборд</span>
@@ -1631,44 +1631,89 @@
             <a class="drawer-link text-danger" href="{{ url_for('auth.logout') }}"><i class="fas fa-sign-out-alt"></i> Выйти</a>
         </div>
         {% else %}
-        {% if current_user.role in ['admin', 'executive', 'user'] %}
         <div class="drawer-group">
-            <div class="drawer-group-title">Аналитика</div>
-            <a class="drawer-link" href="{{ url_for('main.analytics') }}"><i class="fas fa-chart-line"></i> Отчёты и метрики</a>
+            <div class="drawer-group-title">Главное</div>
+            <a class="drawer-link" href="{{ url_for('main.index') }}"><i class="fas fa-gauge-high"></i> Дашборд</a>
+            <a class="drawer-link" href="{{ url_for('orders.orders_list') }}"><i class="fas fa-shopping-basket"></i> Заказы</a>
             {% if current_user.role == 'admin' %}
             <a class="drawer-link" href="{{ url_for('orders.sale_invoices_list') }}"><i class="fas fa-file-invoice-dollar"></i> Счета клиентам</a>
             {% endif %}
-            <a class="drawer-link" href="{{ url_for('crm.crm_client_analytics') }}"><i class="fas fa-users-viewfinder"></i> CRM — клиенты</a>
-            <a class="drawer-link" href="{{ url_for('crm.crm_abc') }}"><i class="fas fa-sort-amount-down"></i> ABC / XYZ</a>
-            <a class="drawer-link" href="{{ url_for('finance.invoices_summary') }}"><i class="fas fa-coins"></i> Финансы</a>
-            <a class="drawer-link" href="{{ url_for('finance.reports_order_payments') }}"><i class="fas fa-money-bill-wave"></i> Поступления ДС</a>
         </div>
-        {% endif %}
 
         <div class="drawer-group">
             <div class="drawer-group-title">Склад</div>
-            <a class="drawer-link" href="{{ url_for('stock.inventory_mobile') }}"><i class="fas fa-mobile-alt"></i> Моб. инвентаризация</a>
-            <a class="drawer-link" href="{{ url_for('stock.stock_report') }}"><i class="fas fa-boxes"></i> Остатки</a>
+            <a class="drawer-link" href="{{ url_for('stock.inventory_mobile') }}"><i class="fas fa-mobile-screen"></i> Моб. инвентаризация</a>
+            <a class="drawer-link" href="{{ url_for('stock.stock_report') }}"><i class="fas fa-boxes-stacked"></i> Остатки</a>
             <a class="drawer-link" href="{{ url_for('stock.stock_receipts') }}"><i class="fas fa-truck-ramp-box"></i> Поступление</a>
             <a class="drawer-link" href="{{ url_for('stock.documents') }}" data-hx-boost="false"><i class="fas fa-file-invoice"></i> Журнал документов</a>
+            {% if current_user.role != 'user2' %}
+            <a class="drawer-link" href="{{ url_for('finance.reports_turnover') }}"><i class="fas fa-exchange-alt"></i> Оборотная ведомость</a>
+            {% endif %}
+            {% if current_user.role in ['admin', 'executive'] %}
+            <a class="drawer-link" href="{{ url_for('stock.price_history') }}"><i class="fas fa-clock-rotate-left"></i> История цен</a>
+            {% endif %}
         </div>
 
         <div class="drawer-group">
-            <div class="drawer-group-title">Выкопка</div>
-            {# Бригадиру показываем только «Ввод выкопки»: планирование и аналитика для него недоступны и кидают на дашборд. #}
+            <div class="drawer-group-title">Производство</div>
             {% if current_user.is_authenticated and current_user.role in ['user2', 'brigadier'] %}
             <a class="drawer-link" href="{{ url_for('digging.mobile_index') }}"><i class="fas fa-trowel"></i> Ввод выкопки</a>
             {% else %}
             <a class="drawer-link" href="{{ url_for('digging.digging_planning') }}" data-hx-boost="false"><i class="fas fa-calendar-check"></i> План выкопки</a>
             <a class="drawer-link" href="{{ url_for('digging.mobile_index') }}"><i class="fas fa-trowel"></i> Ввод выкопки</a>
             <a class="drawer-link" href="{{ url_for('digging.analytics') }}"><i class="fas fa-chart-area"></i> Аналитика выкопки</a>
+            {% if current_user.role in ['admin', 'executive', 'user'] %}
+            <a class="drawer-link" href="{{ url_for('production.projects_list') }}"><i class="fas fa-seedling"></i> Посадка в горшки</a>
+            {% endif %}
+            {% if current_user.role != 'user2' %}
+            <a class="drawer-link" href="{{ url_for('digging.manager_report') }}"><i class="fas fa-clipboard-check"></i> Отчёт по выкопке</a>
+            {% endif %}
+            {% if current_user.role in ['admin', 'executive'] %}
+            <a class="drawer-link" href="{{ url_for('vium.vium_report') }}"><i class="fas fa-boxes-stacked"></i> Учёт ВиУМ</a>
+            <a class="drawer-link" href="{{ url_for('vium.vium_techcards') }}"><i class="fas fa-clipboard-list"></i> Тех.карты ВиУМ</a>
+            <a class="drawer-link" href="{{ url_for('vium.vium_plan_report') }}"><i class="fas fa-chart-line"></i> План ВиУМ</a>
+            {% endif %}
             {% endif %}
         </div>
+
+        {% if current_user.role in ['admin', 'executive', 'user'] %}
+        <div class="drawer-group">
+            <div class="drawer-group-title">Аналитика и CRM</div>
+            <a class="drawer-link" href="{{ url_for('main.analytics') }}"><i class="fas fa-chart-line"></i> Отчёты и метрики</a>
+            {% if current_user.role in ['admin', 'executive'] %}
+            <a class="drawer-link" href="{{ url_for('crm.crm_client_analytics') }}"><i class="fas fa-users"></i> Аналитика по клиентам</a>
+            <a class="drawer-link" href="{{ url_for('crm.crm_abc') }}"><i class="fas fa-sort-amount-down"></i> ABC / XYZ</a>
+            <a class="drawer-link" href="{{ url_for('crm.crm_seasonality') }}"><i class="fas fa-calendar-alt"></i> Сезонность</a>
+            <a class="drawer-link" href="{{ url_for('crm.crm_yoy') }}"><i class="fas fa-chart-column"></i> Сравнение периодов</a>
+            <a class="drawer-link" href="{{ url_for('crm.crm_price_calculator') }}"><i class="fas fa-tags"></i> Анализ рынка</a>
+            {% endif %}
+        </div>
+
+        <div class="drawer-group">
+            <div class="drawer-group-title">Финансы</div>
+            <a class="drawer-link" href="{{ url_for('finance.invoices_summary') }}"><i class="fas fa-list-alt"></i> Реестр счетов</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_reconciliation') }}"><i class="fas fa-handshake"></i> Акт сверки</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_order_payments') }}"><i class="fas fa-money-bill-wave"></i> Поступления ДС</a>
+            {% if current_user.role in ['admin', 'executive'] %}
+            <a class="drawer-link" href="{{ url_for('finance.projects_list') }}"><i class="fas fa-tasks"></i> Проекты</a>
+            <a class="drawer-link" href="{{ url_for('finance.expenses') }}?tab=invoices"><i class="fas fa-file-invoice-dollar"></i> Счета и расходы</a>
+            <a class="drawer-link" href="{{ url_for('finance.budget') }}"><i class="fas fa-wallet"></i> Бюджет</a>
+            <a class="drawer-link" href="{{ url_for('finance.cost_report') }}"><i class="fas fa-calculator"></i> Себестоимость</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_financial') }}"><i class="fas fa-piggy-bank"></i> Фин. результат</a>
+            {% if current_user.role == 'admin' %}
+            <a class="drawer-link" href="{{ url_for('finance.archive_align') }}"><i class="fas fa-balance-scale"></i> Выравнивание архива</a>
+            {% endif %}
+            <a class="drawer-link" href="{{ url_for('finance.reports_margin') }}"><i class="fas fa-percent"></i> Маржинальность</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_investor') }}"><i class="fas fa-briefcase"></i> Партнёр</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_calculator') }}"><i class="fas fa-divide"></i> Калькулятор партнёра</a>
+            {% endif %}
+        </div>
+        {% endif %}
 
         {% if current_user.role in ['admin', 'executive', 'user2', 'brigadier'] %}
         <div class="drawer-group">
             <div class="drawer-group-title">Команда</div>
-            <a class="drawer-link" href="{{ url_for('hr.personnel') }}"><i class="fas fa-user-tie"></i> Кадры и табель</a>
+            <a class="drawer-link" href="{{ url_for('hr.personnel') }}"><i class="fas fa-users"></i> Табель и выплаты</a>
             <a class="drawer-link" href="{{ url_for('hr.foreign_employees') }}"><i class="fas fa-passport"></i> Иностранные сотрудники</a>
         </div>
         {% endif %}
@@ -1680,9 +1725,10 @@
             <a class="drawer-link" href="{{ url_for('shop_admin.shop_admin_index') }}"><i class="fas fa-store"></i> Витрина «Княжество»</a>
             {% endif %}
             {% if current_user.role in ['admin', 'executive'] %}
+            <a class="drawer-link" href="{{ url_for('directory.archive') }}"><i class="fas fa-archive"></i> Архив файлов</a>
             <a class="drawer-link" href="{{ url_for('auth.users_manage') }}"><i class="fas fa-users-cog"></i> Пользователи</a>
             <a class="drawer-link" href="{{ url_for('chat.manage') }}"><i class="fas fa-robot"></i> AI-помощник</a>
-            <a class="drawer-link" href="{{ url_for('stock.logs') }}"><i class="fas fa-clipboard-list"></i> Логи</a>
+            <a class="drawer-link" href="{{ url_for('stock.logs') }}"><i class="fas fa-clipboard-list"></i> Логи системы</a>
             {% endif %}
             <a class="drawer-link" href="{{ url_for('stock.changelog') }}"><i class="fas fa-rocket"></i> Обновления</a>
             <a class="drawer-link" href="{{ url_for('main.guide') }}"><i class="fas fa-circle-question"></i> Справка</a>
@@ -2569,12 +2615,6 @@
                 return;
             }
 
-            // Мобильное: открыть sidebar.
-            if (e.target.closest('#mobileMenuBtn')) {
-                e.preventDefault();
-                openMobileSidebar();
-                return;
-            }
             // Мобильное: кнопка «Ещё» в bottom-nav.
             if (e.target.closest('#bnMoreBtn')) {
                 e.preventDefault();

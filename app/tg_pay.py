@@ -266,13 +266,24 @@ def _dev_user(as_role: str) -> User | None:
     return User.query.filter_by(role='admin').first() or User.query.first()
 
 
+def _init_data_from_request() -> str:
+    """initData с телефона часто не доходит в кастомном заголовке — читаем и query."""
+    header = (request.headers.get('X-Telegram-Init-Data') or '').strip()
+    if header:
+        return header
+    auth = (request.headers.get('Authorization') or '').strip()
+    if auth.lower().startswith('tma '):
+        return auth[4:].strip()
+    qs = request.query_string.decode('utf-8', 'ignore')
+    for part in qs.split('&'):
+        if part.startswith('initData='):
+            return unquote(part[9:])
+    return (request.args.get('initData') or '').strip()
+
+
 def resolve_user() -> tuple[User | None, bool, dict | None]:
     """(user, is_dev, pending_tg_user)."""
-    init_data = (
-        request.headers.get('X-Telegram-Init-Data')
-        or request.args.get('initData')
-        or ''
-    )
+    init_data = _init_data_from_request()
     token = _get_bot_token()
     if init_data and token:
         tg_user = _validate_init_data(init_data, token)
@@ -544,7 +555,7 @@ def api_me(user: User):
         'role': user.role,
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
-        'dev': _dev_mode() and not request.headers.get('X-Telegram-Init-Data'),
+        'dev': _dev_mode() and not _init_data_from_request(),
         'telegram_id': user.telegram_id,
     })
 

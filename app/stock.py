@@ -31,7 +31,7 @@ def build_stock_row_price_map(sorted_groups, price_overrides=None):
     ov = price_overrides if price_overrides is not None else get_shop_price_map()
     result = {}
     for group in sorted_groups:
-        if group.get('is_section'):
+        if group.get('is_section') or group.get('is_field'):
             continue
         for row in group.get('data', {}).get('rows', []):
             key = f"{row['plant_id']}_{row['size_id']}"
@@ -159,6 +159,61 @@ def grand_total_from_stock_groups(sorted_groups, exclude_section_keys=None):
     return total
 
 
+def _groups_by_field(aggregated, fields_dict, grand_total):
+    """Остатки для обхода полей: гармошка Поле → растение/размер/кол-во."""
+    field_map = {}
+    for v in aggregated.values():
+        fid = v.get('field_id')
+        fname = fields_dict.get(fid) or (next(iter(v.get('fields') or []), None) or 'Поле')
+        bucket = field_map.setdefault(fid, {
+            'is_field': True,
+            'name': fname,
+            'field_id': fid,
+            'rows': [],
+            'totals': {
+                'qty': 0, 'free': 0, 'reserved': 0, 'shipped': 0,
+                'sum': 0, 'free_sum': 0, 'income': 0,
+            },
+        })
+        free = (v.get('quantity') or 0) - (v.get('reserved') or 0)
+        sm = v.get('total_val') or 0
+        free_sm = (v.get('price') or 0) * free
+        bucket['rows'].append({
+            'plant': v.get('plant') or '',
+            'size': v.get('size') or '',
+            'year': v.get('year'),
+            'quantity': v.get('quantity') or 0,
+            'free': free,
+            'reserved': v.get('reserved') or 0,
+            'shipped': v.get('shipped') or 0,
+            'price': v.get('price') or 0,
+        })
+        t = bucket['totals']
+        t['qty'] += v.get('quantity') or 0
+        t['free'] += free
+        t['reserved'] += v.get('reserved') or 0
+        t['shipped'] += v.get('shipped') or 0
+        t['sum'] += sm
+        t['free_sum'] += free_sm
+        t['income'] += v.get('income') or 0
+        grand_total['qty'] += v.get('quantity') or 0
+        grand_total['free'] += free
+        grand_total['reserved'] += v.get('reserved') or 0
+        grand_total['shipped'] += v.get('shipped') or 0
+        grand_total['sum'] += sm
+        grand_total['free_sum'] += free_sm
+        grand_total['income'] += v.get('income') or 0
+    out = list(field_map.values())
+    for bucket in out:
+        bucket['rows'].sort(key=lambda r: (
+            (r.get('plant') or '').lower(),
+            natural_key(r.get('size') or ''),
+            r.get('year') or 0,
+        ))
+    out.sort(key=lambda b: natural_key(b.get('name') or ''))
+    return out, grand_total
+
+
 def build_stock_report_data(report_mode, end_date, selected_fields=None, selected_plants=None, selected_sizes=None, selected_years=None, all_plants=None, all_sizes=None, all_fields=None):
     """Собирает данные для отчета по остаткам (та же логика, что и в stock_report).
 
@@ -256,6 +311,9 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
         if report_mode == 'inventory':
             k_agg = (pid, fid, byear)
             size_val = None
+        elif report_mode == 'fields':
+            k_agg = (fid, pid, sid, byear)
+            size_val = size_name
         else:
             k_agg = (pid, sid)
             size_val = size_name
@@ -271,8 +329,8 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
                 'characteristic': pl_obj.characteristic if pl_obj else '',
                 'size': size_val,
                 'fields': set(),
-                'field_id': fid if report_mode == 'inventory' else None,
-                'year': byear if report_mode == 'inventory' else None,
+                'field_id': fid if report_mode in ('inventory', 'fields') else None,
+                'year': byear if report_mode in ('inventory', 'fields') else None,
                 'price': display_price,
                 'income': 0,
                 'reserved': 0,
@@ -290,6 +348,9 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
 
         if not is_netov and display_price > aggregated[k_agg]['price']:
             aggregated[k_agg]['price'] = display_price
+
+    if report_mode == 'fields':
+        return _groups_by_field(aggregated, fields_dict, grand_total)
 
     grouped_final = {}
     for k, v in aggregated.items():
@@ -885,7 +946,9 @@ def stock_report():
 
         return redirect(url_for('stock.stock_report', end_date=request.args.get('end_date'), mode=report_mode, filter_field=selected_fields, filter_plant=selected_plants, filter_size=selected_sizes, filter_year=selected_years))
     
-    # --- Загрузка данных ---
+    if report_mode == 'fields':
+        query_sizes = None
+        selected_sizes = []
     all_plants = sorted(Plant.query.all(), key=lambda x: x.name)
     all_sizes = sorted(Size.query.all(), key=natural_key)
     all_fields = sorted(Field.query.all(), key=natural_key)
@@ -908,6 +971,8 @@ def stock_report():
         grand_total = grand_total_from_stock_groups(
             sorted_groups, exclude_section_keys={'raw_seedlings'},
         )
+    elif report_mode == 'fields':
+        pass
     else:
         grand_total = grand_total_from_stock_groups(sorted_groups)
     
@@ -942,6 +1007,8 @@ def stock_report_export():
     selected_fields = filters['selected_fields']
     selected_plants = filters['selected_plants']
     selected_years = filters['selected_years']
+    if report_mode == 'fields':
+        query_sizes = None
 
     all_plants = sorted(Plant.query.all(), key=lambda x: x.name)
     all_sizes = sorted(Size.query.all(), key=natural_key)
@@ -958,6 +1025,26 @@ def stock_report_export():
         all_sizes=all_sizes,
         all_fields=all_fields,
     )
+    if report_mode == 'fields':
+        remapped = []
+        for g in sorted_groups:
+            rows = []
+            for r in g.get('rows') or []:
+                qty = r.get('quantity') or 0
+                price = r.get('price') or 0
+                rows.append({
+                    **r,
+                    'fields_str': g.get('name') or '',
+                    'sum': price * qty,
+                })
+            remapped.append({
+                'name': g.get('name') or '',
+                'data': {
+                    'rows': rows,
+                    'totals': g.get('totals') or {},
+                },
+            })
+        sorted_groups = remapped
 
     # В Excel секция «не товарные» не выгружается (как раньше в КП)
     skip_raw_rows = report_mode == 'product'

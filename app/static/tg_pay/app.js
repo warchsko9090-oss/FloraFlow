@@ -1,9 +1,33 @@
 (() => {
-  const tg = window.Telegram && window.Telegram.WebApp;
-  if (tg) {
-    tg.ready();
-    tg.expand();
-    try { tg.setHeaderColor('#F4F0E6'); tg.setBackgroundColor('#F4F0E6'); } catch (_) {}
+  function tgApp() {
+    return window.Telegram && window.Telegram.WebApp;
+  }
+  function getInitData() {
+    const w = tgApp();
+    if (w && w.initData) return w.initData;
+    const hash = String(location.hash || '');
+    const m = hash.match(/tgWebAppData=([^&]+)/);
+    if (m) {
+      try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+    }
+    return '';
+  }
+  function waitTelegram() {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const max = 4000;
+      const tick = () => {
+        const w = tgApp();
+        if (w) {
+          try { w.ready(); w.expand(); w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } catch (_) {}
+          if (w.initData || Date.now() - start > max) return resolve(w);
+        } else if (Date.now() - start > max) {
+          return resolve(null);
+        }
+        setTimeout(tick, 50);
+      };
+      tick();
+    });
   }
 
   const view = document.getElementById('view');
@@ -24,16 +48,21 @@
 
   function headers() {
     const h = {};
-    if (tg && tg.initData) h['X-Telegram-Init-Data'] = tg.initData;
+    const initData = getInitData();
+    if (initData) {
+      h['X-Telegram-Init-Data'] = initData;
+      h.Authorization = 'tma ' + initData;
+    }
     const m = document.cookie.match(/(?:^|; )tg_pay_as=([^;]*)/);
     if (m) h['X-Tg-Pay-As'] = decodeURIComponent(m[1]);
     return h;
   }
 
   function withAuth(path) {
-    if (!tg || !tg.initData) return path;
+    const initData = getInitData();
+    if (!initData) return path;
     const sep = path.includes('?') ? '&' : '?';
-    return path + sep + 'initData=' + encodeURIComponent(tg.initData);
+    return path + sep + 'initData=' + encodeURIComponent(initData);
   }
 
   async function api(path, opts) {
@@ -56,7 +85,7 @@
   }
 
   function haptic(kind) {
-    try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || 'light'); } catch (_) {}
+    try { const tg = tgApp(); tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || 'light'); } catch (_) {}
   }
 
   (function bindPress() {
@@ -116,7 +145,14 @@
 
   async function boot() {
     try {
-      me = await api('/tg/pay/api/me');
+      try {
+        me = await api('/tg/pay/api/me');
+      } catch (e) {
+        if (!/Нет входа|unauthorized/i.test(String(e.message || ''))) throw e;
+        await new Promise((r) => setTimeout(r, 700));
+        await waitTelegram();
+        me = await api('/tg/pay/api/me');
+      }
     } catch (e) {
       view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e.message}</p></div>`;
       return;
@@ -635,5 +671,5 @@
     }[c]));
   }
 
-  boot();
+  waitTelegram().then(() => boot());
 })();

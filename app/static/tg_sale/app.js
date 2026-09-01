@@ -1,17 +1,45 @@
 (function () {
-    const tg = window.Telegram && window.Telegram.WebApp;
-    if (tg) { tg.ready(); tg.expand(); }
-    const initData = (tg && tg.initData) || "";
+    function tgApp() {
+        return window.Telegram && window.Telegram.WebApp;
+    }
+    function getInitData() {
+        const w = tgApp();
+        if (w && w.initData) return w.initData;
+        const hash = String(location.hash || "");
+        const m = hash.match(/tgWebAppData=([^&]+)/);
+        if (m) {
+            try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+        }
+        return "";
+    }
+    function waitTelegram() {
+        return new Promise((resolve) => {
+            const start = Date.now();
+            const max = 4000;
+            const tick = () => {
+                const w = tgApp();
+                if (w) {
+                    try { w.ready(); w.expand(); } catch (_) {}
+                    if (w.initData || Date.now() - start > max) return resolve(w);
+                } else if (Date.now() - start > max) {
+                    return resolve(null);
+                }
+                setTimeout(tick, 50);
+            };
+            tick();
+        });
+    }
     const view = document.getElementById("view");
     const titleEl = document.getElementById("screenTitle");
     const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "" };
 
     function haptic(kind) {
-        try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (_) {}
+        try { const tg = tgApp(); tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (_) {}
     }
 
     function notifySaved(inv) {
         const msg = inv && inv.id ? `Счёт №${inv.id} сохранён` : "Счёт сохранён";
+        const tg = tgApp();
         try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success"); } catch (_) {}
         const toast = document.getElementById("toast");
         if (toast) {
@@ -87,9 +115,17 @@
     }
 
     async function api(path, opts) {
-        const headers = Object.assign({ "X-Telegram-Init-Data": initData }, (opts && opts.headers) || {});
+        const initData = getInitData();
+        const headers = Object.assign({}, (opts && opts.headers) || {});
+        if (initData) {
+            headers["X-Telegram-Init-Data"] = initData;
+            headers.Authorization = "tma " + initData;
+        }
         if (opts && opts.body && !(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
-        const res = await fetch(path, Object.assign({}, opts, { headers }));
+        const url = initData
+            ? path + (path.includes("?") ? "&" : "?") + "initData=" + encodeURIComponent(initData)
+            : path;
+        const res = await fetch(url, Object.assign({}, opts, { headers }));
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || data.hint || "Ошибка");
         return data;
@@ -530,7 +566,7 @@
                 window.open(`/tg/sale/api/invoices/${state.current.id}/pdf`, "_blank");
                 return;
             }
-            if (tg && tg.close) setTimeout(() => tg.close(), 400);
+            if (tgApp() && tgApp().close) setTimeout(() => tgApp().close(), 400);
         } catch (e) {
             window.open(`/tg/sale/api/invoices/${state.current.id}/pdf`, "_blank");
         } finally {
@@ -601,7 +637,19 @@
         if (!state.draft.company_id && state.companies[0]) state.draft.company_id = state.companies[0].id;
     }
 
-    reload().then(render).catch((e) => {
+    async function boot() {
+        await waitTelegram();
+        try {
+            await reload();
+        } catch (e) {
+            if (!/unauthorized|Нет входа/i.test(String(e.message || ""))) throw e;
+            await new Promise((r) => setTimeout(r, 700));
+            await waitTelegram();
+            await reload();
+        }
+        render();
+    }
+    boot().catch((e) => {
         view.innerHTML = `<div class="card err">${esc(e.message)}</div>`;
     });
 })();

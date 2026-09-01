@@ -107,6 +107,122 @@
     .print-latin { display: none; }
     .print-header, .print-gallery { display: none; }
 
+    .stock-mobile-card {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        margin: 0 0 8px;
+        overflow: hidden;
+    }
+    .stock-mobile-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 12px 14px;
+        cursor: pointer;
+        width: 100%;
+        border: 0;
+        background: #fff;
+        text-align: left;
+    }
+    .stock-mobile-header .muted { color: #6b7280; font-size: 12px; margin-top: 2px; }
+    .badge-qty {
+        background: #E8F5E9;
+        color: #1B5E20;
+        font-weight: 700;
+        border-radius: 999px;
+        padding: 4px 10px;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+    }
+    .stock-mobile-body { border-top: 1px solid #f3f4f6; padding: 4px 0 8px; }
+    .stock-mobile-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        padding: 8px 14px;
+        align-items: start;
+        font-size: 13px;
+    }
+    .stock-mobile-row + .stock-mobile-row { border-top: 1px solid #f8faf8; }
+    .stock-mobile-row .nums {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+    .stock-mobile-row .nums .free { color: #1B5E20; font-weight: 700; }
+    .field-acc {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        margin-bottom: 8px;
+        padding: 0 14px;
+    }
+    .field-acc > summary {
+        list-style: none;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 0;
+        cursor: pointer;
+        font-weight: 700;
+    }
+    .field-acc > summary::-webkit-details-marker { display: none; }
+    .field-acc-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        padding: 8px 0;
+        border-top: 1px solid #f3f4f6;
+        font-size: 13px;
+    }
+    .field-acc-row .muted { color: #6b7280; font-size: 12px; }
+    .field-acc-row .fw-bold { overflow-wrap: anywhere; }
+    .stock-mobile-header .fw-bold { overflow-wrap: anywhere; }
+    .stock-filter-details {
+        width: 100%;
+        border: 0;
+        background: transparent;
+    }
+    .stock-filter-details > summary {
+        display: none;
+        list-style: none;
+    }
+    .stock-fields-hint { display: none; }
+    @media (min-width: 992px) {
+        .stock-filter-details { display: contents; }
+    }
+    @media (max-width: 991.98px) {
+        .page-header { flex-direction: column; align-items: stretch !important; gap: 10px; }
+        .page-subtitle { display: none; }
+        .page-actions .btn-group { width: 100%; display: flex; }
+        .page-actions .btn-group .btn { flex: 1; }
+        .stock-filter-details {
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 0 12px;
+            background: #fff;
+            margin-top: 4px;
+        }
+        .stock-filter-details > summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 0;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .stock-filter-details > summary::-webkit-details-marker { display: none; }
+        .stock-fields-hint { display: block; color: #6b7280; font-size: 13px; margin: 0 0 10px; }
+        #stockPlantSearch { width: 100% !important; }
+        .stock-filter-details .dropdown { width: 100%; }
+        .stock-filter-details .dropdown > .btn { width: 100%; }
+        .stock-filter-details .ms-auto { margin-left: 0 !important; width: 100%; flex-wrap: wrap; }
+        .stock-filter-details[open] { padding-bottom: 10px; }
+    }
+
     body.kp-print .app-sidebar,
     body.kp-print .app-header,
     body.kp-print .bottom-nav,
@@ -267,13 +383,21 @@
             Остатки на складе
         </div>
         <div class="page-subtitle">
+            {% if report_mode == 'fields' %}
+            Все остатки по полям: товарные и нетоварные, с размерами.
+            {% else %}
             Текущие остатки, резервы и свободный товар по всем полям и партиям.
+            {% endif %}
         </div>
     </div>
     <div class="page-actions">
-        <div class="btn-group btn-group-sm">
+        <div class="btn-group btn-group-sm d-none d-lg-inline-flex">
             <a href="{{ url_for('stock.stock_report', mode='product', end_date=end_date) }}" class="btn {% if report_mode=='product' %}btn-success{% else %}btn-outline-secondary{% endif %}">Товарные</a>
             <a href="{{ url_for('stock.stock_report', mode='inventory', end_date=end_date) }}" class="btn {% if report_mode=='inventory' %}btn-success{% else %}btn-outline-secondary{% endif %}">По полям</a>
+        </div>
+        <div class="btn-group btn-group-sm d-lg-none">
+            <a href="{{ url_for('stock.stock_report', mode='product', end_date=end_date) }}" class="btn {% if report_mode=='product' %}btn-success{% else %}btn-outline-secondary{% endif %}">Товарные</a>
+            <a href="{{ url_for('stock.stock_report', mode='fields', end_date=end_date) }}" class="btn {% if report_mode=='fields' %}btn-success{% else %}btn-outline-secondary{% endif %}">По полям</a>
         </div>
     </div>
 </div>
@@ -283,6 +407,10 @@
     <form class="d-flex align-items-center flex-wrap gap-2 w-100" method="GET" id="stockForm" hx-boost="false">
         <input type="hidden" name="mode" value="{{ report_mode }}">
         <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm" style="width: auto;">
+        <input type="text" id="stockPlantSearch" class="form-control form-control-sm" style="width:200px"
+               placeholder="Поиск растения…" oninput="stockApplyPlantSearch()">
+        <details id="stockFilterDetails" class="stock-filter-details" open>
+        <summary>Фильтры и выгрузка</summary>
         
         <!-- Фильтры -->
         <div class="dropdown">
@@ -297,7 +425,7 @@
             </div>
         </div>
         
-        <div class="dropdown">
+        <div class="dropdown{% if report_mode == 'fields' %} d-none{% endif %}">
             <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Размеры {% if selected_sizes %}<span class="badge bg-secondary">{{ selected_sizes|length }}</span>{% endif %}</button>
             <div class="dropdown-menu dropdown-check-list shadow" style="max-height: 300px; overflow-y: auto;">
                 <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('size', false)">Сбросить</a></div>
@@ -327,9 +455,7 @@
             </div>
         </div>
 
-        <!-- Быстрый поиск по растению (как на остатках площадки) -->
-        <input type="text" id="stockPlantSearch" class="form-control form-control-sm" style="width:200px"
-               placeholder="Поиск растения…" oninput="stockApplyPlantSearch()">
+        <!-- Быстрый поиск по растению перенесён выше, чтобы на телефоне был сразу виден -->
 
         <!-- Кнопки управления гармошкой -->
         <div class="btn-group btn-group-sm ms-2 shadow-sm">
@@ -354,10 +480,12 @@
             {% endif %}
             <button type="button" onclick="printKP()" class="btn btn-dark btn-sm"><i class="fas fa-print"></i> Выгрузка тов. остатков</button>
         </div>
+        </details>
     </form>
 </div>
 
 <!-- ТАБЛИЦА ПК -->
+{% if report_mode != 'fields' %}
 <script type="application/json" id="stockRowPricesData">{{ stock_row_prices|tojson }}</script>
 <div class="table-responsive d-none d-lg-block">
     <table class="table table-sm table-hover table-1c table-stock bg-white mb-0" id="stockTable" data-price-mode="retail"
@@ -544,25 +672,60 @@
     </table>
 </div>
 
-<!-- МОБИЛЬНАЯ ВЕРСИЯ (Оставляем как есть) -->
+{% endif %}
+{% if report_mode == 'fields' %}
+<p class="stock-fields-hint no-print">Товарные и нетоварные. Поля по возрастанию — нажмите, чтобы увидеть растения и размеры.</p>
+<div>
+    {% for field in report_data %}
+    <details class="field-acc">
+        <summary>
+            <span>{{ field.name }}</span>
+            <span class="badge-qty">{{ field.totals.qty }} шт</span>
+        </summary>
+        {% for row in field.rows %}
+        <div class="field-acc-row" data-plant="{{ row.plant }}">
+            <div>
+                <div class="fw-bold">{{ row.plant }}</div>
+                <div class="muted">{{ row.size or '—' }}{% if row.year %} · {{ row.year }}{% endif %}{% if row.reserved %} · резерв {{ row.reserved }}{% endif %}</div>
+            </div>
+            <div class="text-end" style="font-variant-numeric:tabular-nums">
+                <div class="fw-bold" style="color:#1B5E20">{{ row.quantity }} шт</div>
+                <div class="muted">своб. {{ row.free }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </details>
+    {% else %}
+    <p class="text-muted px-2">На полях пока нет остатков.</p>
+    {% endfor %}
+</div>
+{% else %}
+<!-- МОБИЛЬНАЯ ВЕРСИЯ -->
 <div class="d-lg-none">
     {% for group in report_data %}
     {% if group.is_section %}
-    <div class="px-3 py-2 fw-bold text-success text-uppercase small border-bottom">{{ group.name }}</div>
+    <div class="px-1 py-2 fw-bold text-success text-uppercase small">{{ group.name }}</div>
     {% else %}
     {% set unique_id = loop.index %}
     <div class="stock-mobile-card">
-        <div class="stock-mobile-header collapsed" data-bs-toggle="collapse" data-bs-target="#mob-stock-{{ unique_id }}">
-            <div style="flex: 1;"><div class="fw-bold">{{ group.name }}</div></div>
-            <div class="text-end"><div class="badge-qty bg-qty-free">{{ group.data.totals.free }}</div></div>
-        </div>
+        <button type="button" class="stock-mobile-header collapsed" data-bs-toggle="collapse" data-bs-target="#mob-stock-{{ unique_id }}">
+            <div style="min-width:0">
+                <div class="fw-bold">{{ group.name }}</div>
+                <div class="muted">{{ group.data.rows|map(attribute='fields_str')|join(', ')|truncate(42) }} · {{ group.data.rows|length }} разм.</div>
+            </div>
+            <div class="badge-qty">{{ group.data.totals.free }} шт</div>
+        </button>
         <div id="mob-stock-{{ unique_id }}" class="collapse stock-mobile-body">
             {% for row in group.data.rows %}
             <div class="stock-mobile-row">
-                <div>{{ row.size }}</div>
-                {% if current_user.role != 'user2' %}
-                <div class="text-end fw-bold">{{ row.price|money_int }}</div>
-                {% endif %}
+                <div>
+                    <div class="fw-bold">{{ row.size or '—' }}</div>
+                    <div class="muted">{{ row.fields_str }}{% if row.year %} · {{ row.year }}{% endif %}</div>
+                </div>
+                <div class="nums">
+                    <div class="free">{{ row.free }} своб.</div>
+                    <div class="muted">факт {{ row.quantity }}{% if current_user.role != 'user2' %} · {{ row.price|money_int }}{% endif %}</div>
+                </div>
             </div>
             {% endfor %}
         </div>
@@ -570,6 +733,7 @@
     {% endif %}
     {% endfor %}
 </div>
+{% endif %}
 
 <!-- Галерея для печати -->
 <div class="print-gallery">
@@ -622,6 +786,16 @@
 {% block scripts %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+        const filterDetails = document.getElementById('stockFilterDetails');
+        if (filterDetails && window.matchMedia('(max-width: 991.98px)').matches) {
+            filterDetails.removeAttribute('open');
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('mode') === 'inventory') {
+                params.set('mode', 'fields');
+                window.location.replace(window.location.pathname + '?' + params.toString());
+                return;
+            }
+        }
         var collapseElements = document.querySelectorAll('.collapse');
         collapseElements.forEach(function(el) {
             var id = el.id.split('-')[2];
@@ -645,19 +819,23 @@
 
     // === Управление гармошкой ===
     function expandAllStocks() {
-        // Ищем все скрытые строки деталей
-        const collapses = document.querySelectorAll('.detail-row.collapse:not(.show)');
-        collapses.forEach(el => {
+        document.querySelectorAll('.detail-row.collapse:not(.show)').forEach(el => {
             new bootstrap.Collapse(el, { toggle: false }).show();
         });
+        document.querySelectorAll('.stock-mobile-body.collapse:not(.show)').forEach(el => {
+            new bootstrap.Collapse(el, { toggle: false }).show();
+        });
+        document.querySelectorAll('.field-acc').forEach(el => { el.open = true; });
     }
 
     function collapseAllStocks() {
-        // Ищем все открытые строки деталей
-        const collapses = document.querySelectorAll('.detail-row.collapse.show');
-        collapses.forEach(el => {
+        document.querySelectorAll('.detail-row.collapse.show').forEach(el => {
             new bootstrap.Collapse(el, { toggle: false }).hide();
         });
+        document.querySelectorAll('.stock-mobile-body.collapse.show').forEach(el => {
+            new bootstrap.Collapse(el, { toggle: false }).hide();
+        });
+        document.querySelectorAll('.field-acc').forEach(el => { el.open = false; });
     }
 
     function stockRowIsVisible(el) {
@@ -781,6 +959,21 @@
                     row.style.display = match ? '' : 'none';
                 });
             }
+        });
+        document.querySelectorAll('.stock-mobile-card').forEach(card => {
+            const name = (card.querySelector('.fw-bold')?.textContent || '').toLowerCase();
+            card.style.display = !q || name.includes(q) ? '' : 'none';
+        });
+        document.querySelectorAll('.field-acc').forEach(acc => {
+            let any = !q;
+            acc.querySelectorAll('.field-acc-row').forEach(row => {
+                const name = (row.getAttribute('data-plant') || row.textContent || '').toLowerCase();
+                const match = !q || name.includes(q);
+                row.style.display = match ? '' : 'none';
+                if (match) any = true;
+            });
+            acc.style.display = any ? '' : 'none';
+            if (q && any) acc.open = true;
         });
         // Секции без видимых групп прячем
         let pendingSection = null;

@@ -18,7 +18,9 @@
         .hint { font-size: 7pt; color: #333; }
         .qr { width: 88pt; height: 88pt; }
         .qr-cap { font-size: 7pt; text-align: center; margin-top: 3pt; }
-        .title { font-size: 13pt; font-weight: bold; margin: 10pt 0 8pt; }
+        .title { font-size: 13pt; font-weight: bold; margin: 0; }
+        .title-cell { padding-left: 8pt; vertical-align: middle; }
+        .seal { width: 42pt; height: 42pt; }
         .party { width: 100%; margin-bottom: 4pt; }
         .party td { font-size: 8.5pt; vertical-align: top; padding: 1pt 0; }
         .lbl { width: 92pt; }
@@ -75,7 +77,18 @@
         </tr>
     </table>
 
-    <div class="title">Счет на оплату № {{ inv.id }} от {{ date_long }}</div>
+    <table class="pay" cellpadding="0" cellspacing="0" style="margin: 10pt 0 8pt;">
+        <tr>
+            {% if logo_uri %}
+            <td width="48" valign="middle">
+                <img class="seal" src="{{ logo_uri }}" />
+            </td>
+            {% endif %}
+            <td class="title-cell">
+                <div class="title">Счет на оплату № {{ inv.id }} от {{ date_long }}</div>
+            </td>
+        </tr>
+    </table>
 
     <table class="party" cellpadding="0" cellspacing="0">
         <tr>
