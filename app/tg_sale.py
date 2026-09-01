@@ -290,6 +290,18 @@ def _fmt_money_ru(value) -> str:
     return f'{sign}{grouped} ₽'
 
 
+def _sale_chat_ref(inv: SaleInvoice, order: Order | None = None) -> str:
+    oid = order.id if order is not None else inv.order_id
+    if oid:
+        return f'счёт №{inv.id} / Заказ №{oid}'
+    return f'счёт №{inv.id}'
+
+
+def _discard_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
+    ref = _sale_chat_ref(inv, order)
+    return f'❌ {ref[0].upper() + ref[1:]} удалён'
+
+
 def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     lines = list(inv.lines or [])
     npos = len(lines)
@@ -313,10 +325,8 @@ def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     if extra > 0:
         items.append(f'• … и ещё {extra} {pos_word}')
     body = '\n'.join(items) if items else '• нет позиций'
-    head = [f'✅ <b>Согласован на выкопку</b> счёт №{inv.id}']
-    if order:
-        head.append(f'🧾 Заказ #{order.id} в ERP')
-    text = '\n'.join(head + [
+    text = '\n'.join([
+        f'✅ <b>Согласован на выкопку</b> {_sale_chat_ref(inv, order)}',
         '',
         f'👤 {buyer}',
         f'💰 ИТОГО: {_fmt_money_ru(inv.amount)} · {npos} {pos_word}',
@@ -1115,15 +1125,10 @@ def api_discard(user: User, inv_id: int):
             }), 409
         raise
     db.session.commit()
-    if order:
-        try:
-            tg_send_message(
-                f'❌ Счёт №{inv.id} удалён\n'
-                f'Заказ #{order.id} снят с резерва и скрыт в ERP',
-                chat_type='orders',
-            )
-        except Exception:
-            current_app.logger.exception('sale invoice discard chat')
+    try:
+        tg_send_message(_discard_orders_text(inv, order), chat_type='orders')
+    except Exception:
+        current_app.logger.exception('sale invoice discard chat')
     return jsonify({'ok': True, 'order_id': order.id if order else None})
 
 

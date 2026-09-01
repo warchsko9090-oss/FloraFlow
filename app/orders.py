@@ -735,7 +735,7 @@ def sale_invoice_discard(inv_id):
         flash('Доступ запрещен')
         return redirect(url_for('orders.orders_list'))
     from app.models import SaleInvoice
-    from app.tg_sale import void_sale_invoice
+    from app.tg_sale import void_sale_invoice, _discard_orders_text
     inv = SaleInvoice.query.get_or_404(inv_id)
     if inv.status == 'discarded':
         flash('Счёт уже удалён')
@@ -749,14 +749,10 @@ def sale_invoice_discard(inv_id):
         raise
     db.session.commit()
     log_action(f"Удалил счёт ТГ-{inv.id}" + (f" и заказ #{order.id}" if order else ""))
-    if order:
-        try:
-            send_tg_message_orders(
-                f'❌ Счёт №{inv.id} удалён\n'
-                f'Заказ #{order.id} снят с резерва и скрыт в ERP'
-            )
-        except Exception:
-            current_app.logger.exception('sale invoice discard chat')
+    try:
+        send_tg_message_orders(_discard_orders_text(inv, order))
+    except Exception:
+        current_app.logger.exception('sale invoice discard chat')
     flash('Счёт удалён' + (f', заказ №{order.id} скрыт' if order else ''))
     return redirect(url_for('orders.sale_invoices_list'))
 
