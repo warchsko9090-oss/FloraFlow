@@ -10,6 +10,21 @@
         try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (_) {}
     }
 
+    function notifySaved(inv) {
+        const msg = inv && inv.id ? `Счёт №${inv.id} сохранён` : "Счёт сохранён";
+        try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success"); } catch (_) {}
+        const toast = document.getElementById("toast");
+        if (toast) {
+            toast.textContent = msg;
+            toast.classList.remove("hide");
+            clearTimeout(notifySaved._t);
+            notifySaved._t = setTimeout(() => toast.classList.add("hide"), 2800);
+        }
+        if (tg && typeof tg.showAlert === "function") {
+            try { tg.showAlert(msg); } catch (_) {}
+        }
+    }
+
     (function bindPress() {
         const sel = "button, .btn, .list-item[data-open], .firm, .size-row";
         let cur = null;
@@ -168,7 +183,7 @@
             </div>
             <div class="card row"><span class="muted">Итого</span><span class="tot" id="totVal">0 ₽</span></div>
             <div id="saveErr" class="err hide"></div>
-            <button class="btn gold" id="save">Сохранить черновик</button>
+            <button class="btn gold" id="save">Сохранить счёт</button>
             ${state.current ? `<div class="grid2" style="margin-top:8px">
                 <button class="btn" id="pdf">Открыть счёт</button>
                 <button class="btn ghost" id="approve">Согласовать</button>
@@ -495,9 +510,9 @@
                 saved = await api("/tg/sale/api/invoices", { method: "POST", body: JSON.stringify(body) });
             }
             state.current = saved;
-            haptic("medium");
             await reload();
             render();
+            notifySaved(saved);
         } catch (ex) {
             showSaveErr(ex.message);
         } finally {
