@@ -278,6 +278,63 @@ def _line_sum(lines) -> Decimal:
     return total.quantize(Decimal('0.01'))
 
 
+def _fmt_money_ru(value) -> str:
+    q = Decimal(str(value or 0)).quantize(Decimal('0.01'))
+    sign = '-' if q < 0 else ''
+    q = abs(q)
+    whole = int(q)
+    frac = int((q - Decimal(whole)) * 100)
+    grouped = f'{whole:,}'.replace(',', ' ')
+    if frac:
+        return f'{sign}{grouped},{frac:02d} ₽'
+    return f'{sign}{grouped} ₽'
+
+
+def _approved_orders_text(inv: SaleInvoice, user: User) -> str:
+    lines = list(inv.lines or [])
+    npos = len(lines)
+    pos_word = 'поз.' if npos != 1 else 'позиция'
+    buyer = html_escape((inv.buyer_name or 'Без клиента').strip())
+    company_name = (inv.company.short_name if inv.company else '') or ''
+    vat = 'НДС 22%' if inv.company and _vat_included(inv.company.vat_mode) else 'без НДС'
+    shown = lines[:25]
+    items = []
+    for ln in shown:
+        plant = html_escape(ln.plant_name or 'Растение')
+        size = html_escape(ln.size_name or '')
+        qty = int(ln.qty or 0)
+        price = _fmt_money_ru(ln.price)
+        total = _fmt_money_ru(Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0)))
+        head = f'{plant} · {size}' if size else plant
+        items.append(f'• {head}\n  {qty} шт × {price} = {total}')
+    extra = npos - len(shown)
+    if extra > 0:
+        items.append(f'• … и ещё {extra} {pos_word}')
+    body = '\n'.join(items) if items else '• нет позиций'
+    parts = [
+        f'✅ <b>Согласован на выкопку</b> счёт №{inv.id}',
+        '',
+        f'👤 {buyer}',
+        f'💰 <b>ИТОГО: {_fmt_money_ru(inv.amount)}</b> · {npos} {pos_word}',
+        '',
+        f'📦 <b>Позиции</b>',
+        body,
+    ]
+    footer = []
+    if company_name:
+        same = company_name.strip().lower() == (inv.buyer_name or '').strip().lower()
+        if same:
+            footer.append(f'🧾 {vat}')
+        else:
+            footer.append(f'🧾 {html_escape(company_name)} · {vat}')
+    if user and user.username:
+        footer.append(f'✍️ {html_escape(user.username)}')
+    if footer:
+        parts.extend(['', '\n'.join(footer)])
+    text = '\n'.join(parts)
+    return text[:3500]
+
+
 def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
     data = {
         'id': inv.id,
@@ -924,15 +981,7 @@ def api_approve(user: User, inv_id: int):
     inv.status = 'approved'
     inv.approved_at = msk_now()
     db.session.commit()
-    company = html_escape(inv.company.short_name if inv.company else '')
-    vat = 'НДС 22%' if inv.company and _vat_included(inv.company.vat_mode) else 'без НДС'
-    text = (
-        f'Согласован счёт №{inv.id}\n'
-        f'{html_escape(inv.buyer_name or "")}\n'
-        f'{company} · {vat}\n'
-        f'{inv.amount} ₽ · {len(inv.lines)} поз.\n'
-        f'Автор: {html_escape(user.username)}'
-    )
+    text = _approved_orders_text(inv, user)
     try:
         tg_send_message(text, chat_type='orders')
     except Exception:
