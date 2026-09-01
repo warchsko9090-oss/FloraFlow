@@ -53,6 +53,14 @@ def _dadata_token() -> str:
     ).strip()
 
 
+def _dadata_headers() -> dict:
+    return {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': f'Token {_dadata_token()}',
+    }
+
+
 def _from_dadata(inn: str) -> tuple[dict, str, str]:
     """(fields, status, error). status — ACTIVE / LIQUIDATED / …"""
     token = _dadata_token()
@@ -62,11 +70,7 @@ def _from_dadata(inn: str) -> tuple[dict, str, str]:
         resp = requests.post(
             'https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/party',
             json={'query': inn},
-            headers={
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'Authorization': f'Token {token}',
-            },
+            headers=_dadata_headers(),
             timeout=8,
         )
         if resp.status_code != 200:
@@ -103,6 +107,43 @@ def _from_dadata(inn: str) -> tuple[dict, str, str]:
         return {}, '', 'network'
 
 
+def _from_dadata_bank(bik: str) -> dict:
+    """Название банка и корсчёт по БИК. В ЕГРЮЛ этого нет."""
+    bik = re.sub(r'\D+', '', str(bik or ''))[:9]
+    if len(bik) != 9 or not _dadata_token():
+        return {}
+    try:
+        resp = requests.post(
+            'https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/bank',
+            json={'query': bik},
+            headers=_dadata_headers(),
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return {}
+        suggestions = (resp.json() or {}).get('suggestions') or []
+        if not suggestions:
+            return {}
+        item = suggestions[0]
+        data = item.get('data') or {}
+        name = (
+            ((data.get('name') or {}).get('payment'))
+            or ((data.get('name') or {}).get('short'))
+            or item.get('value')
+            or ''
+        )
+        out = {}
+        if str(name).strip():
+            out['bank'] = str(name).strip()
+        ks = str(data.get('correspondent_account') or '').strip()
+        if ks:
+            out['ks'] = re.sub(r'\D+', '', ks)[:20]
+        out['bik'] = bik
+        return out
+    except Exception:
+        return {}
+
+
 def _fill_empty(dest: dict, src: dict) -> dict:
     out = dict(dest)
     for key, val in src.items():
@@ -134,10 +175,19 @@ def lookup_requisites(inn_raw: str) -> dict:
     if egrul:
         fields = _fill_empty(fields, egrul)
         sources.append('egrul')
+    bik = re.sub(r'\D+', '', fields.get('bik') or '')[:9]
+    if len(bik) == 9 and (not (fields.get('bank') or '').strip() or not (fields.get('ks') or '').strip()):
+        bank = _from_dadata_bank(bik)
+        if bank:
+            before = (fields.get('bank') or '').strip()
+            fields = _fill_empty(fields, bank)
+            if not before and (fields.get('bank') or '').strip():
+                sources.append('bik')
     hint = ''
+    core = [s for s in sources if s != 'bik']
     if status in ('LIQUIDATED', 'BANKRUPT'):
         hint = 'В ЕГРЮЛ организация не действующая — проверьте реквизиты'
-    elif not sources:
+    elif not core:
         if err == 'no_key':
             hint = 'ЕГРЮЛ не подключен: в Amvera нет DADATA_API_KEY'
         elif err == 'not_found':
@@ -146,12 +196,16 @@ def lookup_requisites(inn_raw: str) -> dict:
             hint = 'ЕГРЮЛ сейчас не ответил, заполните вручную или вставьте файл'
         else:
             hint = 'Реквизиты не найдены'
-    elif sources == ['db']:
-        hint = 'Подставили из вашей базы клиентов'
-    elif sources == ['egrul']:
-        hint = 'Подставили из ЕГРЮЛ. Банк и счета — из файла или вручную'
-    else:
+    elif 'egrul' in core and 'db' in core:
         hint = 'Карточка клиента + недостающее из ЕГРЮЛ'
+    elif core == ['db']:
+        hint = 'Подставили из вашей базы клиентов'
+    elif 'egrul' in core:
+        hint = 'Подставили из ЕГРЮЛ'
+    else:
+        hint = 'Подставили реквизиты'
+    if 'bik' in sources:
+        hint = hint.rstrip('.') + '. Название банка подставили по БИК'
     return {
         'ok': bool(sources),
         'fields': fields,
