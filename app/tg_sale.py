@@ -328,10 +328,8 @@ def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     if extra > 0:
         items.append(f'• … и ещё {extra} {pos_word}')
     body = '\n'.join(items) if items else '• нет позиций'
-    head = [f'✅ <b>Согласован на выкопку</b> {_sale_chat_ref(inv, order)}']
-    if order:
-        head.append(f'🧾 Заказ #{order.id} в ERP')
-    text = '\n'.join(head + [
+    text = '\n'.join([
+        f'✅ <b>Согласован на выкопку</b> {_sale_chat_ref(inv, order)}',
         '',
         f'👤 {buyer}',
         f'💰 ИТОГО: {_fmt_money_ru(inv.amount)} · {npos} {pos_word}',
