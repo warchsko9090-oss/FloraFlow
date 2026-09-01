@@ -290,13 +290,11 @@ def _fmt_money_ru(value) -> str:
     return f'{sign}{grouped} ₽'
 
 
-def _approved_orders_text(inv: SaleInvoice, user: User) -> str:
+def _approved_orders_text(inv: SaleInvoice) -> str:
     lines = list(inv.lines or [])
     npos = len(lines)
-    pos_word = 'поз.' if npos != 1 else 'позиция'
+    pos_word = 'позиция' if npos == 1 else 'поз.'
     buyer = html_escape((inv.buyer_name or 'Без клиента').strip())
-    company_name = (inv.company.short_name if inv.company else '') or ''
-    vat = 'НДС 22%' if inv.company and _vat_included(inv.company.vat_mode) else 'без НДС'
     shown = lines[:25]
     items = []
     for ln in shown:
@@ -306,32 +304,24 @@ def _approved_orders_text(inv: SaleInvoice, user: User) -> str:
         price = _fmt_money_ru(ln.price)
         total = _fmt_money_ru(Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0)))
         head = f'{plant} · {size}' if size else plant
-        items.append(f'• {head}\n  {qty} шт × {price} = {total}')
+        items.append(
+            f'• {head}\n'
+            f'<b>{qty} шт</b> по цене <b>{price}</b>\n'
+            f'{total}'
+        )
     extra = npos - len(shown)
     if extra > 0:
         items.append(f'• … и ещё {extra} {pos_word}')
     body = '\n'.join(items) if items else '• нет позиций'
-    parts = [
+    text = '\n'.join((
         f'✅ <b>Согласован на выкопку</b> счёт №{inv.id}',
         '',
         f'👤 {buyer}',
-        f'💰 <b>ИТОГО: {_fmt_money_ru(inv.amount)}</b> · {npos} {pos_word}',
+        f'💰 ИТОГО: {_fmt_money_ru(inv.amount)} · {npos} {pos_word}',
         '',
-        f'📦 <b>Позиции</b>',
+        f'📦 Позиции:',
         body,
-    ]
-    footer = []
-    if company_name:
-        same = company_name.strip().lower() == (inv.buyer_name or '').strip().lower()
-        if same:
-            footer.append(f'🧾 {vat}')
-        else:
-            footer.append(f'🧾 {html_escape(company_name)} · {vat}')
-    if user and user.username:
-        footer.append(f'✍️ {html_escape(user.username)}')
-    if footer:
-        parts.extend(['', '\n'.join(footer)])
-    text = '\n'.join(parts)
+    ))
     return text[:3500]
 
 
@@ -1007,7 +997,7 @@ def api_approve(user: User, inv_id: int):
     inv.status = 'approved'
     inv.approved_at = msk_now()
     db.session.commit()
-    text = _approved_orders_text(inv, user)
+    text = _approved_orders_text(inv)
     try:
         tg_send_message(text, chat_type='orders')
     except Exception:
