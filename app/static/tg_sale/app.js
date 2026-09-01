@@ -261,11 +261,25 @@
                     <option value="none" ${vatIncluded(c.vat_mode) ? "" : "selected"}>без НДС</option>
                     <option value="included_22" ${vatIncluded(c.vat_mode) ? "selected" : ""}>с НДС 22%</option>
                 </select>
+                <div class="label">Печать с подписью</div>
+                <p class="muted">PNG с прозрачным фоном: круглая печать и подпись на одном файле. 800–1200 px (на счёте около 8×8 см), до 2 МБ. JPG или WebP тоже можно, лучше PNG.</p>
+                <p class="muted">${c.has_stamp ? `Сейчас: ${esc(c.stamp_name || "загружена")}` : "Ещё не загружена"}</p>
+                <input class="input" type="file" accept="image/png,image/jpeg,image/webp" data-stamp>
+                <div class="grid2" style="margin-top:8px">
+                    <button class="btn ghost" data-stamp-co="${c.id}">Загрузить печать</button>
+                    ${c.has_stamp ? `<button class="btn danger" data-unstamp-co="${c.id}">Убрать</button>` : `<span></span>`}
+                </div>
                 <button class="btn" data-save-co="${c.id}" style="margin-top:10px">Сохранить</button>
             </div>`).join("");
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
         view.querySelectorAll("[data-save-co]").forEach((btn) => {
             btn.onclick = () => saveCompany(Number(btn.dataset.saveCo), btn.closest(".card"));
+        });
+        view.querySelectorAll("[data-stamp-co]").forEach((btn) => {
+            btn.onclick = () => uploadStamp(Number(btn.dataset.stampCo), btn.closest(".card"));
+        });
+        view.querySelectorAll("[data-unstamp-co]").forEach((btn) => {
+            btn.onclick = () => clearStamp(Number(btn.dataset.unstampCo), btn);
         });
     }
 
@@ -283,6 +297,46 @@
             await reload();
             state.screen = "firms";
             render();
+        } finally {
+            done();
+        }
+    }
+
+    async function uploadStamp(id, card) {
+        const input = card.querySelector("[data-stamp]");
+        if (!input || !input.files || !input.files[0]) {
+            alert("Выберите файл: PNG 800–1200 px, печать и подпись на прозрачном фоне, до 2 МБ");
+            return;
+        }
+        const done = armBusy(card.querySelector("[data-stamp-co]"));
+        try {
+            const fd = new FormData();
+            fd.append("file", input.files[0]);
+            const init = window.FFTg && window.FFTg.getInitData ? window.FFTg.getInitData() : "";
+            if (init) fd.append("initData", init);
+            await api(`/tg/sale/api/companies/${id}/stamp`, { method: "POST", body: fd });
+            haptic("medium");
+            await reload();
+            state.screen = "firms";
+            render();
+        } catch (e) {
+            alert(e.message || "Не удалось загрузить печать");
+        } finally {
+            done();
+        }
+    }
+
+    async function clearStamp(id, btn) {
+        if (!confirm("Убрать печать с этой фирмы?")) return;
+        const done = armBusy(btn);
+        try {
+            await api(`/tg/sale/api/companies/${id}/stamp`, { method: "DELETE", body: "{}" });
+            haptic("medium");
+            await reload();
+            state.screen = "firms";
+            render();
+        } catch (e) {
+            alert(e.message || "Не удалось убрать печать");
         } finally {
             done();
         }
@@ -356,7 +410,7 @@
         const d = state.draft;
         const html = d.lines.map((ln, i) => `
             <div class="list-item">
-                <div><b>${esc(ln.plant_name)}</b> · ${esc(ln.size_name)}</div>
+                <div><b>${esc(ln.plant_name)}</b> · ${esc(ln.size_name)}${ln.shop_attrs ? ` ${esc(ln.shop_attrs)}` : ""}</div>
                 <div class="grid2" style="margin-top:8px">
                     <div>
                         <div class="label">Кол-во, шт</div>
@@ -414,7 +468,7 @@
         else {
             state.draft.lines.push({
                 plant_id: it.plant_id, size_id: it.size_id, plant_name: it.plant_name,
-                size_name: it.size_name, qty: 1, price: it.price, free_qty: it.free_qty || it.free || 0,
+                size_name: it.size_name, shop_attrs: it.shop_attrs || "", qty: 1, price: it.price, free_qty: it.free_qty || it.free || 0,
             });
         }
         refreshLines();
@@ -437,7 +491,7 @@
             const from = g.min_price ? `от ${money(g.min_price)}` : "без цены";
             const rows = (g.sizes || []).map((it, si) => `
                 <button type="button" class="size-row ${it.is_seedling ? "seed" : ""}" data-g="${gi}" data-s="${si}">
-                    <span class="sz">${esc(it.size_name)}</span>
+                    <span class="sz">${esc(it.size_name)}${it.shop_attrs ? ` ${esc(it.shop_attrs)}` : ""}</span>
                     <span class="pr">${it.price ? money(it.price) : "—"}</span>
                     <span class="st">${it.free_qty || it.free} шт</span>
                     <span class="addm">+</span>

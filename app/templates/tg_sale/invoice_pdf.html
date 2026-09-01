@@ -34,6 +34,10 @@
         .words { font-size: 9pt; margin-top: 8pt; }
         .legal { font-size: 8pt; margin-top: 8pt; line-height: 1.35; }
         .sign { margin-top: 16pt; font-size: 9pt; }
+        .sign-block { width: 100%; margin-top: 18pt; }
+        .sign-role { font-size: 9pt; padding-bottom: 8pt; }
+        .stamp-img { width: 118pt; height: auto; margin: 0 0 -46pt 18pt; }
+        .sign-fio { font-size: 9pt; padding-top: 8pt; }
     </style>
 </head>
 <body>
@@ -151,8 +155,18 @@
         Уведомление об оплате обязательно, в противном случае не гарантируется наличие товара на складе.
         Товар отпускается по факту прихода денег на р/с Поставщика, самовывозом, при наличии доверенности и паспорта.
     </div>
-    {% if sign_line %}
-    <div class="sign">{{ sign_line }}</div>
-    {% endif %}
+    <table class="sign-block" cellpadding="0" cellspacing="0">
+        <tr>
+            <td width="28%" class="sign-role" valign="bottom">Руководитель</td>
+            <td width="72%" valign="bottom">
+                {% if stamp_uri %}
+                <img class="stamp-img" src="{{ stamp_uri }}" />
+                {% endif %}
+                {% if sign_line %}
+                <div class="sign-fio">_____________________ / {{ sign_line }} /</div>
+                {% endif %}
+            </td>
+        </tr>
+    </table>
 </body>
 </html>

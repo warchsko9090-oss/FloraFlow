@@ -1801,6 +1801,8 @@ class SaleCompany(db.Model):
     vat_mode = db.Column(db.String(20), nullable=False, default='none')  # none | included_22
     is_active = db.Column(db.Boolean, default=True)
     sort_order = db.Column(db.Integer, default=0)
+    stamp_blob = db.Column(db.LargeBinary)
+    stamp_name = db.Column(db.String(255), nullable=True)
 
 
 class SaleInvoice(db.Model):

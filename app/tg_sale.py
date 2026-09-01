@@ -21,7 +21,7 @@ from werkzeug.utils import secure_filename
 
 from app.models import (
     db, User, Client, Plant, Size, StockBalance, Order, OrderItem, OrderItemHistory,
-    SaleCompany, SaleInvoice, SaleInvoiceLine,
+    SaleCompany, SaleInvoice, SaleInvoiceLine, ShopPlantCard,
 )
 from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail
 from app.tg_sale_parse import parse_buyer_file
@@ -169,6 +169,37 @@ def _is_container_size(sname: str) -> bool:
     return False
 
 
+def _shop_cards(plant_ids) -> dict[int, ShopPlantCard]:
+    ids = sorted({int(pid) for pid in plant_ids if pid})
+    if not ids:
+        return {}
+    rows = ShopPlantCard.query.filter(ShopPlantCard.plant_id.in_(ids)).all()
+    return {int(r.plant_id): r for r in rows}
+
+
+def _shop_attrs(card: ShopPlantCard | None, size_name: str) -> str:
+    if not card:
+        return ''
+    if _is_container_size(size_name):
+        bits = (card.seedling_root_system, card.seedling_pruning)
+    else:
+        bits = (card.root_system, card.pruning)
+    out = []
+    for raw in bits:
+        text = re.sub(r'\s+', ' ', (raw or '').strip())
+        if text:
+            out.append(text.upper())
+    return ' '.join(out)
+
+
+def _goods_title(plant_name: str, size_name: str, attrs: str = '') -> str:
+    base = f'{plant_name or ""} {size_name or ""}'.strip()
+    extra = (attrs or '').strip()
+    if extra:
+        return f'{base} {extra}'.strip()
+    return base
+
+
 def _fmt_money(value) -> str:
     q = Decimal(str(value or 0)).quantize(Decimal('0.01'))
     sign = '-' if q < 0 else ''
@@ -268,6 +299,8 @@ def _serialize_company(c: SaleCompany) -> dict:
         'is_active': bool(c.is_active),
         'sort_order': c.sort_order or 0,
         'filled': _company_ready(c),
+        'has_stamp': bool(c.stamp_blob),
+        'stamp_name': c.stamp_name or '',
     }
 
 
@@ -311,14 +344,18 @@ def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     pos_word = 'позиция' if npos == 1 else 'поз.'
     buyer = html_escape((inv.buyer_name or 'Без клиента').strip())
     shown = lines[:25]
+    cards = _shop_cards(ln.plant_id for ln in shown)
     items = []
     for ln in shown:
         plant = html_escape(ln.plant_name or 'Растение')
         size = html_escape(ln.size_name or '')
+        attrs = html_escape(_shop_attrs(cards.get(ln.plant_id), ln.size_name or ''))
         qty = int(ln.qty or 0)
         price = _fmt_money_ru(ln.price)
         total = _fmt_money_ru(Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0)))
         head = f'{plant} · {size}' if size else plant
+        if attrs:
+            head = f'{head} {attrs}'
         items.append(
             f'• {head}\n'
             f'<b>{qty} шт</b> по цене <b>{price}</b>\n'
@@ -360,6 +397,7 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
     }
     if detail:
         free_map = _free_pairs()
+        cards = _shop_cards(ln.plant_id for ln in (inv.lines or []))
         data.update({
             'buyer_kpp': inv.buyer_kpp or '',
             'buyer_address': inv.buyer_address or '',
@@ -377,6 +415,7 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
                     'size_id': ln.size_id,
                     'plant_name': ln.plant_name,
                     'size_name': ln.size_name,
+                    'shop_attrs': _shop_attrs(cards.get(ln.plant_id), ln.size_name or ''),
                     'qty': ln.qty,
                     'price': float(ln.price or 0),
                     'sum': float(Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0))),
@@ -633,6 +672,35 @@ def _logo_uri() -> str:
     return ''
 
 
+def _blob_temp_uri(data: bytes, filename: str) -> tuple[str, str]:
+    ext = Path(filename or 'stamp.png').suffix.lower()
+    if ext not in ('.png', '.jpg', '.jpeg', '.gif'):
+        ext = '.png'
+    fd, path = tempfile.mkstemp(suffix=ext)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    return Path(path).resolve().as_uri(), path
+
+
+_STAMP_MAX = 2 * 1024 * 1024
+_STAMP_EXT = {'.png', '.jpg', '.jpeg', '.webp'}
+
+
+def _normalize_stamp(data: bytes, filename: str) -> tuple[bytes, str]:
+    from io import BytesIO
+    from PIL import Image
+    im = Image.open(BytesIO(data))
+    im = im.convert('RGBA')
+    max_side = 1400
+    if max(im.size) > max_side:
+        im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    buf = BytesIO()
+    im.save(buf, format='PNG', optimize=True)
+    return buf.getvalue(), 'stamp.png'
+
+
 def _qr_payload(company: SaleCompany, amount, purpose: str) -> str:
     """ГОСТ Р 56042 ST00012 (UTF-8). Пустая строка, если нет обязательных полей."""
     name = re.sub(r'[|\n\r]+', ' ', (company.legal_name or company.short_name or '')).strip()[:160]
@@ -764,10 +832,13 @@ def render_sale_pdf(inv: SaleInvoice) -> bytes | None:
     purpose = f'Оплата по счету N {inv.id} от {doc_date.strftime("%d.%m.%Y")}'
     pay_until = (doc_date + timedelta(days=3)).strftime('%d.%m.%Y')
     qr_uri, qr_path = '', ''
+    stamp_uri, stamp_path = '', ''
     pdf_lines = []
+    cards = _shop_cards(ln.plant_id for ln in (inv.lines or []))
     for i, ln in enumerate(inv.lines or [], 1):
         sm = Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0))
-        title = f'{ln.plant_name} {ln.size_name}'.strip()
+        attrs = _shop_attrs(cards.get(ln.plant_id), ln.size_name or '')
+        title = _goods_title(ln.plant_name, ln.size_name, attrs)
         pdf_lines.append({
             'n': i,
             'name': title,
@@ -782,6 +853,10 @@ def render_sale_pdf(inv: SaleInvoice) -> bytes | None:
         elif company:
             current_app.logger.warning(
                 'sale qr skipped: incomplete company requisites id=%s', company.id
+            )
+        if company and company.stamp_blob:
+            stamp_uri, stamp_path = _blob_temp_uri(
+                bytes(company.stamp_blob), company.stamp_name or 'stamp.png'
             )
         html = render_template(
             'tg_sale/invoice_pdf.html',
@@ -804,15 +879,17 @@ def render_sale_pdf(inv: SaleInvoice) -> bytes | None:
             sign_line=_sign_line(company),
             logo_uri=_logo_uri(),
             qr_uri=qr_uri,
+            stamp_uri=stamp_uri,
             doc_date=doc_date,
         )
         return build_pdf_bytes(html, page_margin='10mm')
     finally:
-        if qr_path:
-            try:
-                os.remove(qr_path)
-            except OSError:
-                pass
+        for p in (qr_path, stamp_path):
+            if p:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
 
 def _store_pdf(inv: SaleInvoice) -> bytes | None:
@@ -912,6 +989,39 @@ def api_company_save(user: User, cid: int):
     return jsonify(_serialize_company(c))
 
 
+@bp.route('/api/companies/<int:cid>/stamp', methods=['POST', 'DELETE'])
+@require_sale
+def api_company_stamp(user: User, cid: int):
+    if not _can_firms(user):
+        return jsonify({'error': 'forbidden'}), 403
+    c = SaleCompany.query.get_or_404(cid)
+    if request.method == 'DELETE':
+        c.stamp_blob = None
+        c.stamp_name = None
+        db.session.commit()
+        return jsonify(_serialize_company(c))
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'error': 'Выберите PNG 800–1200 px, печать и подпись, до 2 МБ'}), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in _STAMP_EXT:
+        return jsonify({'error': 'Нужен PNG, JPG или WebP'}), 400
+    data = file.read()
+    if not data:
+        return jsonify({'error': 'Файл пустой'}), 400
+    if len(data) > _STAMP_MAX:
+        return jsonify({'error': 'Файл больше 2 МБ — уменьшите изображение'}), 400
+    try:
+        blob, name = _normalize_stamp(data, file.filename)
+    except Exception:
+        current_app.logger.exception('sale company stamp')
+        return jsonify({'error': 'Не удалось прочитать картинку'}), 400
+    c.stamp_blob = blob
+    c.stamp_name = name
+    db.session.commit()
+    return jsonify(_serialize_company(c))
+
+
 def _plant_photo_url(plant_id: int, plant_name: str, *, prefer_container: bool = False) -> str:
     try:
         from app.photo_storage import PHOTO_VARIANT_CONTAINER, PHOTO_VARIANT_GROUND, resolve_photo_source
@@ -937,6 +1047,7 @@ def api_stock(_user: User):
     q = (request.args.get('q') or '').strip().lower()
     prices = _price_history_map()
     pairs = _free_pairs()
+    cards = {c.plant_id: c for c in ShopPlantCard.query.all()}
     items = []
     plants = {p.id: p.name for p in Plant.query.all()}
     sizes = {s.id: s.name for s in Size.query.all()}
@@ -955,6 +1066,7 @@ def api_stock(_user: User):
             'size_id': sid,
             'plant_name': pname,
             'size_name': sname,
+            'shop_attrs': _shop_attrs(cards.get(pid), sname),
             'free': free,
             'free_qty': free,
             'price': float(prices.get((pid, sid)) or 0),
