@@ -29,7 +29,7 @@ from app.utils import msk_now, build_pdf_bytes, size_natural_key
 from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
 from app.stock_helpers import get_reserved_map
 from app.shop_catalog import _price_history_map
-from app.seedlings import is_seedling_size_name
+from app.seedlings import is_seedling_size_name, is_excluded_from_product_stock
 from app.inn_lookup import lookup_requisites
 
 bp = Blueprint('tg_sale', __name__, url_prefix='/tg/sale')
@@ -585,11 +585,37 @@ def _supplier_line(company: SaleCompany | None) -> str:
 
 def _buyer_line(inv: SaleInvoice) -> str:
     parts = [(inv.buyer_name or '').strip()]
-    if inv.buyer_inn:
-        inn = f'ИНН {inv.buyer_inn}'
-        if inv.buyer_kpp:
-            inn += f', КПП {inv.buyer_kpp}'
-        parts.append(inn)
+    inn = _inn_digits(inv.buyer_inn)
+    if inn:
+        chunk = f'ИНН {inn}'
+        kpp = (inv.buyer_kpp or '').strip()
+        if kpp:
+            chunk += f', КПП {kpp}'
+        parts.append(chunk)
+    ogrn = _digits(inv.buyer_ogrn)
+    if ogrn:
+        parts.append(('ОГРНИП ' if len(ogrn) == 15 else 'ОГРН ') + ogrn)
+    addr = (inv.buyer_address or '').strip()
+    if addr:
+        parts.append(addr)
+    phone = (inv.buyer_phone or '').strip()
+    if phone:
+        parts.append(f'тел.: {phone}')
+    bank_bits = []
+    bank = (inv.buyer_bank or '').strip()
+    if bank:
+        bank_bits.append(bank)
+    rs = _digits(inv.buyer_rs, 20)
+    if len(rs) == 20:
+        bank_bits.append(f'р/с {rs}')
+    bik = _digits(inv.buyer_bik, 9)
+    if len(bik) == 9:
+        bank_bits.append(f'БИК {bik}')
+    ks = _digits(inv.buyer_ks, 20)
+    if len(ks) == 20:
+        bank_bits.append(f'к/с {ks}')
+    if bank_bits:
+        parts.append(', '.join(bank_bits))
     return ', '.join(p for p in parts if p)
 
 
@@ -767,6 +793,8 @@ def api_stock(_user: User):
     for (pid, sid), free in pairs.items():
         pname = plants.get(pid) or ''
         sname = sizes.get(sid) or ''
+        if is_excluded_from_product_stock(sname):
+            continue
         hay = f'{pname} {sname}'.lower()
         tokens = [t for t in q.split() if t] if q else []
         if tokens and not all(t in hay for t in tokens):
@@ -932,9 +960,8 @@ def api_discard(_user: User, inv_id: int):
 @require_sale
 def api_pdf(_user: User, inv_id: int):
     inv = SaleInvoice.query.get_or_404(inv_id)
-    blob = inv.file_blob if inv.status == 'approved' and inv.file_blob else _store_pdf(inv)
-    if inv.status == 'draft':
-        db.session.commit()
+    blob = _store_pdf(inv)
+    db.session.commit()
     if not blob:
         return jsonify({'error': 'pdf_failed'}), 500
     resp = make_response(bytes(blob))
@@ -947,9 +974,8 @@ def api_pdf(_user: User, inv_id: int):
 @require_sale
 def api_send_pdf(user: User, inv_id: int):
     inv = SaleInvoice.query.get_or_404(inv_id)
-    blob = inv.file_blob if inv.file_blob else _store_pdf(inv)
-    if inv.status == 'draft':
-        db.session.commit()
+    blob = _store_pdf(inv)
+    db.session.commit()
     if not blob:
         return jsonify({'ok': False, 'error': 'pdf_failed'}), 500
     if not user.telegram_id:

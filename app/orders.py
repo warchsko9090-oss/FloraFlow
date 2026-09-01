@@ -725,9 +725,10 @@ def sale_invoice_pdf(inv_id):
     from app.models import SaleInvoice
     from app.tg_sale import render_sale_pdf
     inv = SaleInvoice.query.get_or_404(inv_id)
-    blob = inv.file_blob
-    if not blob:
-        blob = render_sale_pdf(inv)
+    blob = render_sale_pdf(inv)
+    if blob:
+        inv.file_blob = blob
+        db.session.commit()
     if not blob:
         flash('Не удалось собрать PDF')
         return redirect(url_for('orders.sale_invoices_list'))
