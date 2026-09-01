@@ -46,6 +46,18 @@ def _build_order_item_snapshot(item):
     }
 
 
+def _sync_order_status_from_dug(order):
+    """После изменения состава/кол-ва заказа вернуть его в план выкопки, если осталось копать.
+
+    Иначе заказ остаётся «Готов» и карточки в «План выкопки» нет.
+    """
+    if order is None:
+        return
+    db.session.flush()
+    db.session.expire(order, ['items'])
+    order.refresh_status_by_dug()
+
+
 def _record_order_item_history(order_id, item, action_type, before_qty, after_qty):
     before_val = int(before_qty) if before_qty is not None else None
     after_val = int(after_qty) if after_qty is not None else None
@@ -1675,6 +1687,7 @@ def order_detail(order_id):
                     return redirect(return_to)
                 return redirect(url_for('orders.order_detail', order_id=order_id))
 
+            _sync_order_status_from_dug(o)
             db.session.commit()
             flash('Сохранено')
             log_action(f"Обновил товары в заказе #{o.id}")
@@ -1719,6 +1732,7 @@ def order_detail(order_id):
                         log_entry.order_item_id = None
 
                     db.session.delete(it)
+                    _sync_order_status_from_dug(o)
                     db.session.commit()
                     flash('Позиция удалена')
                 except Exception as exc:
@@ -1759,6 +1773,7 @@ def order_detail(order_id):
                     after_qty=q,
                 )
                 _notify_assign_batch_task(o, new_item)
+                _sync_order_status_from_dug(o)
                 db.session.commit()
                 flash('Позиция добавлена без поля и партии. Задача на назначение ушла менеджеру питомника и админу.')
             else:
@@ -1817,6 +1832,7 @@ def order_detail(order_id):
                             return redirect(return_to)
                         return redirect(url_for('orders.order_detail', order_id=order_id))
 
+                    _sync_order_status_from_dug(o)
                     db.session.commit()
                 else:
                     flash(f'Недостаточно товара. Доступно: {free}')
@@ -2039,6 +2055,7 @@ def order_detail(order_id):
                         return redirect(return_to)
                     return redirect(url_for('orders.order_detail', order_id=order_id))
 
+                _sync_order_status_from_dug(o)
                 db.session.commit()
                 flash('Позиция разделена')
                 log_action(f"Разделил позицию в заказе #{o.id}")

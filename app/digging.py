@@ -666,7 +666,7 @@ def manager_report():
             continue
 
         items = OrderItem.query.join(Order).filter(
-            Order.status.in_(['reserved', 'in_progress']),
+            Order.status.in_(['reserved', 'in_progress', 'ready']),
             Order.is_deleted == False,
             OrderItem.plant_id == log.plant_id,
             OrderItem.size_id == log.size_id,
@@ -911,7 +911,12 @@ def digging_planning():
         return redirect(url_for('digging.digging_planning'))
 
     # 1. СОБИРАЕМ ЗАКАЗЫ ДЛЯ ЛЕВОЙ КОЛОНКИ (Ждут распределения)
-    active_orders = Order.query.filter(Order.status.in_(['reserved', 'in_progress']), Order.is_deleted == False).order_by(Order.date).all()
+    # ready тоже: если после полной выкопки в заказ добавили объём, статус
+    # мог остаться «Готов», а копать ещё есть.
+    active_orders = Order.query.filter(
+        Order.status.in_(['reserved', 'in_progress', 'ready']),
+        Order.is_deleted == False,
+    ).order_by(Order.date).all()
     orders_to_plan = []
 
     for o in active_orders:
@@ -1070,7 +1075,7 @@ def get_order_plan_form(order_id, date_str):
                 <div style="line-height: 1.2;">
                     <input type="hidden" name="item_id[]" value="{i.id}">
                     <strong class="text-dark">{i.plant.name}</strong><br>
-                    <small class="text-muted">{i.size.name} | Поле {i.field.name}</small>
+                    <small class="text-muted">{i.size.name if i.size else '—'} | Поле {i.field.name if i.field else '—'}</small>
                 </div>
                 <div style="width: 100px;">
                     <label class="small text-muted text-center w-100 mb-0">Осталось: {left_to_plan}</label>
