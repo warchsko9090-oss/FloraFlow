@@ -102,10 +102,31 @@ def _start_greeting(sender, tg_id) -> str:
         lines.append(f'В Amvera одна строка: TG_USER_ID_MAP={tg_id}:admin')
     lines.append('')
     if _can_sale_role(user):
-        lines.append('Кнопки ниже открывают Mini App.')
+        lines.append('Кнопки внизу чата всегда под рукой: Оплата и Выставить счёт.')
     else:
         lines.append('Пришлите PDF — попадёт в черновики администратора.')
     return '\n'.join(lines)
+
+
+def _apps_reply_keyboard(user: User | None) -> dict | None:
+    """Постоянные кнопки Mini App внизу чата — чтобы переключаться без /start."""
+    pay_url = _public_miniapp_url()
+    row = []
+    if pay_url.startswith('https://'):
+        pay_label = 'Оплата' if _can_sale_role(user) else 'Счета на оплату'
+        row.append({'text': pay_label, 'web_app': {'url': pay_url}})
+    if _can_sale_role(user):
+        from app.tg_sale import public_sale_url
+        sale_url = public_sale_url()
+        if sale_url.startswith('https://'):
+            row.append({'text': 'Выставить счёт', 'web_app': {'url': sale_url}})
+    if not row:
+        return None
+    return {
+        'keyboard': [row],
+        'resize_keyboard': True,
+        'is_persistent': True,
+    }
 
 
 def _dev_mode() -> bool:
@@ -962,22 +983,16 @@ def handle_private_update(msg: dict) -> bool:
     if text.startswith('/start') or text in ('счета', 'Счета', '/pay'):
         note_telegram_update('start', tg_id)
         user = _user_from_telegram(sender) if sender else None
-        pay_url = _public_miniapp_url()
-        rows = []
-        if pay_url.startswith('https://'):
-            pay_label = 'Оплата' if _can_sale_role(user) else 'Счета на оплату'
-            rows.append([{'text': pay_label, 'web_app': {'url': pay_url}}])
         if _can_sale_role(user):
             from app.tg_sale import public_sale_url
             sale_url = public_sale_url()
             if sale_url.startswith('https://'):
-                rows.append([{'text': 'Выставить счёт', 'web_app': {'url': sale_url}}])
                 try:
                     from app.telegram import set_pay_menu_button
                     set_pay_menu_button(url=sale_url, chat_id=chat_id, text='Счёт')
                 except Exception:
                     current_app.logger.exception('sale menu button')
-        markup = {'inline_keyboard': rows} if rows else None
+        markup = _apps_reply_keyboard(user)
         _tg_reply(chat_id, _start_greeting(sender, tg_id), reply_markup=markup)
         return True
 
