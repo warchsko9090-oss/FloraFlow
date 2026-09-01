@@ -1,6 +1,6 @@
 """Telegram Mini App «Выставить счёт» клиенту.
 
-Роли: admin и shop_manager. Заказ и резерв не создаём.
+Роли: admin и shop_manager. Согласование создаёт заказ ERP с резервом.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from sqlalchemy import func
 from werkzeug.utils import secure_filename
 
 from app.models import (
-    db, User, Client, Plant, Size, StockBalance,
+    db, User, Client, Plant, Size, StockBalance, Order, OrderItem, OrderItemHistory,
     SaleCompany, SaleInvoice, SaleInvoiceLine,
 )
 from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail
@@ -290,7 +290,7 @@ def _fmt_money_ru(value) -> str:
     return f'{sign}{grouped} ₽'
 
 
-def _approved_orders_text(inv: SaleInvoice) -> str:
+def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     lines = list(inv.lines or [])
     npos = len(lines)
     pos_word = 'позиция' if npos == 1 else 'поз.'
@@ -313,15 +313,17 @@ def _approved_orders_text(inv: SaleInvoice) -> str:
     if extra > 0:
         items.append(f'• … и ещё {extra} {pos_word}')
     body = '\n'.join(items) if items else '• нет позиций'
-    text = '\n'.join((
-        f'✅ <b>Согласован на выкопку</b> счёт №{inv.id}',
+    head = [f'✅ <b>Согласован на выкопку</b> счёт №{inv.id}']
+    if order:
+        head.append(f'🧾 Заказ #{order.id} в ERP')
+    text = '\n'.join(head + [
         '',
         f'👤 {buyer}',
         f'💰 ИТОГО: {_fmt_money_ru(inv.amount)} · {npos} {pos_word}',
         '',
         f'📦 Позиции:',
         body,
-    ))
+    ])
     return text[:3500]
 
 
@@ -341,6 +343,7 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
         'has_file': bool(inv.file_blob),
         'author': inv.user.username if inv.user else '',
         'lines_count': len(inv.lines or []),
+        'order_id': inv.order_id,
     }
     if detail:
         free_map = _free_pairs()
@@ -435,6 +438,122 @@ def _sync_client(inv: SaleInvoice):
     if inv.buyer_ks:
         client.ks = _digits(inv.buyer_ks, 20)[:40]
     inv.client_id = client.id
+
+
+def _allocate_sale_qty(plant_id: int, size_id: int, qty: int) -> list[tuple[int | None, int | None, int]]:
+    """Разложить штуки по полям со свободным остатком; хвост — без поля."""
+    from app.stock_helpers import compute_free
+    remaining = int(qty or 0)
+    if remaining <= 0:
+        return []
+    lots = []
+    rows = StockBalance.query.filter_by(plant_id=plant_id, size_id=size_id).all()
+    for sb in rows:
+        if not sb.field_id:
+            continue
+        year = sb.year or msk_now().year
+        _fact, _res, free = compute_free(plant_id, size_id, sb.field_id, year)
+        if free > 0:
+            lots.append((int(free), int(sb.field_id), int(year)))
+    lots.sort(key=lambda x: -x[0])
+    chunks = []
+    for free, fid, year in lots:
+        if remaining <= 0:
+            break
+        take = min(free, remaining)
+        chunks.append((fid, year, take))
+        remaining -= take
+    if remaining > 0:
+        chunks.append((None, None, remaining))
+    return chunks
+
+
+def create_order_from_sale_invoice(inv: SaleInvoice, user_id: int | None) -> Order | None:
+    """Создаёт заказ ERP с резервом из согласованного счёта Mini App."""
+    if inv.order_id:
+        return Order.query.get(inv.order_id)
+    if not inv.client_id:
+        _sync_client(inv)
+    if not inv.client_id:
+        return None
+    usable = [ln for ln in (inv.lines or []) if ln.plant_id and ln.size_id and int(ln.qty or 0) > 0]
+    if not usable:
+        return None
+
+    order = Order(
+        client_id=inv.client_id,
+        date=inv.approved_at or msk_now(),
+        status='reserved',
+        invoice_number=f'ТГ-{inv.id}',
+        invoice_date=(inv.approved_at or msk_now()).date(),
+        created_by_user_id=user_id or inv.user_id,
+    )
+    db.session.add(order)
+    db.session.flush()
+    inv.order_id = order.id
+
+    created = []
+    for ln in usable:
+        price = _money(ln.price)
+        for field_id, year, qty in _allocate_sale_qty(int(ln.plant_id), int(ln.size_id), int(ln.qty)):
+            oi = OrderItem(
+                order_id=order.id,
+                plant_id=int(ln.plant_id),
+                size_id=int(ln.size_id),
+                field_id=field_id,
+                year=year,
+                quantity=qty,
+                price=price,
+            )
+            db.session.add(oi)
+            db.session.flush()
+            db.session.add(OrderItemHistory(
+                order_id=order.id,
+                order_item_id=oi.id,
+                action_type='initial_item',
+                before_quantity=0,
+                after_quantity=qty,
+                delta_quantity=qty,
+                changed_by_user_id=user_id or inv.user_id,
+                created_at=msk_now(),
+            ))
+            created.append(oi)
+
+    if not created:
+        inv.order_id = None
+        db.session.delete(order)
+        db.session.flush()
+        return None
+
+    if not order.project_id:
+        from app.finance import resolve_project_id_for_yard_fields
+        linked = resolve_project_id_for_yard_fields([it.field_id for it in created if it.field_id])
+        if linked:
+            order.project_id = linked
+
+    return order
+
+
+def backfill_approved_sale_orders() -> int:
+    rows = (
+        SaleInvoice.query
+        .filter(SaleInvoice.status == 'approved', SaleInvoice.order_id.is_(None))
+        .order_by(SaleInvoice.id.asc())
+        .all()
+    )
+    n = 0
+    for inv in rows:
+        try:
+            order = create_order_from_sale_invoice(inv, inv.user_id)
+            if order:
+                db.session.commit()
+                n += 1
+            else:
+                db.session.rollback()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('sale invoice %s -> order backfill failed', inv.id)
+    return n
 
 
 def _replace_lines(inv: SaleInvoice, rows: list):
@@ -699,12 +818,13 @@ def _store_pdf(inv: SaleInvoice) -> bytes | None:
 @bp.route('')
 @bp.route('/')
 def index():
-    user, is_dev, _pending = resolve_user()
-    html = render_template('tg_sale/index.html', has_user=bool(user and _can_sale(user)))
+    html = render_template('tg_sale/index.html')
     resp = make_response(html)
     as_role = request.args.get('as')
-    if is_dev and as_role in ('admin', 'shop_manager'):
-        resp.set_cookie(_DEV_COOKIE, as_role, samesite='Lax')
+    if as_role in ('admin', 'shop_manager'):
+        from app.tg_pay import _dev_mode
+        if _dev_mode():
+            resp.set_cookie(_DEV_COOKIE, as_role, samesite='Lax')
     return resp
 
 
@@ -728,6 +848,7 @@ def api_auth():
         'role': user.role,
         'can_firms': _can_firms(user),
         'can_edit_firms': _can_firms(user),
+        'can_delete_approved': (user.role or '') == 'admin',
         'dev': is_dev,
     })
     return set_mini_cookie(resp, user)
@@ -742,6 +863,7 @@ def api_me(user: User):
         'role': user.role,
         'can_firms': _can_firms(user),
         'can_edit_firms': _can_firms(user),
+        'can_delete_approved': (user.role or '') == 'admin',
     })
 
 
@@ -960,15 +1082,49 @@ def api_save(_user: User, inv_id: int):
     return jsonify(_serialize_invoice(inv, detail=True))
 
 
+def void_sale_invoice(inv: SaleInvoice) -> Order | None:
+    """Убирает счёт из Mini App и снимает связанный заказ ERP (резерв + список)."""
+    order = None
+    if inv.order_id:
+        order = Order.query.get(inv.order_id)
+    if order:
+        if (order.status or '') == 'shipped':
+            raise ValueError('shipped')
+        if (order.status or '') not in ('canceled', 'ghost'):
+            order.status = 'canceled'
+            order.canceled_at = msk_now()
+        order.is_deleted = True
+    inv.status = 'discarded'
+    return order
+
+
 @bp.route('/api/invoices/<int:inv_id>/discard', methods=['POST'])
 @require_sale
-def api_discard(_user: User, inv_id: int):
+def api_discard(user: User, inv_id: int):
     inv = SaleInvoice.query.get_or_404(inv_id)
-    if inv.status == 'approved':
-        return jsonify({'error': 'locked'}), 400
-    inv.status = 'discarded'
+    if inv.status == 'discarded':
+        return jsonify({'ok': True, 'order_id': inv.order_id})
+    if inv.status == 'approved' and (user.role or '') != 'admin':
+        return jsonify({'error': 'Согласованный счёт может удалить только админ'}), 403
+    try:
+        order = void_sale_invoice(inv)
+    except ValueError as err:
+        if str(err) == 'shipped':
+            return jsonify({
+                'error': 'Заказ уже отгружен — снимите его в ERP вручную',
+            }), 409
+        raise
     db.session.commit()
-    return jsonify({'ok': True})
+    if order:
+        try:
+            tg_send_message(
+                f'❌ Счёт №{inv.id} удалён\n'
+                f'Заказ #{order.id} снят с резерва и скрыт в ERP',
+                chat_type='orders',
+            )
+        except Exception:
+            current_app.logger.exception('sale invoice discard chat')
+    return jsonify({'ok': True, 'order_id': order.id if order else None})
 
 
 @bp.route('/api/invoices/<int:inv_id>/pdf')
@@ -1021,8 +1177,9 @@ def api_approve(user: User, inv_id: int):
         return jsonify({'error': 'pdf_failed'}), 500
     inv.status = 'approved'
     inv.approved_at = msk_now()
+    order = create_order_from_sale_invoice(inv, user.id)
     db.session.commit()
-    text = _approved_orders_text(inv)
+    text = _approved_orders_text(inv, order)
     try:
         tg_send_message(text, chat_type='orders')
     except Exception:

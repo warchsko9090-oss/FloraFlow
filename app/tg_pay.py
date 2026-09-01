@@ -376,9 +376,11 @@ def log_mini_auth_fail():
         body = request.get_json(silent=True) or {}
         if isinstance(body, dict):
             debug = body.get('debug') or {}
-    current_app.logger.warning(
+    hint = _auth_fail_hint()
+    log = current_app.logger.info if hint == 'no_init_data' else current_app.logger.warning
+    log(
         'tg mini auth fail hint=%s candidates=%s ua=%s debug=%s',
-        _auth_fail_hint(),
+        hint,
         len(_init_data_candidates()),
         request.headers.get('User-Agent', ''),
         debug,
@@ -632,14 +634,10 @@ def _store_upload(data: bytes, original_name: str) -> str:
 @bp.route('')
 @bp.route('/')
 def index():
-    user, is_dev, _pending = resolve_user()
-    html = render_template(
-        'tg_pay/index.html',
-        has_user=bool(user),
-    )
+    html = render_template('tg_pay/index.html')
     resp = make_response(html)
     as_role = request.args.get('as')
-    if is_dev and as_role in ('admin', 'payer'):
+    if as_role in ('admin', 'payer') and _dev_mode():
         resp.set_cookie(_DEV_COOKIE, as_role, samesite='Lax')
     return resp
 

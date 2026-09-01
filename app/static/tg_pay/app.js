@@ -100,15 +100,23 @@
     return '';
   }
 
+  async function ensureBudgetItems() {
+    if (budgetItems.length) return;
+    if (!me || !(me.can_edit || me.can_inbox)) return;
+    budgetItems = await api('/tg/pay/api/budget-items');
+  }
+
   async function boot() {
     try {
-      await waitTelegram();
+      if (window.FFTg && window.FFTg.bootAuth) {
+        me = await window.FFTg.bootAuth('/tg/pay/api/auth');
+      } else {
+        await waitTelegram();
+        me = await api('/tg/pay/api/me');
+      }
       try { const w = tgApp(); if (w) { w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } } catch (_) {}
-      if (window.FFTg) me = await window.FFTg.handshake('/tg/pay/api/auth');
-      else me = await api('/tg/pay/api/me');
     } catch (e) {
       try {
-        await new Promise((r) => setTimeout(r, 800));
         await waitTelegram();
         if (window.FFTg) me = await window.FFTg.handshake('/tg/pay/api/auth');
         else throw e;
@@ -116,9 +124,6 @@
         view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e2.message || e.message}</p></div>`;
         return;
       }
-    }
-    if (me.can_edit || me.can_inbox) {
-      budgetItems = await api('/tg/pay/api/budget-items');
     }
     window.addEventListener('hashchange', route);
     route();
@@ -213,6 +218,7 @@
   async function renderDetail(id) {
     setTitle('Счёт');
     const inv = await api('/tg/pay/api/invoices/' + id);
+    if (me.can_edit) await ensureBudgetItems();
     const can = me.can_edit;
     let lines = '';
     if (inv.lines && inv.lines.length) {
@@ -432,8 +438,9 @@
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
   }
 
-  function renderPlan() {
+  async function renderPlan() {
     setTitle('План на неделю');
+    await ensureBudgetItems();
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← назад</button>
       <div class="card">
@@ -565,6 +572,7 @@
 
   async function renderInbox() {
     setTitle('Входящие из чата');
+    await ensureBudgetItems();
     const data = await api('/tg/pay/api/inbox');
     const items = data.items || [];
     let html = `<button class="back" type="button" id="goBack">← к счетам</button>`;

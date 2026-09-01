@@ -1832,6 +1832,8 @@ class SaleInvoice(db.Model):
     company = db.relationship('SaleCompany')
     client = db.relationship('Client')
     user = db.relationship('User')
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=True, index=True)
+    order = db.relationship('Order')
     lines = db.relationship(
         'SaleInvoiceLine',
         backref='invoice',

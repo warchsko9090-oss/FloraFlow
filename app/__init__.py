@@ -186,6 +186,16 @@ def create_app():
             return None
         return redirect(url_for('orders.orders_list'))
 
+    @app.after_request
+    def _cache_miniapp_static(response):
+        from flask import request
+        path = request.path or ''
+        if path.endswith('/telegram-web-app.js'):
+            response.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
+        elif path.startswith('/static/tg_'):
+            response.headers['Cache-Control'] = 'public, max-age=604800'
+        return response
+
     # --- ФИЛЬТРЫ ---
     @app.template_filter('money')
     def format_money(value):
@@ -310,6 +320,14 @@ def create_app():
             ensure_numbered_container_yards()
         except Exception as e:
             app.logger.warning(f'ensure_* migrations skipped: {e}')
+
+        try:
+            from app.tg_sale import backfill_approved_sale_orders
+            n = backfill_approved_sale_orders()
+            if n:
+                app.logger.info('sale invoices converted to orders: %s', n)
+        except Exception as e:
+            app.logger.warning('sale invoice order backfill skipped: %s', e)
 
         if not User.query.filter_by(username='admin').first():
             u = User(username='admin', role='admin')

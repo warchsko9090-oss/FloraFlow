@@ -728,6 +728,39 @@ def sale_invoices_list():
     return render_template('orders/sale_invoices.html', invoices=invoices, status=status)
 
 
+@bp.route('/orders/sale_invoices/<int:inv_id>/discard', methods=['POST'])
+@login_required
+def sale_invoice_discard(inv_id):
+    if current_user.role != 'admin':
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+    from app.models import SaleInvoice
+    from app.tg_sale import void_sale_invoice
+    inv = SaleInvoice.query.get_or_404(inv_id)
+    if inv.status == 'discarded':
+        flash('Счёт уже удалён')
+        return redirect(url_for('orders.sale_invoices_list'))
+    try:
+        order = void_sale_invoice(inv)
+    except ValueError as err:
+        if str(err) == 'shipped':
+            flash('Заказ уже отгружен — снимите его в карточке заказа')
+            return redirect(url_for('orders.sale_invoices_list'))
+        raise
+    db.session.commit()
+    log_action(f"Удалил счёт ТГ-{inv.id}" + (f" и заказ #{order.id}" if order else ""))
+    if order:
+        try:
+            send_tg_message_orders(
+                f'❌ Счёт №{inv.id} удалён\n'
+                f'Заказ #{order.id} снят с резерва и скрыт в ERP'
+            )
+        except Exception:
+            current_app.logger.exception('sale invoice discard chat')
+    flash('Счёт удалён' + (f', заказ №{order.id} скрыт' if order else ''))
+    return redirect(url_for('orders.sale_invoices_list'))
+
+
 @bp.route('/orders/sale_invoices/<int:inv_id>/pdf')
 @login_required
 def sale_invoice_pdf(inv_id):

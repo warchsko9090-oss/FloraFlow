@@ -120,8 +120,28 @@
     };
   }
 
+  function applyWeb() {
+    const web = tgApp();
+    if (web) {
+      try { web.ready(); web.expand(); } catch (_) {}
+    }
+    return web || null;
+  }
+
+  function loadSdk() {
+    if (tgApp() || w.__ffSdkLoading) return;
+    const src = document.documentElement.getAttribute("data-tg-sdk");
+    if (!src) return;
+    w.__ffSdkLoading = true;
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    s.onload = function () { applyWeb(); };
+    document.head.appendChild(s);
+  }
+
   function waitTelegram(maxMs) {
-    const max = maxMs || 1200;
+    const max = maxMs == null ? 1200 : maxMs;
     return new Promise((resolve) => {
       const start = Date.now();
       let done = false;
@@ -129,14 +149,11 @@
         if (done) return;
         done = true;
         remember(getInitData());
-        resolve(web || tgApp() || null);
+        resolve(web || applyWeb());
       };
       const tick = () => {
-        const web = tgApp();
-        if (web) {
-          try { web.ready(); web.expand(); } catch (_) {}
-        }
-        if (getInitData() || Date.now() - start > max) return finish(web);
+        applyWeb();
+        if (getInitData() || Date.now() - start > max) return finish(tgApp());
         setTimeout(tick, 40);
       };
       w.addEventListener("hashchange", () => {
@@ -144,6 +161,21 @@
       });
       tick();
     });
+  }
+
+  /* Cookie с прошлого запуска или hash уже в URL — не ждём SDK. */
+  async function bootAuth(authUrl) {
+    loadSdk();
+    applyWeb();
+    try {
+      const me = await handshake(authUrl);
+      waitTelegram(800).then(applyWeb);
+      return me;
+    } catch (e) {
+      await waitTelegram(1200);
+      applyWeb();
+      return handshake(authUrl);
+    }
   }
 
   function authErrorMessage(data, status) {
@@ -209,5 +241,5 @@
     return data;
   }
 
-  w.FFTg = { tgApp, getInitData, waitTelegram, handshake, api, authErrorMessage, remember, debugInfo };
+  w.FFTg = { tgApp, getInitData, waitTelegram, handshake, bootAuth, api, authErrorMessage, remember, debugInfo, applyWeb };
 })(window);

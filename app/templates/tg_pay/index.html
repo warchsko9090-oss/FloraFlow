@@ -1,14 +1,15 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-tg-sdk="{{ url_for('static', filename='tg_common/telegram-web-app.js') }}?v=20260901sdk">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
     <meta name="theme-color" content="#111814">
     <title>Счета на оплату</title>
     <script>window.__ffLaunch={hash:String(location.hash||''),href:String(location.href||''),search:String(location.search||'')};</script>
-    <script src="{{ url_for('static', filename='tg_common/telegram-web-app.js') }}?v=20260901j"></script>
-    <script>try{var _w=window.Telegram&&Telegram.WebApp;if(_w){_w.ready();_w.expand();}}catch(e){}</script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='tg_pay/app.css') }}?v=20260901e">
+    <link rel="stylesheet" href="{{ url_for('static', filename='tg_pay/app.css') }}?v=20260901f">
+    <link rel="preload" href="{{ url_for('static', filename='tg_common/telegram-web-app.js') }}?v=20260901sdk" as="script">
+    <script src="{{ url_for('static', filename='tg_common/tg_auth.js') }}?v=20260901k" defer></script>
+    <script src="{{ url_for('static', filename='tg_pay/app.js') }}?v=20260901f" defer></script>
 </head>
 <body>
     <div id="app">
@@ -19,9 +20,7 @@
                 <h1 id="screenTitle">Счета на оплату</h1>
             </div>
         </header>
-        <main id="view"></main>
+        <main id="view"><p class="hint">Загрузка…</p></main>
     </div>
-    <script src="{{ url_for('static', filename='tg_common/tg_auth.js') }}?v=20260901e"></script>
-    <script src="{{ url_for('static', filename='tg_pay/app.js') }}?v=20260901e"></script>
 </body>
 </html>

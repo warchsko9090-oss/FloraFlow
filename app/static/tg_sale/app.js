@@ -229,9 +229,12 @@
                 <p class="muted">${esc(companyName(inv))}</p>
                 <div class="tot" style="margin-top:10px">${money(inv.amount)}</div>
             </div>
-            <button class="btn gold" id="pdf">Открыть счёт</button>`;
+            <button class="btn gold" id="pdf">Открыть счёт</button>
+            ${state.me && state.me.can_delete_approved ? `<button class="btn danger" id="discard" style="margin-top:8px">Удалить счёт и заказ</button>` : ""}`;
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
         document.getElementById("pdf").onclick = sendPdf;
+        const ds = document.getElementById("discard");
+        if (ds) ds.onclick = discardInv;
     }
 
     function renderFirms() {
@@ -558,8 +561,18 @@
     }
 
     async function discardInv() {
-        if (!state.current || !confirm("Удалить черновик?")) return;
-        await api(`/tg/sale/api/invoices/${state.current.id}/discard`, { method: "POST", body: "{}" });
+        if (!state.current) return;
+        const approved = state.current.status === "approved";
+        const msg = approved
+            ? "Удалить согласованный счёт и заказ в ERP? Резерв снимется."
+            : "Удалить черновик?";
+        if (!confirm(msg)) return;
+        try {
+            await api(`/tg/sale/api/invoices/${state.current.id}/discard`, { method: "POST", body: "{}" });
+        } catch (e) {
+            alert(e.message || "Не удалось удалить");
+            return;
+        }
         state.current = null;
         await reload();
         state.screen = "list";
@@ -592,12 +605,10 @@
     }
 
     async function reload() {
-        const [me, cos, invs] = await Promise.all([
-            api("/tg/sale/api/me"),
+        const [cos, invs] = await Promise.all([
             api("/tg/sale/api/companies"),
             api("/tg/sale/api/invoices"),
         ]);
-        state.me = me;
         state.companies = cos.companies || cos.items || [];
         state.allCompanies = cos.all || [];
         state.invoices = invs.invoices || invs.items || [];
@@ -605,15 +616,18 @@
     }
 
     async function boot() {
-        await waitTelegram();
         try {
-            if (window.FFTg) await window.FFTg.handshake("/tg/sale/api/auth");
+            if (window.FFTg && window.FFTg.bootAuth) {
+                state.me = await window.FFTg.bootAuth("/tg/sale/api/auth");
+            } else {
+                await waitTelegram();
+                state.me = await api("/tg/sale/api/me");
+            }
             await reload();
         } catch (e) {
             if (!/unauthorized|Нет входа|не передал|Подпись/i.test(String(e.message || ""))) throw e;
-            await new Promise((r) => setTimeout(r, 800));
             await waitTelegram();
-            if (window.FFTg) await window.FFTg.handshake("/tg/sale/api/auth");
+            if (window.FFTg) state.me = await window.FFTg.handshake("/tg/sale/api/auth");
             await reload();
         }
         render();

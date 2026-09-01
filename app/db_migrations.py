@@ -31,6 +31,7 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('sale_company', 'phone', 'VARCHAR(40)', 'VARCHAR(40)'),
     ('sale_invoice', 'buyer_ogrn', 'VARCHAR(20)', 'VARCHAR(20)'),
     ('sale_invoice', 'buyer_phone', 'VARCHAR(40)', 'VARCHAR(40)'),
+    ('sale_invoice', 'order_id', 'INTEGER', 'INTEGER'),
     ('tg_task', 'completed_at', 'TIMESTAMP', 'DATETIME'),
     ('tg_task', 'completed_by_id', 'INTEGER', 'INTEGER'),
     ('tg_task', 'dedup_key', 'VARCHAR(255)', 'VARCHAR(255)'),

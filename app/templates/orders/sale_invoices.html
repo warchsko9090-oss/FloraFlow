@@ -3,7 +3,7 @@
 <div class="page-header">
     <div>
         <div class="page-title"><i class="fas fa-file-invoice-dollar"></i> Счета клиентам</div>
-        <div class="page-subtitle">Исходящие счета из Telegram Mini App. Заказ и резерв не создаются.</div>
+        <div class="page-subtitle">Исходящие счета из Telegram. После согласования создаётся заказ с резервом.</div>
     </div>
 </div>
 
@@ -63,6 +63,12 @@
                     </td>
                     <td>
                         <a class="btn btn-outline-primary btn-sm" href="{{ url_for('orders.sale_invoice_pdf', inv_id=inv.id) }}">PDF</a>
+                        {% if inv.order_id %}
+                        <a class="btn btn-success btn-sm" href="{{ url_for('orders.order_detail', order_id=inv.order_id) }}">Заказ №{{ inv.order_id }}</a>
+                        {% endif %}
+                        <form method="POST" action="{{ url_for('orders.sale_invoice_discard', inv_id=inv.id) }}" class="d-inline" hx-boost="false" onsubmit="return confirm('Удалить счёт{% if inv.order_id %} и заказ №{{ inv.order_id }}{% endif %}? Резерв снимется.');">
+                            <button type="submit" class="btn btn-outline-danger btn-sm">Удалить</button>
+                        </form>
                     </td>
                 </tr>
                 {% else %}
