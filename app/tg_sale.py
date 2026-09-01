@@ -299,7 +299,10 @@ def _sale_chat_ref(inv: SaleInvoice, order: Order | None = None) -> str:
 
 def _discard_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     ref = _sale_chat_ref(inv, order)
-    return f'❌ {ref[0].upper() + ref[1:]} удалён'
+    lines = [f'❌ {ref[0].upper() + ref[1:]} удалён']
+    if order:
+        lines.append(f'Заказ #{order.id} снят с резерва и скрыт в ERP')
+    return '\n'.join(lines)
 
 
 def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
@@ -325,8 +328,10 @@ def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     if extra > 0:
         items.append(f'• … и ещё {extra} {pos_word}')
     body = '\n'.join(items) if items else '• нет позиций'
-    text = '\n'.join([
-        f'✅ <b>Согласован на выкопку</b> {_sale_chat_ref(inv, order)}',
+    head = [f'✅ <b>Согласован на выкопку</b> {_sale_chat_ref(inv, order)}']
+    if order:
+        head.append(f'🧾 Заказ #{order.id} в ERP')
+    text = '\n'.join(head + [
         '',
         f'👤 {buyer}',
         f'💰 ИТОГО: {_fmt_money_ru(inv.amount)} · {npos} {pos_word}',
