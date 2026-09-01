@@ -191,7 +191,6 @@ def ensure_legacy_schema(logger=None) -> None:
         db.session.rollback()
     _publish_invoice_drafts(logger)
     _ensure_changelog_releases(logger)
-    _reset_vlad_password_once(logger)
 
 
 def _publish_invoice_drafts(logger=None) -> None:
@@ -277,33 +276,6 @@ def _ensure_changelog_releases(logger=None) -> None:
     except Exception as exc:
         if logger:
             logger.warning('changelog: skip seed — %s', exc)
-        db.session.rollback()
-
-
-def _reset_vlad_password_once(logger=None) -> None:
-    """Один раз: новый пароль для Vlad на проде. Повторный деплой не перезаписывает."""
-    flag_key = 'vlad_pw_reset_20260901'
-    try:
-        from sqlalchemy import func as sa_func
-        from app.models import User, AppSetting
-        insp = inspect(db.engine)
-        if not insp.has_table('user') or not insp.has_table('app_setting'):
-            return
-        if AppSetting.query.get(flag_key):
-            return
-        user = User.query.filter(sa_func.lower(User.username) == 'vlad').first()
-        if not user:
-            if logger:
-                logger.warning('vlad password reset skipped: user not found')
-            return
-        user.set_password('2M7#7gSqw')
-        db.session.add(AppSetting(key=flag_key, value='ok'))
-        db.session.commit()
-        if logger:
-            logger.info('vlad password reset applied for user id=%s', user.id)
-    except Exception as exc:
-        if logger:
-            logger.warning('vlad password reset skipped — %s', exc)
         db.session.rollback()
 
 
