@@ -178,7 +178,7 @@ def transform_stock_report_price_mode(sorted_groups, price_mode='wholesale'):
         for row in rows:
             nr = dict(row)
             wholesale = _to_float(nr.get('price'))
-            retail = resolve_shop_price(nr['plant_id'], nr['size_id'], wholesale, ov)
+            retail = resolve_shop_price(nr.get('plant_id') or 0, nr.get('size_id') or 0, wholesale, ov)
             nr['price'] = retail
             free = _to_float(nr.get('free'))
             qty = _to_float(nr.get('quantity'))

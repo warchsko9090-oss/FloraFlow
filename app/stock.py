@@ -181,6 +181,7 @@ def _groups_by_field(aggregated, fields_dict, grand_total):
         bucket['rows'].append({
             'plant': v.get('plant') or '',
             'plant_id': v.get('plant_id'),
+            'size_id': v.get('size_id'),
             'size': v.get('size') or '',
             'year': v.get('year'),
             'quantity': v.get('quantity') or 0,

@@ -245,6 +245,140 @@
         .stock-filter-details[open] { padding-bottom: 10px; }
     }
 
+    /* ПК: тот же язык, что на телефоне — карточки, пилюли, воздух. Колонки те же. */
+    .stock-mode-tabs {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+    }
+    .stock-mode-tabs .btn {
+        border: 0 !important;
+        padding: .45rem 1.05rem;
+        font-weight: 700;
+        font-size: 13px;
+    }
+    .stock-mode-tabs .btn + .btn { border-left: 1px solid #e5e7eb !important; }
+    .stock-mode-tabs .btn-outline-secondary {
+        color: #4b5563;
+        background: #fff;
+    }
+    .stock-mode-tabs .btn-outline-secondary:hover {
+        background: #f3f4f6;
+        color: #111827;
+    }
+    .stock-mode-tabs .btn-success {
+        background: #2E7D32 !important;
+        color: #fff !important;
+    }
+    @media screen and (min-width: 992px) {
+        body:not(.kp-print) .stock-page-head { margin-bottom: 1rem; }
+        body:not(.kp-print) .stock-filter-panel {
+            border-radius: 16px;
+            padding: 12px 16px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+        }
+        body:not(.kp-print) .stock-filter-panel .form-control,
+        body:not(.kp-print) .stock-filter-panel .form-select,
+        body:not(.kp-print) .stock-filter-panel .dropdown > .btn,
+        body:not(.kp-print) .stock-filter-panel .btn {
+            border-radius: 10px;
+        }
+        body:not(.kp-print) .stock-filter-panel .dropdown > .btn {
+            background: #fff;
+            border-color: #e5e7eb;
+            font-weight: 600;
+            color: #111827;
+        }
+        body:not(.kp-print) .stock-filter-panel .btn-group.shadow-sm {
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: none !important;
+            border: 1px solid #e5e7eb;
+        }
+        body:not(.kp-print) .stock-filter-panel .btn-group .btn {
+            border-radius: 0;
+            border: 0;
+        }
+        body:not(.kp-print) .stock-desk-shell {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+            margin-bottom: 8px;
+        }
+        body:not(.kp-print) .stock-desk-shell .table-stock {
+            font-size: 13.5px;
+        }
+        body:not(.kp-print) .stock-desk-shell .table-stock thead th {
+            background: #fff !important;
+            color: #6b7280 !important;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            padding: 12px 10px;
+            border-bottom: 1px solid #e5e7eb;
+            box-shadow: none;
+        }
+        body:not(.kp-print) .stock-desk-shell .section-header-row td {
+            background: #fff !important;
+            border: none !important;
+            border-bottom: 1px solid #f3f4f6 !important;
+            padding: 16px 16px 10px !important;
+        }
+        body:not(.kp-print) .stock-desk-shell .section-header-row .fw-bold {
+            color: #2E7D32 !important;
+            letter-spacing: .06em;
+        }
+        body:not(.kp-print) .stock-desk-shell .group-header-row {
+            background: #fff;
+            font-weight: 700;
+            box-shadow: none;
+        }
+        body:not(.kp-print) .stock-desk-shell .group-header-row td {
+            padding: 13px 12px;
+            border-top: 1px solid #f3f4f6;
+            vertical-align: middle;
+        }
+        body:not(.kp-print) .stock-desk-shell .group-header-row:hover {
+            background: #f8faf8;
+            color: #111827;
+        }
+        body:not(.kp-print) .stock-desk-shell .rotate-icon {
+            font-size: 11px;
+            width: 18px;
+            transition: transform .15s ease;
+        }
+        body:not(.kp-print) .stock-desk-shell .detail-row td {
+            background: #fafdfa;
+            border: none;
+            border-top: 1px solid #f3f4f6;
+            padding: 10px 12px;
+            font-size: 13px;
+        }
+        body:not(.kp-print) .stock-desk-shell .detail-row td:first-child {
+            padding-left: 38px;
+        }
+        body:not(.kp-print) .stock-desk-shell .stock-footer-row td {
+            background: #f4faf4 !important;
+            border-top: 1px solid #dcecdc;
+            padding: 12px 12px;
+        }
+        body:not(.kp-print) .stock-desk-shell .badge-qty {
+            display: inline-block;
+            min-width: 2.6rem;
+            text-align: center;
+        }
+        body:not(.kp-print) .stock-fields-hint-desk {
+            color: #6b7280;
+            font-size: 13px;
+            margin: 0 0 10px;
+        }
+    }
+
     body.kp-print .app-sidebar,
     body.kp-print .app-header,
     body.kp-print .bottom-nav,
@@ -284,6 +418,13 @@
         .print-header p, .print-header div { font-size: 9pt !important; }
         
         .table-responsive { display: block !important; border: none !important; }
+        .stock-desk-shell {
+            border: none !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            overflow: visible !important;
+            background: transparent !important;
+        }
         .table-stock {
             width: 100% !important;
             border: none !important;
@@ -398,7 +539,7 @@
 </div>
 
 <!-- ИНТЕРФЕЙС + ФИЛЬТРЫ (Как было, скрыто при печати) -->
-<div class="page-header no-print">
+<div class="page-header no-print stock-page-head">
     <div>
         <div class="page-title">
             <i class="fas fa-warehouse"></i>
@@ -413,19 +554,19 @@
         </div>
     </div>
     <div class="page-actions">
-        <div class="btn-group btn-group-sm d-none d-lg-inline-flex">
+        <div class="btn-group btn-group-sm stock-mode-tabs d-none d-lg-inline-flex">
             <a href="{{ url_for('stock.stock_report', mode='product', end_date=end_date) }}" class="btn {% if report_mode=='product' %}btn-success{% else %}btn-outline-secondary{% endif %}">Товарные</a>
             <a href="{{ url_for('stock.stock_report', mode='inventory', end_date=end_date) }}" class="btn {% if report_mode=='inventory' %}btn-success{% else %}btn-outline-secondary{% endif %}">По полям</a>
             <a href="{{ url_for('stock.stock_report', mode='fields', end_date=end_date) }}" class="btn {% if report_mode=='fields' %}btn-success{% else %}btn-outline-secondary{% endif %}">Все поля</a>
         </div>
-        <div class="btn-group btn-group-sm d-lg-none">
+        <div class="btn-group btn-group-sm stock-mode-tabs d-lg-none">
             <a href="{{ url_for('stock.stock_report', mode='product', end_date=end_date) }}" class="btn {% if report_mode=='product' %}btn-success{% else %}btn-outline-secondary{% endif %}">Товарные</a>
             <a href="{{ url_for('stock.stock_report', mode='fields', end_date=end_date) }}" class="btn {% if report_mode=='fields' %}btn-success{% else %}btn-outline-secondary{% endif %}">По полям</a>
         </div>
     </div>
 </div>
 
-<div class="filter-panel no-print">
+<div class="filter-panel no-print stock-filter-panel">
     <!-- ИСПРАВЛЕНИЕ: Добавили hx-boost="false" чтобы браузер корректно очищал кэш формы -->
     <form class="d-flex align-items-center flex-wrap gap-2 w-100" method="GET" id="stockForm" hx-boost="false">
         <input type="hidden" name="mode" value="{{ report_mode }}">
@@ -512,7 +653,7 @@
 <!-- ТАБЛИЦА ПК -->
 {% if report_mode != 'fields' %}
 <script type="application/json" id="stockRowPricesData">{{ stock_row_prices|tojson }}</script>
-<div class="table-responsive d-none d-lg-block">
+<div class="stock-desk-shell table-responsive d-none d-lg-block">
     <table class="table table-sm table-hover table-1c table-stock bg-white mb-0" id="stockTable" data-price-mode="retail"
            data-exclude-raw="{{ '1' if report_mode == 'product' and not size_filter_manual else '0' }}">
         <thead class="table-light">
@@ -602,7 +743,7 @@
                 <td class="col-reserve text-center">{{ group.data.totals.reserved }}</td>
                 <td class="col-shipped text-center text-muted">{{ group.data.totals.shipped }}</td>
                 
-                <td class="col-free-cell">{{ group.data.totals.free }}</td>
+                <td class="col-free-cell"><span class="badge-qty">{{ group.data.totals.free }}</span></td>
                 {% if current_user.role != 'user2' %}<td class="col-free-sum pe-2">{{ group.data.totals.free_sum|money }}</td>{% endif %}
                 
                 <td class="col-fact-cell">{{ group.data.totals.qty }}</td>
@@ -699,9 +840,9 @@
 
 {% endif %}
 {% if report_mode == 'fields' %}
-<p class="d-none d-lg-block text-muted small no-print mb-2">Товарные и нетоварные, с размерами. Нажмите поле — откроются позиции. Excel выгружает этот вид.</p>
+<p class="d-none d-lg-block stock-fields-hint-desk no-print">Товарные и нетоварные, с размерами. Нажмите поле — откроются позиции. Excel выгружает этот вид.</p>
 <p class="stock-fields-hint no-print">Товарные и нетоварные. Поля по возрастанию — нажмите, чтобы увидеть растения и размеры.</p>
-<div class="table-responsive d-none d-lg-block">
+<div class="stock-desk-shell table-responsive d-none d-lg-block">
     <table class="table table-sm table-hover table-1c table-stock bg-white mb-0" id="stockFieldsTable">
         <thead class="table-light">
             <tr>
@@ -731,14 +872,15 @@
                 <td class="col-year"></td>
                 <td class="col-reserve text-center">{{ field.totals.reserved }}</td>
                 <td class="col-shipped text-center text-muted">{{ field.totals.shipped }}</td>
-                <td class="col-free-cell">{{ field.totals.free }}</td>
+                <td class="col-free-cell"><span class="badge-qty">{{ field.totals.free }}</span></td>
                 <td class="col-fact-cell">{{ field.totals.qty }}</td>
                 {% if current_user.role != 'user2' %}<td class="col-sum text-end fw-bold pe-2">{{ field.totals.sum|money }}</td>{% endif %}
             </tr>
             {% for row in field.rows %}
             <tr class="collapse field-collapse-{{ unique_id }} detail-row"
                 data-plant="{{ row.plant }}"
-                data-plant-id="{{ row.plant_id or '' }}">
+                data-plant-id="{{ row.plant_id or '' }}"
+                data-size-id="{{ row.size_id or '' }}">
                 <td class="ps-4">{{ row.plant }}</td>
                 <td class="small">{{ row.size or '—' }}</td>
                 <td class="col-year text-center">{{ row.year or '' }}</td>
@@ -1005,7 +1147,12 @@
             if (g.header) {
                 // Заголовок уже скрыт поиском при необходимости
                 const hFree = g.header.querySelector('.col-free-cell');
-                if (hFree && anyVisible) hFree.textContent = String(Math.round(groupFree));
+                if (hFree && anyVisible) {
+                    const pill = hFree.querySelector('.badge-qty');
+                    const freeTxt = String(Math.round(groupFree));
+                    if (pill) pill.textContent = freeTxt;
+                    else hFree.textContent = freeTxt;
+                }
                 const hFact = g.header.querySelector('.col-fact-cell');
                 if (hFact && anyVisible) hFact.textContent = String(Math.round(groupFact));
                 const hRes = g.header.querySelector('.col-reserve');
