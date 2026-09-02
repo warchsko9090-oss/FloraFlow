@@ -182,17 +182,32 @@
     .field-acc-row .fw-bold { overflow-wrap: anywhere; }
     .stock-mobile-header .fw-bold { overflow-wrap: anywhere; }
     .stock-filter-details {
-        width: 100%;
         border: 0;
         background: transparent;
+        min-width: 0;
     }
     .stock-filter-details > summary {
         display: none;
         list-style: none;
     }
+    .stock-filter-body {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem 0.75rem;
+        min-width: 0;
+    }
     .stock-fields-hint { display: none; }
     @media (min-width: 992px) {
-        .stock-filter-details { display: contents; }
+        /* display:contents на <details> в Chromium ломает ряд — фильтры встают столбиком */
+        .stock-filter-details {
+            flex: 1 1 auto;
+            width: auto;
+        }
+        .stock-filter-details > summary { display: none !important; }
+        .stock-filter-body {
+            width: 100%;
+        }
     }
     @media (max-width: 991.98px) {
         .page-header { flex-direction: column; align-items: stretch !important; gap: 10px; }
@@ -200,6 +215,7 @@
         .page-actions .btn-group { width: 100%; display: flex; }
         .page-actions .btn-group .btn { flex: 1; }
         .stock-filter-details {
+            width: 100%;
             border: 1px solid #e5e7eb;
             border-radius: 12px;
             padding: 0 12px;
@@ -217,6 +233,12 @@
         .stock-filter-details > summary::-webkit-details-marker { display: none; }
         .stock-fields-hint { display: block; color: #6b7280; font-size: 13px; margin: 0 0 10px; }
         #stockPlantSearch { width: 100% !important; }
+        .stock-filter-body {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+            width: 100%;
+        }
         .stock-filter-details .dropdown { width: 100%; }
         .stock-filter-details .dropdown > .btn { width: 100%; }
         .stock-filter-details .ms-auto { margin-left: 0 !important; width: 100%; flex-wrap: wrap; }
@@ -412,6 +434,7 @@
                placeholder="Поиск растения…" oninput="stockApplyPlantSearch()">
         <details id="stockFilterDetails" class="stock-filter-details" open>
         <summary>Фильтры и выгрузка</summary>
+        <div class="stock-filter-body">
         
         <!-- Фильтры -->
         <div class="dropdown">
@@ -480,6 +503,7 @@
             <button type="button" class="btn btn-outline-dark btn-sm" data-bs-toggle="modal" data-bs-target="#printSettingsModal"><i class="fas fa-cog"></i> Шапка</button>
             {% endif %}
             <button type="button" onclick="printKP()" class="btn btn-dark btn-sm"><i class="fas fa-print"></i> Выгрузка тов. остатков</button>
+        </div>
         </div>
         </details>
     </form>
