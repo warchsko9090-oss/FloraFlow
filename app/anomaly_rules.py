@@ -892,7 +892,26 @@ def detect_stock_missing_price(today=None):
     в details — сводка («N партий, например: …»). Если все цены проставлены —
     карточка автоматически закроется на следующем скане.
     Получатель — только админ (он ведёт прайс).
+
+    Перед уведомлением копируем цену с любой другой партии того же
+    растения и размера (поле и год не важны — прайс один). Карточка
+    остаётся только если такого ключа с ценой нигде нет.
     """
+    try:
+        from app.stock import fill_missing_stock_prices
+        filled = fill_missing_stock_prices(source='auto')
+        if filled:
+            try:
+                from flask import current_app
+                current_app.logger.info('stock_no_price autofill: %s rows', filled)
+            except Exception:
+                pass
+    except Exception:
+        try:
+            from flask import current_app
+            current_app.logger.exception('stock_no_price autofill failed')
+        except Exception:
+            pass
     rows = (
         db.session.query(StockBalance, Plant, Size, Field)
         .join(Plant, StockBalance.plant_id == Plant.id)
@@ -941,7 +960,8 @@ def detect_stock_missing_price(today=None):
         word_partii = 'партий'
 
     details = (
-        f'У {n} {word_partii} на складе не задана цена продажи. '
+        f'У {n} {word_partii} на складе нет цены продажи, и её не из чего скопировать '
+        f'(ключ — наименование + размер). '
         f'Без цены ИИ-чат показывает 0 ₽, а заказы формируются с пустой суммой. '
         f'Например: {"; ".join(sample_parts)}{more}. '
         f'Откройте раздел «Склад» и проставьте цены в карточках партий.'

@@ -272,6 +272,13 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
             StockBalance.price,
         ).all()
     }
+    pair_price_map = {}
+    for (pid, sid, _fid, _year), p in stock_prices_map.items():
+        if p is not None and float(p or 0) > 0:
+            pair_price_map.setdefault((pid, sid), p)
+    for (pid, sid, _year), p in hist_plant_size_map.items():
+        if p is not None and float(p or 0) > 0:
+            pair_price_map.setdefault((pid, sid), p)
 
     aggregated = {}
     grand_total = {'income': 0, 'reserved': 0, 'free': 0, 'shipped': 0, 'qty': 0, 'sum': 0, 'free_sum': 0}
@@ -302,6 +309,7 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
             actual_price = lookup_sale_price(
                 pid, sid, fid, byear, target_price_year,
                 hist_prices_map, stock_prices_map, hist_plant_size_map,
+                pair_price_map,
             )
             calc_price = float(actual_price)
             display_price = calc_price
@@ -481,20 +489,25 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
 
 
 def lookup_sale_price(plant_id, size_id, field_id, batch_year, target_price_year,
-                      hist_prices_map, stock_prices_map, hist_plant_size_map=None):
-    """Цена продажи партии: точная запись в истории → позиция+год → остаток."""
+                      hist_prices_map, stock_prices_map, hist_plant_size_map=None,
+                      pair_price_map=None):
+    """Цена продажи партии: точная запись в истории → позиция+год → остаток → любой год/поле."""
     for y in (target_price_year, batch_year):
         p = hist_prices_map.get((plant_id, size_id, field_id, y))
-        if p is not None:
+        if p is not None and float(p) > 0:
             return float(p)
     if hist_plant_size_map:
         for y in (target_price_year, batch_year):
             p = hist_plant_size_map.get((plant_id, size_id, y))
-            if p is not None:
+            if p is not None and float(p) > 0:
                 return float(p)
     p = stock_prices_map.get((plant_id, size_id, field_id, batch_year))
     if p is not None and float(p) > 0:
         return float(p)
+    if pair_price_map:
+        p = pair_price_map.get((plant_id, size_id))
+        if p is not None and float(p) > 0:
+            return float(p)
     return 0.0
 
 
@@ -625,6 +638,144 @@ def apply_price_for_plant_size(plant_id: int, size_id: int, price, source: str =
             f'({stock_rows} строк остатков перезаписано).'
         ).replace(',', ' '),
     }
+
+
+def plant_size_sale_price(plant_id, size_id):
+    """Ненулевая цена продажи по ключу растение+размер (поле и год не важны)."""
+    if not plant_id or not size_id:
+        return None
+    live = (
+        StockBalance.query
+        .filter_by(plant_id=plant_id, size_id=size_id)
+        .filter(StockBalance.price > 0, StockBalance.quantity > 0)
+        .order_by(StockBalance.year.desc())
+        .first()
+    )
+    if live and live.price:
+        return live.price
+    any_stock = (
+        StockBalance.query
+        .filter_by(plant_id=plant_id, size_id=size_id)
+        .filter(StockBalance.price > 0)
+        .order_by(StockBalance.year.desc())
+        .first()
+    )
+    if any_stock and any_stock.price:
+        return any_stock.price
+    hist = (
+        PriceHistory.query
+        .filter_by(plant_id=plant_id, size_id=size_id)
+        .filter(PriceHistory.price > 0)
+        .order_by(PriceHistory.year.desc())
+        .first()
+    )
+    if hist and hist.price:
+        return hist.price
+    return None
+
+
+def _apply_inherited_price(sb: StockBalance, price, source: str = 'auto') -> bool:
+    """Пишет цену в остаток и историю партии. Не коммитит."""
+    try:
+        price_val = Decimal(str(price or 0))
+    except Exception:
+        return False
+    if price_val <= 0:
+        return False
+    old = sb.price
+    sb.price = price_val
+    ex = PriceHistory.query.filter_by(
+        plant_id=sb.plant_id, size_id=sb.size_id,
+        field_id=sb.field_id, year=sb.year,
+    ).first()
+    old_hist = ex.price if ex else old
+    _append_price_change_log(
+        plant_id=sb.plant_id, size_id=sb.size_id,
+        old_price=old_hist, new_price=price_val,
+        field_id=sb.field_id, year=sb.year, source=source,
+    )
+    if ex:
+        ex.price = price_val
+    else:
+        db.session.add(PriceHistory(
+            plant_id=sb.plant_id, size_id=sb.size_id,
+            field_id=sb.field_id, year=sb.year, price=price_val,
+        ))
+    return True
+
+
+def fill_missing_stock_prices(source: str = 'auto') -> int:
+    """Проставляет нулевые цены по ключу растение+размер. Возвращает число строк."""
+    from collections import Counter, defaultdict
+
+    donors = defaultdict(list)
+    rows = (
+        StockBalance.query
+        .with_entities(
+            StockBalance.plant_id, StockBalance.size_id,
+            StockBalance.price, StockBalance.quantity,
+        )
+        .filter(StockBalance.price > 0)
+        .all()
+    )
+    for pid, sid, price, qty in rows:
+        donors[(pid, sid)].append((1 if (qty or 0) > 0 else 0, price))
+
+    priced = {}
+    for key, items in donors.items():
+        live = [p for q, p in items if q]
+        pool = live or [p for _, p in items]
+        counts = Counter(Decimal(str(p)).quantize(Decimal('0.01')) for p in pool)
+        priced[key] = counts.most_common(1)[0][0]
+
+    if priced:
+        missing_keys = {
+            (pid, sid)
+            for pid, sid in (
+                db.session.query(StockBalance.plant_id, StockBalance.size_id)
+                .filter(or_(StockBalance.price.is_(None), StockBalance.price <= 0))
+                .distinct()
+                .all()
+            )
+            if (pid, sid) not in priced
+        }
+    else:
+        missing_keys = set(
+            db.session.query(StockBalance.plant_id, StockBalance.size_id)
+            .filter(or_(StockBalance.price.is_(None), StockBalance.price <= 0))
+            .distinct()
+            .all()
+        )
+    if missing_keys:
+        hist_rows = (
+            PriceHistory.query
+            .filter(PriceHistory.price > 0)
+            .order_by(PriceHistory.year.desc())
+            .all()
+        )
+        for h in hist_rows:
+            key = (h.plant_id, h.size_id)
+            if key in missing_keys and key not in priced:
+                priced[key] = h.price
+
+    if not priced:
+        return 0
+
+    missing = (
+        StockBalance.query
+        .filter(or_(StockBalance.price.is_(None), StockBalance.price <= 0))
+        .all()
+    )
+    n = 0
+    for sb in missing:
+        price = priced.get((sb.plant_id, sb.size_id))
+        if price is None:
+            continue
+        if _apply_inherited_price(sb, price, source=source):
+            n += 1
+    if n:
+        db.session.flush()
+    return n
 
 
 def _price_history_position_options(plant_id: int, size_id: int) -> dict:

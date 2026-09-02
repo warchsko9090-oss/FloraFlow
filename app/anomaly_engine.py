@@ -515,14 +515,30 @@ def ensure_daily_scan():
     считаем, что скан сегодня уже проходил.
 
     Безопасно: если скана сегодня не было — запустим; если был — no-op.
+    Исключение: только что проставили цены с соседних партий — пересканируем,
+    чтобы карточка «нет цены» закрылась сразу.
     """
+    filled = 0
+    try:
+        from app.stock import fill_missing_stock_prices
+        filled = fill_missing_stock_prices(source='auto')
+        if filled:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        filled = 0
+        try:
+            current_app.logger.exception('stock price autofill failed')
+        except Exception:
+            pass
+
     today = msk_today()
     last = db.session.query(db.func.max(TgTask.last_seen_at)).filter(
         TgTask.action_type == ANOMALY_ACTION_TYPE,
     ).scalar()
     if last is not None:
         last_date = last.date() if hasattr(last, 'date') else last
-        if last_date >= today:
+        if last_date >= today and not filled:
             return None  # уже сканировали сегодня
     return run_daily_scan()
 

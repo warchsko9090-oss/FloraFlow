@@ -72,6 +72,13 @@ def get_or_create_stock(plant_id, size_id, field_id, year):
         stock = StockBalance(plant_id=plant_id, size_id=size_id, field_id=field_id, year=year, quantity=0, price=0, purchase_price=0)
         db.session.add(stock)
         db.session.flush()
+        try:
+            from app.stock import plant_size_sale_price, _apply_inherited_price
+            inherited = plant_size_sale_price(plant_id, size_id)
+            if inherited:
+                _apply_inherited_price(stock, inherited, source='inherit')
+        except Exception:
+            pass
     return stock
 
 def natural_key(obj):
@@ -125,17 +132,17 @@ def get_actual_price(plant_id, size_id, field_id, check_year=None):
     hist = PriceHistory.query.filter_by(
         plant_id=plant_id, size_id=size_id, field_id=field_id, year=curr_year,
     ).first()
-    if hist:
+    if hist and hist.price and float(hist.price) > 0:
         return hist.price
     hist = PriceHistory.query.filter_by(
         plant_id=plant_id, size_id=size_id, field_id=field_id,
     ).order_by(PriceHistory.year.desc()).first()
-    if hist:
+    if hist and hist.price and float(hist.price) > 0:
         return hist.price
     hist = PriceHistory.query.filter_by(
         plant_id=plant_id, size_id=size_id, year=curr_year,
     ).first()
-    if hist:
+    if hist and hist.price and float(hist.price) > 0:
         return hist.price
     sb = StockBalance.query.filter_by(
         plant_id=plant_id, size_id=size_id, field_id=field_id, year=curr_year,
@@ -145,6 +152,22 @@ def get_actual_price(plant_id, size_id, field_id, check_year=None):
     sb = StockBalance.query.filter_by(
         plant_id=plant_id, size_id=size_id, field_id=field_id,
     ).order_by(StockBalance.year.desc()).first()
+    if sb and sb.price:
+        return sb.price
+    hist = (
+        PriceHistory.query.filter_by(plant_id=plant_id, size_id=size_id)
+        .filter(PriceHistory.price > 0)
+        .order_by(PriceHistory.year.desc())
+        .first()
+    )
+    if hist:
+        return hist.price
+    sb = (
+        StockBalance.query.filter_by(plant_id=plant_id, size_id=size_id)
+        .filter(StockBalance.price > 0)
+        .order_by(StockBalance.year.desc())
+        .first()
+    )
     return sb.price if sb else Decimal('0.00')
 
 PDF_FONT_FILES = (
