@@ -2,6 +2,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from datetime import datetime
 from sqlalchemy import func
+from sqlalchemy.orm import deferred
 from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
@@ -842,12 +843,59 @@ class PaymentInvoice(db.Model):
     week_start = db.Column(db.Date, nullable=True)
     plan_id = db.Column(db.Integer, db.ForeignKey('payment_invoice.id'), nullable=True)
 
+    # Квитанция / выписка банка (не подменяет PDF счёта поставщика).
+    receipt_blob = deferred(db.Column(db.LargeBinary))
+    receipt_name = db.Column(db.String(255), nullable=True)
+
     item = db.relationship('BudgetItem')
     fact_invoices = db.relationship(
         'PaymentInvoice',
         foreign_keys=[plan_id],
         backref=db.backref('plan', remote_side=[id]),
     )
+
+
+class BankSlip(db.Model):
+    """Фото выписки, квитанции или платёжки — один файл, несколько платежей."""
+    __tablename__ = 'bank_slip'
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, index=True)
+    file_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    original_name = db.Column(db.String(255), nullable=False, default='')
+    file_blob = deferred(db.Column(db.LargeBinary))
+    source = db.Column(db.String(20), nullable=False, default='upload')  # upload | expenses_chat
+    kind = db.Column(db.String(40), nullable=True)
+    parsed_json = db.Column(db.Text)
+    tg_chat_id = db.Column(db.String(64), nullable=True)
+    tg_message_id = db.Column(db.Integer, nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    created_by = db.relationship('User')
+    items = db.relationship(
+        'BankSlipItem',
+        backref='slip',
+        cascade='all, delete-orphan',
+        order_by='BankSlipItem.id',
+    )
+
+
+class BankSlipItem(db.Model):
+    __tablename__ = 'bank_slip_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    slip_id = db.Column(db.Integer, db.ForeignKey('bank_slip.id'), nullable=False, index=True)
+    payee = db.Column(db.String(300), nullable=False, default='')
+    amount = db.Column(db.Numeric(12, 2), nullable=True)
+    invoice_no = db.Column(db.String(80), nullable=True)
+    paid_on = db.Column(db.Date, nullable=True)
+    purpose = db.Column(db.String(800), nullable=True)
+    vat = db.Column(db.String(120), nullable=True)
+    action = db.Column(db.String(20), nullable=False, default='skipped')  # matched | created | skipped
+    note = db.Column(db.String(300), nullable=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('payment_invoice.id'), nullable=True, index=True)
+
+    invoice = db.relationship('PaymentInvoice')
 
 # --- ВЫКОПКА (DIGGING) ---
 class DiggingLog(db.Model):

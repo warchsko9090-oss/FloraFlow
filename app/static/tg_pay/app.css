@@ -138,6 +138,9 @@ h1 {
     font-weight: 700;
 }
 .choice p { color: var(--mute); font-size: 14px; margin-top: 6px; }
+.act-matched { color: var(--ok); font-weight: 700; }
+.act-created { color: var(--brass); font-weight: 700; }
+.act-skipped { color: var(--mute); font-weight: 700; }
 
 .list { display: flex; flex-direction: column; gap: 8px; }
 

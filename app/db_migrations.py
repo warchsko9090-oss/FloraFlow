@@ -78,6 +78,8 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('payment_invoice', 'kind', "VARCHAR(20) DEFAULT 'invoice'", "VARCHAR(20) DEFAULT 'invoice'"),
     ('payment_invoice', 'week_start', 'DATE', 'DATE'),
     ('payment_invoice', 'plan_id', 'INTEGER', 'INTEGER'),
+    ('payment_invoice', 'receipt_blob', 'BYTEA', 'BLOB'),
+    ('payment_invoice', 'receipt_name', 'VARCHAR(255)', 'VARCHAR(255)'),
     ('chat_expense_message', 'matched_invoice_id', 'INTEGER', 'INTEGER'),
     ('"user"', 'telegram_id', 'BIGINT', 'INTEGER'),
     ('document', 'project_id', 'INTEGER', 'INTEGER'),
@@ -200,7 +202,10 @@ def _publish_invoice_drafts(logger=None) -> None:
     """Черновики Mini App раньше не входили в «к оплате» — публикуем как new."""
     try:
         result = db.session.execute(
-            text("UPDATE payment_invoice SET status = 'new' WHERE status = 'draft'")
+            text(
+                "UPDATE payment_invoice SET status = 'new' WHERE status = 'draft' "
+                "AND COALESCE(source, '') <> 'bank_slip'"
+            )
         )
         n = result.rowcount or 0
         db.session.commit()

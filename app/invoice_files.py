@@ -35,6 +35,38 @@ def has_file(inv: PaymentInvoice) -> bool:
     return bool(disk_path(inv))
 
 
+def has_receipt(inv: PaymentInvoice) -> bool:
+    return bool(getattr(inv, 'receipt_name', None) or getattr(inv, 'receipt_blob', None))
+
+
+def receipt_bytes(inv: PaymentInvoice) -> bytes | None:
+    blob = getattr(inv, 'receipt_blob', None)
+    if blob:
+        return bytes(blob)
+    return None
+
+
+def flask_send_receipt(inv: PaymentInvoice, *, as_attachment: bool = True):
+    data = receipt_bytes(inv)
+    if not data:
+        return None
+    name = getattr(inv, 'receipt_name', None) or 'receipt.jpg'
+    mime = 'image/jpeg'
+    lower = name.lower()
+    if lower.endswith('.png'):
+        mime = 'image/png'
+    elif lower.endswith('.webp'):
+        mime = 'image/webp'
+    elif lower.endswith('.pdf'):
+        mime = 'application/pdf'
+    return send_file(
+        io.BytesIO(data),
+        mimetype=mime,
+        as_attachment=as_attachment,
+        download_name=name,
+    )
+
+
 def attach_file(inv: PaymentInvoice, data: bytes, save_name: str | None = None) -> str:
     """Пишет blob и кэш на диск. Возвращает имя файла."""
     if save_name:
@@ -85,7 +117,7 @@ def flask_send(inv: PaymentInvoice, *, as_attachment: bool = True):
     lower = name.lower()
     if lower.endswith('.png'):
         mime = 'image/png'
-    elif lower.endswith(('.jpg', '.jpeg')):
+    elif lower.endswith(('.jpg', '.jpeg', '.jfif')):
         mime = 'image/jpeg'
     elif lower.endswith('.webp'):
         mime = 'image/webp'

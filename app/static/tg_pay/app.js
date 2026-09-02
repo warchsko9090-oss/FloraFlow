@@ -82,6 +82,7 @@
     if (parts[0] === 'new') return renderNew();
     if (parts[0] === 'plan') return renderPlan();
     if (parts[0] === 'file') return renderUpload();
+    if (parts[0] === 'bank') return renderBank();
     if (parts[0] === 'inbox') {
       if (!me.can_inbox) return renderList();
       return renderInbox();
@@ -198,7 +199,7 @@
       html += '<h2 class="sec">Черновики</h2><div class="list">' + drafts.map(rowHtml).join('') + '</div>';
     }
     if (!shown.length && !drafts.length) {
-      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План на неделю или PDF боту.' : 'Неоплаченных счетов нет.'}</p></div>`;
+      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План, счёт или выписка банка — кнопка +.' : 'Неоплаченных счетов нет.'}</p></div>`;
     } else {
       if (cashless.length) {
         html += '<h2 class="sec">Безнал</h2><div class="list">' + cashless.map(rowHtml).join('') + '</div>';
@@ -297,9 +298,12 @@
     const payBtn = (!isDraft && inv.status !== 'paid')
       ? '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>'
       : '';
-    const fileBtns = inv.has_file
+    const fileBtns = (inv.has_file
       ? '<button class="btn btn-brass" type="button" id="btnOpen">Открыть счёт</button>'
-      : '<p class="warn">Файл счёта не найден.</p>';
+      : '<p class="warn">Файл счёта не найден.</p>')
+      + (inv.has_receipt
+        ? '<button class="btn btn-quiet" type="button" id="btnReceipt">Квитанция</button>'
+        : '');
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
@@ -316,6 +320,8 @@
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
     const openBtn = document.getElementById('btnOpen');
     if (openBtn) openBtn.onclick = () => openInvoice(inv);
+    const recBtn = document.getElementById('btnReceipt');
+    if (recBtn) recBtn.onclick = () => openReceipt(inv);
     const more = document.getElementById('btnMore');
     const panel = document.getElementById('editPanel');
     if (more && panel) {
@@ -422,6 +428,19 @@
     window.open(URL.createObjectURL(blob), '_blank');
   }
 
+  async function openReceipt(inv) {
+    const res = await fetch('/tg/pay/api/invoices/' + inv.id + '/receipt', {
+      credentials: 'same-origin',
+      headers: headers(),
+    });
+    if (!res.ok) {
+      alert('Квитанция не найдена');
+      return;
+    }
+    const blob = await res.blob();
+    window.open(URL.createObjectURL(blob), '_blank');
+  }
+
   function renderNew() {
     setTitle('Добавить');
     view.innerHTML = `
@@ -433,6 +452,10 @@
       <a class="choice" href="#/file">
         <div class="choice-k">Файл</div>
         <p>PDF или фото реального счёта.</p>
+      </a>
+      <a class="choice" href="#/bank">
+        <div class="choice-k">Выписка</div>
+        <p>Квитанция Альфа-Банка, платёжка или скрин списаний. Разнесём по счетам.</p>
       </a>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
@@ -535,6 +558,77 @@
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
     document.getElementById('btnUp').onclick = uploadFile;
+  }
+
+  function renderBank() {
+    setTitle('Выписка / платёжка');
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← назад</button>
+      <div class="card">
+        <p class="hint">Скрин списка в Альфе, фото платёжки с монитора или PDF. Несколько платежей на одном кадре — разнесём все.</p>
+        <div class="field"><label>Файл</label>
+          <input id="bFile" type="file" accept="image/*,application/pdf,.jfif"></div>
+        <button class="btn btn-ink" type="button" id="btnBank">Разнести</button>
+        <p class="hint" id="bStatus"></p>
+      </div>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
+    document.getElementById('btnBank').onclick = uploadBank;
+  }
+
+  function bankActLabel(act) {
+    if (act === 'matched') return 'оплачен';
+    if (act === 'created') return 'черновик';
+    return 'пропуск';
+  }
+
+  function renderBankResult(data) {
+    setTitle('Разнос');
+    const items = data.items || [];
+    const c = data.counts || {};
+    let html = `<button class="back" type="button" id="goBack">← к списку</button>`;
+    if (data.duplicate) {
+      html += '<p class="hint">Этот файл уже загружали — повторно не проводим.</p>';
+    }
+    html += `<div class="card"><p class="hint">${c.matched || 0} оплачено · ${c.created || 0} черновик · ${c.skipped || 0} пропуск</p></div>`;
+    if (!items.length) {
+      html += `<div class="empty"><h2>Платежей нет</h2><p>${esc(data.error || 'Попробуйте более крупный кадр или другой файл.')}</p></div>`;
+    } else {
+      html += '<div class="list">';
+      for (const it of items) {
+        const href = it.invoice_id ? `#/inv/${it.invoice_id}` : '#/';
+        html += `<a class="choice" href="${href}">
+          <div class="choice-k">${esc(it.payee || it.invoice_no || 'платёж')}</div>
+          <p>${money(it.amount)} · <span class="act-${esc(it.action)}">${bankActLabel(it.action)}</span>${it.invoice_no ? ' · №' + esc(it.invoice_no) : ''}</p>
+          <p>${esc(it.note || '')}</p>
+        </a>`;
+      }
+      html += '</div>';
+    }
+    view.innerHTML = html;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+  }
+
+  async function uploadBank() {
+    const input = document.getElementById('bFile');
+    const status = document.getElementById('bStatus');
+    if (!input.files || !input.files[0]) {
+      status.textContent = 'Выберите файл.';
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', input.files[0]);
+    status.textContent = 'Читаю выписку… может занять полминуты.';
+    view.classList.add('busy');
+    try {
+      const data = await api('/tg/pay/api/bank-slips', { method: 'POST', body: fd });
+      haptic('medium');
+      renderBankResult(data);
+    } catch (e) {
+      status.textContent = e.message;
+    } finally {
+      view.classList.remove('busy');
+    }
   }
 
   async function uploadFile() {

@@ -460,7 +460,7 @@ def ingest_message(msg: dict) -> dict:
         chat = msg.get("chat") or {}
         tg_chat_id = str(chat.get("id") or "")
         tg_message_id = int(msg.get("message_id") or 0)
-        if not tg_chat_id or not tg_message_id or not text:
+        if not tg_chat_id or not tg_message_id:
             return {"ok": False, "error": "empty"}
 
         sender = msg.get("from") or {}
@@ -473,6 +473,16 @@ def ingest_message(msg: dict) -> dict:
         ).first()
         if existing is not None:
             return {"ok": True, "status": existing.status, "chat_expense_id": existing.id}
+
+        from app.bank_slip import extract_telegram_media, ingest_expenses_chat_media
+        media = extract_telegram_media(msg)
+        if media:
+            bank = ingest_expenses_chat_media(msg, media)
+            if bank.get("handled"):
+                return bank
+
+        if not text:
+            return {"ok": False, "error": "empty"}
 
         parsed = parse_expense_text(text)
         msg_dt = _tg_date_to_dt(msg.get("date")) or msk_now()

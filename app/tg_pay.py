@@ -34,11 +34,15 @@ from app.telegram import (
     _get_bot_token, send_chat_message, send_chat_document, download_bot_file,
     default_miniapp_url,
 )
-from app.invoice_files import invoice_bytes, has_file as invoice_has_file, attach_file, flask_send
+from app.invoice_files import (
+    invoice_bytes, has_file as invoice_has_file, has_receipt as invoice_has_receipt,
+    attach_file, flask_send, flask_send_receipt,
+)
 
 bp = Blueprint('tg_pay', __name__, url_prefix='/tg/pay')
 
-_ALLOWED_EXT = {'.pdf', '.jpg', '.jpeg', '.png', '.webp'}
+_ALLOWED_EXT = {'.pdf', '.jpg', '.jpeg', '.jfif', '.png', '.webp', '.bmp', '.heic', '.tif', '.tiff'}
+_BANK_EXT = _ALLOWED_EXT
 _DEV_COOKIE = 'tg_pay_as'
 _MINI_COOKIE = 'tg_mini'
 _MINI_SALT = 'tg-mini-v1'
@@ -561,6 +565,7 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
         'has_file': invoice_has_file(inv) or bool(linked and invoice_has_file(linked)),
     }
     if detail:
+        data['has_receipt'] = invoice_has_receipt(inv)
         data['comment'] = inv.comment or ''
         data['lines'] = _lines_of(inv) or (linked and _lines_of(linked)) or []
         data['budget_item_id'] = inv.budget_item_id
@@ -779,6 +784,18 @@ def api_invoice_file(user: User, inv_id: int):
     return resp
 
 
+@bp.route('/api/invoices/<int:inv_id>/receipt')
+@require_user
+def api_invoice_receipt(user: User, inv_id: int):
+    inv = PaymentInvoice.query.get_or_404(inv_id)
+    if not _can_edit(user) and inv.status != 'new':
+        return jsonify({'error': 'not_found'}), 404
+    resp = flask_send_receipt(inv, as_attachment=False)
+    if resp is None:
+        return jsonify({'error': 'file_missing'}), 404
+    return resp
+
+
 @bp.route('/api/invoices/<int:inv_id>/send-pdf', methods=['POST'])
 @require_user
 def api_send_pdf(user: User, inv_id: int):
@@ -861,6 +878,38 @@ def api_upload(user: User):
     payload = serialize_invoice(inv, detail=True)
     payload['parse_error'] = parsed.get('error')
     return jsonify(payload)
+
+
+@bp.route('/api/bank-slips', methods=['POST'])
+@require_user
+def api_bank_slip_upload(user: User):
+    if not _can_edit(user):
+        return jsonify({'error': 'forbidden'}), 403
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'error': 'no_file'}), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext and ext not in _BANK_EXT:
+        return jsonify({'error': 'bad_type', 'hint': 'Фото, PDF или скрин выписки / платёжки'}), 400
+    data = file.read()
+    if not data:
+        return jsonify({'error': 'empty'}), 400
+    from app.bank_slip import ingest_bytes
+    result = ingest_bytes(data, file.filename, source='upload', user=user)
+    if not result.get('ok'):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@bp.route('/api/bank-slips/<int:slip_id>')
+@require_user
+def api_bank_slip(user: User, slip_id: int):
+    if not _can_edit(user):
+        return jsonify({'error': 'forbidden'}), 403
+    from app.models import BankSlip
+    from app.bank_slip import serialize_slip
+    slip = BankSlip.query.get_or_404(slip_id)
+    return jsonify(serialize_slip(slip))
 
 
 @bp.route('/api/invoices/<int:inv_id>', methods=['POST'])
