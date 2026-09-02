@@ -1590,7 +1590,7 @@
         <a class="bn-link {% if request.endpoint and request.endpoint.startswith('orders.') and request.endpoint not in ('orders.sale_invoices_list', 'orders.sale_invoice_pdf') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
             <i class="fas fa-shopping-basket"></i><span>Заказы</span>
         </a>
-        <a class="bn-link {% if request.endpoint and request.endpoint.startswith('stock.') %}active{% endif %}" href="{{ url_for('stock.documents') }}" data-hx-boost="false">
+        <a class="bn-link {% if request.endpoint and request.endpoint.startswith('stock.') %}active{% endif %}" href="{{ url_for('stock.stock_report') }}" data-hx-boost="false">
             <i class="fas fa-warehouse"></i><span>Склад</span>
         </a>
         {# Бригадир (user2/brigadier) не имеет доступа к планированию — ведём его сразу во «Ввод выкопки». #}

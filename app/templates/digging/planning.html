@@ -520,6 +520,39 @@
         .cal-cell { min-height: 96px; }
         .week-scroll .cal-cell { padding: 4px; font-size: 11px; }
         #dayPreviewPopup { width: calc(100vw - 32px); }
+        .order-card__head, .cal-cell.has-tasks {
+            -webkit-touch-callout: none;
+            -webkit-user-drag: none;
+            user-select: none;
+        }
+        .cal-cell.has-tasks .cal-drag-handle { opacity: 0.9; }
+    }
+    .digging-drag-ghost {
+        position: fixed;
+        z-index: 5000;
+        pointer-events: none;
+        transform: translate(-50%, -120%);
+        background: #111827;
+        color: #fff;
+        font-weight: 700;
+        font-size: 13px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, .28);
+        max-width: min(80vw, 280px);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    body.digging-touch-dragging {
+        overflow: hidden;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+    body.digging-touch-dragging .week-scroll,
+    body.digging-touch-dragging .sidebar-content {
+        overflow: hidden !important;
     }
 </style>
 
@@ -534,7 +567,8 @@
     <div class="planner-sidebar">
         <div class="sidebar-header">
             <h6 class="fw-bold text-primary m-0"><i class="fas fa-inbox me-2"></i>Ждут плана</h6>
-            <div class="small text-muted mt-1">Разверните состав кликом по шеврону, перетащите карточку на день.</div>
+            <div class="small text-muted mt-1 d-none d-lg-block">Разверните состав кликом по шеврону, перетащите карточку на день.</div>
+            <div class="small text-muted mt-1 d-lg-none">Зажмите карточку и перенесите на дату в календаре.</div>
         </div>
         <div class="sidebar-content" id="unplanned-orders">
             {% for o in orders_to_plan %}
@@ -575,8 +609,11 @@
                         {% endfor %}
                     </ul>
                 </div>
-                <div class="order-hint">
+                <div class="order-hint d-none d-lg-block">
                     <i class="fas fa-hand-pointer"></i> Перетащить шапку карточки на дату
+                </div>
+                <div class="order-hint d-lg-none">
+                    <i class="fas fa-hand-pointer"></i> Зажмите и перенесите на дату
                 </div>
             </div>
             {% else %}
@@ -603,6 +640,7 @@
                 <a href="{{ url_for('digging.digging_planning', center=next_center_iso) }}" class="btn btn-sm btn-outline-secondary rounded-circle" title="На 8 недель вперёд"><i class="fas fa-angles-right"></i></a>
             </div>
         </div>
+        <p class="d-lg-none small text-muted px-1 mb-2">Короткое нажатие открывает день. Зажмите день с планом и перетащите на другую дату.</p>
 
         <div class="card shadow-sm border-0 flex-grow-1 d-flex flex-column" style="min-height: 0;">
             <!-- Заголовок дней недели — закреплён над лентой -->
@@ -771,28 +809,30 @@
         window.diggingDrop = function (ev, dateStr) {
             ev.preventDefault();
             ev.stopPropagation();
+            const moveDate = ev.dataTransfer.getData('move_date');
+            const orderId = ev.dataTransfer.getData('order_id');
+            applyDiggingDrop(dateStr, moveDate, orderId);
+        };
+
+        function applyDiggingDrop(dateStr, moveDate, orderId) {
             document.querySelectorAll('.cal-cell').forEach(el => {
                 el.classList.remove('drag-over');
                 el.classList.remove('drag-source-day');
             });
             document.querySelectorAll('.order-card').forEach(el => el.classList.remove('drag-source'));
 
-            // Вариант 1: перенос всего плана с другой даты.
-            const moveDate = ev.dataTransfer.getData('move_date');
             if (moveDate) {
-                if (moveDate === dateStr) return; // бросили на ту же ячейку
+                if (moveDate === dateStr) return;
                 diggingMoveDayPlan(moveDate, dateStr);
                 return;
             }
 
-            // Вариант 2: перетащили карточку заказа из левой колонки.
-            const orderId = ev.dataTransfer.getData('order_id');
             if (!orderId) return;
 
             modalBody.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-success"></i> Загрузка...</div>';
             ensureModal().show();
             if (window.htmx) htmx.ajax('GET', `/api/digging/order_plan_form/${orderId}/${dateStr}`, { target: '#modalBody' });
-        };
+        }
 
         function diggingMoveDayPlan(fromDate, toDate) {
             const fmt = (d) => {
@@ -825,6 +865,10 @@
         }
 
         window.diggingOpenDay = function (dateStr) {
+            if (window.__diggingSkipClick) {
+                window.__diggingSkipClick = false;
+                return;
+            }
             // Если сейчас открыт попап превью — пусть не перекрывает модалку.
             hidePreview();
             modalBody.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-primary"></i> Загрузка плана...</div>';
@@ -840,6 +884,170 @@
             });
             window.__diggingDragendBound = true;
         }
+
+        // HTML5 drag на iOS/Android не работает. Долгое нажатие + перенос пальцем.
+        (function initTouchPlannerDnD() {
+            const LONG_MS = 280;
+            const CANCEL_PX = 12;
+            let press = null;
+            let ghost = null;
+            let overCell = null;
+
+            if (window.matchMedia('(pointer: coarse)').matches) {
+                document.querySelectorAll('.order-card__head[draggable], .cal-cell[draggable]').forEach(el => {
+                    el.setAttribute('draggable', 'false');
+                });
+            }
+
+            function cellAt(x, y) {
+                const stack = document.elementsFromPoint
+                    ? document.elementsFromPoint(x, y)
+                    : [document.elementFromPoint(x, y)];
+                for (const el of stack) {
+                    if (!el || !el.closest) continue;
+                    const cell = el.closest('.cal-cell');
+                    if (cell) return cell;
+                }
+                return null;
+            }
+
+            function clearOver() {
+                if (overCell) overCell.classList.remove('drag-over');
+                overCell = null;
+            }
+
+            function setOver(cell) {
+                if (overCell === cell) return;
+                clearOver();
+                if (cell) {
+                    cell.classList.add('drag-over');
+                    overCell = cell;
+                }
+            }
+
+            function ghostText(p) {
+                if (p.kind === 'order') {
+                    const name = (p.source.querySelector('.order-card__client') || {}).textContent || '';
+                    const qty = (p.source.querySelector('.order-card__badge') || {}).textContent || '';
+                    return ('#' + p.orderId + ' ' + name + ' ' + qty).trim();
+                }
+                const chips = Array.from(p.source.querySelectorAll('.chip-name')).map(n => n.textContent.trim()).filter(Boolean);
+                return chips.length ? ('План: ' + chips.join(', ')) : ('План ' + p.moveDate.split('-').reverse().join('.'));
+            }
+
+            function makeGhost(p, x, y) {
+                ghost = document.createElement('div');
+                ghost.className = 'digging-drag-ghost';
+                ghost.textContent = ghostText(p);
+                ghost.style.left = x + 'px';
+                ghost.style.top = y + 'px';
+                document.body.appendChild(ghost);
+            }
+
+            function moveGhost(x, y) {
+                if (!ghost) return;
+                ghost.style.left = x + 'px';
+                ghost.style.top = y + 'px';
+            }
+
+            function stopDrag(drop) {
+                const p = press;
+                press = null;
+                if (ghost) { ghost.remove(); ghost = null; }
+                document.body.classList.remove('digging-touch-dragging');
+                const dropCell = overCell;
+                clearOver();
+                if (!p) return;
+                try { p.source && p.source.releasePointerCapture(p.pointerId); } catch (_) {}
+                if (p.source) {
+                    p.source.classList.remove('drag-source');
+                    p.source.classList.remove('drag-source-day');
+                }
+                if (p.timer) { clearTimeout(p.timer); p.timer = null; }
+                if (!p.armed) return;
+                window.__diggingSkipClick = true;
+                setTimeout(() => { window.__diggingSkipClick = false; }, 400);
+                if (!drop || !dropCell) return;
+                const toDate = dropCell.getAttribute('data-date');
+                if (!toDate) return;
+                applyDiggingDrop(toDate, p.kind === 'day' ? p.moveDate : '', p.kind === 'order' ? p.orderId : '');
+            }
+
+            function arm(p, x, y) {
+                p.armed = true;
+                document.body.classList.add('digging-touch-dragging');
+                if (p.kind === 'order') p.source.classList.add('drag-source');
+                else p.source.classList.add('drag-source-day');
+                makeGhost(p, x, y);
+                if (typeof window.__diggingHidePreview === 'function') window.__diggingHidePreview();
+                try { p.source.setPointerCapture(p.pointerId); } catch (_) {}
+                try { navigator.vibrate && navigator.vibrate(25); } catch (_) {}
+            }
+
+            function onDown(ev) {
+                if (ev.pointerType === 'mouse') return;
+                if (ev.button != null && ev.button !== 0) return;
+                if (ev.target.closest('.js-toggle-order')) return;
+                const head = ev.target.closest('.order-card__head');
+                const cell = ev.target.closest('.cal-cell');
+                let kind = null;
+                let source = null;
+                if (head) {
+                    kind = 'order';
+                    source = head.closest('.order-card');
+                } else if (cell && cell.getAttribute('data-has-tasks') === '1') {
+                    kind = 'day';
+                    source = cell;
+                }
+                if (!kind || !source) return;
+                const x = ev.clientX, y = ev.clientY;
+                press = {
+                    kind,
+                    source,
+                    orderId: source.dataset.orderId || (head && head.dataset.orderId) || '',
+                    moveDate: cell ? cell.getAttribute('data-date') : '',
+                    x, y, armed: false, pointerId: ev.pointerId,
+                    timer: setTimeout(() => {
+                        if (!press || press.armed) return;
+                        arm(press, press.x, press.y);
+                    }, LONG_MS),
+                };
+            }
+
+            function onMove(ev) {
+                if (!press || ev.pointerId !== press.pointerId) return;
+                const x = ev.clientX, y = ev.clientY;
+                const dx = x - press.x, dy = y - press.y;
+                if (!press.armed) {
+                    if ((dx * dx + dy * dy) > CANCEL_PX * CANCEL_PX) {
+                        if (press.timer) { clearTimeout(press.timer); press.timer = null; }
+                        press = null;
+                    }
+                    return;
+                }
+                ev.preventDefault();
+                press.x = x; press.y = y;
+                moveGhost(x, y);
+                setOver(cellAt(x, y));
+            }
+
+            function onUp(ev) {
+                if (!press || (ev.pointerId != null && ev.pointerId !== press.pointerId)) return;
+                stopDrag(true);
+            }
+
+            document.addEventListener('pointerdown', onDown);
+            document.addEventListener('pointermove', onMove, { passive: false });
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', function (ev) {
+                if (!press || ev.pointerId !== press.pointerId) return;
+                stopDrag(false);
+            });
+            document.addEventListener('touchmove', function (ev) {
+                if (!document.body.classList.contains('digging-touch-dragging')) return;
+                ev.preventDefault();
+            }, { passive: false });
+        })();
 
         // ============================================================
         // Разворачивание карточки заказа в левой колонке.
@@ -1093,6 +1301,7 @@
         // попап даже без hover (для планшетов и когда пользователь «удерживает»).
         document.addEventListener('mousedown', function (ev) {
             if (ev.button !== 0) return;
+            if (ev.sourceCapabilities && ev.sourceCapabilities.firesTouchEvents) return;
             const cell = ev.target.closest('.cal-cell');
             if (!cell) return;
             if (longPressTimer) clearTimeout(longPressTimer);
@@ -1110,6 +1319,8 @@
 
         // На touch-устройствах — long-press через touchstart.
         document.addEventListener('touchstart', function (ev) {
+            // На телефоне long-press занят переносом плана, попап не показываем.
+            if (window.matchMedia('(pointer: coarse)').matches) return;
             const cell = ev.target.closest('.cal-cell');
             if (!cell) return;
             const t = ev.touches && ev.touches[0];
