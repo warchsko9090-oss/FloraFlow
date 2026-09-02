@@ -180,6 +180,7 @@ def _groups_by_field(aggregated, fields_dict, grand_total):
         free_sm = (v.get('price') or 0) * free
         bucket['rows'].append({
             'plant': v.get('plant') or '',
+            'plant_id': v.get('plant_id'),
             'size': v.get('size') or '',
             'year': v.get('year'),
             'quantity': v.get('quantity') or 0,
@@ -187,6 +188,8 @@ def _groups_by_field(aggregated, fields_dict, grand_total):
             'reserved': v.get('reserved') or 0,
             'shipped': v.get('shipped') or 0,
             'price': v.get('price') or 0,
+            'sum': sm,
+            'free_sum': free_sm,
         })
         t = bucket['totals']
         t['qty'] += v.get('quantity') or 0
@@ -1244,6 +1247,7 @@ def stock_report_export():
     # Колонки, которые присутствуют в таблице на экране
     columns = ["Растение"]
     include_size = report_mode != 'inventory'
+    include_year = report_mode in ('inventory', 'fields')
     if include_size:
         columns.append("Размер")
 
@@ -1258,11 +1262,16 @@ def stock_report_export():
     if include_price:
         columns.append("Сумма")
 
-    if report_mode == 'inventory':
+    if include_year:
         columns.append("Год")
 
     # Заголовок файла
-    title = f"Остатки на {end_date.strftime('%d.%m.%Y')} ({'Товарные' if report_mode=='product' else 'По полям'})"
+    mode_title = {
+        'product': 'Товарные',
+        'inventory': 'По полям',
+        'fields': 'Все поля',
+    }.get(report_mode, report_mode)
+    title = f"Остатки на {end_date.strftime('%d.%m.%Y')} ({mode_title})"
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columns))
     title_cell = ws.cell(row=1, column=1, value=title)
     title_cell.fill = title_fill
@@ -1324,7 +1333,8 @@ def stock_report_export():
         # Строки деталей
         for row in group['data']['rows']:
             col = 1
-            ws.cell(row=row_idx, column=col, value="").border = thin_border
+            plant_cell = row.get('plant') if report_mode == 'fields' else ''
+            ws.cell(row=row_idx, column=col, value=plant_cell).border = thin_border
             col += 1
 
             if include_size:
@@ -1355,7 +1365,7 @@ def stock_report_export():
                 c_sum.border = thin_border
                 col += 1
 
-            if report_mode == 'inventory':
+            if include_year:
                 c_year = ws.cell(row=row_idx, column=col, value=row.get('year'))
                 c_year.alignment = align_center
                 c_year.border = thin_border
@@ -1400,7 +1410,7 @@ def stock_report_export():
     wb.save(buf)
     buf.seek(0)
 
-    filename = f'stock_export_{end_date.strftime("%Y%m%d")}_{"opt" if price_mode == "wholesale" else "rozn"}.xlsx'
+    filename = f'stock_export_{end_date.strftime("%Y%m%d")}_{report_mode}_{"opt" if price_mode == "wholesale" else "rozn"}.xlsx'
     response = make_response(buf.getvalue())
     response.headers["Content-Disposition"] = f"attachment; filename={filename}"
     response.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

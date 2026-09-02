@@ -394,6 +394,7 @@
         <div class="btn-group btn-group-sm d-none d-lg-inline-flex">
             <a href="{{ url_for('stock.stock_report', mode='product', end_date=end_date) }}" class="btn {% if report_mode=='product' %}btn-success{% else %}btn-outline-secondary{% endif %}">Товарные</a>
             <a href="{{ url_for('stock.stock_report', mode='inventory', end_date=end_date) }}" class="btn {% if report_mode=='inventory' %}btn-success{% else %}btn-outline-secondary{% endif %}">По полям</a>
+            <a href="{{ url_for('stock.stock_report', mode='fields', end_date=end_date) }}" class="btn {% if report_mode=='fields' %}btn-success{% else %}btn-outline-secondary{% endif %}">Все поля</a>
         </div>
         <div class="btn-group btn-group-sm d-lg-none">
             <a href="{{ url_for('stock.stock_report', mode='product', end_date=end_date) }}" class="btn {% if report_mode=='product' %}btn-success{% else %}btn-outline-secondary{% endif %}">Товарные</a>
@@ -674,8 +675,73 @@
 
 {% endif %}
 {% if report_mode == 'fields' %}
+<p class="d-none d-lg-block text-muted small no-print mb-2">Товарные и нетоварные, с размерами. Нажмите поле — откроются позиции. Excel выгружает этот вид.</p>
 <p class="stock-fields-hint no-print">Товарные и нетоварные. Поля по возрастанию — нажмите, чтобы увидеть растения и размеры.</p>
-<div>
+<div class="table-responsive d-none d-lg-block">
+    <table class="table table-sm table-hover table-1c table-stock bg-white mb-0" id="stockFieldsTable">
+        <thead class="table-light">
+            <tr>
+                <th class="text-start ps-3">Поле / растение</th>
+                <th>Размер</th>
+                <th class="col-year">Год</th>
+                <th class="col-reserve">Резерв</th>
+                <th class="col-shipped">Отгружено</th>
+                <th class="col-free-header">Свободно</th>
+                <th class="col-fact-header">Факт</th>
+                {% if current_user.role != 'user2' %}<th class="col-sum">Сумма</th>{% endif %}
+            </tr>
+        </thead>
+        <tbody>
+        {% for field in report_data %}
+            {% set unique_id = loop.index %}
+            <tr class="group-header-row" data-bs-toggle="collapse" data-bs-target=".field-collapse-{{ unique_id }}"
+                data-field-name="{{ field.name|e }}">
+                <td class="ps-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="fas fa-chevron-right rotate-icon text-muted"></i>
+                        <span class="fw-bold">{{ field.name }}</span>
+                        <span class="text-muted small">{{ field.rows|length }} поз.</span>
+                    </div>
+                </td>
+                <td></td>
+                <td class="col-year"></td>
+                <td class="col-reserve text-center">{{ field.totals.reserved }}</td>
+                <td class="col-shipped text-center text-muted">{{ field.totals.shipped }}</td>
+                <td class="col-free-cell">{{ field.totals.free }}</td>
+                <td class="col-fact-cell">{{ field.totals.qty }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum text-end fw-bold pe-2">{{ field.totals.sum|money }}</td>{% endif %}
+            </tr>
+            {% for row in field.rows %}
+            <tr class="collapse field-collapse-{{ unique_id }} detail-row"
+                data-plant="{{ row.plant }}"
+                data-plant-id="{{ row.plant_id or '' }}">
+                <td class="ps-4">{{ row.plant }}</td>
+                <td class="small">{{ row.size or '—' }}</td>
+                <td class="col-year text-center">{{ row.year or '' }}</td>
+                <td class="col-reserve text-center">{{ row.reserved }}</td>
+                <td class="col-shipped text-center text-muted">{{ row.shipped }}</td>
+                <td class="col-free-cell">{{ row.free }}</td>
+                <td class="col-fact-cell">{{ row.quantity }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum text-end pe-2">{{ row.sum|money }}</td>{% endif %}
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="{% if current_user.role != 'user2' %}8{% else %}7{% endif %}" class="text-muted ps-3 py-3">На полях пока нет остатков.</td></tr>
+        {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr class="stock-footer-row">
+                <td class="text-end pe-3 footer-label-cell" colspan="3">Итого</td>
+                <td class="col-reserve text-center">{{ grand_total.reserved }}</td>
+                <td class="col-shipped text-center">{{ grand_total.shipped }}</td>
+                <td class="footer-free">{{ grand_total.free }}</td>
+                <td class="footer-fact">{{ grand_total.qty }}</td>
+                {% if current_user.role != 'user2' %}<td class="footer-sum">{{ grand_total.sum|money }}</td>{% endif %}
+            </tr>
+        </tfoot>
+    </table>
+</div>
+<div class="d-lg-none">
     {% for field in report_data %}
     <details class="field-acc">
         <summary>
@@ -683,7 +749,7 @@
             <span class="badge-qty">{{ field.totals.qty }} шт</span>
         </summary>
         {% for row in field.rows %}
-        <div class="field-acc-row" data-plant="{{ row.plant }}">
+        <div class="field-acc-row" data-plant="{{ row.plant }}" data-plant-id="{{ row.plant_id or '' }}">
             <div>
                 <div class="fw-bold">{{ row.plant }}</div>
                 <div class="muted">{{ row.size or '—' }}{% if row.year %} · {{ row.year }}{% endif %}{% if row.reserved %} · резерв {{ row.reserved }}{% endif %}</div>
@@ -826,6 +892,9 @@
             new bootstrap.Collapse(el, { toggle: false }).show();
         });
         document.querySelectorAll('.field-acc').forEach(el => { el.open = true; });
+        document.querySelectorAll('#stockFieldsTable .detail-row.collapse:not(.show)').forEach(el => {
+            new bootstrap.Collapse(el, { toggle: false }).show();
+        });
     }
 
     function collapseAllStocks() {
@@ -836,6 +905,9 @@
             new bootstrap.Collapse(el, { toggle: false }).hide();
         });
         document.querySelectorAll('.field-acc').forEach(el => { el.open = false; });
+        document.querySelectorAll('#stockFieldsTable .detail-row.collapse.show').forEach(el => {
+            new bootstrap.Collapse(el, { toggle: false }).hide();
+        });
     }
 
     function stockRowIsVisible(el) {
@@ -963,6 +1035,24 @@
         document.querySelectorAll('.stock-mobile-card').forEach(card => {
             const name = (card.querySelector('.fw-bold')?.textContent || '').toLowerCase();
             card.style.display = !q || name.includes(q) ? '' : 'none';
+        });
+        document.querySelectorAll('#stockFieldsTable .group-header-row').forEach(header => {
+            const target = header.getAttribute('data-bs-target');
+            let any = !q;
+            if (target) {
+                document.querySelectorAll(target).forEach(row => {
+                    const name = (row.getAttribute('data-plant') || row.textContent || '').toLowerCase();
+                    const match = !q || name.includes(q);
+                    row.style.display = match ? '' : 'none';
+                    if (match) any = true;
+                });
+            }
+            header.style.display = any ? '' : 'none';
+            if (q && any && target) {
+                document.querySelectorAll(target).forEach(row => {
+                    if (row.style.display !== 'none') row.classList.add('show');
+                });
+            }
         });
         document.querySelectorAll('.field-acc').forEach(acc => {
             let any = !q;
@@ -1153,6 +1243,11 @@
                 document.querySelectorAll(target).forEach(d => {
                     if (d.dataset.plantId) ids.add(d.dataset.plantId);
                 });
+            });
+            document.querySelectorAll('.field-acc-row, #stockFieldsTable .detail-row').forEach(row => {
+                if (row.style.display === 'none') return;
+                if (row.closest && row.closest('.field-acc') && row.closest('.field-acc').style.display === 'none') return;
+                if (row.dataset.plantId) ids.add(row.dataset.plantId);
             });
             ids.forEach(id => params.append('filter_plant', id));
             if (!ids.size) {
