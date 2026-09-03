@@ -24,6 +24,13 @@ _SPAM_WORDS = (
     'prezzo', 'precio', 'klik di sini', 'cheap promo',
 )
 
+# Живые клиенты иногда пишут имя латиницей. Склейки ботов (Robertfow) сюда не входят.
+_OK_LATIN_NAMES = {
+    'alexander', 'alexandra', 'alexey', 'alexei', 'andrey', 'anna', 'dmitry',
+    'elena', 'ivan', 'john', 'maria', 'maxim', 'michael', 'mikhail', 'natalia',
+    'natalya', 'nikolai', 'olga', 'pavel', 'peter', 'roman', 'sergey', 'vladimir',
+}
+
 _PLANT_HINTS = (
     'туя', 'ель', 'сосна', 'клён', 'клен', 'липа', 'дуб', 'гортенз', 'сажен',
     'дерев', 'питомник', 'ландшафт', 'хвой', 'кустар', 'изгород', 'газон',
@@ -52,8 +59,8 @@ def _secret() -> bytes:
     return (os.environ.get('SECRET_KEY') or 'change-me').encode('utf-8')
 
 
-def issue_form_token() -> str:
-    ts = str(int(time.time()))
+def issue_form_token(issued_at: int | None = None) -> str:
+    ts = str(int(issued_at if issued_at is not None else time.time()))
     sig = hmac.new(_secret(), ts.encode(), hashlib.sha256).hexdigest()[:20]
     return f'{ts}.{sig}'
 
@@ -100,6 +107,22 @@ def heuristic_score(name: str, phone: str, message: str) -> tuple[int, list[str]
     elif _LATIN_ONE.match(name or '') and not _CYR.search(name):
         score += 1
         reasons.append('latin-one-word')
+
+    # Пустой комментарий + одно латинское «слово» без пробела — типичный бот с главной.
+    compact = re.sub(r'[\s.\-_]', '', name)
+    if (
+        compact
+        and not _CYR.search(name + message)
+        and ' ' not in name.strip()
+        and len(compact) >= 8
+        and re.fullmatch(r'[A-Za-z]+', compact)
+        and compact.lower() not in _OK_LATIN_NAMES
+    ):
+        score += 2
+        reasons.append('latin-handle')
+        if not message:
+            score += 1
+            reasons.append('empty-latin')
 
     if message and not _CYR.search(message) and not any(h in blob for h in _PLANT_HINTS):
         # Латиница без растений: типичный шаблон бота «hi I want your price».
