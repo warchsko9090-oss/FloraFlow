@@ -187,6 +187,7 @@ def ensure_legacy_schema(logger=None) -> None:
     _backfill_registration_periods(logger)
     _ensure_sale_companies(logger)
     _migrate_vat_22(logger)
+    _clear_blocked_ips_once(logger)
     try:
         from app.invoice_files import backfill_blobs
         backfill_blobs(logger)
@@ -341,6 +342,28 @@ def _ensure_sale_companies(logger=None) -> None:
     except Exception as exc:
         if logger:
             logger.warning('legacy schema: sale_company seed skipped — %s', exc)
+        db.session.rollback()
+
+
+def _clear_blocked_ips_once(logger=None) -> None:
+    """Разовая разблокировка: админ не может войти в /users, пока IP в lockout."""
+    flag = 'blocked_ip_cleared_20260903'
+    try:
+        from app.models import AppSetting, BlockedIP
+        insp = inspect(db.engine)
+        if not insp.has_table('blocked_ip'):
+            return
+        if insp.has_table('app_setting') and AppSetting.query.get(flag):
+            return
+        deleted = BlockedIP.query.delete()
+        if insp.has_table('app_setting'):
+            db.session.add(AppSetting(key=flag, value='1'))
+        db.session.commit()
+        if logger:
+            logger.info('legacy schema: cleared %s blocked_ip row(s)', deleted)
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: blocked_ip clear skipped — %s', exc)
         db.session.rollback()
 
 

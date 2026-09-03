@@ -219,7 +219,11 @@ def personnel():
     last_day = calendar.monthrange(selected_year, selected_month)[1]
     end_date = date(selected_year, selected_month, last_day)
     
-    filter_emp_ids =[int(x) for x in request.args.getlist('employee_id') if x]
+    filter_emp_ids = []
+    if active_tab == 'summary':
+        for x in request.args.getlist('employee_id'):
+            if x and str(x).isdigit():
+                filter_emp_ids.append(int(x))
     
     def get_setting_int(key): 
         s = AppSetting.query.get(key)
@@ -587,10 +591,14 @@ def personnel():
             else:
                 flash('Нет данных для отправки отчета.', 'warning')
 
-        return redirect(url_for('hr.personnel', year=selected_year, month=selected_month, employee_id=filter_emp_ids, tab=active_tab))
+        redir_kw = {'year': selected_year, 'month': selected_month, 'tab': active_tab}
+        if active_tab == 'summary' and filter_emp_ids:
+            redir_kw['employee_id'] = filter_emp_ids
+        return redirect(url_for('hr.personnel', **redir_kw))
         
     emp_query = Employee.query
-    if filter_emp_ids: emp_query = emp_query.filter(Employee.id.in_(filter_emp_ids))
+    if active_tab == 'summary' and filter_emp_ids:
+        emp_query = emp_query.filter(Employee.id.in_(filter_emp_ids))
     
     # ПРЯЧЕМ МЕНЕДЖЕРОВ ОТ ВСЕХ, КРОМЕ АДМИНА И РУКОВОДИТЕЛЯ
     if current_user.role not in ['admin', 'executive']:
@@ -728,18 +736,6 @@ def personnel():
         total_summary['paid_total'] += (row['paid_official'] + row['paid_unofficial'] + row['other_adjust'])
         total_summary['balance'] += row['balance']
 
-    # Итоги для инфо-плашек считаются по всем сотрудникам без исключений
-    all_summary = {'earned': Decimal(0), 'official': Decimal(0), 'unofficial': Decimal(0), 'other': Decimal(0), 'paid_total': Decimal(0), 'balance': Decimal(0)}
-    all_summary_employees = Employee.query.order_by(Employee.name).all()
-    for emp in all_summary_employees:
-        row = _calc_payroll_row(emp)
-        all_summary['earned'] += row['earned']
-        all_summary['official'] += row['paid_official']
-        all_summary['unofficial'] += row['paid_unofficial']
-        all_summary['other'] += row['other_adjust']
-        all_summary['paid_total'] += (row['paid_official'] + row['paid_unofficial'] + row['other_adjust'])
-        all_summary['balance'] += row['balance']
-
     timesheet_data =[]; days_in_month = list(range(1, last_day + 1))
         
     for emp in employees:
@@ -815,7 +811,6 @@ def personnel():
                            active_tab=active_tab, 
                            data=data, 
                            summary=total_summary, 
-                           summary_all=all_summary,
                            timesheet_data=timesheet_data, 
                            days_in_month=days_in_month, 
                            year=selected_year, month=selected_month, 

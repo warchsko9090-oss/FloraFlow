@@ -1,6 +1,24 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="row justify-content-center">
+<style>
+    .blocked-ip-card { margin-top: 1.5rem; }
+    @media (max-width: 991.98px) {
+        .users-page-wrap { padding-bottom: 56px; }
+        .blocked-ip-card { margin-bottom: 12px; }
+        .blocked-ip-card .btn-unblock {
+            width: 100%;
+            min-height: 44px;
+        }
+        .blocked-ip-card td {
+            vertical-align: middle;
+        }
+        .blocked-ip-card .ip-action {
+            display: block;
+            padding-top: 6px;
+        }
+    }
+</style>
+<div class="row justify-content-center users-page-wrap">
     <div class="col-md-9">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h4 class="mb-0 text-success fw-bold"><i class="fas fa-users-cog me-2"></i>Пользователи</h4>
@@ -45,6 +63,59 @@
                 </table>
             </div>
         </div>
+
+        {% if current_user.role == 'admin' %}
+        <div class="card blocked-ip-card border-danger shadow-sm">
+            <div class="card-header bg-danger text-white fw-bold">
+                <i class="fas fa-shield-alt me-2"></i> Защита (Заблокированные IP)
+            </div>
+            <div class="card-body p-0">
+                {% if blocked_ips %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0 align-middle">
+                        <thead class="bg-light d-none d-md-table-header-group">
+                            <tr>
+                                <th class="ps-3">IP-адрес бота/пользователя</th>
+                                <th class="text-center">Неудачных попыток</th>
+                                <th>Время блокировки</th>
+                                <th class="text-end pe-3">Действие</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for b in blocked_ips %}
+                            <tr>
+                                <td class="ps-3">
+                                    <div class="fw-bold text-danger">{{ b.ip_address }}</div>
+                                    <div class="small text-muted d-md-none">
+                                        Попыток: {{ b.failed_attempts }}
+                                        · {{ b.locked_at.strftime('%d.%m.%Y %H:%M') if b.locked_at else 'Неизвестно' }}
+                                    </div>
+                                </td>
+                                <td class="text-center d-none d-md-table-cell">{{ b.failed_attempts }}</td>
+                                <td class="d-none d-md-table-cell">{{ b.locked_at.strftime('%d.%m.%Y %H:%M') if b.locked_at else 'Неизвестно' }}</td>
+                                <td class="text-end pe-3 ip-action">
+                                    <form method="POST" onsubmit="return confirm('Уверены, что хотите разблокировать этот IP?');">
+                                        <input type="hidden" name="action" value="unblock_ip">
+                                        <input type="hidden" name="ip_address" value="{{ b.ip_address }}">
+                                        <button type="submit" class="btn btn-outline-success btn-sm fw-bold btn-unblock">
+                                            <i class="fas fa-unlock-alt me-1"></i> Разбанить
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-center text-muted">
+                    <i class="fas fa-check-circle fa-2x text-success mb-2"></i><br>
+                    В данный момент нет заблокированных IP-адресов. Система в безопасности.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 
@@ -105,52 +176,4 @@
         new bootstrap.Modal(document.getElementById('editUserModal')).show();
     }
 </script>
-
-{% if current_user.role == 'admin' %}
-<div class="card mt-4 border-danger shadow-sm">
-    <div class="card-header bg-danger text-white fw-bold">
-        <i class="fas fa-shield-alt me-2"></i> Защита (Заблокированные IP)
-    </div>
-    <div class="card-body p-0">
-        {% if blocked_ips %}
-        <div class="table-responsive">
-            <table class="table table-sm table-hover mb-0 align-middle">
-                <thead class="bg-light">
-                    <tr>
-                        <th class="ps-3">IP-адрес бота/пользователя</th>
-                        <th class="text-center">Неудачных попыток</th>
-                        <th>Время блокировки</th>
-                        <th class="text-end pe-3">Действие</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for b in blocked_ips %}
-                    <tr>
-                        <td class="ps-3 fw-bold text-danger">{{ b.ip_address }}</td>
-                        <td class="text-center">{{ b.failed_attempts }}</td>
-                        <td>{{ b.locked_at.strftime('%d.%m.%Y %H:%M') if b.locked_at else 'Неизвестно' }}</td>
-                        <td class="text-end pe-3">
-                            <form method="POST" onsubmit="return confirm('Уверены, что хотите разблокировать этот IP?');">
-                                <input type="hidden" name="action" value="unblock_ip">
-                                <input type="hidden" name="ip_address" value="{{ b.ip_address }}">
-                                <button type="submit" class="btn btn-outline-success btn-sm fw-bold">
-                                    <i class="fas fa-unlock-alt me-1"></i> Разбанить
-                                </button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="p-4 text-center text-muted">
-            <i class="fas fa-check-circle fa-2x text-success mb-2"></i><br>
-            В данный момент нет заблокированных IP-адресов. Система в безопасности.
-        </div>
-        {% endif %}
-    </div>
-</div>
-{% endif %}
-
 {% endblock %}

@@ -31,6 +31,14 @@
     .hr-stat-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
     .hr-label { color: #888; }
     .hr-val { font-weight: 600; color: #333; }
+    .hr-emp-filter .dropdown-menu {
+        min-width: 260px; max-height: 320px; overflow-y: auto; padding: 10px;
+    }
+    @media (max-width: 767.98px) {
+        .hr-emp-filter { width: 100%; }
+        .hr-emp-filter > button { width: 100%; }
+        .hr-emp-filter .dropdown-menu { width: 100%; }
+    }
 </style>
 
 <div class="page-header">
@@ -46,7 +54,7 @@
     
     <div class="page-actions">
         <div class="d-none d-md-block">
-            <a href="{{ url_for('hr.personnel', year=year, month=month, tab=active_tab, export='excel') }}" hx-boost="false" target="_blank" class="btn btn-success btn-sm"><i class="fas fa-file-excel"></i> Excel</a>
+            <a href="{{ url_for('hr.personnel', year=year, month=month, tab=active_tab, export='excel') }}{% for eid in filter_emp_ids %}&employee_id={{ eid }}{% endfor %}" hx-boost="false" target="_blank" class="btn btn-success btn-sm"><i class="fas fa-file-excel"></i> Excel</a>
         </div>
         {% if current_user.role == 'admin' %}
         <!-- Кнопки только для ПК (на телефоне места нет) -->
@@ -61,22 +69,39 @@
 
 <!-- Фильтры (ОБЩИЕ) -->
 <div class="filter-panel">
-    <form method="GET" class="d-flex gap-2 align-items-center w-100 justify-content-between" hx-boost="false">
+    <form method="GET" class="d-flex gap-2 align-items-center flex-wrap w-100" hx-boost="false">
         <input type="hidden" name="tab" value="{{ active_tab }}">
-        <div class="d-flex gap-2">
-            <select name="month" class="form-select form-select-sm" style="width: 120px;" onchange="this.form.submit()">
-                {% for m_num, m_name in month_names.items() %}
-                <option value="{{ m_num }}" {% if m_num == month %}selected{% endif %}>{{ m_name }}</option>
+        <select name="month" class="form-select form-select-sm" style="width: 120px;" onchange="this.form.submit()">
+            {% for m_num, m_name in month_names.items() %}
+            <option value="{{ m_num }}" {% if m_num == month %}selected{% endif %}>{{ m_name }}</option>
+            {% endfor %}
+        </select>
+        <select name="year" class="form-select form-select-sm" style="width: 80px;" onchange="this.form.submit()">
+            {% for y in range(2023, 2030) %}
+            <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+            {% endfor %}
+        </select>
+        {% if active_tab == 'summary' %}
+        <div class="dropdown hr-emp-filter">
+            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+                Сотрудники{% if filter_emp_ids %} ({{ filter_emp_ids|length }}){% endif %}
+            </button>
+            <div class="dropdown-menu dropdown-check-list shadow">
+                <div class="px-1 pb-2 d-flex gap-2">
+                    <a href="javascript:void(0)" class="small" onclick="checkAllEmp(true)">Все</a>
+                    <a href="javascript:void(0)" class="small" onclick="checkAllEmp(false)">Сбросить</a>
+                </div>
+                <input type="text" class="form-control form-control-sm mb-2" placeholder="Поиск..." onkeyup="filterEmpList(this)">
+                {% for e in employees %}
+                <div class="form-check chk-emp-div">
+                    <input class="form-check-input check-emp" type="checkbox" name="employee_id" value="{{ e.id }}" id="emp{{ e.id }}" {% if e.id in filter_emp_ids %}checked{% endif %}>
+                    <label class="form-check-label small" for="emp{{ e.id }}">{{ e.name }}</label>
+                </div>
                 {% endfor %}
-            </select>
-            <select name="year" class="form-select form-select-sm" style="width: 80px;" onchange="this.form.submit()">
-                {% for y in range(2023, 2030) %}
-                <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
-                {% endfor %}
-            </select>
+            </div>
         </div>
-        <!-- Кнопка обновления -->
-        <button class="btn btn-outline-primary btn-sm"><i class="fas fa-sync"></i></button>
+        {% endif %}
+        <button class="btn btn-outline-primary btn-sm ms-auto" title="Применить"><i class="fas fa-sync"></i></button>
     </form>
 </div>
 
@@ -97,48 +122,48 @@
     <div class="col-6 col-md-2">
         <div class="card shadow-sm h-100">
             <div class="card-body p-2">
-                <div class="small text-muted">Заработано (все)</div>
-                <div class="fw-bold">{{ summary_all.earned|money }}</div>
+                <div class="small text-muted">Заработано{% if filter_emp_ids %} (выбранные){% endif %}</div>
+                <div class="fw-bold">{{ summary.earned|money }}</div>
             </div>
         </div>
     </div>
     <div class="col-6 col-md-2">
         <div class="card shadow-sm h-100">
             <div class="card-body p-2">
-                <div class="small text-muted">Офиц. выплаты (все)</div>
-                <div class="fw-bold text-success">{{ summary_all.official|money }}</div>
+                <div class="small text-muted">Офиц. выплаты{% if filter_emp_ids %} (выбранные){% endif %}</div>
+                <div class="fw-bold text-success">{{ summary.official|money }}</div>
             </div>
         </div>
     </div>
     <div class="col-6 col-md-2">
         <div class="card shadow-sm h-100">
             <div class="card-body p-2">
-                <div class="small text-muted">Неофиц. выплаты (все)</div>
-                <div class="fw-bold text-success">{{ summary_all.unofficial|money }}</div>
+                <div class="small text-muted">Неофиц. выплаты{% if filter_emp_ids %} (выбранные){% endif %}</div>
+                <div class="fw-bold text-success">{{ summary.unofficial|money }}</div>
             </div>
         </div>
     </div>
     <div class="col-6 col-md-2">
         <div class="card shadow-sm h-100">
             <div class="card-body p-2">
-                <div class="small text-muted">Прочее (все)</div>
-                <div class="fw-bold {% if summary_all.other < 0 %}text-danger{% else %}text-muted{% endif %}">{{ summary_all.other|money }}</div>
+                <div class="small text-muted">Прочее{% if filter_emp_ids %} (выбранные){% endif %}</div>
+                <div class="fw-bold {% if summary.other < 0 %}text-danger{% else %}text-muted{% endif %}">{{ summary.other|money }}</div>
             </div>
         </div>
     </div>
     <div class="col-6 col-md-2">
         <div class="card shadow-sm h-100 border-success">
             <div class="card-body p-2">
-                <div class="small text-muted">Выплачено всего (все)</div>
-                <div class="fw-bold text-success">{{ summary_all.paid_total|money }}</div>
+                <div class="small text-muted">Выплачено всего{% if filter_emp_ids %} (выбранные){% endif %}</div>
+                <div class="fw-bold text-success">{{ summary.paid_total|money }}</div>
             </div>
         </div>
     </div>
     <div class="col-6 col-md-2">
         <div class="card shadow-sm h-100 border-danger">
             <div class="card-body p-2">
-                <div class="small text-muted">Долг (все)</div>
-                <div class="fw-bold {% if summary_all.balance > 0 %}text-danger{% else %}text-success{% endif %}">{{ summary_all.balance|money }}</div>
+                <div class="small text-muted">Долг{% if filter_emp_ids %} (выбранные){% endif %}</div>
+                <div class="fw-bold {% if summary.balance > 0 %}text-danger{% else %}text-success{% endif %}">{{ summary.balance|money }}</div>
             </div>
         </div>
     </div>
@@ -766,6 +791,16 @@
 {% block scripts %}
 <script>
     // === JS ДЛЯ ПК (Таблица) ===
+    function checkAllEmp(on) {
+        document.querySelectorAll('.check-emp').forEach(function(cb) { cb.checked = !!on; });
+    }
+    function filterEmpList(input) {
+        var q = (input.value || '').toLowerCase();
+        document.querySelectorAll('.chk-emp-div').forEach(function(el) {
+            el.style.display = el.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+        });
+    }
+
     function toggleTimesheetDetails(empId, icon) {
         document.querySelectorAll(`.detail-${empId}`).forEach(row => { row.style.display = (row.style.display === 'none') ? 'table-row' : 'none'; });
         if (icon.classList.contains('fa-plus-square')) { icon.classList.remove('fa-plus-square'); icon.classList.add('fa-minus-square'); } else { icon.classList.remove('fa-minus-square'); icon.classList.add('fa-plus-square'); }
