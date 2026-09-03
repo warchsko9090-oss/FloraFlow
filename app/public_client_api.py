@@ -238,14 +238,24 @@ def _render_landing_page(redirect_endpoint: str):
         if not (request.form.get("pd_consent") or "").strip():
             return redirect(url_for(redirect_endpoint, err="consent") + "#action")
 
+        from app.shop_antispam import inspect_inquiry, log_drop
         from app.shop_on_request import create_landing_inquiry
 
+        name = request.form.get("customer_name", "")
+        phone = request.form.get("phone", "")
+        message = request.form.get("message", "")
+        verdict = inspect_inquiry(
+            name, phone, message,
+            honeypot=request.form.get("company_url") or request.form.get("website") or '',
+            form_token=request.form.get("form_token") or '',
+            source='landing',
+        )
+        if verdict.drop:
+            log_drop(verdict, 'landing', name, phone)
+            return redirect(url_for(redirect_endpoint, sent=1))
+
         try:
-            row = create_landing_inquiry(
-                request.form.get("customer_name", ""),
-                request.form.get("phone", ""),
-                request.form.get("message", ""),
-            )
+            row = create_landing_inquiry(name, phone, message)
             db.session.commit()
             try:
                 from app.shop_telegram import notify_shop_operator_on_request
@@ -686,12 +696,14 @@ def group_catalog_by_plant(catalog_items):
 
 
 def _shop_page_context(catalog_items):
+    from app.shop_antispam import issue_form_token
     shop_items = [catalog_item_to_shop_row(item) for item in catalog_items]
     return {
         "catalog_json": json.dumps(shop_items, ensure_ascii=False),
         "shop_contacts": get_shop_contacts_for_site(),
         "contact_display_label": contact_display_label,
         "contact_href": contact_href,
+        "shop_form_token": issue_form_token(),
     }
 
 
@@ -932,12 +944,24 @@ def public_shop_on_request():
     if not (str(data.get("pd_consent") or "").strip()):
         return jsonify({"status": "error", "message": "Необходимо согласие на обработку персональных данных"}), 400
 
+    plant_id = data.get("plant_id")
+    size_id = data.get("size_id")
+    customer_name = data.get("customer_name", "")
+    phone = data.get("phone", "")
+    message = data.get("message", "")
+
+    from app.shop_antispam import inspect_inquiry, log_drop
+    verdict = inspect_inquiry(
+        customer_name, phone, message,
+        honeypot=data.get("company_url") or data.get("website") or '',
+        form_token=data.get("form_token") or '',
+        source='on_request',
+    )
+    if verdict.drop:
+        log_drop(verdict, 'on_request', customer_name, phone)
+        return jsonify({"status": "ok", "request_id": 0})
+
     try:
-        plant_id = data.get("plant_id")
-        size_id = data.get("size_id")
-        customer_name = data.get("customer_name", "")
-        phone = data.get("phone", "")
-        message = data.get("message", "")
         row = create_on_request(plant_id, size_id, customer_name, phone, message)
         db.session.commit()
         try:

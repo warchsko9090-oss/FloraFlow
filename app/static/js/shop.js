@@ -536,6 +536,8 @@
             phone: form.phone.value.trim(),
             message: form.message.value.trim(),
             pd_consent: '1',
+            company_url: (form.company_url && form.company_url.value) || '',
+            form_token: (form.form_token && form.form_token.value) || '',
         };
 
         submitBtn.disabled = true;

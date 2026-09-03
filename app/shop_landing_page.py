@@ -338,6 +338,7 @@ def resolve_landing_images(page: ShopLandingPage) -> dict:
 
 
 def get_landing_context(form_sent: bool = False, form_error: str = '') -> dict:
+    from app.shop_antispam import issue_form_token
     from app.shop_contacts import contact_display_label, contact_href, get_shop_contacts_for_site
     from app.shop_sidebar import get_sidebar_slide_urls
 
@@ -360,5 +361,6 @@ def get_landing_context(form_sent: bool = False, form_error: str = '') -> dict:
         'contact_href': contact_href,
         'form_sent': form_sent,
         'form_error': (form_error or '').strip()[:200],
+        'shop_form_token': issue_form_token(),
     }
     return ctx
