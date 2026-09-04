@@ -241,5 +241,22 @@
     return data;
   }
 
-  w.FFTg = { tgApp, getInitData, waitTelegram, handshake, bootAuth, api, authErrorMessage, remember, debugInfo, applyWeb };
+  async function fetchBlob(path) {
+    const initData = getInitData();
+    const headers = {};
+    if (initData && initData.length < 4000) {
+      headers["X-Telegram-Init-Data"] = initData;
+    }
+    const res = await fetch(path, { credentials: "same-origin", headers: headers });
+    if (res.ok) return res.blob();
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 404) {
+      throw new Error(
+        "В этой карточке нет PDF. Файл в чате Telegram — отдельная копия: откройте его там или прикрепите счёт в правках."
+      );
+    }
+    throw new Error(authErrorMessage(data, res.status));
+  }
+
+  w.FFTg = { tgApp, getInitData, waitTelegram, handshake, bootAuth, api, fetchBlob, authErrorMessage, remember, debugInfo, applyWeb };
 })(window);

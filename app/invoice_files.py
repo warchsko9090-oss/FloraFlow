@@ -129,6 +129,49 @@ def flask_send(inv: PaymentInvoice, *, as_attachment: bool = True):
     )
 
 
+def delete_unpaid_invoice(inv: PaymentInvoice) -> str | None:
+    """Удаляет неоплаченный счёт и привязанные факты. Не коммитит. None = ок."""
+    if (inv.status or '') == 'paid':
+        return 'Оплаченный счёт нельзя удалить'
+    for kid in list(getattr(inv, 'fact_invoices', None) or []):
+        err = delete_unpaid_invoice(kid)
+        if err:
+            return err
+    from app.models import ChatExpenseMessage, Expense
+    ChatExpenseMessage.query.filter_by(matched_invoice_id=inv.id).update(
+        {'matched_invoice_id': None}, synchronize_session=False
+    )
+    Expense.query.filter_by(invoice_id=inv.id).update(
+        {'invoice_id': None}, synchronize_session=False
+    )
+    try:
+        from app.models import BankSlipItem
+        BankSlipItem.query.filter_by(invoice_id=inv.id).update(
+            {'invoice_id': None}, synchronize_session=False
+        )
+    except Exception:
+        pass
+    try:
+        from app.models import ViumInvoiceQueue, ViumOperation, ViumLot
+        ViumInvoiceQueue.query.filter_by(invoice_id=inv.id).delete(synchronize_session=False)
+        ViumOperation.query.filter_by(invoice_id=inv.id).update(
+            {'invoice_id': None}, synchronize_session=False
+        )
+        ViumLot.query.filter_by(source_invoice_id=inv.id).update(
+            {'source_invoice_id': None}, synchronize_session=False
+        )
+    except Exception:
+        pass
+    path = disk_path(inv)
+    db.session.delete(inv)
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return None
+
+
 def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
     """Пишет расход по оплаченному счёту, если его ещё нет. Не коммитит."""
     from decimal import Decimal

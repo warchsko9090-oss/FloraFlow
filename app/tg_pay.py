@@ -36,7 +36,7 @@ from app.telegram import (
 )
 from app.invoice_files import (
     invoice_bytes, has_file as invoice_has_file, has_receipt as invoice_has_receipt,
-    attach_file, flask_send, flask_send_receipt,
+    attach_file, flask_send, flask_send_receipt, delete_unpaid_invoice,
 )
 
 bp = Blueprint('tg_pay', __name__, url_prefix='/tg/pay')
@@ -536,6 +536,19 @@ def _invoice_path(inv: PaymentInvoice) -> str | None:
     return materialize_path(inv)
 
 
+def _invoice_with_file(inv: PaymentInvoice) -> PaymentInvoice:
+    """Карточка плана может не держать PDF — он на привязанном факте."""
+    if invoice_has_file(inv):
+        return inv
+    for kid in (getattr(inv, 'fact_invoices', None) or []):
+        if invoice_has_file(kid):
+            return kid
+    plan = getattr(inv, 'plan', None)
+    if plan is not None and invoice_has_file(plan):
+        return plan
+    return inv
+
+
 def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
     item = inv.item
     planned = float(inv.planned_amount) if inv.planned_amount is not None else None
@@ -773,12 +786,7 @@ def api_invoice_file(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if not _can_edit(user) and inv.status != 'new':
         return jsonify({'error': 'not_found'}), 404
-    src = inv
-    if not invoice_has_file(src):
-        kid = next(iter(getattr(inv, 'fact_invoices', None) or []), None)
-        if kid:
-            src = kid
-    resp = flask_send(src, as_attachment=False)
+    resp = flask_send(_invoice_with_file(inv), as_attachment=False)
     if resp is None:
         return jsonify({'error': 'file_missing'}), 404
     return resp
@@ -802,11 +810,8 @@ def api_send_pdf(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if not _can_edit(user) and inv.status != 'new':
         return jsonify({'error': 'not_found'}), 404
-    data = invoice_bytes(inv)
-    if not data:
-        kid = next(iter(getattr(inv, 'fact_invoices', None) or []), None)
-        if kid:
-            data = invoice_bytes(kid)
+    src = _invoice_with_file(inv)
+    data = invoice_bytes(src)
     if not data:
         return jsonify({'error': 'file_missing'}), 404
     chat_id = user.telegram_id
@@ -818,7 +823,7 @@ def api_send_pdf(user: User, inv_id: int):
         })
     ok, err = send_chat_document(
         chat_id,
-        filename=inv.original_name,
+        filename=src.original_name or src.filename or 'invoice.pdf',
         caption=f"{_purpose(inv)} · {inv.amount} ₽",
         file_bytes=data,
     )
@@ -1043,22 +1048,57 @@ def api_create_plan(user: User):
     return jsonify(serialize_invoice(inv, detail=True))
 
 
+@bp.route('/api/invoices/<int:inv_id>/attach', methods=['POST'])
+@require_user
+def api_attach_file(user: User, inv_id: int):
+    if not _can_edit(user):
+        return jsonify({'error': 'forbidden'}), 403
+    inv = PaymentInvoice.query.get_or_404(inv_id)
+    if inv.status == 'paid':
+        return jsonify({'error': 'locked'}), 400
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'error': 'no_file'}), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in _ALLOWED_EXT:
+        return jsonify({'error': 'bad_type', 'hint': 'Нужен PDF (или фото счёта)'}), 400
+    data = file.read()
+    if not data:
+        return jsonify({'error': 'empty'}), 400
+    save_name, path = _store_upload(data, file.filename)
+    parsed = parse_invoice_file(path, file.filename)
+    attach_file(inv, data, save_name)
+    amount = parsed.get('amount') or Decimal('0')
+    if not isinstance(amount, Decimal):
+        try:
+            amount = _parse_money(amount)
+        except (InvalidOperation, TypeError, ValueError):
+            amount = Decimal('0')
+    if amount > 0:
+        inv.amount = amount
+    if parsed.get('summary') and not (inv.summary or '').strip():
+        inv.summary = parsed['summary'][:500]
+        inv.comment = inv.summary
+    if parsed.get('lines'):
+        inv.line_items = json.dumps(parsed.get('lines') or [], ensure_ascii=False)
+    inv.original_name = (file.filename or inv.original_name or 'invoice.pdf')[:255]
+    db.session.commit()
+    _notify_watchers(inv, except_user=user)
+    payload = serialize_invoice(inv, detail=True)
+    payload['parse_error'] = parsed.get('error')
+    return jsonify(payload)
+
+
 @bp.route('/api/invoices/<int:inv_id>/discard', methods=['POST'])
 @require_user
 def api_discard(user: User, inv_id: int):
     if not _can_edit(user):
         return jsonify({'error': 'forbidden'}), 403
     inv = PaymentInvoice.query.get_or_404(inv_id)
-    if inv.status not in ('draft', 'new'):
-        return jsonify({'error': 'locked'}), 400
-    path = _invoice_path(inv)
-    db.session.delete(inv)
+    err = delete_unpaid_invoice(inv)
+    if err:
+        return jsonify({'error': 'locked', 'hint': err}), 400
     db.session.commit()
-    if path:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
     return jsonify({'ok': True})
 
 

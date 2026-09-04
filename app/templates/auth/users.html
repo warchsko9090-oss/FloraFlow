@@ -34,6 +34,7 @@
                         <tr>
                             <th>Логин</th>
                             <th>Роль</th>
+                            <th>Telegram ID</th>
                             <th class="text-end">Действия</th>
                         </tr>
                     </thead>
@@ -47,8 +48,9 @@
                                 {% elif user.role == 'shop_manager' %}<span class="badge bg-info text-dark">Активный менеджер продаж</span>
                                 {% else %}<span class="badge bg-secondary">{{ user.role }}</span>{% endif %}
                             </td>
+                            <td class="small text-muted">{{ user.telegram_id or '—' }}</td>
                             <td class="text-end">
-                                <button class="btn btn-sm btn-outline-primary" onclick="openEditUserModal('{{ user.id }}', '{{ user.username }}', '{{ user.role }}')"><i class="fas fa-pen"></i></button>
+                                <button class="btn btn-sm btn-outline-primary" onclick="openEditUserModal('{{ user.id }}', '{{ user.username }}', '{{ user.role }}', '{{ user.telegram_id or '' }}')"><i class="fas fa-pen"></i></button>
                                 <button class="btn btn-sm btn-outline-warning" onclick="openPassModal('{{ user.id }}', '{{ user.username }}')"><i class="fas fa-key"></i></button>
                                 {% if user.id != current_user.id %}
                                 <form method="POST" class="d-inline" onsubmit="return confirm('Удалить {{ user.username }}?');">
@@ -120,7 +122,39 @@
 </div>
 
 <!-- Modal Add -->
-<div class="modal fade" id="addUserModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form method="POST"><div class="modal-header bg-success text-white"><h5 class="modal-title">Новый пользователь</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" name="action" value="add"><div class="mb-3"><label>Логин</label><input type="text" name="username" class="form-control" required></div><div class="mb-3"><label>Пароль</label><input type="text" name="password" class="form-control" required></div><div class="mb-3"><label>Роль</label><select name="role" class="form-select"><option value="user">Менеджер питомника</option><option value="shop_manager">Активный менеджер продаж</option><option value="admin">Администратор</option><option value="executive">Руководитель</option><option value="user2">Кадровик</option></select></div></div><div class="modal-footer"><button type="submit" class="btn btn-success">Создать</button></div></form></div></div></div>
+<div class="modal fade" id="addUserModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST">
+        <div class="modal-header bg-success text-white">
+          <h5 class="modal-title">Новый пользователь</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" name="action" value="add">
+          <div class="mb-3"><label>Логин</label><input type="text" name="username" class="form-control" required></div>
+          <div class="mb-3"><label>Пароль</label><input type="text" name="password" class="form-control" required></div>
+          <div class="mb-3">
+            <label>Роль</label>
+            <select name="role" class="form-select">
+              <option value="user">Менеджер питомника</option>
+              <option value="shop_manager">Активный менеджер продаж</option>
+              <option value="admin">Администратор</option>
+              <option value="executive">Руководитель</option>
+              <option value="user2">Кадровик</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label>Telegram ID</label>
+            <input type="text" name="telegram_id" class="form-control" inputmode="numeric" placeholder="только цифры">
+            <div class="form-text">После сохранения человек пишет боту /start. Менеджер продаж — «Выставить счёт», питомник и руководитель — «Счета на оплату».</div>
+          </div>
+        </div>
+        <div class="modal-footer"><button type="submit" class="btn btn-success">Создать</button></div>
+      </form>
+    </div>
+  </div>
+</div>
 
 <!-- Modal Password -->
 <div class="modal fade" id="changePassModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form method="POST"><div class="modal-header bg-warning"><h5 class="modal-title">Смена пароля</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" name="action" value="change_password"><input type="hidden" name="user_id" id="passUserId"><p>Для: <b id="passUserName"></b></p><div class="mb-3"><label>Новый пароль</label><input type="text" name="new_password" class="form-control" required></div></div><div class="modal-footer"><button type="submit" class="btn btn-warning">Сохранить</button></div></form></div></div></div>
@@ -151,6 +185,11 @@
                     <option value="user2">Кадровик (User2)</option>
                 </select>
             </div>
+            <div class="mb-3">
+                <label>Telegram ID</label>
+                <input type="text" name="telegram_id" id="editTelegramId" class="form-control" inputmode="numeric" placeholder="только цифры">
+                <div class="form-text">После сохранения человек пишет боту /start.</div>
+            </div>
         </div>
         <div class="modal-footer">
             <button type="submit" class="btn btn-primary">Обновить данные</button>
@@ -169,10 +208,11 @@
         new bootstrap.Modal(document.getElementById('changePassModal')).show();
     }
     
-    function openEditUserModal(id, name, role) {
+    function openEditUserModal(id, name, role, telegramId) {
         document.getElementById('editUserId').value = id;
         document.getElementById('editUserName').value = name;
         document.getElementById('editUserRole').value = role;
+        document.getElementById('editTelegramId').value = telegramId || '';
         new bootstrap.Modal(document.getElementById('editUserModal')).show();
     }
 </script>

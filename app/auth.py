@@ -11,6 +11,26 @@ def get_client_ip():
         return request.headers.get('X-Forwarded-For').split(',')[0].strip()
     return request.remote_addr
 
+
+def _parse_telegram_id(raw):
+    text = (raw or '').strip()
+    if not text:
+        return None, None
+    if not text.isdigit():
+        return None, 'Telegram ID — только цифры'
+    return int(text), None
+
+
+def _assign_telegram_id(user, tg_id):
+    if tg_id is None:
+        user.telegram_id = None
+        return None
+    taken = User.query.filter(User.telegram_id == tg_id, User.id != user.id).first()
+    if taken:
+        return f'Этот Telegram ID уже привязан к {taken.username}'
+    user.telegram_id = tg_id
+    return None
+
 @bp.route('/login', methods=['GET', 'POST'])
 def login():
     ip = get_client_ip()
@@ -81,6 +101,10 @@ def users_manage():
             return redirect(url_for('auth.users_manage'))
             
         action = request.form.get('action')
+        tg_id, tg_err = _parse_telegram_id(request.form.get('telegram_id'))
+        if action in ('add', 'edit_user') and tg_err:
+            flash(tg_err, 'danger')
+            return redirect(url_for('auth.users_manage'))
         
         if action == 'add':
             if User.query.filter_by(username=request.form.get('username')).first(): 
@@ -88,10 +112,14 @@ def users_manage():
             else:
                 u = User(username=request.form.get('username'), role=request.form.get('role'))
                 u.set_password(request.form.get('password'))
-                db.session.add(u)
-                db.session.commit()
-                flash('Пользователь создан', 'success')
-                log_action(f"Создал пользователя {u.username}")
+                bind_err = _assign_telegram_id(u, tg_id)
+                if bind_err:
+                    flash(bind_err, 'danger')
+                else:
+                    db.session.add(u)
+                    db.session.commit()
+                    flash('Пользователь создан', 'success')
+                    log_action(f"Создал пользователя {u.username}")
                 
         elif action == 'edit_user':
             u = User.query.get(request.form.get('user_id'))
@@ -103,11 +131,15 @@ def users_manage():
                 if existing and existing.id != u.id:
                     flash('Ошибка: Логин уже занят другим пользователем', 'danger')
                 else:
-                    u.username = new_username
-                    u.role = request.form.get('role')
-                    db.session.commit()
-                    flash('Пользователь обновлен', 'success')
-                    log_action(f"Обновил пользователя {u.username}")
+                    bind_err = _assign_telegram_id(u, tg_id)
+                    if bind_err:
+                        flash(bind_err, 'danger')
+                    else:
+                        u.username = new_username
+                        u.role = request.form.get('role')
+                        db.session.commit()
+                        flash('Пользователь обновлен', 'success')
+                        log_action(f"Обновил пользователя {u.username}")
                 
         elif action == 'delete':
             if int(request.form.get('user_id')) != current_user.id: 

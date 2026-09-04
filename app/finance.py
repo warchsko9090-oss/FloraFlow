@@ -166,14 +166,14 @@ def expenses():
             if inv:
                 action = request.form.get('action')
                 if action == 'delete':
-                    # Удаляем файл с диска
-                    inv_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'invoices')
-                    file_path = os.path.join(inv_dir, inv.filename)
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                    db.session.delete(inv)
-                    flash('Счет полностью удален')
-                    log_action(f"Удалил счет: {inv.original_name}")
+                    from app.invoice_files import delete_unpaid_invoice
+                    name = inv.original_name
+                    err = delete_unpaid_invoice(inv)
+                    if err:
+                        flash(err)
+                    else:
+                        flash('Счет полностью удален')
+                        log_action(f"Удалил счет: {name}")
                 else:
                     inv.status = 'paid'
                     flash('Счет помечен как оплаченный')

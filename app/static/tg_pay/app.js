@@ -286,11 +286,7 @@
           </div>
           <div class="field"><label>План на неделю</label>
             <input id="fPlan" inputmode="decimal" value="${inv.planned_amount || ''}" placeholder="сумма в пятницу"></div>
-          ${!inv.has_file ? `<div class="field"><label>Реальный счёт</label>
-            <input id="fAttach" type="file" accept="application/pdf,image/*"></div>
-            <button class="btn btn-quiet" type="button" id="btnAttach">Прикрепить файл</button>` : ''}
           <button class="btn btn-quiet" type="button" id="btnSave">Сохранить правки</button>
-          <button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>
         </div>
       `;
     }
@@ -300,10 +296,18 @@
       : '';
     const fileBtns = (inv.has_file
       ? '<button class="btn btn-brass" type="button" id="btnOpen">Открыть счёт</button>'
-      : '<p class="warn">Файл счёта не найден.</p>')
+      : '<p class="warn">Файл счёта не найден — прикрепите PDF.</p>')
       + (inv.has_receipt
         ? '<button class="btn btn-quiet" type="button" id="btnReceipt">Квитанция</button>'
         : '');
+    const attachBlock = (can && inv.status !== 'paid')
+      ? `<div class="field"><label>${inv.has_file ? 'Заменить PDF' : 'Прикрепить PDF'}</label>
+            <input id="fAttach" type="file" accept="application/pdf,image/*"></div>
+          <button class="btn btn-quiet" type="button" id="btnAttach">${inv.has_file ? 'Заменить файл' : 'Прикрепить файл'}</button>`
+      : '';
+    const dropBtn = (can && inv.status !== 'paid')
+      ? '<button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>'
+      : '';
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
@@ -313,6 +317,8 @@
         ${fileBtns}
         ${assignPanel}
         ${payBtn}
+        ${attachBlock}
+        ${dropBtn}
         ${editPanel}
         ${lines}
       </div>
@@ -335,7 +341,7 @@
     const save = document.getElementById('btnSave');
     if (save) save.onclick = () => saveInv(inv.id, false);
     const attach = document.getElementById('btnAttach');
-    if (attach) attach.onclick = () => attachToPlan(inv.id);
+    if (attach) attach.onclick = () => attachPdf(inv.id);
     const paid = document.getElementById('btnPaid');
     if (paid) paid.onclick = () => markPaid(inv.id);
     const assignBtn = document.getElementById('btnAssign');
@@ -343,8 +349,16 @@
     const drop = document.getElementById('btnDrop');
     if (drop) drop.onclick = async () => {
       if (!confirm('Удалить счёт?')) return;
-      await api('/tg/pay/api/invoices/' + inv.id + '/discard', { method: 'POST' });
-      location.hash = '#/';
+      view.classList.add('busy');
+      try {
+        await api('/tg/pay/api/invoices/' + inv.id + '/discard', { method: 'POST' });
+        haptic('medium');
+        location.hash = '#/';
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        view.classList.remove('busy');
+      }
     };
   }
 
@@ -408,37 +422,45 @@
     }
   }
 
+  function openBlob(blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
+  }
+
   async function openInvoice(inv) {
-    try {
-      const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', { method: 'POST' });
-      if (sent.ok) {
-        alert('Счёт отправил в чат с ботом — откройте его там.');
-        return;
-      }
-    } catch (_) {}
-    const res = await fetch('/tg/pay/api/invoices/' + inv.id + '/file', {
-      credentials: 'same-origin',
-      headers: headers(),
-    });
-    if (!res.ok) {
-      alert('Не удалось открыть счёт');
-      return;
+    const platform = ((tgApp() && tgApp().platform) || '').toLowerCase();
+    const sendToChat = platform === 'ios' || platform === 'android';
+    if (sendToChat) {
+      try {
+        const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', { method: 'POST' });
+        if (sent.ok) {
+          alert('Счёт отправил в чат с ботом — откройте его там.');
+          return;
+        }
+      } catch (_) {}
     }
-    const blob = await res.blob();
-    window.open(URL.createObjectURL(blob), '_blank');
+    try {
+      if (!window.FFTg || !window.FFTg.fetchBlob) throw new Error('Не удалось открыть счёт');
+      openBlob(await window.FFTg.fetchBlob('/tg/pay/api/invoices/' + inv.id + '/file'));
+    } catch (e) {
+      alert(e.message || 'Не удалось открыть счёт');
+    }
   }
 
   async function openReceipt(inv) {
-    const res = await fetch('/tg/pay/api/invoices/' + inv.id + '/receipt', {
-      credentials: 'same-origin',
-      headers: headers(),
-    });
-    if (!res.ok) {
-      alert('Квитанция не найдена');
-      return;
+    try {
+      if (!window.FFTg || !window.FFTg.fetchBlob) throw new Error('Квитанция не найдена');
+      openBlob(await window.FFTg.fetchBlob('/tg/pay/api/invoices/' + inv.id + '/receipt'));
+    } catch (e) {
+      alert(e.message || 'Квитанция не найдена');
     }
-    const blob = await res.blob();
-    window.open(URL.createObjectURL(blob), '_blank');
   }
 
   function renderNew() {
@@ -517,7 +539,7 @@
     }
   }
 
-  async function attachToPlan(planId) {
+  async function attachPdf(invId) {
     const input = document.getElementById('fAttach');
     if (!input || !input.files || !input.files[0]) {
       alert('Выберите PDF или фото.');
@@ -525,10 +547,9 @@
     }
     const fd = new FormData();
     fd.append('file', input.files[0]);
-    fd.append('plan_id', String(planId));
     view.classList.add('busy');
     try {
-      const inv = await api('/tg/pay/api/invoices/upload', { method: 'POST', body: fd });
+      const inv = await api('/tg/pay/api/invoices/' + invId + '/attach', { method: 'POST', body: fd });
       haptic('medium');
       location.hash = '#/inv/' + inv.id;
     } catch (e) {
