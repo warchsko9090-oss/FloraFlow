@@ -88,17 +88,22 @@ def _db_ok() -> bool:
         return False
 
 
+def _role(user: User | None) -> str:
+    return (user.role or '') if user else ''
+
+
 def _can_sale_role(user: User | None) -> bool:
-    return bool(user) and (user.role or '') in ('admin', 'shop_manager')
+    """Счёт клиенту: админ, руководитель, менеджер продаж."""
+    return _role(user) in ('admin', 'executive', 'shop_manager')
 
 
 def _is_admin(user: User | None) -> bool:
-    return bool(user) and (user.role or '') == 'admin'
+    return _role(user) == 'admin'
 
 
 def _can_pay_app(user: User | None) -> bool:
-    """Оплата поставщикам: админ и исполнители. Менеджеру продаж не нужна."""
-    return not (user and (user.role or '') == 'shop_manager')
+    """Оплата поставщикам. Менеджеру продаж это приложение не показываем."""
+    return bool(user) and _role(user) in ('admin', 'executive', 'user', 'user2')
 
 
 def _start_greeting(sender, tg_id) -> str:
@@ -107,25 +112,29 @@ def _start_greeting(sender, tg_id) -> str:
     lines.append('Токен бота: ок' if _get_bot_token() else 'Токен бота: НЕ ЗАДАН в Amvera (TG_BOT_TOKEN)')
     user = _user_from_telegram(sender) if sender else None
     if user:
-        if _is_admin(user):
-            lines.append(f'Вы: {tg_id} → {user.username} ({user.role})')
+        lines.append(f'Вы: {tg_id} → {user.username} ({user.role})')
+        if _can_pay_app(user) and _can_sale_role(user):
             lines.append('Оплата — счета поставщикам. Выставить счёт — клиенту.')
         elif _can_sale_role(user):
-            lines.append(f'Вы: {tg_id} → {user.username} ({user.role})')
             lines.append('Выставить счёт клиенту.')
         elif _can_edit(user):
-            lines.append(f'Вы: {tg_id} → {user.username} (черновики и планы)')
+            lines.append('Черновики и планы по счетам поставщиков.')
+        elif _can_pay_app(user):
+            lines.append('Оплата счетов поставщикам.')
         else:
-            lines.append(f'Вы: {tg_id} → {user.username}, роль {user.role}. Оплата счетов.')
+            lines.append(f'Роль {user.role}: для Mini App не настроена.')
     else:
         lines.append(f'Вы: {tg_id} — не привязан к ERP.')
-        lines.append(f'В Amvera: TG_USER_ID_MAP={tg_id}:логин_из_ERP')
-        lines.append('После двоеточия — логин из Пользователей, не роль. Для счетов клиенту — логин с ролью «Активный менеджер продаж».')
+        lines.append('В Amvera, логин или роль из Пользователей:')
+        lines.append(f'TG_USER_ID_MAP={tg_id}:admin')
+        lines.append('Примеры: 111:admin,222:executive,333:shop_manager')
     lines.append('')
-    if _is_admin(user):
-        lines.append('Кнопки внизу чата всегда под рукой: Оплата и Выставить счёт.')
+    if _can_pay_app(user) and _can_sale_role(user):
+        lines.append('Кнопки внизу чата: Оплата и Выставить счёт.')
     elif _can_sale_role(user):
         lines.append('Кнопка внизу чата: Выставить счёт.')
+    elif _can_pay_app(user):
+        lines.append('Кнопка внизу чата: Счета на оплату.')
     else:
         lines.append('Пришлите PDF — попадёт в черновики администратора.')
     return '\n'.join(lines)
@@ -136,7 +145,7 @@ def _apps_reply_keyboard(user: User | None) -> dict | None:
     row = []
     pay_url = _public_miniapp_url()
     if _can_pay_app(user) and pay_url.startswith('https://'):
-        pay_label = 'Оплата' if _is_admin(user) else 'Счета на оплату'
+        pay_label = 'Оплата' if _role(user) in ('admin', 'executive') else 'Счета на оплату'
         row.append({'text': pay_label, 'web_app': {'url': pay_url}})
     if _can_sale_role(user):
         from app.tg_sale import public_sale_url
@@ -246,6 +255,42 @@ def _tg_user_id_map() -> dict[str, str]:
     return mapping
 
 
+_ROLE_ALIASES = {
+    'executive': 'executive',
+    'руководитель': 'executive',
+    'rukovoditel': 'executive',
+    'manager': 'shop_manager',
+    'shop_manager': 'shop_manager',
+    'sales': 'shop_manager',
+    'sales_manager': 'shop_manager',
+    'менеджер': 'shop_manager',
+}
+
+
+def _login_free_for_tg(user: User, tg_id: int) -> bool:
+    """Нельзя входить под чужим уже привязанным логином: иначе PDF уйдёт не тому."""
+    if not user.telegram_id:
+        return True
+    try:
+        return int(user.telegram_id) == int(tg_id)
+    except (TypeError, ValueError):
+        return True
+
+
+def _user_by_role_alias(canonical: str, tg_id: int) -> User | None:
+    role = _ROLE_ALIASES.get((canonical or '').lower())
+    if not role:
+        return None
+    already = User.query.filter_by(telegram_id=tg_id).first()
+    if already and (already.role or '') == role:
+        return already
+    for found in User.query.filter_by(role=role).order_by(User.id).all():
+        if _login_free_for_tg(found, tg_id):
+            _bind_telegram_id(found, tg_id)
+            return found
+    return None
+
+
 def _bind_telegram_id(user: User, tg_id: int) -> None:
     """Пишем telegram_id, если колонка свободна. Два Telegram на один логин
     живут через TG_USER_ID_MAP — unique не даёт хранить оба числа на одной строке."""
@@ -269,25 +314,24 @@ def _user_from_telegram(tg_user: dict) -> User | None:
         return None
     tg_id = int(raw_id)
 
-    # Явная карта важнее ника Telegram и уже сохранённого telegram_id:
-    # иначе @KirillT навсегда садится в менеджера, даже если в env стоит admin.
+    # Явная карта важнее ника Telegram и уже сохранённого telegram_id.
     canonical = _tg_user_id_map().get(str(tg_id), '')
     if canonical:
         found = User.query.filter(db.func.lower(User.username) == canonical.lower()).first()
-        if found:
+        if found and _login_free_for_tg(found, tg_id):
             _bind_telegram_id(found, tg_id)
             return found
-        role_alias = {
-            'manager': 'shop_manager',
-            'shop_manager': 'shop_manager',
-            'sales': 'shop_manager',
-            'sales_manager': 'shop_manager',
-        }.get(canonical.lower())
-        if role_alias:
-            found = User.query.filter_by(role=role_alias).order_by(User.id).first()
-            if found:
-                _bind_telegram_id(found, tg_id)
-                return found
+        aliased = _user_by_role_alias(canonical, tg_id)
+        if aliased:
+            return aliased
+        # Второй Telegram с «:admin» — не чужой логин, а руководитель.
+        if canonical.lower() == 'admin':
+            aliased = _user_by_role_alias('executive', tg_id)
+            if aliased:
+                return aliased
+        already = User.query.filter_by(telegram_id=tg_id).first()
+        if already:
+            return already
         return None
 
     found = User.query.filter_by(telegram_id=tg_id).first()
@@ -296,7 +340,7 @@ def _user_from_telegram(tg_user: dict) -> User | None:
     username = (tg_user.get('username') or '').lstrip('@').lower()
     if username:
         found = User.query.filter(db.func.lower(User.username) == username).first()
-        if found:
+        if found and _login_free_for_tg(found, tg_id):
             _bind_telegram_id(found, tg_id)
             return found
     return None
@@ -326,8 +370,13 @@ def _mini_cookie_secure() -> bool:
     return bool(os.environ.get('AMVERA') or os.path.isdir('/data') or request.is_secure)
 
 
-def set_mini_cookie(resp, user: User):
-    token = _mini_signer().dumps({'uid': int(user.id)})
+def set_mini_cookie(resp, user: User, tg_id: int | None = None):
+    if tg_id is None:
+        tg_id = _telegram_id_from_init_data()
+    payload = {'uid': int(user.id)}
+    if tg_id:
+        payload['tg'] = int(tg_id)
+    token = _mini_signer().dumps(payload)
     resp.set_cookie(
         _MINI_COOKIE,
         token,
@@ -340,14 +389,33 @@ def set_mini_cookie(resp, user: User):
     return resp
 
 
-def _user_from_mini_cookie() -> User | None:
+def _mini_cookie_payload() -> dict | None:
     raw = request.cookies.get(_MINI_COOKIE) or ''
     if not raw:
         return None
     try:
         data = _mini_signer().loads(raw, max_age=_MINI_MAX_AGE)
-        return User.query.get(int(data.get('uid')))
+        return data if isinstance(data, dict) else None
     except (BadSignature, SignatureExpired, TypeError, ValueError, Exception):
+        return None
+
+
+def _user_from_mini_cookie() -> User | None:
+    data = _mini_cookie_payload()
+    if not data:
+        return None
+    try:
+        return User.query.get(int(data.get('uid')))
+    except (TypeError, ValueError):
+        return None
+
+
+def _telegram_id_from_mini_cookie() -> int | None:
+    data = _mini_cookie_payload() or {}
+    try:
+        tg = data.get('tg')
+        return int(tg) if tg else None
+    except (TypeError, ValueError):
         return None
 
 
@@ -403,8 +471,7 @@ def log_mini_auth_fail():
     )
 
 
-def current_telegram_id() -> int | None:
-    """Telegram id текущего Mini App-сеанса (из initData), не колонка user.telegram_id."""
+def _telegram_id_from_init_data() -> int | None:
     token = _get_bot_token()
     if not token:
         return None
@@ -416,6 +483,11 @@ def current_telegram_id() -> int | None:
             except (TypeError, ValueError):
                 return None
     return None
+
+
+def current_telegram_id() -> int | None:
+    """Telegram id текущего Mini App-сеанса. Не колонка user.telegram_id чужого логина."""
+    return _telegram_id_from_init_data() or _telegram_id_from_mini_cookie()
 
 
 def resolve_user() -> tuple[User | None, bool, dict | None]:
@@ -432,6 +504,11 @@ def resolve_user() -> tuple[User | None, bool, dict | None]:
                 return user, False, None
             pending = tg_user
             break
+    cookie_tg = _telegram_id_from_mini_cookie()
+    if cookie_tg and not pending:
+        mapped = _user_from_telegram({'id': cookie_tg})
+        if mapped:
+            return mapped, False, None
     cookie_user = _user_from_mini_cookie()
     if cookie_user and not pending:
         return cookie_user, False, None
@@ -499,6 +576,8 @@ def require_user(fn):
                 'error': 'unauthorized',
                 'hint': _auth_fail_hint(),
             }), 401
+        if not _can_pay_app(user):
+            return jsonify({'error': 'forbidden', 'hint': 'Оплата — только админ и руководитель'}), 403
         return fn(user, *args, **kwargs)
     return wrapped
 
@@ -716,6 +795,9 @@ def api_auth():
             }), 403
         log_mini_auth_fail()
         return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+    if not _can_pay_app(user):
+        return jsonify({'error': 'forbidden', 'hint': 'Оплата — только админ и руководитель'}), 403
+    session_tg = current_telegram_id()
     resp = jsonify({
         'id': user.id,
         'username': user.username,
@@ -723,9 +805,9 @@ def api_auth():
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
         'dev': is_dev,
-        'telegram_id': user.telegram_id,
+        'telegram_id': session_tg or user.telegram_id,
     })
-    return set_mini_cookie(resp, user)
+    return set_mini_cookie(resp, user, session_tg)
 
 
 @bp.route('/api/me')
@@ -841,7 +923,7 @@ def api_send_pdf(user: User, inv_id: int):
     data = invoice_bytes(src)
     if not data:
         return jsonify({'error': 'file_missing'}), 404
-    chat_id = current_telegram_id() or user.telegram_id
+    chat_id = current_telegram_id()
     if not chat_id:
         return jsonify({
             'ok': False,
@@ -1297,14 +1379,16 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
         hint = (
             f'Этот Telegram не привязан к ERP.\n'
             f'Ваш id: <code>{tg_id}</code>\n\n'
-            f'В Amvera одна строка, логин ERP (не имя):\n'
-            f'<code>TG_USER_ID_MAP={tg_id}:admin</code>'
+            f'В Amvera одна строка:\n'
+            f'<code>TG_USER_ID_MAP={tg_id}:admin</code>\n'
+            f'Руководитель: <code>{tg_id}:executive</code>, менеджер продаж: <code>{tg_id}:shop_manager</code>'
         )
         if mapped:
             hint = (
-                f'В карте указан логин «{mapped}», такого пользователя в ERP нет.\n'
-                f'Нужен логин из входа в систему, обычно <code>admin</code>:\n'
-                f'<code>TG_USER_ID_MAP={tg_id}:admin</code>'
+                f'В карте указано «{mapped}», пользователя с таким логином нет '
+                f'или логин уже занят другим Telegram.\n'
+                f'Нужен логин из Пользователей или роль:\n'
+                f'<code>TG_USER_ID_MAP={tg_id}:executive</code>'
             )
         _tg_reply(chat_id, hint)
         return True

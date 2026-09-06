@@ -85,11 +85,11 @@ def public_sale_url() -> str:
 
 
 def _can_sale(user: User) -> bool:
-    return (user.role or '') in ('admin', 'shop_manager')
+    return (user.role or '') in ('admin', 'executive', 'shop_manager')
 
 
 def _can_firms(user: User) -> bool:
-    return (user.role or '') == 'admin'
+    return (user.role or '') in ('admin', 'executive')
 
 
 def require_sale(fn):
@@ -105,7 +105,7 @@ def require_sale(fn):
                 }), 403
             return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
         if not _can_sale(user):
-            return jsonify({'error': 'forbidden', 'hint': 'Только admin или активный менеджер продаж'}), 403
+            return jsonify({'error': 'forbidden', 'hint': 'Только admin, руководитель или менеджер продаж'}), 403
         return fn(user, *args, **kwargs)
     return wrapped
 
@@ -931,7 +931,8 @@ def api_auth():
         log_mini_auth_fail()
         return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
     if not _can_sale(user):
-        return jsonify({'error': 'forbidden', 'hint': 'Только admin или активный менеджер продаж'}), 403
+        return jsonify({'error': 'forbidden', 'hint': 'Только admin, руководитель или менеджер продаж'}), 403
+    session_tg = current_telegram_id()
     resp = jsonify({
         'id': user.id,
         'username': user.username,
@@ -941,7 +942,7 @@ def api_auth():
         'can_delete_approved': (user.role or '') == 'admin',
         'dev': is_dev,
     })
-    return set_mini_cookie(resp, user)
+    return set_mini_cookie(resp, user, session_tg)
 
 
 @bp.route('/api/me')
@@ -1269,7 +1270,7 @@ def api_send_pdf(user: User, inv_id: int):
     db.session.commit()
     if not blob:
         return jsonify({'ok': False, 'error': 'pdf_failed'}), 500
-    chat_id = current_telegram_id() or user.telegram_id
+    chat_id = current_telegram_id()
     if not chat_id:
         return jsonify({'ok': False, 'error': 'no_telegram_id'})
     ok, err = send_chat_document(
