@@ -360,14 +360,53 @@ def merge_pdf_bytes(chunks):
     return out.getvalue()
 
 
-def create_pdf_response(html_content, filename, *, page_bg=None, page_margin='1cm', pdf_parts=None):
-    """PDF через xhtml2pdf. pdf_parts — список HTML-фрагментов для склейки в один файл."""
+def stamp_pdf_page_numbers(data: bytes) -> bytes:
+    """Накладывает «1 / N» внизу каждой страницы. Без кириллицы — шрифт Helvetica."""
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    if not data:
+        return data
+    reader = PdfReader(io.BytesIO(data))
+    n = len(reader.pages)
+    if n == 0:
+        return data
+    writer = PdfWriter()
+    for i, page in enumerate(reader.pages, start=1):
+        box = page.mediabox
+        width, height = float(box.width), float(box.height)
+        overlay_buf = io.BytesIO()
+        canvas = rl_canvas.Canvas(overlay_buf, pagesize=(width, height))
+        canvas.setFillColorRGB(0.33, 0.33, 0.33)
+        canvas.setFont('Helvetica', 8)
+        canvas.drawCentredString(width / 2.0, 14, f'{i} / {n}')
+        canvas.save()
+        overlay_buf.seek(0)
+        page.merge_page(PdfReader(overlay_buf).pages[0])
+        writer.add_page(page)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def create_pdf_response(
+    html_content, filename, *, page_bg=None, page_margin='1cm', pdf_parts=None,
+    page_number_part_indexes=None, number_pages=False,
+):
+    """PDF через xhtml2pdf. pdf_parts — список HTML-фрагментов для склейки в один файл.
+
+    number_pages — нумерация всего файла. page_number_part_indexes — только
+    указанные части (0-based), каждая со своей нумерацией 1/N.
+    """
     parts = pdf_parts if pdf_parts else [html_content]
+    stamp_idx = set(page_number_part_indexes or ())
     blobs = []
-    for part in parts:
+    for idx, part in enumerate(parts):
         blob = build_pdf_bytes(part, page_bg=page_bg, page_margin=page_margin)
         if not blob:
             return 'Error generating PDF'
+        if number_pages or idx in stamp_idx:
+            blob = stamp_pdf_page_numbers(blob)
         blobs.append(blob)
 
     data = merge_pdf_bytes(blobs) if len(blobs) > 1 else blobs[0]

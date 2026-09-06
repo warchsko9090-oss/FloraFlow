@@ -23,7 +23,7 @@ from app.models import (
     db, User, Client, Plant, Size, StockBalance, Order, OrderItem, OrderItemHistory,
     SaleCompany, SaleInvoice, SaleInvoiceLine, ShopPlantCard,
 )
-from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail
+from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail, current_telegram_id
 from app.tg_sale_parse import parse_buyer_file
 from app.utils import msk_now, build_pdf_bytes, size_natural_key
 from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
@@ -1269,10 +1269,11 @@ def api_send_pdf(user: User, inv_id: int):
     db.session.commit()
     if not blob:
         return jsonify({'ok': False, 'error': 'pdf_failed'}), 500
-    if not user.telegram_id:
+    chat_id = current_telegram_id() or user.telegram_id
+    if not chat_id:
         return jsonify({'ok': False, 'error': 'no_telegram_id'})
     ok, err = send_chat_document(
-        user.telegram_id,
+        chat_id,
         filename=inv.file_name or f'schet_{inv.id}.pdf',
         caption=f'Счёт №{inv.id} · {inv.buyer_name or "клиент"} · {inv.amount} ₽',
         file_bytes=bytes(blob),

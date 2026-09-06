@@ -250,6 +250,18 @@ def personnel():
     if request.method == 'POST':
         action = request.form.get('action')
         
+        if action in ('hide_employee', 'restore_employee') and current_user.role in ('admin', 'brigadier'):
+            emp = Employee.query.get(request.form.get('employee_id'))
+            if emp:
+                emp.is_active = action == 'restore_employee'
+                db.session.commit()
+                flash('Сотрудник снова в табеле' if emp.is_active else 'Сотрудник скрыт из табеля')
+            hidden_flag = '1' if action == 'restore_employee' else None
+            return redirect(url_for(
+                'hr.personnel', year=selected_year, month=selected_month,
+                tab='timesheet', hidden=hidden_flag,
+            ))
+
         # --- ИНДИВИДУАЛЬНАЯ ВЫПЛАТА ЗП ---
         if action == 'pay_individual' and current_user.role in ['admin', 'user2']:
             emp_id = int(request.form.get('employee_id'))
@@ -611,6 +623,12 @@ def personnel():
         all_employees_list = Employee.query.filter(Employee.role != 'manager').order_by(Employee.name).all()
     else:
         all_employees_list = Employee.query.order_by(Employee.name).all()
+
+    show_hidden_emps = request.args.get('hidden') == '1'
+    if show_hidden_emps:
+        timesheet_employees = [e for e in all_employees_list if e.is_active is False]
+    else:
+        timesheet_employees = [e for e in all_employees_list if e.is_active is not False]
     
     rates_db = SalaryRate.query.filter_by(year=selected_year).all()
     rates_map = {} 
@@ -738,7 +756,7 @@ def personnel():
 
     timesheet_data =[]; days_in_month = list(range(1, last_day + 1))
         
-    for emp in employees:
+    for emp in timesheet_employees:
         row = {'emp': emp, 'days': {}}
         h = hours_map.get(emp.id, {'day_offs': []})
         paid_days = h['day_offs'][:3]
@@ -814,7 +832,9 @@ def personnel():
                            timesheet_data=timesheet_data, 
                            days_in_month=days_in_month, 
                            year=selected_year, month=selected_month, 
-                           employees=all_employees_list, 
+                           employees=all_employees_list,
+                           timesheet_employees=timesheet_employees,
+                           show_hidden_emps=show_hidden_emps, 
                            filter_emp_ids=filter_emp_ids, 
                            rates_map=rates_map, 
                            month_names=MONTH_NAMES, 

@@ -863,11 +863,14 @@ def public_shop_stock_pdf():
             "",
             filename,
             pdf_parts=[html_ground, html_containers],
+            page_number_part_indexes=(1,),
             **pdf_kwargs,
         )
 
     html = render_template("shop_stock_pdf.html", pdf_part="full", **template_ctx)
-    return create_pdf_response(html, filename, **pdf_kwargs)
+    return create_pdf_response(
+        html, filename, number_pages=bool(container_groups), **pdf_kwargs,
+    )
 
 
 @bp.route("/shop/contacts")

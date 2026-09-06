@@ -619,14 +619,13 @@ def orders_list():
 
         o.items.sort(key=lambda x: natural_key(x.size.name))
 
-        # Полностью завершён = оплачен полностью + всё выкопано + всё отгружено.
-        # Отменённые и призрачные не считаем "завершёнными".
+        # Полностью завершён = оплачен полностью + всё отгружено.
+        # Выкопка и наличие счёта не требуются: такие заказы уже «неактивны».
         is_done = False
         if o.status not in ('canceled', 'ghost') and not o.is_deleted and o.items:
             fully_paid = (o.payment_status == 'paid')
             fully_shipped = all((i.shipped_quantity or 0) >= (i.quantity or 0) for i in o.items)
-            fully_dug = all((i.dug_total or 0) >= (i.quantity or 0) for i in o.items)
-            is_done = fully_paid and fully_shipped and fully_dug
+            is_done = fully_paid and fully_shipped
 
         orders_view.append({'order': o, 'rowspan': len(o.items), 'order_items': o.items, 'is_done': is_done})
 

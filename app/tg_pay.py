@@ -119,7 +119,8 @@ def _start_greeting(sender, tg_id) -> str:
             lines.append(f'Вы: {tg_id} → {user.username}, роль {user.role}. Оплата счетов.')
     else:
         lines.append(f'Вы: {tg_id} — не привязан к ERP.')
-        lines.append(f'В Amvera одна строка: TG_USER_ID_MAP={tg_id}:admin')
+        lines.append(f'В Amvera: TG_USER_ID_MAP={tg_id}:логин_из_ERP')
+        lines.append('После двоеточия — логин из Пользователей, не роль. Для счетов клиенту — логин с ролью «Активный менеджер продаж».')
     lines.append('')
     if _is_admin(user):
         lines.append('Кнопки внизу чата всегда под рукой: Оплата и Выставить счёт.')
@@ -276,6 +277,17 @@ def _user_from_telegram(tg_user: dict) -> User | None:
         if found:
             _bind_telegram_id(found, tg_id)
             return found
+        role_alias = {
+            'manager': 'shop_manager',
+            'shop_manager': 'shop_manager',
+            'sales': 'shop_manager',
+            'sales_manager': 'shop_manager',
+        }.get(canonical.lower())
+        if role_alias:
+            found = User.query.filter_by(role=role_alias).order_by(User.id).first()
+            if found:
+                _bind_telegram_id(found, tg_id)
+                return found
         return None
 
     found = User.query.filter_by(telegram_id=tg_id).first()
@@ -389,6 +401,21 @@ def log_mini_auth_fail():
         request.headers.get('User-Agent', ''),
         debug,
     )
+
+
+def current_telegram_id() -> int | None:
+    """Telegram id текущего Mini App-сеанса (из initData), не колонка user.telegram_id."""
+    token = _get_bot_token()
+    if not token:
+        return None
+    for init_data in _init_data_candidates():
+        tg_user = _validate_init_data(init_data, token)
+        if tg_user and tg_user.get('id'):
+            try:
+                return int(tg_user['id'])
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def resolve_user() -> tuple[User | None, bool, dict | None]:
@@ -814,7 +841,7 @@ def api_send_pdf(user: User, inv_id: int):
     data = invoice_bytes(src)
     if not data:
         return jsonify({'error': 'file_missing'}), 404
-    chat_id = user.telegram_id
+    chat_id = current_telegram_id() or user.telegram_id
     if not chat_id:
         return jsonify({
             'ok': False,
