@@ -70,6 +70,7 @@
     .stock-rem-pos { color: #2e7d32; font-weight: 700; }
     .stock-rem-formula { font-variant-numeric: tabular-nums; }
     .col-free-sum { color: #1B5E20; font-weight: 700; text-align: right; white-space: nowrap; }
+    .col-sum { font-weight: 700; text-align: right; color: #111827; white-space: nowrap; }
 
     .stock-footer-row td {
         background-color: #f8f9fa !important;
@@ -672,7 +673,9 @@
                 <th class="col-reserve">Резерв</th>
                 <th class="col-shipped">Отгружено</th>
                 <th class="col-free-header">Свободно</th>
+                {% if current_user.role != 'user2' %}<th class="col-free-header col-free-sum">Сумма (своб.)</th>{% endif %}
                 <th class="col-fact-header">Факт</th>
+                {% if current_user.role != 'user2' %}<th class="col-sum">Сумма</th>{% endif %}
                 {% if report_mode == 'inventory' %}<th class="col-year">Год</th>{% endif %}
                 <th class="col-info no-print" style="width: 36px;"></th>
             </tr>
@@ -685,7 +688,7 @@
             <tr class="section-header-row {% if group.section_key == 'raw_seedlings' %}section-raw{% else %}{% endif %}"
                 data-section-key="{{ group.section_key or '' }}"
                 data-print="{{ '0' if group.section_key == 'raw_seedlings' else '1' }}">
-                <td colspan="{% if current_user.role != 'user2' %}9{% else %}8{% endif %}"
+                <td colspan="{% if report_mode != 'inventory' %}{% if current_user.role != 'user2' %}6{% else %}5{% endif %}{% else %}{% if current_user.role != 'user2' %}5{% else %}4{% endif %}{% endif %}"
                     class="ps-3 py-2">
                     <div class="fw-bold text-uppercase small text-muted" style="letter-spacing:.04em;">{{ group.name }}</div>
                     {% if group.section_key == 'ground' %}
@@ -696,6 +699,12 @@
                     <div class="small text-muted">Нетов / саженцы без контейнера — на экране, не в КП и автофильтре</div>
                     {% endif %}
                 </td>
+                <td class="col-free-cell section-free"><span class="badge-qty">{{ group.data.totals.free }}</span></td>
+                {% if current_user.role != 'user2' %}<td class="col-free-sum section-free-sum pe-2">{{ group.data.totals.free_sum|money }}</td>{% endif %}
+                <td class="col-fact-cell section-fact">{{ group.data.totals.qty }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum section-sum text-end fw-bold pe-2">{{ group.data.totals.sum|money }}</td>{% endif %}
+                {% if report_mode == 'inventory' %}<td class="col-year"></td>{% endif %}
+                <td class="col-info no-print"></td>
             </tr>
             {% else %}
             {% set unique_id = loop.index %}
@@ -749,7 +758,9 @@
                 <td class="col-shipped text-center text-muted">{{ group.data.totals.shipped }}</td>
                 
                 <td class="col-free-cell"><span class="badge-qty">{{ group.data.totals.free }}</span></td>
+                {% if current_user.role != 'user2' %}<td class="col-free-sum pe-2">{{ group.data.totals.free_sum|money }}</td>{% endif %}
                 <td class="col-fact-cell">{{ group.data.totals.qty }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum text-end fw-bold pe-2">{{ group.data.totals.sum|money }}</td>{% endif %}
                 {% if report_mode == 'inventory' %}<td class="col-year"></td>{% endif %}
                 <td class="col-info no-print"></td>
             </tr>
@@ -795,7 +806,9 @@
                 <td class="col-shipped text-center text-muted">{{ row.shipped if row.shipped > 0 else '0' }}</td>
                 
                 <td class="col-free-cell">{{ row.free }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-free-sum pe-2">{{ row.free_sum|money }}</td>{% endif %}
                 <td class="col-fact-cell">{{ row.quantity }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum text-end fw-bold pe-2">{{ row.sum|money }}</td>{% endif %}
                 {% if report_mode == 'inventory' %}<td class="col-year text-center">{{ row.year }}</td>{% endif %}
                 
                 <!-- КОЛОНКА ИНФО (ТЕПЕРЬ ПУСТАЯ ИЛИ ПРОСТО ИКОНКА) -->
@@ -810,14 +823,22 @@
         <tfoot>
             <tr class="stock-footer-row table-light">
                 <td class="text-end pe-3 footer-label-cell" colspan="{% if report_mode != 'inventory' %}{% if current_user.role != 'user2' %}6{% else %}5{% endif %}{% else %}{% if current_user.role != 'user2' %}5{% else %}4{% endif %}{% endif %}">
-                    Итого по складу
+                    {% if report_mode == 'product' %}Итого по всем растениям{% else %}Итого по складу{% endif %}
                 </td>
                 
                 <!-- Колонка Свободно -->
                 <td class="footer-free" id="stockFootFree">{{ grand_total.free }}</td>
                 
+                {% if current_user.role != 'user2' %}
+                <td class="footer-free-sum col-free-sum pe-2" id="stockFootFreeSum">{{ grand_total.free_sum|money }}</td>
+                {% endif %}
+                
                 <!-- Колонка Всего -->
                 <td class="footer-fact col-fact-cell" id="stockFootFact">{{ grand_total.qty }}</td>
+                
+                {% if current_user.role != 'user2' %}
+                <td class="footer-sum col-sum pe-2" id="stockFootSum">{{ grand_total.sum|money }}</td>
+                {% endif %}
                 
                 <!-- Год и Инфо (пустые для выравнивания) -->
                 {% if report_mode == 'inventory' %}<td class="col-year"></td>{% endif %}
@@ -844,6 +865,7 @@
                 <th class="col-shipped">Отгружено</th>
                 <th class="col-free-header">Свободно</th>
                 <th class="col-fact-header">Факт</th>
+                {% if current_user.role != 'user2' %}<th class="col-sum">Сумма</th>{% endif %}
             </tr>
         </thead>
         <tbody>
@@ -865,13 +887,16 @@
                 <td class="col-shipped text-center text-muted">{{ field.totals.shipped }}</td>
                 <td class="col-free-cell"><span class="badge-qty">{{ field.totals.free }}</span></td>
                 <td class="col-fact-cell">{{ field.totals.qty }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum text-end fw-bold pe-2">{{ field.totals.sum|money }}</td>{% endif %}
             </tr>
             {% for row in field.rows %}
             <tr class="collapse field-collapse-{{ unique_id }} detail-row"
                 data-plant="{{ row.plant }}"
                 data-plant-id="{{ row.plant_id or '' }}"
                 data-size-id="{{ row.size_id or '' }}"
-                data-wholesale-price="{{ row.price|round(0)|int }}">
+                data-wholesale-price="{{ row.price|round(0)|int }}"
+                data-free-qty="{{ row.free|round(0)|int }}"
+                data-fact-qty="{{ row.quantity|round(0)|int }}">
                 <td class="ps-4">{{ row.plant }}</td>
                 <td class="small">{{ row.size or '—' }}</td>
                 <td class="col-year text-center">{{ row.year or '' }}</td>
@@ -884,10 +909,11 @@
                 <td class="col-shipped text-center text-muted">{{ row.shipped }}</td>
                 <td class="col-free-cell">{{ row.free }}</td>
                 <td class="col-fact-cell">{{ row.quantity }}</td>
+                {% if current_user.role != 'user2' %}<td class="col-sum text-end pe-2">{{ row.sum|money }}</td>{% endif %}
             </tr>
             {% endfor %}
         {% else %}
-            <tr><td colspan="{% if current_user.role != 'user2' %}8{% else %}7{% endif %}" class="text-muted ps-3 py-3">На полях пока нет остатков.</td></tr>
+            <tr><td colspan="{% if current_user.role != 'user2' %}9{% else %}7{% endif %}" class="text-muted ps-3 py-3">На полях пока нет остатков.</td></tr>
         {% endfor %}
         </tbody>
         <tfoot>
@@ -897,6 +923,7 @@
                 <td class="col-shipped text-center">{{ grand_total.shipped }}</td>
                 <td class="footer-free">{{ grand_total.free }}</td>
                 <td class="footer-fact">{{ grand_total.qty }}</td>
+                {% if current_user.role != 'user2' %}<td class="footer-sum col-sum pe-2">{{ grand_total.sum|money }}</td>{% endif %}
             </tr>
         </tfoot>
     </table>
@@ -1103,6 +1130,7 @@
 
         let footFree = 0, footFact = 0, footRes = 0, footShip = 0;
         let footFreeSum = 0, footSum = 0;
+        const sectionTotals = {};
 
         collectStockTableGroups(table).forEach(g => {
             const headerVisible = stockRowIsVisible(g.header);
@@ -1114,7 +1142,6 @@
                 // Детали могут быть display:none из поиска; collapse не влияет на итог
                 const searchHidden = d.style.display === 'none';
                 if (searchHidden) return;
-                if (table.dataset.excludeRaw === '1' && d.dataset.sectionKey === 'raw_seedlings') return;
 
                 visibleDetails += 1;
                 const key = `${d.dataset.plantId}_${d.dataset.sizeId}`;
@@ -1172,8 +1199,17 @@
                 }
             }
 
+            const sec = g.header?.dataset.sectionKey || '';
+            if (anyVisible && sec) {
+                const st = sectionTotals[sec] || (sectionTotals[sec] = {free: 0, fact: 0, freeSum: 0, sum: 0});
+                st.free += groupFree;
+                st.fact += groupFact;
+                st.freeSum += groupFreeSum;
+                st.sum += groupSum;
+            }
+
             if (!anyVisible) return;
-            if (table.dataset.excludeRaw === '1' && g.header?.dataset.sectionKey === 'raw_seedlings') return;
+            if (table.dataset.excludeRaw === '1' && sec === 'raw_seedlings') return;
 
             footFree += groupFree;
             footFact += groupFact;
@@ -1181,6 +1217,23 @@
             footShip += groupShip;
             footFreeSum += groupFreeSum;
             footSum += groupSum;
+        });
+
+        table.querySelectorAll('.section-header-row').forEach(row => {
+            const st = sectionTotals[row.dataset.sectionKey] || {free: 0, fact: 0, freeSum: 0, sum: 0};
+            const freeEl = row.querySelector('.section-free');
+            if (freeEl) {
+                const pill = freeEl.querySelector('.badge-qty');
+                const txt = String(Math.round(st.free));
+                if (pill) pill.textContent = txt;
+                else freeEl.textContent = txt;
+            }
+            const factEl = row.querySelector('.section-fact');
+            if (factEl) factEl.textContent = String(Math.round(st.fact));
+            const fs = row.querySelector('.section-free-sum');
+            if (fs) fs.textContent = formatStockMoneyFull(st.freeSum);
+            const sm = row.querySelector('.section-sum');
+            if (sm) sm.textContent = formatStockMoneyFull(st.sum);
         });
 
         const setTxt = (sel, val) => {
@@ -1387,19 +1440,32 @@
         }
 
         const priceIdx = getStockPriceColIdx(table);
+        let footSum = 0;
         collectStockTableGroups(table).forEach(g => {
+            let groupSum = 0;
             g.details.forEach(d => {
+                if (d.style.display === 'none') return;
                 const key = `${d.dataset.plantId}_${d.dataset.sizeId}`;
                 const rowPrices = prices[key];
                 const unit = rowPrices
                     ? (mode === 'retail' ? rowPrices.retail : rowPrices.wholesale)
                     : (parseFloat(d.dataset.wholesalePrice) || 0);
+                const fact = parseFloat(d.dataset.factQty) || 0;
+                const rowSum = unit * fact;
+                groupSum += rowSum;
+                footSum += rowSum;
                 if (priceIdx >= 0) {
                     const cells = Array.from(d.children);
                     if (cells[priceIdx]) setStockPriceCellValue(cells[priceIdx], unit, mode);
                 }
+                const sumTd = d.querySelector('.col-sum');
+                if (sumTd) sumTd.textContent = formatStockMoneyFull(rowSum);
             });
+            const hSum = g.header && g.header.querySelector('.col-sum');
+            if (hSum) hSum.textContent = formatStockMoneyFull(groupSum);
         });
+        const footSumEl = table.querySelector('tfoot .footer-sum');
+        if (footSumEl) footSumEl.textContent = formatStockMoneyFull(footSum);
     }
 
     function applyPriceModeToMobile(mode) {

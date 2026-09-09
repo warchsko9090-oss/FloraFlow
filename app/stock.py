@@ -431,6 +431,17 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
         def _empty_totals():
             return {'sum': 0, 'free_sum': 0, 'income': 0, 'reserved': 0, 'free': 0, 'shipped': 0, 'qty': 0}
 
+        def _add_totals(dst, src):
+            for k in dst:
+                dst[k] += src.get(k) or 0
+            return dst
+
+        def _totals_of(groups):
+            totals = _empty_totals()
+            for g in groups:
+                _add_totals(totals, (g.get('data') or {}).get('totals') or {})
+            return totals
+
         def _recalc_group(name, latin_name, rows):
             totals = _empty_totals()
             for r in rows:
@@ -446,13 +457,13 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
                 'data': {'latin_name': latin_name or '', 'rows': rows, 'totals': totals},
             }
 
-        def _section_marker(key, title, print_include=True):
+        def _section_marker(key, title, groups=None, print_include=True):
             return {
                 'is_section': True,
                 'section_key': key,
                 'print_include': print_include,
                 'name': title,
-                'data': {'latin_name': '', 'rows': [], 'totals': _empty_totals()},
+                'data': {'latin_name': '', 'rows': [], 'totals': _totals_of(groups or [])},
             }
 
         ground_groups = []
@@ -480,16 +491,17 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
 
         sorted_groups = []
         if ground_groups:
-            sorted_groups.append(_section_marker('ground', 'Растения в грунте'))
+            sorted_groups.append(_section_marker('ground', 'Растения в грунте', ground_groups))
             sorted_groups.extend(ground_groups)
         if container_groups:
-            sorted_groups.append(_section_marker('containers', 'Товарные саженцы'))
+            sorted_groups.append(_section_marker('containers', 'Товарные саженцы', container_groups))
             sorted_groups.extend(container_groups)
         # Нетоварные (нетов / без контейнера) — на экране, но не в КП/PDF автофильтра
         if raw_groups:
             sorted_groups.append(_section_marker(
                 'raw_seedlings',
                 'Саженцы (не товарные)',
+                raw_groups,
                 print_include=False,
             ))
             sorted_groups.extend(raw_groups)
