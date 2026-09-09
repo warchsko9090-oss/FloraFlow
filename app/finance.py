@@ -1313,6 +1313,15 @@ def budget_export():
     align_center = Alignment(horizontal="center", vertical="center")
     align_right = Alignment(horizontal="right", vertical="center")
     money_fmt = '#,##0 "₽"'
+    # Настоящий Excel-процент: в ячейке 0.671, формат 0.0% → «67,1%».
+    # Писать 67.1 с форматом 0.0"%" нельзя: iOS/Telegram игнорируют кавычки
+    # вокруг % и умножают число на 100 (67,1% превращается в 6710%).
+    pct_fmt = '0.0%'
+
+    def excel_pct(points):
+        if points is None:
+            return None
+        return round(float(points) / 100.0, 5)
 
     def paint_plan_cell(cell, zebra=False):
         cell.fill = fill_plan_alt if zebra else fill_plan
@@ -1392,7 +1401,7 @@ def budget_export():
                 (3, plan_v, align_right),
                 (4, fact_v, align_right),
                 (5, delta, align_right),
-                (6, round(pct, 1) if plan_v else None, align_center),
+                (6, excel_pct(pct) if plan_v else None, align_center),
             ]
             for col, val, alg in cells:
                 c = ws.cell(row=row_idx, column=col, value=val)
@@ -1403,7 +1412,7 @@ def budget_export():
                 if col in (3, 4, 5):
                     c.number_format = money_fmt
                 if col == 6 and val is not None:
-                    c.number_format = '0.0"%"'
+                    c.number_format = pct_fmt
             # Цветовое разделение колонок План/Факт.
             paint_plan_cell(ws.cell(row=row_idx, column=3), zebra=bool(zebra))
             paint_fact_cell(ws.cell(row=row_idx, column=4), zebra=bool(zebra))
@@ -1440,12 +1449,12 @@ def budget_export():
         fact_total_cell = ws.cell(row=row_idx, column=4)
         fact_total_cell.fill = fill_fact_total
         fact_total_cell.font = font_fact_total
-        c = ws.cell(row=row_idx, column=6, value=round(pct_total, 1) if period_plan else None)
+        c = ws.cell(row=row_idx, column=6, value=excel_pct(pct_total) if period_plan else None)
         c.fill = style_total
         c.font = font_total
         c.alignment = align_center
         c.border = thin
-        c.number_format = '0.0"%"'
+        c.number_format = pct_fmt
 
     else:
         # =================================================================
@@ -1563,7 +1572,7 @@ def budget_export():
                 (3, row_plan, align_right),
                 (4, row_fact, align_right),
                 (5, row_diff, align_right),
-                (6, round(row_pct, 1) if row_plan else None, align_center),
+                (6, excel_pct(row_pct) if row_plan else None, align_center),
             ]
             for col, val, alg in cells:
                 c = ws.cell(row=row_idx, column=col, value=val)
@@ -1574,7 +1583,7 @@ def budget_export():
                 if col in (3, 4, 5):
                     c.number_format = money_fmt
                 if col == 6 and val is not None:
-                    c.number_format = '0.0"%"'
+                    c.number_format = pct_fmt
 
             # Цветовое разделение колонок «План» и «Факт».
             paint_plan_cell(ws.cell(row=row_idx, column=3), zebra=bool(zebra))
@@ -1635,12 +1644,12 @@ def budget_export():
         fact_total_cell = ws.cell(row=row_idx, column=4)
         fact_total_cell.fill = fill_fact_total
         fact_total_cell.font = font_fact_total
-        c = ws.cell(row=row_idx, column=6, value=round(period_pct, 1) if period_plan_total else None)
+        c = ws.cell(row=row_idx, column=6, value=excel_pct(period_pct) if period_plan_total else None)
         c.fill = style_total
         c.font = font_total
         c.alignment = align_center
         c.border = thin
-        c.number_format = '0.0"%"'
+        c.number_format = pct_fmt
 
         if n_months > 1:
             for idx, m in enumerate(selected_months):

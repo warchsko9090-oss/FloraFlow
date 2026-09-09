@@ -31,18 +31,20 @@ def build_stock_row_price_map(sorted_groups, price_overrides=None):
     ov = price_overrides if price_overrides is not None else get_shop_price_map()
     result = {}
     for group in sorted_groups:
-        if group.get('is_section') or group.get('is_field'):
+        if group.get('is_section'):
             continue
-        for row in group.get('data', {}).get('rows', []):
-            key = f"{row['plant_id']}_{row['size_id']}"
+        rows = group.get('rows') if group.get('is_field') else group.get('data', {}).get('rows', [])
+        for row in rows:
+            pid, sid = row.get('plant_id'), row.get('size_id')
+            if not pid or not sid:
+                continue
+            key = f"{pid}_{sid}"
             if key in result:
                 continue
             wholesale = float(row.get('price') or 0)
             result[key] = {
                 'wholesale': wholesale,
-                'retail': resolve_shop_price(
-                    row['plant_id'], row['size_id'], wholesale, ov,
-                ),
+                'retail': resolve_shop_price(pid, sid, wholesale, ov),
             }
     return result
 
@@ -182,6 +184,7 @@ def _groups_by_field(aggregated, fields_dict, grand_total):
             'plant': v.get('plant') or '',
             'plant_id': v.get('plant_id'),
             'size_id': v.get('size_id'),
+            'field_id': fid,
             'size': v.get('size') or '',
             'year': v.get('year'),
             'quantity': v.get('quantity') or 0,
@@ -1162,6 +1165,7 @@ def stock_report():
                            resolve_shop_price=resolve_shop_price,
                            stock_row_prices=stock_row_prices,
                            size_filter_manual=size_filter_manual)
+
 
 @bp.route('/stock/export')
 @login_required
