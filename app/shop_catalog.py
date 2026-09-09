@@ -11,6 +11,30 @@ from app.utils import msk_now
 
 SEEDLING_HIDDEN_SETTING_KEY = 'shop_seedling_hidden_plant_ids'
 
+# Только витрина и PDF сайта: эти растения в «Контейнерных позициях»,
+# даже если остаток на поле открытого грунта. Остатки ERP не трогаем.
+_SITE_FORCE_CONTAINER_NAMES = frozenset({
+    'щитовник мужской',
+})
+_SITE_FORCE_CONTAINER_LATIN_PREFIXES = (
+    'dryopteris filix-mas',
+    'dryopteris filix mas',
+)
+
+
+def _norm_plant_name(name: str) -> str:
+    return ' '.join((name or '').strip().lower().replace('ё', 'е').split())
+
+
+def plant_forced_to_container_section(plant_name=None, latin_name=None) -> bool:
+    if _norm_plant_name(plant_name) in _SITE_FORCE_CONTAINER_NAMES:
+        return True
+    latin = _norm_plant_name(latin_name).replace('—', '-').replace('–', '-')
+    return any(
+        latin == prefix or latin.startswith(prefix + ' ') or latin.startswith(prefix + '.')
+        for prefix in _SITE_FORCE_CONTAINER_LATIN_PREFIXES
+    )
+
 
 def get_seedling_hidden_ids() -> set[int]:
     """Plant IDs, чьи саженцы принудительно скрыты с сайта/PDF (без ALTER схемы)."""
@@ -43,6 +67,8 @@ def set_seedling_hidden_ids(plant_ids: set[int]) -> None:
 
 def catalog_site_bucket(item: dict) -> str:
     """Секция витрины: грунт или контейнерная площадка (по полю остатка)."""
+    if plant_forced_to_container_section(item.get('plant_name'), item.get('latin_name')):
+        return 'container'
     b = item.get('catalog_bucket')
     if b in ('ground', 'container'):
         return b
@@ -57,8 +83,21 @@ def _field_catalog_bucket(field_id: int, container_ids: set[int] | None = None) 
     return 'container' if int(field_id or 0) in cids else 'ground'
 
 
+def _stock_site_bucket(st, container_ids) -> str:
+    bucket = _field_catalog_bucket(st.field_id, container_ids)
+    plant = getattr(st, 'plant', None)
+    if plant_forced_to_container_section(
+        getattr(plant, 'name', None), getattr(plant, 'latin_name', None),
+    ):
+        return 'container'
+    return bucket
+
+
 def _buckets_for_plant_size(plant_id: int, size_id: int, container_ids: set[int] | None = None) -> set[str]:
     """На каких секциях витрины может быть пара — по полям в остатках."""
+    plant = Plant.query.get(plant_id)
+    if plant and plant_forced_to_container_section(plant.name, plant.latin_name):
+        return {'container'}
     from app.services import get_container_field_ids
     cids = container_ids if container_ids is not None else get_container_field_ids()
     buckets: set[str] = set()
@@ -87,7 +126,7 @@ def _aggregate_stock_by_pair_and_bucket(reserved_map):
             int(st.quantity or 0)
             - int(reserved_map.get((st.plant_id, st.size_id, st.field_id, st.year), 0) or 0),
         )
-        bucket = _field_catalog_bucket(st.field_id, container_ids)
+        bucket = _stock_site_bucket(st, container_ids)
         key = (st.plant_id, st.size_id, bucket)
         if key not in grouped:
             grouped[key] = {
@@ -104,7 +143,7 @@ def _aggregate_stock_by_pair_and_bucket(reserved_map):
     for st in all_stocks:
         if st.size_id not in eligible:
             continue
-        bucket = _field_catalog_bucket(st.field_id, container_ids)
+        bucket = _stock_site_bucket(st, container_ids)
         key = (st.plant_id, st.size_id, bucket)
         if key not in grouped:
             grouped[key] = {
@@ -681,8 +720,10 @@ def build_visible_catalog_items(apply_shop_prices=True):
 
         on_request = free_qty <= 0 and show_on_request
 
-        card_attrs = _catalog_card_attrs(pd, bucket)
-        photo_rel = _catalog_photo_rel(root, plant_id, plant.name, bucket, photo_cache)
+        forced_container = plant_forced_to_container_section(plant.name, plant.latin_name)
+        display_bucket = 'ground' if forced_container else bucket
+        card_attrs = _catalog_card_attrs(pd, display_bucket)
+        photo_rel = _catalog_photo_rel(root, plant_id, plant.name, display_bucket, photo_cache)
         row = {
             'plant_id': plant_id,
             'size_id': size_id,
@@ -700,7 +741,7 @@ def build_visible_catalog_items(apply_shop_prices=True):
             'has_photos': bool(photo_rel),
             'photo_rel': photo_rel,
             'photo_url': shop_image_url(photo_rel, SHOP_IMG_CARD),
-            'catalog_bucket': bucket,
+            'catalog_bucket': 'container' if forced_container else bucket,
         }
         items.append(row)
 
