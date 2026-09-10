@@ -192,8 +192,10 @@ def create_app():
         path = request.path or ''
         if path.endswith('/telegram-web-app.js'):
             response.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
+        elif path.startswith('/static/tg_pay/') or path.startswith('/static/tg_sale/'):
+            response.headers['Cache-Control'] = 'no-store, max-age=0'
         elif path.startswith('/static/tg_'):
-            response.headers['Cache-Control'] = 'public, max-age=604800'
+            response.headers['Cache-Control'] = 'public, max-age=600'
         return response
 
     # --- ФИЛЬТРЫ ---

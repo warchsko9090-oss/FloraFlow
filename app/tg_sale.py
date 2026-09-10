@@ -910,6 +910,8 @@ def _store_pdf(inv: SaleInvoice) -> bytes | None:
 def index():
     html = render_template('tg_sale/index.html')
     resp = make_response(html)
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
     as_role = request.args.get('as')
     if as_role in ('admin', 'shop_manager'):
         from app.tg_pay import _dev_mode

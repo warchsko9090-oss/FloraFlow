@@ -1,7 +1,21 @@
 import os
 import io
+import re
 import requests
 import json
+
+# Telegram Web caches Mini App pages by exact URL. Bump after JS/HTML changes.
+MINIAPP_CACHE_V = '20260910c'
+
+
+def miniapp_web_url(url: str) -> str:
+    """web_app URL with cache-buster so Telegram Web does not reuse an old shell."""
+    url = (url or '').strip()
+    if not url.startswith('https://'):
+        return url
+    if re.search(r'(?:\?|&)v=', url):
+        return url
+    return f"{url}{'&' if '?' in url else '?'}v={MINIAPP_CACHE_V}"
 
 def _resolve_chat_id(chat_env_key):
     """Resolve chat ID from environment variable name."""
@@ -381,7 +395,7 @@ def get_webhook_info():
 def set_pay_menu_button(url=None, chat_id=None, text='Счета'):
     """Кнопка меню бота → Mini App. chat_id — только для этого пользователя."""
     bot_token = _get_bot_token()
-    url = (url or default_miniapp_url() or '').rstrip('/')
+    url = miniapp_web_url((url or default_miniapp_url() or '').rstrip('/'))
     if not bot_token or not url.startswith('https://'):
         return False, 'skip'
     payload = {

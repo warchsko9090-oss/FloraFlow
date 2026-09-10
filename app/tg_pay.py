@@ -143,13 +143,14 @@ def _start_greeting(sender, tg_id) -> str:
 def _apps_reply_keyboard(user: User | None) -> dict | None:
     """Постоянные кнопки Mini App внизу чата — чтобы переключаться без /start."""
     row = []
-    pay_url = _public_miniapp_url()
+    from app.telegram import miniapp_web_url
+    pay_url = miniapp_web_url(_public_miniapp_url())
     if _can_pay_app(user) and pay_url.startswith('https://'):
         pay_label = 'Оплата' if _role(user) in ('admin', 'executive') else 'Счета на оплату'
         row.append({'text': pay_label, 'web_app': {'url': pay_url}})
     if _can_sale_role(user):
         from app.tg_sale import public_sale_url
-        sale_url = public_sale_url()
+        sale_url = miniapp_web_url(public_sale_url())
         if sale_url.startswith('https://'):
             row.append({'text': 'Выставить счёт', 'web_app': {'url': sale_url}})
     if not row:
@@ -760,6 +761,8 @@ def _store_upload(data: bytes, original_name: str) -> str:
 def index():
     html = render_template('tg_pay/index.html')
     resp = make_response(html)
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
     as_role = request.args.get('as')
     if as_role in ('admin', 'payer') and _dev_mode():
         resp.set_cookie(_DEV_COOKIE, as_role, samesite='Lax')
@@ -1415,7 +1418,8 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
     purpose = _purpose(inv)
     amount = f"{inv.amount:,.2f}".replace(',', ' ').replace('.', ',')
     extra = f"\n{parsed['error']}" if parsed.get('error') else ''
-    app_url = _public_miniapp_url()
+    from app.telegram import miniapp_web_url
+    app_url = miniapp_web_url(_public_miniapp_url())
     markup = None
     if app_url.startswith('https://') and _can_edit(user):
         markup = {
