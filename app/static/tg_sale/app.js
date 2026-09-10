@@ -188,7 +188,7 @@
             <div id="saveErr" class="err hide"></div>
             <button class="btn gold" id="save">Сохранить счёт</button>
             ${state.current ? `<div class="grid2" style="margin-top:8px">
-                <button class="btn" id="pdf">Открыть счёт</button>
+                <button class="btn" id="pdf">Счёт в чат</button>
                 <button class="btn ghost" id="approve">Согласовать</button>
             </div>
             <button class="btn danger" id="discard" style="margin-top:8px">Удалить</button>` : ""}`;
@@ -229,7 +229,7 @@
                 <p class="muted">${esc(companyName(inv))}</p>
                 <div class="tot" style="margin-top:10px">${money(inv.amount)}</div>
             </div>
-            <button class="btn gold" id="pdf">Открыть счёт</button>
+            <button class="btn gold" id="pdf">Счёт в чат</button>
             ${state.me && state.me.can_delete_approved ? `<button class="btn danger" id="discard" style="margin-top:8px">Удалить счёт и заказ</button>` : ""}`;
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
         document.getElementById("pdf").onclick = sendPdf;
@@ -585,14 +585,24 @@
         const done = armBusy(document.getElementById("pdf"));
         try {
             const data = await api(`/tg/sale/api/invoices/${state.current.id}/send-pdf`, { method: "POST", body: "{}" });
-            haptic("medium");
             if (!data.ok) {
-                window.open(`/tg/sale/api/invoices/${state.current.id}/pdf`, "_blank");
+                const err = data.error || "";
+                alert(err === "no_telegram_id"
+                    ? "Не вижу ваш Telegram. Закройте мини-приложение и откройте его кнопкой в чате с ботом."
+                    : "Не удалось отправить счёт в чат.");
                 return;
             }
-            if (tgApp() && tgApp().close) setTimeout(() => tgApp().close(), 400);
+            haptic("medium");
+            const tg = tgApp();
+            if (tg && typeof tg.showAlert === "function") {
+                try {
+                    tg.showAlert("Счёт отправил в чат с ботом.", () => { try { tg.close && tg.close(); } catch (_) {} });
+                    return;
+                } catch (_) {}
+            }
+            if (tg && tg.close) setTimeout(() => tg.close(), 400);
         } catch (e) {
-            window.open(`/tg/sale/api/invoices/${state.current.id}/pdf`, "_blank");
+            alert(e.message || "Не удалось отправить счёт в чат.");
         } finally {
             done();
         }

@@ -295,10 +295,10 @@
       ? '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>'
       : '';
     const fileBtns = (inv.has_file
-      ? '<button class="btn btn-brass" type="button" id="btnOpen">Открыть счёт</button>'
+      ? '<button class="btn btn-brass" type="button" id="btnOpen">Счёт в чат</button>'
       : '<p class="warn">Файл счёта не найден — прикрепите PDF.</p>')
       + (inv.has_receipt
-        ? '<button class="btn btn-quiet" type="button" id="btnReceipt">Квитанция</button>'
+        ? '<button class="btn btn-quiet" type="button" id="btnReceipt">Квитанция в чат</button>'
         : '');
     const attachBlock = (can && inv.status !== 'paid')
       ? `<div class="field"><label>${inv.has_file ? 'Заменить PDF' : 'Прикрепить PDF'}</label>
@@ -422,44 +422,54 @@
     }
   }
 
-  function openBlob(blob) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
+  function sendErrorText(sent, fallback) {
+    const err = (sent && sent.error) || '';
+    if (err === 'no_telegram_id') {
+      return 'Не вижу ваш Telegram. Закройте мини-приложение и откройте его кнопкой в чате с ботом.';
+    }
+    if (err === 'file_missing') return fallback || 'Файла нет.';
+    return fallback || 'Не удалось отправить файл в чат.';
+  }
+
+  function afterSentToChat(msg) {
+    haptic('medium');
+    const tg = tgApp();
+    if (tg && typeof tg.showAlert === 'function') {
+      try {
+        tg.showAlert(msg, () => { try { tg.close && tg.close(); } catch (_) {} });
+        return;
+      } catch (_) {}
+    }
+    alert(msg);
+    if (tg && tg.close) setTimeout(() => tg.close(), 400);
+  }
+
+  async function sendFileToChat(inv, kind) {
+    const isReceipt = kind === 'receipt';
+    const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', {
+      method: 'POST',
+      body: JSON.stringify({ kind: isReceipt ? 'receipt' : 'file' }),
+    });
+    if (sent && sent.ok) {
+      afterSentToChat(isReceipt ? 'Квитанцию отправил в чат с ботом.' : 'Счёт отправил в чат с ботом.');
+      return;
+    }
+    alert(sendErrorText(sent, isReceipt ? 'Квитанция не найдена.' : 'У этого счёта нет PDF.'));
   }
 
   async function openInvoice(inv) {
-    const platform = ((tgApp() && tgApp().platform) || '').toLowerCase();
-    const sendToChat = platform === 'ios' || platform === 'android';
-    if (sendToChat) {
-      try {
-        const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', { method: 'POST' });
-        if (sent.ok) {
-          alert('Счёт отправил в чат с ботом — откройте его там.');
-          return;
-        }
-      } catch (_) {}
-    }
     try {
-      if (!window.FFTg || !window.FFTg.fetchBlob) throw new Error('Не удалось открыть счёт');
-      openBlob(await window.FFTg.fetchBlob('/tg/pay/api/invoices/' + inv.id + '/file'));
+      await sendFileToChat(inv, 'file');
     } catch (e) {
-      alert(e.message || 'Не удалось открыть счёт');
+      alert(e.message || 'Не удалось отправить счёт в чат.');
     }
   }
 
   async function openReceipt(inv) {
     try {
-      if (!window.FFTg || !window.FFTg.fetchBlob) throw new Error('Квитанция не найдена');
-      openBlob(await window.FFTg.fetchBlob('/tg/pay/api/invoices/' + inv.id + '/receipt'));
+      await sendFileToChat(inv, 'receipt');
     } catch (e) {
-      alert(e.message || 'Квитанция не найдена');
+      alert(e.message || 'Не удалось отправить квитанцию в чат.');
     }
   }
 

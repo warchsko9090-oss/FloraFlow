@@ -35,7 +35,7 @@ from app.telegram import (
     default_miniapp_url,
 )
 from app.invoice_files import (
-    invoice_bytes, has_file as invoice_has_file, has_receipt as invoice_has_receipt,
+    invoice_bytes, receipt_bytes, has_file as invoice_has_file, has_receipt as invoice_has_receipt,
     attach_file, flask_send, flask_send_receipt, delete_unpaid_invoice,
 )
 
@@ -919,25 +919,33 @@ def api_send_pdf(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if not _can_edit(user) and inv.status != 'new':
         return jsonify({'error': 'not_found'}), 404
-    src = _invoice_with_file(inv)
-    data = invoice_bytes(src)
+    body = request.get_json(silent=True) if request.is_json else None
+    kind = ''
+    if isinstance(body, dict):
+        kind = str(body.get('kind') or '')
+    kind = (kind or request.args.get('kind') or 'file').strip().lower()
+    if kind == 'receipt':
+        data = receipt_bytes(inv)
+        filename = getattr(inv, 'receipt_name', None) or 'receipt.jpg'
+        caption = f"Квитанция · {_purpose(inv)}"
+    else:
+        src = _invoice_with_file(inv)
+        data = invoice_bytes(src)
+        filename = src.original_name or src.filename or 'invoice.pdf'
+        caption = f"{_purpose(inv)} · {inv.amount} ₽"
     if not data:
-        return jsonify({'error': 'file_missing'}), 404
+        return jsonify({'ok': False, 'error': 'file_missing'})
     chat_id = current_telegram_id()
     if not chat_id:
-        return jsonify({
-            'ok': False,
-            'error': 'no_telegram_id',
-            'file_url': f'/tg/pay/api/invoices/{inv.id}/file',
-        })
+        return jsonify({'ok': False, 'error': 'no_telegram_id'})
     ok, err = send_chat_document(
         chat_id,
-        filename=src.original_name or src.filename or 'invoice.pdf',
-        caption=f"{_purpose(inv)} · {inv.amount} ₽",
+        filename=filename,
+        caption=caption,
         file_bytes=data,
     )
     if not ok:
-        return jsonify({'ok': False, 'error': err, 'file_url': f'/tg/pay/api/invoices/{inv.id}/file'})
+        return jsonify({'ok': False, 'error': err or 'send_failed'})
     return jsonify({'ok': True})
 
 
