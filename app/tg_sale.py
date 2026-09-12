@@ -1,6 +1,8 @@
 """Telegram Mini App «Выставить счёт» клиенту.
 
-Роли: admin и shop_manager. Согласование создаёт заказ ERP с резервом.
+Роли: admin, executive, shop_manager.
+Новый счёт при согласовании создаёт заказ ERP. «На заказ» заполняет счёт
+из уже существующего заказа и не создаёт второй.
 """
 from __future__ import annotations
 
@@ -16,7 +18,8 @@ from pathlib import Path
 from flask import (
     Blueprint, current_app, jsonify, request, render_template, make_response,
 )
-from sqlalchemy import func
+from sqlalchemy import func, or_
+from sqlalchemy.orm import joinedload, selectinload
 from werkzeug.utils import secure_filename
 
 from app.models import (
@@ -39,6 +42,14 @@ _DEV_COOKIE = 'tg_sale_as'
 _VAT_INCLUDED = ('included_20', 'included_22')
 _VAT_RATE = Decimal('22')
 _VAT_BASE = Decimal('122')
+_ORDER_STATUS_LABEL = {
+    'reserved': 'резерв',
+    'in_progress': 'в работе',
+    'ready': 'готов',
+    'shipped': 'отгружен',
+    'canceled': 'отменён',
+    'ghost': 'скрыт',
+}
 _MONTHS_GEN = (
     'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
     'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
@@ -394,6 +405,7 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
         'author': inv.user.username if inv.user else '',
         'lines_count': len(inv.lines or []),
         'order_id': inv.order_id,
+        'from_existing_order': bool(inv.from_existing_order),
     }
     if detail:
         free_map = _free_pairs()
@@ -427,6 +439,10 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
                 for ln in inv.lines
             ],
         })
+        if inv.order_id:
+            linked = inv.order or Order.query.get(inv.order_id)
+            if linked:
+                data['order'] = _serialize_order(linked, preview=False)
     return data
 
 
@@ -492,6 +508,129 @@ def _sync_client(inv: SaleInvoice):
     inv.client_id = client.id
 
 
+def _buyer_from_client(client: Client | None) -> dict:
+    if not client:
+        return {}
+    return {
+        'name': client.name or '',
+        'inn': client.inn or '',
+        'kpp': client.kpp or '',
+        'ogrn': client.ogrn or '',
+        'address': client.address or '',
+        'phone': client.phone or '',
+        'bank': client.bank_name or '',
+        'rs': client.rs or '',
+        'bik': client.bik or '',
+        'ks': client.ks or '',
+    }
+
+
+def _order_composition(order: Order) -> list[dict]:
+    grouped: dict[tuple[int, int], dict] = {}
+    for it in order.items or []:
+        pid = int(it.plant_id or 0)
+        sid = int(it.size_id or 0)
+        if not pid or not sid:
+            continue
+        rec = grouped.setdefault((pid, sid), {
+            'plant_id': pid,
+            'size_id': sid,
+            'plant_name': (it.plant.name if it.plant else '') or '',
+            'size_name': (it.size.name if it.size else '') or '',
+            'qty': 0,
+            'sum': 0.0,
+        })
+        qty = int(it.quantity or 0)
+        rec['qty'] += qty
+        rec['sum'] += float(it.price or 0) * qty
+    rows = []
+    for rec in grouped.values():
+        qty = rec['qty']
+        rec['price'] = (rec['sum'] / qty) if qty else 0.0
+        rows.append(rec)
+    rows.sort(key=lambda r: ((r.get('plant_name') or '').lower(), r.get('size_name') or ''))
+    return rows
+
+
+def _serialize_order(order: Order, *, preview: bool = True) -> dict:
+    lines = _order_composition(order)
+    shown = lines[:4] if preview else lines
+    more = max(0, len(lines) - len(shown))
+    client = order.client
+    return {
+        'id': order.id,
+        'status': order.status or '',
+        'status_label': _ORDER_STATUS_LABEL.get(order.status or '', order.status or ''),
+        'date': order.date.isoformat() if order.date else None,
+        'amount': float(order.total_sum or 0),
+        'client_id': order.client_id,
+        'client_name': (client.name if client else '') or '',
+        'client_inn': (client.inn if client else '') or '',
+        'invoice_number': order.invoice_number or '',
+        'items_count': len(lines),
+        'more_count': more,
+        'lines': shown if preview else lines,
+        'buyer': _buyer_from_client(client),
+    }
+
+
+def _order_query():
+    return (
+        Order.query
+        .options(
+            joinedload(Order.client),
+            selectinload(Order.items).options(
+                joinedload(OrderItem.plant),
+                joinedload(OrderItem.size),
+            ),
+        )
+    )
+
+
+def _link_existing_order(inv: SaleInvoice, order_id) -> tuple[Order | None, str | None]:
+    if order_id in (None, '', 0, '0'):
+        inv.order_id = None
+        inv.from_existing_order = False
+        return None, None
+    try:
+        oid = int(order_id)
+    except (TypeError, ValueError):
+        return None, 'bad_order'
+    order = _order_query().filter(Order.id == oid).first()
+    if not order or order.is_deleted:
+        return None, 'order_missing'
+    if (order.status or '') in ('canceled', 'ghost'):
+        return None, 'order_closed'
+    inv.order_id = order.id
+    inv.from_existing_order = True
+    inv.client_id = order.client_id
+    if not (inv.comment or '').strip():
+        inv.comment = f'Заказ №{order.id}'
+    buyer = _buyer_from_client(order.client)
+    if buyer.get('name'):
+        _apply_buyer(inv, {
+            'buyer_name': buyer.get('name'),
+            'buyer_inn': buyer.get('inn'),
+            'buyer_kpp': buyer.get('kpp'),
+            'buyer_ogrn': buyer.get('ogrn'),
+            'buyer_address': buyer.get('address'),
+            'buyer_phone': buyer.get('phone'),
+            'buyer_bank': buyer.get('bank'),
+            'buyer_rs': buyer.get('rs'),
+            'buyer_bik': buyer.get('bik'),
+            'buyer_ks': buyer.get('ks'),
+        })
+    return order, None
+
+
+def _order_link_hint(err: str) -> str:
+    return {
+        'bad_order': 'Некорректный номер заказа',
+        'order_missing': 'Заказ не найден',
+        'order_closed': 'Этот заказ отменён',
+    }.get(err, 'Не удалось привязать заказ')
+
+
 def _allocate_sale_qty(plant_id: int, size_id: int, qty: int) -> list[tuple[int | None, int | None, int]]:
     """Разложить штуки по полям со свободным остатком; хвост — без поля."""
     from app.stock_helpers import compute_free
@@ -523,7 +662,11 @@ def _allocate_sale_qty(plant_id: int, size_id: int, qty: int) -> list[tuple[int 
 def create_order_from_sale_invoice(inv: SaleInvoice, user_id: int | None) -> Order | None:
     """Создаёт заказ ERP с резервом из согласованного счёта Mini App."""
     if inv.order_id:
-        return Order.query.get(inv.order_id)
+        order = Order.query.get(inv.order_id)
+        if order and inv.from_existing_order and not (order.invoice_number or '').strip():
+            order.invoice_number = f'ТГ-{inv.id}'
+            order.invoice_date = (inv.approved_at or msk_now()).date()
+        return order
     if not inv.client_id:
         _sync_client(inv)
     if not inv.client_id:
@@ -612,6 +755,7 @@ def _replace_lines(inv: SaleInvoice, rows: list):
     inv.lines.clear()
     db.session.flush()
     free_map = _free_pairs()
+    clamp_free = not bool(inv.from_existing_order)
     for row in rows or []:
         try:
             pid = int(row.get('plant_id')) if row.get('plant_id') else None
@@ -622,7 +766,7 @@ def _replace_lines(inv: SaleInvoice, rows: list):
             continue
         if qty <= 0:
             continue
-        if pid and sid:
+        if pid and sid and clamp_free:
             free = int(free_map.get((pid, sid), 0))
             if qty > free:
                 qty = free
@@ -1174,7 +1318,20 @@ def api_create(user: User):
     _apply_buyer(inv, body)
     db.session.add(inv)
     db.session.flush()
-    _replace_lines(inv, body.get('lines') or [])
+    if 'order_id' in body:
+        order, err = _link_existing_order(inv, body.get('order_id'))
+        if err:
+            db.session.rollback()
+            return jsonify({'error': err, 'hint': _order_link_hint(err)}), 400
+    else:
+        order = None
+    rows = body.get('lines')
+    if rows:
+        _replace_lines(inv, rows)
+    elif order:
+        _replace_lines(inv, _order_composition(order))
+    else:
+        _replace_lines(inv, [])
     db.session.commit()
     return jsonify(_serialize_invoice(inv, detail=True))
 
@@ -1202,8 +1359,15 @@ def api_save(_user: User, inv_id: int):
     if 'comment' in body:
         inv.comment = str(body.get('comment') or '')[:500]
     _apply_buyer(inv, body)
+    if 'order_id' in body:
+        _order, err = _link_existing_order(inv, body.get('order_id'))
+        if err:
+            return jsonify({'error': err, 'hint': _order_link_hint(err)}), 400
     if 'lines' in body:
         _replace_lines(inv, body.get('lines') or [])
+    elif inv.order_id and (inv.order or Order.query.get(inv.order_id)):
+        order = inv.order or Order.query.get(inv.order_id)
+        _replace_lines(inv, _order_composition(order))
     else:
         inv.amount = _line_sum(inv.lines)
     db.session.commit()
@@ -1211,19 +1375,26 @@ def api_save(_user: User, inv_id: int):
 
 
 def void_sale_invoice(inv: SaleInvoice) -> Order | None:
-    """Убирает счёт из Mini App и снимает связанный заказ ERP (резерв + список)."""
+    """Убирает счёт из Mini App. Заказ ERP снимается, только если его создал этот счёт."""
     order = None
     if inv.order_id:
         order = Order.query.get(inv.order_id)
-    if order:
+    owns_order = bool(
+        order
+        and not inv.from_existing_order
+        and (order.invoice_number or '') == f'ТГ-{inv.id}'
+    )
+    if owns_order and order:
         if (order.status or '') == 'shipped':
             raise ValueError('shipped')
         if (order.status or '') not in ('canceled', 'ghost'):
             order.status = 'canceled'
             order.canceled_at = msk_now()
         order.is_deleted = True
+        inv.status = 'discarded'
+        return order
     inv.status = 'discarded'
-    return order
+    return None
 
 
 @bp.route('/api/invoices/<int:inv_id>/discard', methods=['POST'])
@@ -1248,6 +1419,45 @@ def api_discard(user: User, inv_id: int):
     except Exception:
         current_app.logger.exception('sale invoice discard chat')
     return jsonify({'ok': True, 'order_id': order.id if order else None})
+
+
+@bp.route('/api/orders')
+@require_sale
+def api_orders(_user: User):
+    q = (request.args.get('q') or '').strip()
+    if not q:
+        return jsonify({'orders': []})
+    digits = re.sub(r'\D+', '', q)
+    clauses = []
+    if q.isdigit():
+        clauses.append(Order.id == int(q))
+    like = f'%{q}%'
+    clauses.append(Client.name.ilike(like))
+    clauses.append(Order.invoice_number.ilike(like))
+    if len(digits) >= 4:
+        clauses.append(Client.inn.ilike(f'%{digits}%'))
+    rows = (
+        _order_query()
+        .join(Client, Order.client_id == Client.id)
+        .filter(Order.is_deleted.is_(False))
+        .filter(~Order.status.in_(('canceled', 'ghost')))
+        .filter(or_(*clauses))
+        .order_by(Order.id.desc())
+        .limit(8)
+        .all()
+    )
+    return jsonify({'orders': [_serialize_order(o, preview=True) for o in rows]})
+
+
+@bp.route('/api/orders/<int:order_id>')
+@require_sale
+def api_order(_user: User, order_id: int):
+    order = _order_query().filter(Order.id == order_id, Order.is_deleted.is_(False)).first()
+    if not order:
+        return jsonify({'error': 'order_missing'}), 404
+    if (order.status or '') in ('canceled', 'ghost'):
+        return jsonify({'error': 'order_closed'}), 400
+    return jsonify(_serialize_order(order, preview=False))
 
 
 @bp.route('/api/invoices/<int:inv_id>/pdf')

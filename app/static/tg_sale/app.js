@@ -10,7 +10,7 @@
     }
     const view = document.getElementById("view");
     const titleEl = document.getElementById("screenTitle");
-    const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "" };
+    const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "", orderHits: [], orderQ: "" };
 
     function haptic(kind) {
         try { const tg = tgApp(); tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (_) {}
@@ -33,7 +33,7 @@
     }
 
     (function bindPress() {
-        const sel = "button, .btn, .list-item[data-open], .firm, .size-row";
+        const sel = "button, .btn, .list-item[data-open], .firm, .size-row, .order-hit";
         let cur = null;
         let downAt = 0;
         function clear() {
@@ -70,6 +70,8 @@
             company_id: null,
             buyer: { name: "", inn: "", kpp: "", ogrn: "", address: "", phone: "", bank: "", rs: "", bik: "", ks: "" },
             lines: [],
+            order_id: null,
+            order: null,
         };
     }
 
@@ -105,6 +107,7 @@
         else if (state.screen === "edit") renderEdit();
         else if (state.screen === "firms") renderFirms();
         else if (state.screen === "view") renderView();
+        else if (state.screen === "pick-order") renderPickOrder();
     }
 
     function companyName(inv) {
@@ -118,7 +121,7 @@
                 <div class="row">
                     <div>
                         <div><b>№${inv.id}</b> · ${esc(inv.buyer_name || "Без клиента")}</div>
-                        <div class="muted">${esc(companyName(inv))} · ${fmtDate(inv.created_at)}</div>
+                        <div class="muted">${esc(companyName(inv))} · ${fmtDate(inv.created_at)}${inv.order_id ? ` · заказ №${inv.order_id}` : ""}</div>
                     </div>
                     <div>
                         <span class="chip ${inv.status === "approved" ? "ok" : ""}">${inv.status === "approved" ? "согласован" : "черновик"}</span>
@@ -129,21 +132,186 @@
         view.innerHTML = `
             <div class="grid2" style="margin-bottom:12px">
                 <button class="btn gold" id="btnNew">Новый счёт</button>
-                ${state.me && (state.me.can_firms || state.me.can_edit_firms) ? `<button class="btn ghost" id="btnFirms">Фирмы</button>` : `<span></span>`}
+                <button class="btn ghost" id="btnFromOrder">На заказ</button>
             </div>
+            ${state.me && (state.me.can_firms || state.me.can_edit_firms) ? `<button class="btn ghost" id="btnFirms" style="margin-bottom:12px">Фирмы</button>` : ""}
             <div class="card">${rows}</div>`;
-        document.getElementById("btnNew").onclick = () => {
-            state.draft = emptyDraft();
-            if (state.companies[0]) state.draft.company_id = state.companies[0].id;
-            state.current = null;
-            state.screen = "edit";
-            render();
-        };
+        document.getElementById("btnNew").onclick = () => startNewInvoice();
+        document.getElementById("btnFromOrder").onclick = () => startPickOrder();
         const bf = document.getElementById("btnFirms");
         if (bf) bf.onclick = () => { state.screen = "firms"; render(); };
         view.querySelectorAll("[data-open]").forEach((el) => {
             el.onclick = () => openInvoice(Number(el.dataset.open));
         });
+    }
+
+    function startNewInvoice() {
+        state.draft = emptyDraft();
+        if (state.companies[0]) state.draft.company_id = state.companies[0].id;
+        state.current = null;
+        state.screen = "edit";
+        render();
+    }
+
+    function startPickOrder() {
+        state.draft = emptyDraft();
+        if (state.companies[0]) state.draft.company_id = state.companies[0].id;
+        state.current = null;
+        state.orderHits = [];
+        state.orderQ = "";
+        state.pickFrom = "list";
+        state.screen = "pick-order";
+        render();
+    }
+
+    function orderLinesHtml(ord, limit) {
+        const rows = ord && ord.lines ? ord.lines : [];
+        const shown = limit ? rows.slice(0, limit) : rows;
+        const more = (ord && ord.more_count) || Math.max(0, rows.length - shown.length);
+        const lis = shown.map((ln) =>
+            `<li>${esc(ln.plant_name || "—")}${ln.size_name ? ` · ${esc(ln.size_name)}` : ""} ×${ln.qty} · ${money(ln.sum || (Number(ln.qty) * Number(ln.price)))}</li>`
+        ).join("");
+        if (!lis) return `<p class="muted">В заказе нет позиций</p>`;
+        return `<ul class="order-lines">${lis}</ul>${more ? `<p class="muted">ещё ${more} поз.</p>` : ""}`;
+    }
+
+    function orderBannerHtml(d) {
+        const ord = d.order;
+        if (ord && ord.id) {
+            return `
+            <div class="card order-banner">
+                <div class="row">
+                    <div>
+                        <div><b>Заказ №${ord.id}</b> · ${esc(ord.status_label || ord.status || "")} · ${money(ord.amount)}</div>
+                        <div class="muted">${esc(ord.client_name || "")}${ord.invoice_number ? ` · счёт ERP ${esc(ord.invoice_number)}` : ""}</div>
+                    </div>
+                    <button type="button" class="btn sm ghost" id="orderClear">снять</button>
+                </div>
+                ${orderLinesHtml(ord)}
+            </div>`;
+        }
+        return `<button type="button" class="btn ghost" id="btnPickOrder" style="margin-bottom:10px">Привязать заказ из базы</button>`;
+    }
+
+    function bindOrderBanner() {
+        const pick = document.getElementById("btnPickOrder");
+        if (pick) pick.onclick = () => {
+            state.orderHits = [];
+            state.orderQ = "";
+            state.pickFrom = "edit";
+            state.screen = "pick-order";
+            render();
+        };
+        const clr = document.getElementById("orderClear");
+        if (clr) clr.onclick = () => {
+            state.draft.order_id = null;
+            state.draft.order = null;
+            render();
+        };
+    }
+
+    function applyOrder(ord) {
+        const d = state.draft;
+        d.order_id = ord.id;
+        d.order = ord;
+        const src = ord.buyer || {};
+        d.buyer = {
+            name: src.name || ord.client_name || "",
+            inn: src.inn || ord.client_inn || "",
+            kpp: src.kpp || "", ogrn: src.ogrn || "", address: src.address || "",
+            phone: src.phone || "", bank: src.bank || "", rs: src.rs || "",
+            bik: src.bik || "", ks: src.ks || "",
+        };
+        d.lines = (ord.lines || []).map((ln) => ({
+            plant_id: ln.plant_id, size_id: ln.size_id,
+            plant_name: ln.plant_name, size_name: ln.size_name,
+            qty: ln.qty, price: ln.price, free_qty: ln.qty,
+        }));
+        state.screen = "edit";
+        render();
+    }
+
+    function renderPickOrder() {
+        setTitle("Счёт на заказ");
+        const hits = state.orderHits || [];
+        const q = state.orderQ || "";
+        const list = !q
+            ? `<p class="muted">Введите номер заказа, клиента или ИНН. Список сам не открывается — так не смешаются три заказа одного клиента.</p>`
+            : (hits.map((ord) => `
+                <button type="button" class="order-hit" data-oid="${ord.id}">
+                    <div class="row">
+                        <div>
+                            <div><b>Заказ №${ord.id}</b> · ${esc(ord.status_label || "")}</div>
+                            <div class="muted">${esc(ord.client_name || "Без клиента")}</div>
+                        </div>
+                        <div class="hit-sum">${money(ord.amount)}</div>
+                    </div>
+                    ${orderLinesHtml(ord, 4)}
+                </button>`).join("") || `<p class="muted">Ничего не найдено</p>`);
+        view.innerHTML = `
+            <button class="btn ghost" id="back">← Назад</button>
+            <input class="input" id="orderQ" placeholder="№ заказа, клиент или ИНН" value="${esc(q)}" inputmode="search">
+            <div id="orderHits" class="order-hits">${list}</div>`;
+        document.getElementById("back").onclick = () => {
+            state.screen = (state.pickFrom === "edit" || state.draft.order_id) ? "edit" : "list";
+            render();
+        };
+        const inp = document.getElementById("orderQ");
+        inp.focus();
+        let t = null;
+        inp.oninput = () => {
+            state.orderQ = inp.value;
+            clearTimeout(t);
+            t = setTimeout(() => searchOrders(inp.value), 220);
+        };
+        bindOrderHits();
+        if (q) searchOrders(q);
+    }
+
+    function bindOrderHits() {
+        view.querySelectorAll("[data-oid]").forEach((el) => {
+            el.onclick = async () => {
+                const id = Number(el.dataset.oid);
+                const cached = (state.orderHits || []).find((x) => Number(x.id) === id);
+                try {
+                    const full = await api(`/tg/sale/api/orders/${id}`);
+                    applyOrder(full);
+                } catch (e) {
+                    if (cached) applyOrder(cached);
+                    else alert(e.message || "Не удалось открыть заказ");
+                }
+            };
+        });
+    }
+
+    async function searchOrders(q) {
+        const box = document.getElementById("orderHits");
+        if (!box) return;
+        const query = String(q || "").trim();
+        state.orderQ = query;
+        if (!query) {
+            state.orderHits = [];
+            box.innerHTML = `<p class="muted">Введите номер заказа, клиента или ИНН. Список сам не открывается — так не смешаются три заказа одного клиента.</p>`;
+            return;
+        }
+        try {
+            const data = await api(`/tg/sale/api/orders?q=${encodeURIComponent(query)}`);
+            state.orderHits = data.orders || [];
+            box.innerHTML = state.orderHits.map((ord) => `
+                <button type="button" class="order-hit" data-oid="${ord.id}">
+                    <div class="row">
+                        <div>
+                            <div><b>Заказ №${ord.id}</b> · ${esc(ord.status_label || "")}</div>
+                            <div class="muted">${esc(ord.client_name || "Без клиента")}</div>
+                        </div>
+                        <div class="hit-sum">${money(ord.amount)}</div>
+                    </div>
+                    ${orderLinesHtml(ord, 4)}
+                </button>`).join("") || `<p class="muted">Ничего не найдено</p>`;
+            bindOrderHits();
+        } catch (e) {
+            box.innerHTML = `<p class="err">${esc(e.message || "Не удалось найти заказы")}</p>`;
+        }
     }
 
     function buyerFields(b) {
@@ -169,6 +337,7 @@
             </button>`).join("") || `<p class="muted">Сначала заполните фирмы (админ)</p>`;
         view.innerHTML = `
             <button class="btn ghost" id="back">← К списку</button>
+            ${orderBannerHtml(d)}
             <div class="label">Клиент</div>
             <div class="card">
                 <input type="file" id="buyerFile" accept=".pdf,.doc,.docx,image/*">
@@ -193,6 +362,7 @@
             </div>
             <button class="btn danger" id="discard" style="margin-top:8px">Удалить</button>` : ""}`;
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
+        bindOrderBanner();
         view.querySelectorAll("[data-co]").forEach((el) => {
             el.onclick = () => { d.company_id = Number(el.dataset.co); render(); };
         });
@@ -226,11 +396,12 @@
             <div class="card">
                 <span class="chip ok">согласован</span>
                 <h2 style="margin:10px 0 4px">${esc(inv.buyer_name)}</h2>
-                <p class="muted">${esc(companyName(inv))}</p>
+                <p class="muted">${esc(companyName(inv))}${inv.order_id ? ` · заказ №${inv.order_id}` : ""}</p>
                 <div class="tot" style="margin-top:10px">${money(inv.amount)}</div>
             </div>
+            ${inv.order ? `<div class="card order-banner">${orderLinesHtml(inv.order)}</div>` : ""}
             <button class="btn gold" id="pdf">Счёт в чат</button>
-            ${state.me && state.me.can_delete_approved ? `<button class="btn danger" id="discard" style="margin-top:8px">Удалить счёт и заказ</button>` : ""}`;
+            ${state.me && state.me.can_delete_approved ? `<button class="btn danger" id="discard" style="margin-top:8px">Удалить счёт${inv.from_existing_order ? "" : " и заказ"}</button>` : ""}`;
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
         document.getElementById("pdf").onclick = sendPdf;
         const ds = document.getElementById("discard");
@@ -536,6 +707,7 @@
         const b = state.draft.buyer;
         return {
             company_id: state.draft.company_id,
+            order_id: state.draft.order_id || null,
             buyer_name: b.name,
             buyer_inn: b.inn,
             buyer_kpp: b.kpp,
@@ -627,9 +799,12 @@
     async function discardInv() {
         if (!state.current) return;
         const approved = state.current.status === "approved";
+        const fromOrder = state.current.from_existing_order || (state.draft && state.draft.order_id);
         const msg = approved
-            ? "Удалить согласованный счёт и заказ в ERP? Резерв снимется."
-            : "Удалить черновик?";
+            ? (fromOrder
+                ? "Удалить согласованный счёт? Заказ в ERP останется."
+                : "Удалить согласованный счёт и заказ в ERP? Резерв снимется.")
+            : (fromOrder ? "Удалить черновик счёта? Заказ в ERP останется." : "Удалить черновик?");
         if (!confirm(msg)) return;
         try {
             await api(`/tg/sale/api/invoices/${state.current.id}/discard`, { method: "POST", body: "{}" });
@@ -646,10 +821,9 @@
     async function openInvoice(id) {
         const inv = (state.invoices || []).find((x) => x.id === id);
         if (!inv) return;
-        state.current = inv;
-        if (inv.status === "approved") { state.screen = "view"; render(); return; }
         const full = await api(`/tg/sale/api/invoices/${id}`);
         state.current = full;
+        if (full.status === "approved") { state.screen = "view"; render(); return; }
         state.draft = {
             company_id: full.company_id,
             buyer: {
@@ -659,6 +833,8 @@
                 bik: full.buyer_bik || "", ks: full.buyer_ks || "",
             },
             lines: (full.lines || []).map((ln) => Object.assign({ free_qty: ln.free_qty || 0 }, ln)),
+            order_id: full.order_id || null,
+            order: full.order || null,
         };
         state.screen = "edit";
         render();

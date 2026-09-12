@@ -5,7 +5,7 @@ import requests
 import json
 
 # Telegram Web caches Mini App pages by exact URL. Bump after JS/HTML changes.
-MINIAPP_CACHE_V = '20260910c'
+MINIAPP_CACHE_V = '20260912a'
 
 
 def miniapp_web_url(url: str) -> str:
