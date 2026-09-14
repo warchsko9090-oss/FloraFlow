@@ -72,6 +72,7 @@
             lines: [],
             order_id: null,
             order: null,
+            anonymous: false,
         };
     }
 
@@ -120,7 +121,7 @@
             <div class="list-item" data-open="${inv.id}">
                 <div class="row">
                     <div>
-                        <div><b>№${inv.id}</b> · ${esc(inv.buyer_name || "Без клиента")}</div>
+                        <div><b>№${inv.id}</b> · ${esc(inv.anonymous ? "Без плательщика" : (inv.buyer_name || "Без клиента"))}</div>
                         <div class="muted">${esc(companyName(inv))} · ${fmtDate(inv.created_at)}${inv.order_id ? ` · заказ №${inv.order_id}` : ""}</div>
                     </div>
                     <div>
@@ -338,6 +339,10 @@
         view.innerHTML = `
             <button class="btn ghost" id="back">← К списку</button>
             ${orderBannerHtml(d)}
+            <label class="check-row">
+                <input type="checkbox" id="anon"${d.anonymous ? " checked" : ""}>
+                <span>Обезличенный счёт — в PDF только поставщик, без плательщика</span>
+            </label>
             <div class="label">Клиент</div>
             <div class="card">
                 <input type="file" id="buyerFile" accept=".pdf,.doc,.docx,image/*">
@@ -363,6 +368,8 @@
             <button class="btn danger" id="discard" style="margin-top:8px">Удалить</button>` : ""}`;
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
         bindOrderBanner();
+        const anon = document.getElementById("anon");
+        if (anon) anon.onchange = () => { d.anonymous = anon.checked; };
         view.querySelectorAll("[data-co]").forEach((el) => {
             el.onclick = () => { d.company_id = Number(el.dataset.co); render(); };
         });
@@ -395,7 +402,8 @@
             <button class="btn ghost" id="back">← К списку</button>
             <div class="card">
                 <span class="chip ok">согласован</span>
-                <h2 style="margin:10px 0 4px">${esc(inv.buyer_name)}</h2>
+                ${inv.anonymous ? `<span class="chip">без плательщика</span>` : ""}
+                <h2 style="margin:10px 0 4px">${esc(inv.anonymous ? "Обезличенный счёт" : inv.buyer_name)}</h2>
                 <p class="muted">${esc(companyName(inv))}${inv.order_id ? ` · заказ №${inv.order_id}` : ""}</p>
                 <div class="tot" style="margin-top:10px">${money(inv.amount)}</div>
             </div>
@@ -708,6 +716,7 @@
         return {
             company_id: state.draft.company_id,
             order_id: state.draft.order_id || null,
+            anonymous: !!state.draft.anonymous,
             buyer_name: b.name,
             buyer_inn: b.inn,
             buyer_kpp: b.kpp,
@@ -835,6 +844,7 @@
             lines: (full.lines || []).map((ln) => Object.assign({ free_qty: ln.free_qty || 0 }, ln)),
             order_id: full.order_id || null,
             order: full.order || null,
+            anonymous: !!full.anonymous,
         };
         state.screen = "edit";
         render();

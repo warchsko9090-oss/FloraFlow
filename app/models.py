@@ -1884,6 +1884,7 @@ class SaleInvoice(db.Model):
     user = db.relationship('User')
     order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=True, index=True)
     from_existing_order = db.Column(db.Boolean, default=False)
+    anonymous = db.Column(db.Boolean, default=False)
     order = db.relationship('Order')
     lines = db.relationship(
         'SaleInvoiceLine',

@@ -150,6 +150,14 @@ def _digits(value: str | None, n: int | None = None) -> str:
     return s[:n] if n else s
 
 
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 def _find_client_by_inn(inn: str | None) -> Client | None:
     digits = _inn_digits(inn)
     if len(digits) not in (10, 12):
@@ -354,6 +362,8 @@ def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     npos = len(lines)
     pos_word = 'позиция' if npos == 1 else 'поз.'
     buyer = html_escape((inv.buyer_name or 'Без клиента').strip())
+    if inv.anonymous:
+        buyer = 'обезличенный (без плательщика)'
     shown = lines[:25]
     cards = _shop_cards(ln.plant_id for ln in shown)
     items = []
@@ -406,6 +416,7 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
         'lines_count': len(inv.lines or []),
         'order_id': inv.order_id,
         'from_existing_order': bool(inv.from_existing_order),
+        'anonymous': bool(inv.anonymous),
     }
     if detail:
         free_map = _free_pairs()
@@ -470,6 +481,11 @@ def _apply_buyer(inv: SaleInvoice, body: dict):
             inv.client_id = found.id
             if not (inv.buyer_name or '').strip():
                 inv.buyer_name = found.name
+
+
+def _apply_anonymous(inv: SaleInvoice, body: dict):
+    if 'anonymous' in body:
+        inv.anonymous = _as_bool(body.get('anonymous'))
 
 
 def _sync_client(inv: SaleInvoice):
@@ -1018,7 +1034,8 @@ def render_sale_pdf(inv: SaleInvoice) -> bytes | None:
             date_long=_date_long(doc_date),
             pay_until=pay_until,
             supplier_line=_supplier_line(company),
-            buyer_line=_buyer_line(inv),
+            buyer_line='' if inv.anonymous else _buyer_line(inv),
+            anonymous=bool(inv.anonymous),
             basis=(inv.comment or '').strip() or 'Без договора',
             sign_line=_sign_line(company),
             logo_uri=_logo_uri(),
@@ -1316,6 +1333,7 @@ def api_create(user: User):
         buyer_name='',
     )
     _apply_buyer(inv, body)
+    _apply_anonymous(inv, body)
     db.session.add(inv)
     db.session.flush()
     if 'order_id' in body:
@@ -1359,6 +1377,7 @@ def api_save(_user: User, inv_id: int):
     if 'comment' in body:
         inv.comment = str(body.get('comment') or '')[:500]
     _apply_buyer(inv, body)
+    _apply_anonymous(inv, body)
     if 'order_id' in body:
         _order, err = _link_existing_order(inv, body.get('order_id'))
         if err:
@@ -1485,10 +1504,15 @@ def api_send_pdf(user: User, inv_id: int):
     chat_id = current_telegram_id()
     if not chat_id:
         return jsonify({'ok': False, 'error': 'no_telegram_id'})
+    caption = (
+        f'Счёт №{inv.id} · без плательщика · {inv.amount} ₽'
+        if inv.anonymous else
+        f'Счёт №{inv.id} · {inv.buyer_name or "клиент"} · {inv.amount} ₽'
+    )
     ok, err = send_chat_document(
         chat_id,
         filename=inv.file_name or f'schet_{inv.id}.pdf',
-        caption=f'Счёт №{inv.id} · {inv.buyer_name or "клиент"} · {inv.amount} ₽',
+        caption=caption,
         file_bytes=bytes(blob),
     )
     return jsonify({'ok': bool(ok), 'error': err if not ok else None})
@@ -1502,7 +1526,7 @@ def api_approve(user: User, inv_id: int):
         return jsonify({'error': 'locked'}), 400
     if not inv.lines:
         return jsonify({'error': 'no_lines'}), 400
-    if not (inv.buyer_name or '').strip():
+    if not inv.anonymous and not (inv.buyer_name or '').strip():
         return jsonify({'error': 'need_buyer'}), 400
     inv.amount = _line_sum(inv.lines)
     _sync_client(inv)

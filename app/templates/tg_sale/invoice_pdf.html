@@ -99,10 +99,12 @@
             <td class="lbl">Поставщик<br/>(Исполнитель):</td>
             <td><b>{{ supplier_line }}</b></td>
         </tr>
+        {% if not anonymous %}
         <tr>
             <td class="lbl">Покупатель<br/>(Заказчик):</td>
             <td><b>{{ buyer_line }}</b></td>
         </tr>
+        {% endif %}
         <tr>
             <td class="lbl">Основание:</td>
             <td>{{ basis }}</td>

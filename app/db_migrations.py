@@ -35,6 +35,7 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('sale_invoice', 'buyer_phone', 'VARCHAR(40)', 'VARCHAR(40)'),
     ('sale_invoice', 'order_id', 'INTEGER', 'INTEGER'),
     ('sale_invoice', 'from_existing_order', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
+    ('sale_invoice', 'anonymous', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
     ('tg_task', 'completed_at', 'TIMESTAMP', 'DATETIME'),
     ('tg_task', 'completed_by_id', 'INTEGER', 'INTEGER'),
     ('tg_task', 'dedup_key', 'VARCHAR(255)', 'VARCHAR(255)'),
