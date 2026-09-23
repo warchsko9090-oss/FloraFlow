@@ -58,7 +58,7 @@ bp = Blueprint('vium', __name__, url_prefix='/vium')
 # helpers
 # ---------------------------------------------------------------------------
 
-ALLOWED_ROLES = ('admin', 'executive')
+ALLOWED_ROLES = ('admin', 'executive', 'shop_manager')
 
 UNIT_CHOICES = ['шт', 'кг', 'м', 'м2', 'рулон', 'упак', 'л']
 KIND_CHOICES = [

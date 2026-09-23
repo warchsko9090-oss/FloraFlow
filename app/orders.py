@@ -112,7 +112,7 @@ def _is_order_locked_for_manager(order, user):
 
 
 def _shop_manager_locks_meta(user):
-    """Активный менеджер продаж: можно qty/add/delete, нельзя price/field/year."""
+    """Активный менеджер продаж: нельзя field/year/split; цену и кол-во можно."""
     return _is_shop_sales_manager(user)
 
 
@@ -724,6 +724,12 @@ def sale_invoices_list():
     if status in ('draft', 'approved'):
         q = q.filter(SaleInvoice.status == status)
     invoices = q.order_by(SaleInvoice.id.desc()).limit(200).all()
+    try:
+        from app.tg_sale import align_sale_invoices_with_orders
+        align_sale_invoices_with_orders(commit=True)
+        invoices = q.order_by(SaleInvoice.id.desc()).limit(200).all()
+    except Exception:
+        db.session.rollback()
     return render_template('orders/sale_invoices.html', invoices=invoices, status=status)
 
 
@@ -747,7 +753,7 @@ def sale_invoice_discard(inv_id):
             return redirect(url_for('orders.sale_invoices_list'))
         raise
     db.session.commit()
-    log_action(f"Удалил счёт ТГ-{inv.id}" + (f" и заказ #{order.id}" if order else ""))
+    log_action(f"Удалил счёт №{inv.doc_number or inv.id}" + (f" и заказ #{order.id}" if order else ""))
     try:
         send_tg_message_orders(_discard_orders_text(inv, order))
     except Exception:
@@ -759,7 +765,7 @@ def sale_invoice_discard(inv_id):
 @bp.route('/orders/sale_invoices/<int:inv_id>/pdf')
 @login_required
 def sale_invoice_pdf(inv_id):
-    if current_user.role != 'admin':
+    if current_user.role not in ('admin', 'executive', 'shop_manager'):
         flash('Доступ запрещен')
         return redirect(url_for('orders.orders_list'))
     from app.models import SaleInvoice
@@ -776,8 +782,44 @@ def sale_invoice_pdf(inv_id):
         io.BytesIO(bytes(blob)),
         mimetype='application/pdf',
         as_attachment=False,
-        download_name=inv.file_name or f'schet_{inv.id}.pdf',
+        download_name=inv.file_name or f'schet_{inv.doc_number or inv.id}.pdf',
     )
+
+
+@bp.route('/orders/<int:order_id>/export-sale-invoice', methods=['POST'])
+@login_required
+def order_export_sale_invoice(order_id):
+    if current_user.role not in ('admin', 'executive', 'shop_manager'):
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+    o = Order.query.get_or_404(order_id)
+    from app.tg_sale import create_sale_invoice_from_order, sale_public_number
+    try:
+        company_id = int(request.form.get('company_id') or 0)
+    except (TypeError, ValueError):
+        company_id = 0
+    try:
+        inv = create_sale_invoice_from_order(o, company_id, current_user.id)
+        db.session.commit()
+    except ValueError as err:
+        db.session.rollback()
+        hints = {
+            'no_client': 'У заказа нет клиента',
+            'bad_order': 'Отменённый или скрытый заказ выгрузить нельзя',
+            'no_company': 'Сначала заполните фирму в Mini App (ИНН, банк, р/с, БИК)',
+            'no_lines': 'В заказе нет позиций',
+            'pdf_failed': 'Не удалось собрать PDF счёта',
+        }
+        flash(hints.get(str(err), f'Не удалось выгрузить счёт: {err}'))
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('export sale invoice from order %s', order_id)
+        flash('Не удалось выгрузить счёт')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+    log_action(f"Выгрузил счёт Mini App №{sale_public_number(inv)} из заказа #{o.id}")
+    flash(f'Счёт №{sale_public_number(inv)} в Mini App. PDF как в боте.')
+    return redirect(url_for('orders.sale_invoice_pdf', inv_id=inv.id))
 
 
 @bp.route('/orders/client_draft/<int:doc_id>', methods=['GET', 'POST'])
@@ -1413,6 +1455,12 @@ def order_detail(order_id):
             
             if current_user.role in ['admin', 'executive']:
                 o.is_barter = request.form.get('is_barter') == 'on'
+
+            try:
+                from app.tg_sale import sync_sale_invoices_from_order
+                sync_sale_invoices_from_order(o)
+            except Exception:
+                current_app.logger.exception('sync sale invoice client from order')
                 
             db.session.commit()
             flash('Обновлено')
@@ -1570,14 +1618,17 @@ def order_detail(order_id):
                     continue
 
                 new_qty = int(qtys[i])
-                # Активный менеджер продаж: только кол-во; цена/поле/партия — как было.
+                # Активный менеджер продаж: поле и партия — как было; цену можно менять.
                 if shop_locks:
                     new_field_id = it.field_id
                     new_year = it.year
                     try:
-                        new_price_forced = float(it.price or 0)
+                        new_price_forced = float(prices[i] or it.price or 0)
                     except Exception:
-                        new_price_forced = 0.0
+                        try:
+                            new_price_forced = float(it.price or 0)
+                        except Exception:
+                            new_price_forced = 0.0
                 else:
                     new_field_id = int(flds[i])
                     new_year = int(yrs[i])
@@ -1782,6 +1833,11 @@ def order_detail(order_id):
                     wholesale = float(wholesale or 0)
                 except Exception:
                     wholesale = 0
+                try:
+                    form_price = float(request.form.get('price') or 0)
+                except (TypeError, ValueError):
+                    form_price = 0
+                item_price = form_price if form_price > 0 else order_default_price(p, s, wholesale)
                 new_item = OrderItem(
                     order_id=o.id,
                     plant_id=p,
@@ -1789,7 +1845,7 @@ def order_detail(order_id):
                     field_id=None,
                     year=None,
                     quantity=q,
-                    price=order_default_price(p, s, wholesale),
+                    price=item_price,
                 )
                 db.session.add(new_item)
                 db.session.flush()
@@ -2179,8 +2235,28 @@ def order_detail(order_id):
     order_paid_total = _order_paid_total(o.id)
     order_locked_for_manager = _is_order_locked_for_manager(o, current_user)
     shop_manager_locks = _shop_manager_locks_meta(current_user)
-    # UI: блокируем поле/цену/партию и для оплаченного user, и для shop_manager всегда
+    # Поле/партия: lock для оплаченного менеджера питомника и для shop_manager.
+    # Цену shop_manager может менять; nursery user — нет, если заказ оплачен.
     meta_locked = order_locked_for_manager or shop_manager_locks
+    price_locked = order_locked_for_manager
+
+    sale_mini_invoice = None
+    sale_companies = []
+    try:
+        from app.models import SaleInvoice, SaleCompany
+        from app.tg_sale import _company_ready
+        sale_mini_invoice = (
+            SaleInvoice.query
+            .filter(SaleInvoice.order_id == o.id, SaleInvoice.status != 'discarded')
+            .order_by(SaleInvoice.id.desc())
+            .first()
+        )
+        sale_companies = [
+            c for c in SaleCompany.query.order_by(SaleCompany.sort_order, SaleCompany.id).all()
+            if c.is_active and _company_ready(c)
+        ]
+    except Exception:
+        current_app.logger.exception('order_detail sale invoice block')
 
     # История изменений позиций — только для админа. Запросом не утяжеляем
     # страницу для других ролей. Лимит 200 событий хватает с запасом, кнопка
@@ -2228,8 +2304,11 @@ def order_detail(order_id):
                            order_locked_for_manager=order_locked_for_manager,
                            shop_manager_locks=shop_manager_locks,
                            meta_locked=meta_locked,
+                           price_locked=price_locked,
                            order_history_rows=order_history_rows,
-                           return_to=return_to)
+                           return_to=return_to,
+                           sale_mini_invoice=sale_mini_invoice,
+                           sale_companies=sale_companies)
 
 @bp.route('/order/download_payment_file/<int:payment_id>')
 @login_required
@@ -2862,90 +2941,247 @@ def invoice_detail(client_id, invoice_number):
                            shipments=all_shipments,
                            return_to=return_to)
 
-@bp.route('/orders/export')
-@login_required
-def export_orders():
-    """Excel-выгрузка списка заказов.
+def _commercial_proposal_styles():
+    """Общие стили листа «Коммерческое предложение» (список заказов / печать)."""
+    return {
+        'style_order_header': PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid"),
+        'style_sub_header': PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid"),
+        'style_table_header': PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid"),
+        'style_total': PatternFill(start_color="F1F8E9", end_color="F1F8E9", fill_type="solid"),
+        'style_grand_total': PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid"),
+        'style_date_row': PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid"),
+        'font_order_header': Font(bold=True, color="FFFFFF", size=13),
+        'font_sub_header': Font(bold=True, color="1B5E20", size=11),
+        'font_table_header': Font(bold=True, color="000000"),
+        'font_total': Font(bold=True),
+        'border_total': Border(top=Side(style='thick')),
+        'thin_border': Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin'),
+        ),
+        'align_center': Alignment(horizontal="center", vertical="center"),
+        'align_right': Alignment(horizontal="right", vertical="center"),
+        'align_left': Alignment(horizontal="left", vertical="center"),
+        # Колонка «Размер» шире 14: длинные значения вида «140-160 * 100-120»
+        # иначе обрезаются в Excel (отображается «...»).
+        'columns': ["Растение", "Размер", "Поле", "Год", "Цена", "Кол-во", "Сумма"],
+        'col_widths': [33, 28, 12, 8, 14, 10, 18],
+    }
 
-    Учитывает все фильтры со страницы /orders (клиент, статус, даты, режим
-    активные/скрытые) плюс multi-select «По номеру заказа» (`filter_ids`).
-    Если пользователь отметил конкретные номера в фильтре — Excel выгрузит
-    только их. Иначе — все заказы по текущим фильтрам.
 
-    Дизайн копирует «красивый» отчёт `export_order_history`: для каждого
-    заказа собственная зелёная шапка, светло-зелёная подшапка с клиентом,
-    таблица позиций (без столбцов «Первоначально / Изменения» — мы хотим
-    видеть только фактические числа на момент выгрузки) и блок ИТОГО /
-    Оплачено / Остаток. Между заказами — пустая строка-разделитель.
+def _fit_commercial_size_column(ws, size_names, col_idx=2, min_width=28, max_width=48):
+    """Подгоняет ширину столбца «Размер» под самый длинный размер в выгрузке."""
+    longest = max((len(str(n or '')) for n in size_names), default=0)
+    width = max(min_width, min(max_width, longest + 2))
+    ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-    В конце листа — общий итог по выгруженной выборке (кол-во заказов,
-    суммарная сумма, оплачено и остаток), чтобы при многозаказной выгрузке
-    сразу был виден сводный показатель.
+
+def _append_order_commercial_block(ws, o, row_idx, styles, *, with_print_dates=False):
+    """Рисует один заказ в формате «Коммерческое предложение».
+
+    Возвращает (next_row_idx, order_total_qty, order_total_sum, paid_sum, size_names).
+    При with_print_dates=True под блоком оплаты добавляются пустые строки
+    «Дата биркования / Дата начала копки / Дата отгрузки» — для печати.
     """
-    f_client = request.args.get('filter_client')
-    f_status = request.args.get('filter_status')
-    f_date_start = request.args.get('start_date')
-    f_date_end = request.args.get('end_date')
-    mode = request.args.get('mode', 'active')
+    style_order_header = styles['style_order_header']
+    style_sub_header = styles['style_sub_header']
+    style_table_header = styles['style_table_header']
+    style_total = styles['style_total']
+    style_date_row = styles['style_date_row']
+    font_order_header = styles['font_order_header']
+    font_sub_header = styles['font_sub_header']
+    font_table_header = styles['font_table_header']
+    font_total = styles['font_total']
+    border_total = styles['border_total']
+    thin_border = styles['thin_border']
+    align_center = styles['align_center']
+    align_right = styles['align_right']
+    align_left = styles['align_left']
+    columns = styles['columns']
 
-    # Multi-select по номерам заказов из фильтра на /orders. Приходит как
-    # ?filter_ids=1&filter_ids=5&filter_ids=12. Дополнительно поддерживаем
-    # старый формат ?ids=1,5,12 на случай прямых ссылок.
-    f_ids_raw = request.args.getlist('filter_ids')
-    if not f_ids_raw and request.args.get('ids'):
-        f_ids_raw = (request.args.get('ids') or '').split(',')
-    selected_ids = []
-    for v in f_ids_raw:
-        v = (v or '').strip()
-        if v.isdigit():
-            selected_ids.append(int(v))
+    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
+    cell = ws.cell(
+        row=row_idx, column=1,
+        value=f"Заказ №{o.id} от {o.date.strftime('%d.%m.%Y')}"
+    )
+    cell.fill = style_order_header
+    cell.font = font_order_header
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row_idx].height = 26
+    row_idx += 1
 
-    # Применяем тот же набор фильтров, что и на странице /orders, плюс
-    # фильтр по выбранным номерам. Это гарантирует, что Excel содержит
-    # ровно то, что сейчас видно в списке.
-    q = Order.query.filter_by(is_deleted=(mode == 'trash'))
-    if f_client:
-        q = q.filter(Order.client_id == int(f_client))
-    if f_status:
-        q = q.filter(Order.status == f_status)
-    if not f_status:
-        q = q.filter(Order.status != 'ghost')
-    if f_date_start:
-        q = q.filter(func.date(Order.date) >= f_date_start)
-    if f_date_end:
-        q = q.filter(func.date(Order.date) <= f_date_end)
-    if selected_ids:
-        q = q.filter(Order.id.in_(selected_ids))
-    orders = q.order_by(Order.date.desc()).all()
+    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
+    client_name = o.client.name if o.client else '—'
+    sub_parts = [f"Клиент: {client_name}", f"Статус: {o.status}"]
+    if o.invoice_number:
+        inv_part = f"Счёт: {o.invoice_number}"
+        if o.invoice_date:
+            inv_part += f" от {o.invoice_date.strftime('%d.%m.%Y')}"
+        sub_parts.append(inv_part)
+    c_client = ws.cell(row=row_idx, column=1, value="    |    ".join(sub_parts))
+    c_client.fill = style_sub_header
+    c_client.font = font_sub_header
+    c_client.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row_idx].height = 22
+    row_idx += 2
 
+    for col_num, col_name in enumerate(columns, 1):
+        c = ws.cell(row=row_idx, column=col_num, value=col_name)
+        c.fill = style_table_header
+        c.font = font_table_header
+        c.border = thin_border
+        c.alignment = align_center
+    row_idx += 1
+
+    items_sorted = sorted(
+        o.items,
+        key=lambda it: (
+            (it.plant.name if it.plant else '').lower(),
+            natural_key(it.size.name if it.size else ''),
+            (it.field.name if it.field else '').lower(),
+            it.year or 0,
+        ),
+    )
+
+    order_total_qty = 0
+    order_total_sum = Decimal('0')
+    size_names = []
+
+    for item in items_sorted:
+        plant_name = item.plant.name if item.plant else '—'
+        size_name = item.size.name if item.size else '—'
+        field_name = item.field.name if item.field else '—'
+        size_names.append(size_name)
+        qty = int(item.quantity or 0)
+        price = Decimal(str(item.price or 0))
+        line_sum = price * Decimal(qty)
+
+        c_plant = ws.cell(row=row_idx, column=1, value=plant_name)
+        c_plant.border = thin_border
+        c_size = ws.cell(row=row_idx, column=2, value=size_name)
+        c_size.border = thin_border
+        c_size.alignment = align_left
+        c_field = ws.cell(row=row_idx, column=3, value=field_name)
+        c_field.border = thin_border
+        c_field.alignment = align_center
+
+        c_year = ws.cell(row=row_idx, column=4, value=item.year)
+        c_year.border = thin_border
+        c_year.alignment = align_center
+
+        c_price = ws.cell(row=row_idx, column=5, value=float(price))
+        c_price.border = thin_border
+        c_price.number_format = '#,##0.00 "₽"'
+
+        c_qty = ws.cell(row=row_idx, column=6, value=qty)
+        c_qty.border = thin_border
+        c_qty.alignment = align_center
+
+        c_sum = ws.cell(row=row_idx, column=7, value=float(line_sum))
+        c_sum.border = thin_border
+        c_sum.number_format = '#,##0.00 "₽"'
+        c_sum.font = Font(bold=True)
+
+        order_total_qty += qty
+        order_total_sum += line_sum
+        row_idx += 1
+
+    c_label = ws.cell(row=row_idx, column=5, value="ИТОГО:")
+    c_label.font = font_total
+    c_label.alignment = align_right
+    c_label.border = border_total
+    c_label.fill = style_total
+    c_t_qty = ws.cell(row=row_idx, column=6, value=order_total_qty)
+    c_t_qty.font = font_total
+    c_t_qty.alignment = align_center
+    c_t_qty.border = border_total
+    c_t_qty.fill = style_total
+    c_t_sum = ws.cell(row=row_idx, column=7, value=float(order_total_sum))
+    c_t_sum.font = font_total
+    c_t_sum.number_format = '#,##0.00 "₽"'
+    c_t_sum.border = border_total
+    c_t_sum.fill = style_total
+    for col_idx in range(1, 5):
+        cc = ws.cell(row=row_idx, column=col_idx)
+        cc.fill = style_total
+        cc.border = border_total
+    row_idx += 2
+
+    total_sum = Decimal(str(o.total_sum or 0))
+    paid_sum = Decimal(str(o.paid_sum or 0))
+    debt = total_sum - paid_sum
+    summary_titles = ["Сумма заказа", "Оплачено", "Остаток"]
+    summary_values = [float(total_sum), float(paid_sum), float(debt)]
+    summary_cols = [(1, 2), (3, 4), (5, 7)]
+
+    for idx, title in enumerate(summary_titles):
+        start_col, end_col = summary_cols[idx]
+        ws.merge_cells(start_row=row_idx, start_column=start_col,
+                       end_row=row_idx, end_column=end_col)
+        t_cell = ws.cell(row=row_idx, column=start_col, value=title)
+        t_cell.fill = style_sub_header
+        t_cell.font = font_sub_header
+        t_cell.alignment = align_center
+        t_cell.border = thin_border
+        for c in range(start_col + 1, end_col + 1):
+            ws.cell(row=row_idx, column=c).border = thin_border
+    row_idx += 1
+
+    for idx, value in enumerate(summary_values):
+        start_col, end_col = summary_cols[idx]
+        ws.merge_cells(start_row=row_idx, start_column=start_col,
+                       end_row=row_idx, end_column=end_col)
+        v_cell = ws.cell(row=row_idx, column=start_col, value=value)
+        v_cell.font = Font(bold=True, size=12, color="1B5E20")
+        v_cell.alignment = align_center
+        v_cell.number_format = '#,##0.00 "₽"'
+        v_cell.border = thin_border
+        for c in range(start_col + 1, end_col + 1):
+            ws.cell(row=row_idx, column=c).border = thin_border
+    row_idx += 2
+
+    if with_print_dates:
+        for label in ("Дата биркования", "Дата начала копки", "Дата отгрузки"):
+            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=4)
+            lbl = ws.cell(row=row_idx, column=1, value=label)
+            lbl.fill = style_date_row
+            lbl.font = Font(bold=True, size=11)
+            lbl.alignment = align_left
+            lbl.border = thin_border
+            for c in range(2, 5):
+                cell_mid = ws.cell(row=row_idx, column=c)
+                cell_mid.fill = style_date_row
+                cell_mid.border = thin_border
+            ws.merge_cells(start_row=row_idx, start_column=5, end_row=row_idx, end_column=7)
+            blank = ws.cell(row=row_idx, column=5, value="")
+            blank.fill = style_date_row
+            blank.border = thin_border
+            for c in range(6, 8):
+                cell_r = ws.cell(row=row_idx, column=c)
+                cell_r.fill = style_date_row
+                cell_r.border = thin_border
+            ws.row_dimensions[row_idx].height = 22
+            row_idx += 1
+        row_idx += 1
+
+    # Пустая строка-разделитель между заказами.
+    row_idx += 1
+    return row_idx, order_total_qty, order_total_sum, paid_sum, size_names
+
+
+def _build_commercial_workbook(orders, *, with_print_dates=False):
+    """Собирает xlsx «Коммерческое предложение» по списку заказов."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Заказы"
+    styles = _commercial_proposal_styles()
+    style_grand_total = styles['style_grand_total']
+    font_sub_header = styles['font_sub_header']
+    thin_border = styles['thin_border']
+    align_center = styles['align_center']
+    align_right = styles['align_right']
 
-    # --- Палитра/стили (как в export_order_history) -----------------------
-    style_order_header = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
-    style_sub_header = PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid")
-    style_table_header = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
-    style_total = PatternFill(start_color="F1F8E9", end_color="F1F8E9", fill_type="solid")
-    style_grand_total = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
-    font_order_header = Font(bold=True, color="FFFFFF", size=13)
-    font_sub_header = Font(bold=True, color="1B5E20", size=11)
-    font_table_header = Font(bold=True, color="000000")
-    font_total = Font(bold=True)
-    border_total = Border(top=Side(style='thick'))
-    thin_border = Border(
-        left=Side(style='thin'), right=Side(style='thin'),
-        top=Side(style='thin'), bottom=Side(style='thin'),
-    )
-    align_center = Alignment(horizontal="center", vertical="center")
-    align_right = Alignment(horizontal="right", vertical="center")
-
-    # 7 колонок (как в истории заказа), но без «Первоначально / Изменения».
-    # «Поле» и «Год» нужны при многозаказной выгрузке: один и тот же размер
-    # может встречаться у разных партий и без поля/года их не отличить.
-    columns = ["Растение", "Размер", "Поле", "Год", "Цена", "Кол-во", "Сумма"]
-    col_widths = [33, 14, 16, 8, 14, 10, 18]
-    for i, w in enumerate(col_widths, 1):
+    for i, w in enumerate(styles['col_widths'], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     row_idx = 1
@@ -2953,162 +3189,22 @@ def export_orders():
     grand_total_sum = Decimal('0')
     grand_total_paid = Decimal('0')
     exported_count = 0
+    all_size_names = []
 
     for o in orders:
         if not o.items:
             continue
-
-        # Шапка заказа (зелёная) — №, дата, статус
-        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
-        cell = ws.cell(
-            row=row_idx, column=1,
-            value=f"Заказ №{o.id} от {o.date.strftime('%d.%m.%Y')}"
+        row_idx, order_total_qty, order_total_sum, paid_sum, size_names = _append_order_commercial_block(
+            ws, o, row_idx, styles, with_print_dates=with_print_dates,
         )
-        cell.fill = style_order_header
-        cell.font = font_order_header
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        ws.row_dimensions[row_idx].height = 26
-        row_idx += 1
-
-        # Подшапка — клиент + счёт + статус
-        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
-        client_name = o.client.name if o.client else '—'
-        sub_parts = [f"Клиент: {client_name}", f"Статус: {o.status}"]
-        if o.invoice_number:
-            inv_part = f"Счёт: {o.invoice_number}"
-            if o.invoice_date:
-                inv_part += f" от {o.invoice_date.strftime('%d.%m.%Y')}"
-            sub_parts.append(inv_part)
-        c_client = ws.cell(row=row_idx, column=1, value="    |    ".join(sub_parts))
-        c_client.fill = style_sub_header
-        c_client.font = font_sub_header
-        c_client.alignment = Alignment(horizontal="center", vertical="center")
-        ws.row_dimensions[row_idx].height = 22
-        row_idx += 2
-
-        # Заголовки таблицы позиций
-        for col_num, col_name in enumerate(columns, 1):
-            c = ws.cell(row=row_idx, column=col_num, value=col_name)
-            c.fill = style_table_header
-            c.font = font_table_header
-            c.border = thin_border
-            c.alignment = align_center
-        row_idx += 1
-
-        # Позиции — фактические числа на момент выгрузки.
-        # Сортируем для удобочитаемости: растение → размер → поле → год.
-        items_sorted = sorted(
-            o.items,
-            key=lambda it: (
-                (it.plant.name if it.plant else '').lower(),
-                natural_key(it.size.name if it.size else ''),
-                (it.field.name if it.field else '').lower(),
-                it.year or 0,
-            ),
-        )
-
-        order_total_qty = 0
-        order_total_sum = Decimal('0')
-
-        for item in items_sorted:
-            plant_name = item.plant.name if item.plant else '—'
-            size_name = item.size.name if item.size else '—'
-            field_name = item.field.name if item.field else '—'
-            qty = int(item.quantity or 0)
-            price = Decimal(str(item.price or 0))
-            line_sum = price * Decimal(qty)
-
-            ws.cell(row=row_idx, column=1, value=plant_name).border = thin_border
-            ws.cell(row=row_idx, column=2, value=size_name).border = thin_border
-            c_field = ws.cell(row=row_idx, column=3, value=field_name)
-            c_field.border = thin_border
-            c_field.alignment = align_center
-
-            c_year = ws.cell(row=row_idx, column=4, value=item.year)
-            c_year.border = thin_border
-            c_year.alignment = align_center
-
-            c_price = ws.cell(row=row_idx, column=5, value=float(price))
-            c_price.border = thin_border
-            c_price.number_format = '#,##0.00 "₽"'
-
-            c_qty = ws.cell(row=row_idx, column=6, value=qty)
-            c_qty.border = thin_border
-            c_qty.alignment = align_center
-
-            c_sum = ws.cell(row=row_idx, column=7, value=float(line_sum))
-            c_sum.border = thin_border
-            c_sum.number_format = '#,##0.00 "₽"'
-            c_sum.font = Font(bold=True)
-
-            order_total_qty += qty
-            order_total_sum += line_sum
-            row_idx += 1
-
-        # ИТОГО по заказу
-        c_label = ws.cell(row=row_idx, column=5, value="ИТОГО:")
-        c_label.font = font_total
-        c_label.alignment = align_right
-        c_label.border = border_total
-        c_label.fill = style_total
-        c_t_qty = ws.cell(row=row_idx, column=6, value=order_total_qty)
-        c_t_qty.font = font_total
-        c_t_qty.alignment = align_center
-        c_t_qty.border = border_total
-        c_t_qty.fill = style_total
-        c_t_sum = ws.cell(row=row_idx, column=7, value=float(order_total_sum))
-        c_t_sum.font = font_total
-        c_t_sum.number_format = '#,##0.00 "₽"'
-        c_t_sum.border = border_total
-        c_t_sum.fill = style_total
-        # Закрасим пустые ячейки слева, чтобы тоновая полоса была сплошной
-        for col_idx in range(1, 5):
-            cc = ws.cell(row=row_idx, column=col_idx)
-            cc.fill = style_total
-            cc.border = border_total
-        row_idx += 2
-
-        # Блок «Сумма заказа / Оплачено / Остаток»
-        total_sum = Decimal(str(o.total_sum or 0))
-        paid_sum = Decimal(str(o.paid_sum or 0))
-        debt = total_sum - paid_sum
-        summary_titles = ["Сумма заказа", "Оплачено", "Остаток"]
-        summary_values = [float(total_sum), float(paid_sum), float(debt)]
-        summary_cols = [(1, 2), (3, 4), (5, 7)]
-
-        for idx, title in enumerate(summary_titles):
-            start_col, end_col = summary_cols[idx]
-            ws.merge_cells(start_row=row_idx, start_column=start_col,
-                           end_row=row_idx, end_column=end_col)
-            t_cell = ws.cell(row=row_idx, column=start_col, value=title)
-            t_cell.fill = style_sub_header
-            t_cell.font = font_sub_header
-            t_cell.alignment = align_center
-            t_cell.border = thin_border
-            for c in range(start_col + 1, end_col + 1):
-                ws.cell(row=row_idx, column=c).border = thin_border
-        row_idx += 1
-
-        for idx, value in enumerate(summary_values):
-            start_col, end_col = summary_cols[idx]
-            ws.merge_cells(start_row=row_idx, start_column=start_col,
-                           end_row=row_idx, end_column=end_col)
-            v_cell = ws.cell(row=row_idx, column=start_col, value=value)
-            v_cell.font = Font(bold=True, size=12, color="1B5E20")
-            v_cell.alignment = align_center
-            v_cell.number_format = '#,##0.00 "₽"'
-            v_cell.border = thin_border
-            for c in range(start_col + 1, end_col + 1):
-                ws.cell(row=row_idx, column=c).border = thin_border
-        # Пустая строка-разделитель между заказами.
-        row_idx += 3
-
+        all_size_names.extend(size_names)
         grand_total_qty += order_total_qty
         grand_total_sum += order_total_sum
         grand_total_paid += paid_sum
         exported_count += 1
 
-    # --- Общий итог по выборке (только если выгружено больше 1 заказа) ----
+    _fit_commercial_size_column(ws, all_size_names)
+
     if exported_count > 1:
         ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
         gh = ws.cell(
@@ -3170,6 +3266,66 @@ def export_orders():
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
+    return buf, exported_count
+
+
+@bp.route('/orders/export')
+@login_required
+def export_orders():
+    """Excel-выгрузка списка заказов.
+
+    Учитывает все фильтры со страницы /orders (клиент, статус, даты, режим
+    активные/скрытые) плюс multi-select «По номеру заказа» (`filter_ids`).
+    Если пользователь отметил конкретные номера в фильтре — Excel выгрузит
+    только их. Иначе — все заказы по текущим фильтрам.
+
+    Дизайн копирует «красивый» отчёт `export_order_history`: для каждого
+    заказа собственная зелёная шапка, светло-зелёная подшапка с клиентом,
+    таблица позиций (без столбцов «Первоначально / Изменения» — мы хотим
+    видеть только фактические числа на момент выгрузки) и блок ИТОГО /
+    Оплачено / Остаток. Между заказами — пустая строка-разделитель.
+
+    В конце листа — общий итог по выгруженной выборке (кол-во заказов,
+    суммарная сумма, оплачено и остаток), чтобы при многозаказной выгрузке
+    сразу был виден сводный показатель.
+    """
+    f_client = request.args.get('filter_client')
+    f_status = request.args.get('filter_status')
+    f_date_start = request.args.get('start_date')
+    f_date_end = request.args.get('end_date')
+    mode = request.args.get('mode', 'active')
+
+    # Multi-select по номерам заказов из фильтра на /orders. Приходит как
+    # ?filter_ids=1&filter_ids=5&filter_ids=12. Дополнительно поддерживаем
+    # старый формат ?ids=1,5,12 на случай прямых ссылок.
+    f_ids_raw = request.args.getlist('filter_ids')
+    if not f_ids_raw and request.args.get('ids'):
+        f_ids_raw = (request.args.get('ids') or '').split(',')
+    selected_ids = []
+    for v in f_ids_raw:
+        v = (v or '').strip()
+        if v.isdigit():
+            selected_ids.append(int(v))
+
+    # Применяем тот же набор фильтров, что и на странице /orders, плюс
+    # фильтр по выбранным номерам. Это гарантирует, что Excel содержит
+    # ровно то, что сейчас видно в списке.
+    q = Order.query.filter_by(is_deleted=(mode == 'trash'))
+    if f_client:
+        q = q.filter(Order.client_id == int(f_client))
+    if f_status:
+        q = q.filter(Order.status == f_status)
+    if not f_status:
+        q = q.filter(Order.status != 'ghost')
+    if f_date_start:
+        q = q.filter(func.date(Order.date) >= f_date_start)
+    if f_date_end:
+        q = q.filter(func.date(Order.date) <= f_date_end)
+    if selected_ids:
+        q = q.filter(Order.id.in_(selected_ids))
+    orders = q.order_by(Order.date.desc()).all()
+
+    buf, _exported_count = _build_commercial_workbook(orders, with_print_dates=False)
     filename = f'Коммерческое предложение {msk_now().strftime("%d.%m.%Y")}.xlsx'
 
     return send_file(
@@ -3177,6 +3333,74 @@ def export_orders():
         download_name=filename,
         as_attachment=True,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+
+@bp.route('/order/<int:order_id>/print.xlsx')
+@login_required
+def export_order_print(order_id):
+    """Excel одного заказа для печати: тот же формат, что у /orders/export,
+    плюс поля «Дата биркования / Дата начала копки / Дата отгрузки».
+    """
+    o = Order.query.get_or_404(order_id)
+    buf, _n = _build_commercial_workbook([o], with_print_dates=True)
+    filename = f'Заказ №{o.id} от {o.date.strftime("%d.%m.%Y")}.xlsx'
+    return send_file(
+        buf,
+        download_name=filename,
+        as_attachment=True,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+
+@bp.route('/order/<int:order_id>/print')
+@login_required
+def order_print_page(order_id):
+    """Страница печати заказа: скачивает xlsx и сразу открывает диалог печати.
+
+    Браузер не умеет корректно «напечатать» xlsx сам, поэтому файл
+    скачивается в формате Excel, а на принтер уходит HTML-копия того же
+    макета (включая пустые поля дат под заказом).
+    """
+    o = Order.query.get_or_404(order_id)
+    items_sorted = sorted(
+        o.items or [],
+        key=lambda it: (
+            (it.plant.name if it.plant else '').lower(),
+            natural_key(it.size.name if it.size else ''),
+            (it.field.name if it.field else '').lower(),
+            it.year or 0,
+        ),
+    )
+    lines = []
+    total_qty = 0
+    total_sum = Decimal('0')
+    for item in items_sorted:
+        qty = int(item.quantity or 0)
+        price = Decimal(str(item.price or 0))
+        line_sum = price * Decimal(qty)
+        total_qty += qty
+        total_sum += line_sum
+        lines.append({
+            'plant': item.plant.name if item.plant else '—',
+            'size': item.size.name if item.size else '—',
+            'field': item.field.name if item.field else '—',
+            'year': item.year,
+            'price': price,
+            'qty': qty,
+            'sum': line_sum,
+        })
+    paid = Decimal(str(o.paid_sum or 0))
+    order_sum = Decimal(str(o.total_sum or 0))
+    return render_template(
+        'orders/order_print.html',
+        order=o,
+        lines=lines,
+        total_qty=total_qty,
+        total_sum=total_sum,
+        paid_sum=paid,
+        debt=order_sum - paid,
+        xlsx_url=url_for('orders.export_order_print', order_id=o.id),
     )
 
 

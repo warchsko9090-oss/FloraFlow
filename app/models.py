@@ -1176,6 +1176,47 @@ class DiggingTask(db.Model):
     item = db.relationship('OrderItem', backref=db.backref('digging_tasks', lazy=True))
     created_by = db.relationship('User')
 
+
+# --- ПЛАН ОТГРУЗКИ (календарь плана выкопки) ---
+class ShipmentPlan(db.Model):
+    """Запланированная дата отгрузки заказа — красная метка в календаре выкопки."""
+    __tablename__ = 'shipment_plan'
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False, index=True)
+    planned_date = db.Column(db.Date, nullable=False, index=True)
+    comment = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+
+    order = db.relationship('Order', backref=db.backref('shipment_plans', lazy=True, cascade='all, delete-orphan'))
+    created_by = db.relationship('User')
+
+    __table_args__ = (
+        db.UniqueConstraint('order_id', name='uq_shipment_plan_order'),
+    )
+
+
+# --- ВЫХОДНЫЕ В КАЛЕНДАРЕ ВЫКОПКИ ---
+# kind: crew_off — выходной рабочей бригады; brigadier_off — выходной бригадира.
+class DiggingCalendarMark(db.Model):
+    __tablename__ = 'digging_calendar_mark'
+    KIND_CREW_OFF = 'crew_off'
+    KIND_BRIGADIER_OFF = 'brigadier_off'
+    KINDS = (KIND_CREW_OFF, KIND_BRIGADIER_OFF)
+
+    id = db.Column(db.Integer, primary_key=True)
+    planned_date = db.Column(db.Date, nullable=False, index=True)
+    kind = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+
+    created_by = db.relationship('User')
+
+    __table_args__ = (
+        db.UniqueConstraint('planned_date', 'kind', name='uq_digging_cal_mark_day_kind'),
+    )
+
+
 # --- ЗАДАЧИ ИЗ TELEGRAM (AI ПАРСИНГ) ---
 class TgTask(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1878,6 +1919,11 @@ class SaleInvoice(db.Model):
     buyer_phone = db.Column(db.String(40), nullable=True)
     file_blob = db.Column(db.LargeBinary)
     file_name = db.Column(db.String(255), nullable=True)
+    # Номер для клиента/PDF: с 100, сброс каждый календарный год (MSK).
+    doc_number = db.Column(db.Integer, nullable=True, index=True)
+    doc_year = db.Column(db.Integer, nullable=True, index=True)
+    # miniapp — создан в Telegram; erp — выгружен из заказа ERP (заказ не трогаем при удалении счёта).
+    origin = db.Column(db.String(20), nullable=False, default='miniapp')
 
     company = db.relationship('SaleCompany')
     client = db.relationship('Client')

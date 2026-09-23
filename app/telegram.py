@@ -1,8 +1,28 @@
 import os
 import io
 import re
-import requests
 import json
+import logging
+import requests
+from urllib.parse import urlsplit
+
+log = logging.getLogger(__name__)
+
+_SESSION = None
+_SESSION_PROXY = object()
+_PROXY_CACHE = {'url': None, 'ts': 0}
+
+_PROXY_ENV_KEYS = (
+    'TG_PROXY', 'TELEGRAM_PROXY',
+    'HTTPS_PROXY', 'https_proxy',
+    'ALL_PROXY', 'all_proxy',
+    'HTTP_PROXY', 'http_proxy',
+)
+_PROXY_SETTING_KEYS = (
+    'tg_proxy', 'telegram_proxy', 'https_proxy', 'http_proxy',
+    'socks_proxy', 'proxy',
+)
+
 
 # Telegram Web caches Mini App pages by exact URL. Bump after JS/HTML changes.
 MINIAPP_CACHE_V = '20260914a'
@@ -24,6 +44,157 @@ def _resolve_chat_id(chat_env_key):
 
 def _get_bot_token():
     return os.environ.get("TG_BOT_TOKEN", "").strip() or None
+
+
+def _tg_root():
+    """База Bot API. На Amvera api.telegram.org часто недоступен —
+    ставят зеркало, например Cloudflare Worker (TG_API_BASE)."""
+    raw = (
+        os.environ.get('TG_API_BASE')
+        or os.environ.get('TELEGRAM_API_BASE')
+        or ''
+    ).strip()
+    if not raw:
+        try:
+            from flask import has_app_context
+            if has_app_context():
+                from app.models import AppSetting
+                row = AppSetting.query.get('tg_api_base')
+                if row and (row.value or '').strip():
+                    raw = row.value.strip()
+        except Exception:
+            pass
+    raw = (raw or 'https://api.telegram.org').rstrip('/')
+    if not raw.startswith('http'):
+        raw = 'https://' + raw
+    return raw
+
+
+def redact_secrets(text):
+    """Не светить токен бота и пароль прокси в логах."""
+    out = str(text or '')
+    token = _get_bot_token()
+    if token:
+        out = out.replace(token, '***')
+    proxy = _PROXY_CACHE.get('url') or ''
+    if proxy:
+        parts = urlsplit(proxy)
+        if parts.password:
+            out = out.replace(parts.password, '***')
+        if parts.username:
+            out = out.replace(parts.username, '***')
+    return out
+
+
+def _normalize_proxy(raw):
+    raw = (raw or '').strip()
+    if not raw:
+        return None
+    if raw.startswith('{'):
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        nested = data.get('url') or data.get('proxy') or data.get('tg_proxy')
+        if nested:
+            return _normalize_proxy(nested)
+        host = data.get('host') or data.get('server') or data.get('ip')
+        port = data.get('port')
+        if not host or not port:
+            return None
+        scheme = str(data.get('type') or data.get('scheme') or 'socks5').lower()
+        if scheme in ('socks', 'socks5'):
+            scheme = 'socks5h'
+        user = data.get('user') or data.get('username')
+        password = data.get('password') or data.get('pass')
+        auth = f'{user}:{password}@' if user else ''
+        return f'{scheme}://{auth}{host}:{port}'
+    lower = raw.lower()
+    if 't.me/proxy' in lower or lower.startswith('tg://proxy'):
+        # MTProto нельзя использовать из requests к Bot API.
+        return None
+    if '://' not in raw:
+        raw = 'socks5h://' + raw
+    if raw.startswith('socks5://'):
+        raw = 'socks5h://' + raw[len('socks5://'):]
+    return raw
+
+
+def _proxy_from_env():
+    for key in _PROXY_ENV_KEYS:
+        val = (os.environ.get(key) or '').strip()
+        if val:
+            return val
+    return None
+
+
+def _proxy_from_db():
+    try:
+        from flask import has_app_context
+        if not has_app_context():
+            return None
+        from app.models import AppSetting
+        for key in _PROXY_SETTING_KEYS:
+            row = AppSetting.query.get(key)
+            if row and (row.value or '').strip():
+                return row.value.strip()
+        rows = AppSetting.query.all()
+        for row in rows:
+            key = (row.key or '').lower()
+            if 'proxy' not in key:
+                continue
+            val = (row.value or '').strip()
+            if val:
+                return val
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_proxy():
+    import time
+    now = time.time()
+    if now - _PROXY_CACHE['ts'] < 30 and _PROXY_CACHE['ts']:
+        return _PROXY_CACHE['url']
+    raw = _proxy_from_env() or _proxy_from_db()
+    if not raw:
+        from flask import has_app_context
+        if not has_app_context():
+            return None
+    url = _normalize_proxy(raw)
+    _PROXY_CACHE['url'] = url
+    _PROXY_CACHE['ts'] = now
+    return url
+
+
+def describe_proxy():
+    """Для логов: схема и хост без логина/пароля."""
+    url = _resolve_proxy()
+    if not url:
+        return 'off'
+    parts = urlsplit(url)
+    host = parts.hostname or '?'
+    port = f':{parts.port}' if parts.port else ''
+    return f'{parts.scheme}://{host}{port}'
+
+
+def _http():
+    global _SESSION, _SESSION_PROXY
+    proxy = _resolve_proxy()
+    if _SESSION is None or _SESSION_PROXY != proxy:
+        if proxy and proxy.startswith('socks'):
+            try:
+                import socks  # noqa: F401  # PySocks
+            except ImportError as exc:
+                raise RuntimeError('SOCKS proxy needs PySocks (pip install PySocks)') from exc
+        _SESSION = requests.Session()
+        if proxy:
+            _SESSION.proxies.update({'http': proxy, 'https': proxy})
+        _SESSION_PROXY = proxy
+        log.info('Telegram HTTP session proxy=%s', describe_proxy())
+    return _SESSION
 
 
 CHAT_ROUTES = {
@@ -83,9 +254,9 @@ def send_message(text, chat_type="hr"):
         return False, "TG creds not configured"
 
     payload_text = _maybe_test_prefix(chat_type) + text
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    url = f"{_tg_root()}/bot{bot_token}/sendMessage"
     try:
-        r = requests.post(url, json={
+        r = _http().post(url, json={
             'chat_id': chat_id,
             'text': payload_text,
             'parse_mode': 'HTML'
@@ -107,10 +278,10 @@ def send_photo(photo_path, caption="", chat_type="hr"):
         return False, "TG creds not configured"
 
     payload_caption = (_maybe_test_prefix(chat_type) + caption) if caption or _is_test_mode() else caption
-    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    url = f"{_tg_root()}/bot{bot_token}/sendPhoto"
     try:
         with open(photo_path, 'rb') as f:
-            r = requests.post(url, data={
+            r = _http().post(url, data={
                 'chat_id': chat_id,
                 'caption': payload_caption,
                 'parse_mode': 'HTML'
@@ -135,14 +306,18 @@ def set_reaction(chat_id, message_id, emoji='✅'):
     bot_token = _get_bot_token()
     if not bot_token or not chat_id or not message_id:
         return False, "TG creds/ids not configured"
-    url = f"https://api.telegram.org/bot{bot_token}/setMessageReaction"
+    url = f"{_tg_root()}/bot{bot_token}/setMessageReaction"
+    body = {
+        'chat_id': chat_id,
+        'message_id': int(message_id),
+        'is_big': False,
+    }
+    if emoji:
+        body['reaction'] = [{'type': 'emoji', 'emoji': emoji}]
+    else:
+        body['reaction'] = []
     try:
-        r = requests.post(url, json={
-            'chat_id': chat_id,
-            'message_id': int(message_id),
-            'reaction': [{'type': 'emoji', 'emoji': emoji}],
-            'is_big': False,
-        }, timeout=8)
+        r = _http().post(url, json=body, timeout=8)
         if not r.ok:
             return False, r.text
     except Exception as exc:
@@ -160,7 +335,7 @@ def send_photo_album(photo_paths, chat_type="hr"):
     if not bot_token or not chat_id or not photo_paths:
         return False, "TG creds not configured or no photos"
 
-    url = f"https://api.telegram.org/bot{bot_token}/sendMediaGroup"
+    url = f"{_tg_root()}/bot{bot_token}/sendMediaGroup"
     
     # Telegram разрешает максимум 10 медиафайлов в одной группе
     chunks = [photo_paths[i:i + 10] for i in range(0, len(photo_paths), 10)]
@@ -181,7 +356,7 @@ def send_photo_album(photo_paths, chat_type="hr"):
                     'media': f'attach://{file_name}'
                 })
             
-            r = requests.post(url, data={
+            r = _http().post(url, data={
                 'chat_id': chat_id,
                 'media': json.dumps(media)
             }, files=files, timeout=20)
@@ -208,7 +383,7 @@ def send_chat_message(chat_id, text, reply_markup=None):
     bot_token = _get_bot_token()
     if not bot_token or not chat_id:
         return False, "TG creds not configured"
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    url = f"{_tg_root()}/bot{bot_token}/sendMessage"
     payloads = []
     base = {'chat_id': chat_id, 'text': text}
     if reply_markup:
@@ -219,7 +394,7 @@ def send_chat_message(chat_id, text, reply_markup=None):
     last_err = 'send failed'
     for payload in payloads:
         try:
-            r = requests.post(url, json=payload, timeout=8)
+            r = _http().post(url, json=payload, timeout=8)
             if r.ok:
                 return True, "ok"
             last_err = r.text
@@ -233,12 +408,12 @@ def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes
     bot_token = _get_bot_token()
     if not bot_token or not chat_id:
         return False, "TG creds not configured"
-    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+    url = f"{_tg_root()}/bot{bot_token}/sendDocument"
     name = filename or (os.path.basename(path) if path else 'invoice.pdf')
     try:
         if file_bytes is not None:
             files = {'document': (name, io.BytesIO(file_bytes))}
-            r = requests.post(
+            r = _http().post(
                 url,
                 data={'chat_id': chat_id, 'caption': caption or ''},
                 files=files,
@@ -248,7 +423,7 @@ def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes
             if not path:
                 return False, "no file"
             with open(path, 'rb') as f:
-                r = requests.post(
+                r = _http().post(
                     url,
                     data={'chat_id': chat_id, 'caption': caption or ''},
                     files={'document': (name, f)},
@@ -261,14 +436,22 @@ def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes
     return True, "ok"
 
 
+def send_document(filename=None, caption='', file_bytes=None, path=None, chat_type='orders'):
+    """Файл в групповой чат (orders и т.п.)."""
+    chat_id = _get_chat_id(chat_type)
+    if not chat_id:
+        return False, 'TG chat not configured'
+    return send_chat_document(chat_id, path=path, filename=filename, caption=caption, file_bytes=file_bytes)
+
+
 def download_bot_file(file_id):
     """Скачивает файл из Telegram по file_id. Возвращает (bytes, file_path) или (None, err)."""
     bot_token = _get_bot_token()
     if not bot_token or not file_id:
         return None, "TG creds not configured"
     try:
-        r = requests.get(
-            f"https://api.telegram.org/bot{bot_token}/getFile",
+        r = _http().get(
+            f"{_tg_root()}/bot{bot_token}/getFile",
             params={'file_id': file_id},
             timeout=15,
         )
@@ -277,8 +460,8 @@ def download_bot_file(file_id):
         file_path = (r.json().get('result') or {}).get('file_path')
         if not file_path:
             return None, "no file_path"
-        fr = requests.get(
-            f"https://api.telegram.org/file/bot{bot_token}/{file_path}",
+        fr = _http().get(
+            f"{_tg_root()}/file/bot{bot_token}/{file_path}",
             timeout=30,
         )
         if not fr.ok:
@@ -314,8 +497,8 @@ def ensure_webhook(url=None):
     if not bot_token or not url.startswith('https://'):
         return False, 'skip'
     try:
-        r = requests.post(
-            f'https://api.telegram.org/bot{bot_token}/setWebhook',
+        r = _http().post(
+            f'{_tg_root()}/bot{bot_token}/setWebhook',
             json={
                 'url': url,
                 'allowed_updates': [
@@ -341,8 +524,8 @@ def delete_webhook(drop_pending=False):
     if not bot_token:
         return False, 'TG_BOT_TOKEN not set'
     try:
-        r = requests.post(
-            f'https://api.telegram.org/bot{bot_token}/deleteWebhook',
+        r = _http().post(
+            f'{_tg_root()}/bot{bot_token}/deleteWebhook',
             json={'drop_pending_updates': bool(drop_pending)},
             timeout=10,
         )
@@ -367,8 +550,8 @@ def get_updates(offset=None, timeout=25):
     }
     if offset:
         params['offset'] = offset
-    r = requests.get(
-        f'https://api.telegram.org/bot{bot_token}/getUpdates',
+    r = _http().get(
+        f'{_tg_root()}/bot{bot_token}/getUpdates',
         params=params,
         timeout=timeout + 10,
     )
@@ -383,8 +566,8 @@ def get_webhook_info():
     if not bot_token:
         return {'ok': False, 'error': 'TG_BOT_TOKEN not set'}
     try:
-        r = requests.get(
-            f'https://api.telegram.org/bot{bot_token}/getWebhookInfo',
+        r = _http().get(
+            f'{_tg_root()}/bot{bot_token}/getWebhookInfo',
             timeout=10,
         )
         return r.json() if r.content else {'ok': False, 'error': r.text}
@@ -408,8 +591,8 @@ def set_pay_menu_button(url=None, chat_id=None, text='Счета'):
     if chat_id:
         payload['chat_id'] = chat_id
     try:
-        r = requests.post(
-            f'https://api.telegram.org/bot{bot_token}/setChatMenuButton',
+        r = _http().post(
+            f'{_tg_root()}/bot{bot_token}/setChatMenuButton',
             json=payload,
             timeout=8,
         )

@@ -251,7 +251,7 @@
         color: #94a3b8;
     }
 
-    /* Клиентские чипы в ячейке дня */
+    /* Клиентские чипы в ячейке дня (выкопка) */
     .cal-clients {
         display: flex;
         flex-direction: column;
@@ -309,6 +309,232 @@
         display: flex;
         justify-content: space-between;
         gap: 6px;
+    }
+
+    /*
+      Палитра (без пересечений):
+      • выкопка — синий чип
+      • отгрузка — малиновый чип + лёгкий розовый фон ячейки
+      • выходной бригады — фиолетовая полоска
+      • выходной бригадира — бирюзовая полоска (не оранж, чтобы не путать с отгрузкой)
+    */
+    .cal-cell.has-status {
+        padding-top: 0;
+    }
+    .cal-status-bar {
+        display: flex;
+        height: 7px;
+        margin: 0 -8px 8px -8px;
+        overflow: hidden;
+        border-radius: 0;
+        flex-shrink: 0;
+    }
+    .week-scroll .cal-cell .cal-status-bar {
+        margin-left: -8px;
+        margin-right: -8px;
+    }
+    @media (max-width: 992px) {
+        .week-scroll .cal-cell .cal-status-bar {
+            margin-left: -4px;
+            margin-right: -4px;
+        }
+    }
+    .cal-status-bar .seg {
+        flex: 1 1 0;
+        min-width: 0;
+    }
+    .cal-status-bar .seg.crew {
+        background: #7c3aed;
+    }
+    .cal-status-bar .seg.brigadier {
+        background: #0d9488;
+    }
+
+    /* Фон дня: приоритет выходных, иначе — заливка отгрузки */
+    .cal-cell.has-shipments:not(.crew-off):not(.brigadier-off) {
+        background: #fff1f2;
+    }
+    .cal-cell.has-shipments:not(.has-tasks):not(.crew-off):not(.brigadier-off) {
+        background: #ffe4e6;
+    }
+    .cal-cell.crew-off:not(.brigadier-off) {
+        background: #f5f0ff;
+    }
+    .cal-cell.brigadier-off:not(.crew-off) {
+        background: #ecfdf5;
+    }
+    .cal-cell.crew-off.brigadier-off {
+        background: linear-gradient(180deg, #f5f0ff 0%, #ecfdf5 100%);
+    }
+    .cal-cell.is-today-cell {
+        box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.45);
+    }
+
+    .cal-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 18px;
+        align-items: center;
+        padding: 10px 14px;
+        margin-bottom: 10px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        font-size: 12px;
+        color: #334155;
+    }
+    .cal-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .cal-legend-swatch {
+        flex-shrink: 0;
+        border: 1px solid rgba(0,0,0,.08);
+    }
+    /* Легенда = те же формы, что в ячейке */
+    .cal-legend-swatch.dig {
+        width: 22px;
+        height: 12px;
+        border-radius: 3px;
+        background: #eff6ff;
+        border-left: 3px solid #3b82f6;
+    }
+    .cal-legend-swatch.ship {
+        width: 22px;
+        height: 12px;
+        border-radius: 3px;
+        background: #fecdd3;
+        border-color: #fb7185;
+        border-left: 3px solid #e11d48;
+    }
+    .cal-legend-swatch.crew {
+        width: 22px;
+        height: 7px;
+        border-radius: 2px;
+        background: #7c3aed;
+        border: none;
+    }
+    .cal-legend-swatch.brigadier {
+        width: 22px;
+        height: 7px;
+        border-radius: 2px;
+        background: #0d9488;
+        border: none;
+    }
+    body.paint-crew-off .cal-cell,
+    body.paint-brigadier-off .cal-cell {
+        cursor: crosshair !important;
+    }
+    .btn-paint.active-crew {
+        background: #7c3aed !important;
+        border-color: #7c3aed !important;
+        color: #fff !important;
+    }
+    .btn-paint.active-brigadier {
+        background: #0d9488 !important;
+        border-color: #0d9488 !important;
+        color: #fff !important;
+    }
+    .cal-ship-line {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 4px;
+        padding: 3px 5px;
+        background: #fecdd3;
+        color: #9f1239;
+        border-radius: 5px;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.2;
+        overflow: hidden;
+        white-space: nowrap;
+        border: 1px solid #fda4af;
+        border-left: 3px solid #e11d48;
+    }
+    .cal-ship-line i {
+        flex-shrink: 0;
+        font-size: 10px;
+        color: #e11d48;
+    }
+    .cal-ship-line .ship-ids {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+    }
+
+    #dayPreviewPopup .pop-offs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 10px;
+    }
+    #dayPreviewPopup .pop-off-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    #dayPreviewPopup .pop-off-chip.crew {
+        background: #f5f0ff;
+        color: #5b21b6;
+        border: 1px solid #c4b5fd;
+    }
+    #dayPreviewPopup .pop-off-chip.crew::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        background: #7c3aed;
+        flex-shrink: 0;
+    }
+    #dayPreviewPopup .pop-off-chip.brigadier {
+        background: #ecfdf5;
+        color: #115e59;
+        border: 1px solid #99f6e4;
+    }
+    #dayPreviewPopup .pop-off-chip.brigadier::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        background: #0d9488;
+        flex-shrink: 0;
+    }
+    #dayPreviewPopup .pop-ship {
+        margin-bottom: 10px;
+        padding: 8px 10px;
+        background: #fff1f2;
+        border-radius: 8px;
+        border-left: 3px solid #e11d48;
+    }
+    #dayPreviewPopup .pop-ship__title {
+        font-weight: 700;
+        color: #9f1239;
+        font-size: 12px;
+        margin-bottom: 4px;
+    }
+    #dayPreviewPopup .pop-ship__row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+        padding: 2px 0;
+        color: #881337;
+        font-weight: 600;
+    }
+    #dayPreviewPopup .pop-dig-title {
+        font-weight: 700;
+        color: #1d4ed8;
+        font-size: 12px;
+        margin: 0 0 6px;
     }
 
     /* -------- Hover-попап c разбивкой ---------------------------- */
@@ -556,9 +782,31 @@
     }
 </style>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h4 class="fw-bold text-success"><i class="fas fa-calendar-alt me-2"></i>План выкопки</h4>
-    <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">В меню</a>
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <h4 class="fw-bold text-success m-0"><i class="fas fa-calendar-alt me-2"></i>План выкопки</h4>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        {% if can_edit_shipment %}
+        <button type="button" class="btn btn-outline-secondary btn-sm btn-paint" id="btnPaintCrew"
+                title="Кликните по дням в календаре, чтобы отметить/снять выходной бригады">
+            Выходной бригады
+        </button>
+        <button type="button" class="btn btn-outline-secondary btn-sm btn-paint" id="btnPaintBrigadier"
+                title="Кликните по дням в календаре, чтобы отметить/снять выходной бригадира">
+            Выходной бригадира
+        </button>
+        <button type="button" class="btn btn-danger btn-sm fw-bold" id="btnAddShipment" title="Назначить день отгрузки заказа">
+            <i class="fas fa-truck me-1"></i>Дата отгрузки
+        </button>
+        {% endif %}
+        <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">В меню</a>
+    </div>
+</div>
+
+<div class="cal-legend" aria-label="Легенда цветов календаря">
+    <span class="cal-legend-item"><span class="cal-legend-swatch dig"></span> Выкопка</span>
+    <span class="cal-legend-item"><span class="cal-legend-swatch ship"></span> Отгрузка</span>
+    <span class="cal-legend-item"><span class="cal-legend-swatch crew"></span> Выходной бригады</span>
+    <span class="cal-legend-item"><span class="cal-legend-swatch brigadier"></span> Выходной бригадира</span>
 </div>
 
 <div class="planner-layout">
@@ -666,15 +914,26 @@
                          data-week-index="{{ w.index }}"
                          data-week-start="{{ w.start.strftime('%Y-%m-%d') }}">
                         {% for day in w.days %}
-                        <div class="cal-cell {% if day.is_today %}is-today-cell{% endif %} {% if day.tasks_count > 0 %}has-tasks{% endif %}"
+                        <div class="cal-cell {% if day.is_today %}is-today-cell{% endif %} {% if day.tasks_count > 0 %}has-tasks{% endif %} {% if day.shipments_count > 0 %}has-shipments{% endif %} {% if day.crew_off %}crew-off{% endif %} {% if day.brigadier_off %}brigadier-off{% endif %} {% if day.crew_off or day.brigadier_off %}has-status{% endif %}"
                              data-date="{{ day.date_str }}"
                              data-has-tasks="{{ '1' if day.tasks_count > 0 else '0' }}"
+                             data-has-ships="{{ '1' if day.shipments_count > 0 else '0' }}"
+                             data-crew-off="{{ '1' if day.crew_off else '0' }}"
+                             data-brigadier-off="{{ '1' if day.brigadier_off else '0' }}"
                              data-day-json='{{ day.orders_groups|tojson }}'
+                             data-ship-json='{{ day.shipments|tojson }}'
                              {% if day.tasks_count > 0 %}draggable="true" ondragstart="diggingDayDragStart(event, '{{ day.date_str }}')"{% endif %}
                              ondrop="diggingDrop(event, '{{ day.date_str }}')"
                              ondragover="diggingAllowDrop(event)"
                              ondragleave="diggingLeaveDrop(event)"
                              onclick="diggingOpenDay('{{ day.date_str }}')">
+
+                            {% if day.crew_off or day.brigadier_off %}
+                            <div class="cal-status-bar" aria-hidden="true">
+                                {% if day.crew_off %}<span class="seg crew" title="Выходной бригады"></span>{% endif %}
+                                {% if day.brigadier_off %}<span class="seg brigadier" title="Выходной бригадира"></span>{% endif %}
+                            </div>
+                            {% endif %}
 
                             <div class="cal-date-row d-flex justify-content-between align-items-center">
                                 <div class="cal-date {% if day.is_today %}today{% endif %}">{{ day.day }}</div>
@@ -685,16 +944,25 @@
                                 {% endif %}
                             </div>
 
+                            {% if day.shipments_count > 0 %}
+                            <div class="cal-ship-line" title="{% for s in day.shipments %}Отгрузка #{{ s.order_id }} — {{ s.client }}{% if not loop.last %}; {% endif %}{% endfor %}">
+                                <i class="fas fa-truck"></i>
+                                <span class="ship-ids">
+                                    {% for s in day.shipments[:2] %}#{{ s.order_id }}{% if not loop.last %}, {% endif %}{% endfor %}{% if day.shipments|length > 2 %}…{% endif %}
+                                </span>
+                            </div>
+                            {% endif %}
+
                             {% if day.clients_summary %}
                             <div class="cal-clients">
                                 {% for c in day.clients_summary[:3] %}
-                                <div class="cal-client-chip">
-                                    <span class="chip-name" title="{{ c.client }}">{{ c.client }}</span>
+                                <div class="cal-client-chip" title="{{ c.client }} — {{ c.qty }} шт">
+                                    <span class="chip-name">{{ c.client }}</span>
                                     <span class="chip-qty">{{ c.qty }}</span>
                                 </div>
                                 {% endfor %}
                                 {% if day.clients_summary|length > 3 %}
-                                <div class="cal-clients-more">+ ещё {{ day.clients_summary|length - 3 }} клиент(а)</div>
+                                <div class="cal-clients-more">+ ещё {{ day.clients_summary|length - 3 }}</div>
                                 {% endif %}
                             </div>
                             {% endif %}
@@ -731,6 +999,39 @@
     </div>
 </div>
 
+{% if can_edit_shipment %}
+<!-- Форма назначения даты отгрузки -->
+<template id="shipmentFormTpl">
+    <form method="POST" action="{{ url_for('digging.digging_planning') }}" hx-boost="false" id="shipmentPlanForm">
+        <input type="hidden" name="action" value="create_shipment">
+        <div class="mb-3 text-center">
+            <h5 class="fw-bold text-danger mb-1"><i class="fas fa-truck me-2"></i>Дата отгрузки</h5>
+            <p class="small text-muted mb-0">Красная строка с номером заказа появится в календаре. Подробности — по клику на день.</p>
+        </div>
+        <div class="mb-3">
+            <label class="form-label fw-bold small">Заказ</label>
+            <select name="order_id" class="form-select" required>
+                <option value="">Выберите заказ…</option>
+                {% for o in ship_orders %}
+                <option value="{{ o.id }}">{{ o.label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label fw-bold small">День отгрузки</label>
+            <input type="date" name="planned_date" class="form-control js-ship-date" required value="{{ today_iso }}">
+        </div>
+        <div class="mb-3">
+            <label class="form-label fw-bold small">Комментарий <span class="text-muted fw-normal">(необязательно)</span></label>
+            <input type="text" name="comment" class="form-control" placeholder="Напр.: самовывоз до 14:00" maxlength="500">
+        </div>
+        <button type="submit" class="btn btn-danger w-100 fw-bold py-2">
+            <i class="fas fa-save me-2"></i>Сохранить дату отгрузки
+        </button>
+    </form>
+</template>
+{% endif %}
+
 <script>
     (function () {
         const modalElement = document.getElementById('universalModal');
@@ -745,6 +1046,80 @@
         }
 
         document.addEventListener('DOMContentLoaded', ensureModal);
+
+        function openShipmentForm(prefillDate) {
+            const tpl = document.getElementById('shipmentFormTpl');
+            if (!tpl || !modalBody) return;
+            const m = ensureModal();
+            if (!m) return;
+            modalBody.innerHTML = tpl.innerHTML;
+            const dateInput = modalBody.querySelector('.js-ship-date');
+            if (dateInput && prefillDate) dateInput.value = prefillDate;
+            m.show();
+        }
+
+        const btnAddShip = document.getElementById('btnAddShipment');
+        if (btnAddShip) {
+            btnAddShip.addEventListener('click', function () {
+                setPaintMode(null);
+                openShipmentForm({{ today_iso|tojson }});
+            });
+        }
+
+        document.addEventListener('click', function (ev) {
+            const btn = ev.target.closest('.js-open-shipment-form');
+            if (!btn) return;
+            ev.preventDefault();
+            setPaintMode(null);
+            openShipmentForm(btn.getAttribute('data-date') || {{ today_iso|tojson }});
+        });
+
+        // Режим «покраски» выходных: клик по дню ставит/снимает метку.
+        let paintKind = null;
+        const btnPaintCrew = document.getElementById('btnPaintCrew');
+        const btnPaintBrigadier = document.getElementById('btnPaintBrigadier');
+
+        function setPaintMode(kind) {
+            paintKind = kind;
+            document.body.classList.remove('paint-crew-off', 'paint-brigadier-off');
+            if (btnPaintCrew) btnPaintCrew.classList.remove('active-crew');
+            if (btnPaintBrigadier) btnPaintBrigadier.classList.remove('active-brigadier');
+            if (kind === 'crew_off') {
+                document.body.classList.add('paint-crew-off');
+                if (btnPaintCrew) btnPaintCrew.classList.add('active-crew');
+            } else if (kind === 'brigadier_off') {
+                document.body.classList.add('paint-brigadier-off');
+                if (btnPaintBrigadier) btnPaintBrigadier.classList.add('active-brigadier');
+            }
+        }
+
+        if (btnPaintCrew) {
+            btnPaintCrew.addEventListener('click', function () {
+                setPaintMode(paintKind === 'crew_off' ? null : 'crew_off');
+            });
+        }
+        if (btnPaintBrigadier) {
+            btnPaintBrigadier.addEventListener('click', function () {
+                setPaintMode(paintKind === 'brigadier_off' ? null : 'brigadier_off');
+            });
+        }
+
+        function toggleDayMark(dateStr, kind) {
+            const fd = new FormData();
+            fd.append('action', 'toggle_day_mark');
+            fd.append('kind', kind);
+            fd.append('planned_date', dateStr);
+            fetch('{{ url_for("digging.digging_planning") }}', {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            }).then(function () {
+                window.location.reload();
+            }).catch(function () {
+                alert('Не удалось сохранить выходной.');
+            });
+        }
 
         // ============================================================
         // Скролл-лента недель: на загрузке центрируем «сегодняшнюю» неделю,
@@ -867,6 +1242,10 @@
         window.diggingOpenDay = function (dateStr) {
             if (window.__diggingSkipClick) {
                 window.__diggingSkipClick = false;
+                return;
+            }
+            if (paintKind) {
+                toggleDayMark(dateStr, paintKind);
                 return;
             }
             // Если сейчас открыт попап превью — пусть не перекрывает модалку.
@@ -1184,20 +1563,63 @@
 
         function renderPreview(cell) {
             let groups = [];
+            let ships = [];
             try {
                 groups = JSON.parse(cell.getAttribute('data-day-json') || '[]');
             } catch (e) {
                 groups = [];
             }
+            try {
+                ships = JSON.parse(cell.getAttribute('data-ship-json') || '[]');
+            } catch (e) {
+                ships = [];
+            }
             const dateStr = cell.getAttribute('data-date') || '';
+            const crewOff = cell.getAttribute('data-crew-off') === '1';
+            const brigadierOff = cell.getAttribute('data-brigadier-off') === '1';
             const totalQty = groups.reduce((a, g) => a + (g.total_qty || 0), 0);
             const totalTasks = groups.reduce((a, g) => a + (g.tasks_count || 0), 0);
 
-            if (!groups.length) {
+            const offsParts = [];
+            if (crewOff) offsParts.push('<span class="pop-off-chip crew">Выходной бригады</span>');
+            if (brigadierOff) offsParts.push('<span class="pop-off-chip brigadier">Выходной бригадира</span>');
+            const offsHtml = offsParts.length
+                ? `<div class="pop-offs">${offsParts.join('')}</div>`
+                : '';
+
+            const shipsHtml = ships.length ? `
+                <div class="pop-ship">
+                    <div class="pop-ship__title"><i class="fas fa-truck me-1"></i>Отгрузка</div>
+                    ${ships.map(s => `
+                        <div class="pop-ship__row">
+                            <span>Заказ #${escapeHtml(s.order_id)}</span>
+                            <span>${escapeHtml(s.client)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : '';
+
+            if (!groups.length && !ships.length) {
+                const emptyHint = (crewOff || brigadierOff)
+                    ? '<div class="pop-hint">Кликните на день для деталей.</div>'
+                    : '<div class="pop-hint">Перетащите сюда заказ, чтобы назначить выкопку.</div>';
                 popup.innerHTML = `
                     <h6>${escapeHtml(dateStr)} <span class="pop-badge" style="background:#94a3b8;">пусто</span></h6>
+                    ${offsHtml}
                     <div style="color:#64748b;">На эту дату план выкопки не составлен.</div>
-                    <div class="pop-hint">Перетащите сюда заказ, чтобы назначить выкопку.</div>
+                    ${emptyHint}
+                `;
+                return;
+            }
+
+            if (!groups.length && ships.length) {
+                popup.innerHTML = `
+                    <h6>${escapeHtml(dateStr)}
+                        <span class="pop-badge" style="background:#e11d48;">отгрузка</span>
+                    </h6>
+                    ${offsHtml}
+                    ${shipsHtml}
+                    <div class="pop-hint">Кликните — детали и снятие даты.</div>
                 `;
                 return;
             }
@@ -1234,8 +1656,11 @@
                 <h6>${escapeHtml(dateStr)}
                     <span class="pop-badge">${escapeHtml(totalTasks)} поз · ${escapeHtml(totalQty)} шт</span>
                 </h6>
+                ${offsHtml}
+                ${shipsHtml}
+                ${ships.length ? '<div class="pop-dig-title">Выкопка</div>' : ''}
                 ${groupsHtml}
-                <div class="pop-hint">Кликните на день, чтобы открыть и редактировать план.</div>
+                <div class="pop-hint">Кликните на день, чтобы открыть план.</div>
             `;
         }
 

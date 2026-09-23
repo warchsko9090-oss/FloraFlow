@@ -150,28 +150,32 @@ def create_app():
     app.register_blueprint(push_module.bp)
     push_module.register_push_hooks(app)
 
-    SHOP_MANAGER_ALLOWED_PREFIXES = (
-        'auth.', 'orders.', 'shop_admin.', 'public_client_api.', 'push.',
+    # Менеджер сайта: просмотр как у руководителя; запись — только заказы
+    # (и связанные sales Mini App / push / auth). Остальное — только GET.
+    SHOP_MANAGER_WRITE_PREFIXES = (
+        'orders.',
+        'tg_sale.',
+        'auth.',
+        'push.',
+        'public_client_api.',
     )
-    SHOP_MANAGER_ALLOWED_EXACT = {
+    SHOP_MANAGER_WRITE_EXACT = {
         'static',
-        'stock.stock_report', 'stock.stock_report_export', 'stock.changelog',
-        'directory.directory',
         'main.serve_uploaded_file', 'main.manifest', 'main.app_icon',
         'main.service_worker', 'main.offline',
     }
 
     @app.before_request
-    def _restrict_shop_manager():
-        from flask import request, redirect, url_for
+    def _restrict_shop_manager_writes():
+        from flask import request, redirect, url_for, flash, jsonify
         from flask_login import current_user
         ep = request.endpoint or ''
         path = request.path or ''
-        # Статика и оболочка PWA не должны ходить в Postgres: иначе при падении
-        # CNPG даже /static/icon-192.png отдаёт 500 и service worker долбит логи.
         if ep in ('static', 'main.service_worker', 'main.manifest', 'main.app_icon', 'main.offline'):
             return None
         if path.startswith('/static/'):
+            return None
+        if path.startswith('/tg/'):
             return None
         try:
             if not getattr(current_user, 'is_authenticated', False):
@@ -180,11 +184,26 @@ def create_app():
             return None
         if (getattr(current_user, 'role', None) or '') != 'shop_manager':
             return None
-        if ep in SHOP_MANAGER_ALLOWED_EXACT:
+        if request.method in ('GET', 'HEAD', 'OPTIONS'):
             return None
-        if any(ep.startswith(p) for p in SHOP_MANAGER_ALLOWED_PREFIXES):
+        if ep in SHOP_MANAGER_WRITE_EXACT:
             return None
-        return redirect(url_for('orders.orders_list'))
+        if any(ep.startswith(p) for p in SHOP_MANAGER_WRITE_PREFIXES):
+            return None
+        wants_json = (
+            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            or (request.accept_mimetypes.best == 'application/json')
+            or path.startswith('/api/')
+        )
+        if wants_json:
+            return jsonify({
+                'ok': False,
+                'error': 'forbidden',
+                'hint': 'Режим просмотра: изменения недоступны для менеджера сайта.',
+            }), 403
+        flash('Режим просмотра: на этой странице изменения недоступны.', 'warning')
+        return redirect(request.referrer or url_for('orders.orders_list'))
+
 
     @app.after_request
     def _cache_miniapp_static(response):
@@ -364,26 +383,37 @@ def create_app():
         app.logger.exception('init_scheduler failed')
 
     try:
-        from app.telegram import set_pay_menu_button, ensure_webhook, get_webhook_info
+        from app.telegram import (
+            describe_proxy, ensure_webhook, get_webhook_info, redact_secrets,
+            set_pay_menu_button,
+        )
         from app.tg_poller import start_telegram_poller, _should_poll
         if _should_poll():
             start_telegram_poller(app)
-            app.logger.info('Telegram: inbound webhook skipped, using getUpdates polling')
+            app.logger.info(
+                'Telegram: inbound webhook skipped, using getUpdates polling proxy=%s',
+                describe_proxy(),
+            )
         else:
             ok, msg = ensure_webhook()
             if ok:
                 app.logger.info('Telegram webhook set: %s', msg)
             else:
-                app.logger.warning('Telegram webhook skipped: %s', msg)
+                app.logger.warning('Telegram webhook skipped: %s', redact_secrets(msg))
             info = get_webhook_info()
-            app.logger.info('Telegram getWebhookInfo: %s', info)
+            app.logger.info('Telegram getWebhookInfo: %s', redact_secrets(info))
         ok, msg = set_pay_menu_button()
         if ok:
             app.logger.info('Telegram menu button set')
         else:
-            app.logger.warning('Telegram menu button skipped: %s', msg)
+            app.logger.warning('Telegram menu button skipped: %s', redact_secrets(msg))
     except Exception as e:
-        app.logger.warning('telegram boot hooks failed: %s', e)
+        try:
+            from app.telegram import redact_secrets
+            msg = redact_secrets(e)
+        except Exception:
+            msg = e
+        app.logger.warning('telegram boot hooks failed: %s', msg)
 
     return app
 

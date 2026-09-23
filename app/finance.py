@@ -35,7 +35,7 @@ bp = Blueprint('finance', __name__)
 @bp.route('/expenses', methods=['GET', 'POST'])
 @login_required
 def expenses():
-    if current_user.role not in ['admin', 'executive']: 
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: 
         return redirect(url_for('orders.orders_list'))
     
     # Текущий таб (расходы / счета)
@@ -125,7 +125,7 @@ def expenses():
         return create_pdf_response(rendered, "expenses.pdf")
         
     if request.method == 'POST':
-        if current_user.role == 'executive':
+        if current_user.role in ('executive', 'shop_manager'):
             flash('У вас права только на просмотр')
             return redirect(url_for('finance.expenses', tab='expenses'))
         
@@ -381,6 +381,12 @@ def expenses():
 
                 db.session.add(exp)
                 db.session.commit()
+                try:
+                    from app.expense_chat import reconcile_chat_expenses_period
+                    d = exp.date.date() if hasattr(exp.date, 'date') else exp.date
+                    reconcile_chat_expenses_period(d, d)
+                except Exception:
+                    current_app.logger.exception('reconcile chat after expense create')
 
                 # Обновляем статус счета (paid/partial/new) в зависимости от суммы созданных расходов
                 if inv_id:
@@ -425,6 +431,53 @@ def expenses():
                            today=msk_today(), 
                            prefill_invoice=prefill_invoice,
                            filters={'start': start_date, 'end': end_date, 'item': f_item, 'type': f_type})
+
+
+def _parse_gap_date(raw, fallback: date) -> date:
+    if not raw:
+        return fallback
+    try:
+        return datetime.strptime(str(raw)[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return fallback
+
+
+@bp.route('/expenses/tg-chat')
+@login_required
+def tg_chat_gap():
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
+        return redirect(url_for('orders.orders_list'))
+    today = msk_today()
+    start = _parse_gap_date(request.args.get('start_date'), date(today.year, today.month, 1))
+    end = _parse_gap_date(request.args.get('end_date'), today)
+    from app.expense_chat import analyze_unrecorded_chat_expenses
+    report = analyze_unrecorded_chat_expenses(start, end)
+    return render_template(
+        'finance/tg_chat_gap.html',
+        report=report,
+        budget_items=sorted(BudgetItem.query.all(), key=natural_key),
+        can_import=current_user.role == 'admin',
+    )
+
+
+@bp.route('/expenses/tg-chat/<int:msg_id>/import', methods=['POST'])
+@login_required
+def tg_chat_gap_import(msg_id):
+    if current_user.role != 'admin':
+        flash('Только админ может провести расход')
+        return redirect(request.referrer or url_for('finance.tg_chat_gap'))
+    start_date = request.form.get('start_date') or request.args.get('start_date')
+    end_date = request.form.get('end_date') or request.args.get('end_date')
+    bid = request.form.get('budget_item_id', type=int)
+    from app.expense_chat import confirm_chat_expense
+    ok, msg = confirm_chat_expense(msg_id, current_user, budget_item_id=bid)
+    if ok:
+        flash('Расход из чата проведён в базу')
+        log_action(f'Импортировал расход из ТГ #{msg_id} (анализ чата)')
+    else:
+        flash(f'Не удалось провести: {msg}')
+    return redirect(url_for('finance.tg_chat_gap', start_date=start_date, end_date=end_date))
+
 
 @bp.route('/expenses/download_template')
 @login_required
@@ -502,7 +555,7 @@ def expenses_import():
 @bp.route('/expenses/export')
 @login_required
 def expenses_export():
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
 
     # Получаем те же фильтры, что и при просмотре
@@ -888,7 +941,7 @@ def _resolve_selected_months(args, fallback_target_month='all'):
 @bp.route('/budget', methods=['GET', 'POST'])
 @login_required
 def budget():
-    if current_user.role not in ['admin', 'executive']: 
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: 
         return redirect(url_for('orders.orders_list'))
     
     # Параметры фильтрации
@@ -1104,7 +1157,7 @@ def budget():
         
     # Обработка сохранения (POST)
     if request.method == 'POST':
-        if current_user.role == 'executive':
+        if current_user.role in ('executive', 'shop_manager'):
             flash('Только просмотр')
             return redirect(url_for('finance.budget', year=year, month=target_month, tab=tab, cf_mode=cf_mode))
 
@@ -1218,7 +1271,7 @@ def budget_export():
     Дизайн новый — компактный, читаемый, с цветной подсветкой отклонений
     и итогами за период. На пустом всё ещё корректно отдаёт пустой шаблон.
     """
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         return redirect(url_for('orders.orders_list'))
 
     year = int(request.args.get('year', msk_now().year))
@@ -1941,14 +1994,14 @@ def _build_cost_report_xlsx(
 @bp.route('/cost', methods=['GET', 'POST'])
 @login_required
 def cost_report():
-    if current_user.role not in ['admin', 'executive']: 
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: 
         return redirect(url_for('orders.orders_list'))
     
     current_year = msk_now().year
     years = list(range(2017, current_year + 1))
     
     if request.method == 'POST':
-        if current_user.role == 'executive':
+        if current_user.role in ('executive', 'shop_manager'):
             flash('Только просмотр')
             return redirect(url_for('finance.cost_report'))
 
@@ -3351,7 +3404,7 @@ _PAYMENT_TYPE_LABELS = {
 
 
 def _order_payments_allowed():
-    return current_user.role in ['admin', 'executive', 'user']
+    return current_user.role in ['admin', 'executive', 'shop_manager', 'user']
 
 
 @bp.route('/reports/order-payments')
@@ -3634,7 +3687,7 @@ def reports_turnover():
 @bp.route('/reports/financial')
 @login_required
 def reports_financial():
-    if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     year = int(request.args.get('year', msk_now().year))
     
     # Исправление: Добавлена обработка NULL (None) при суммировании
@@ -3957,7 +4010,7 @@ def archive_align():
 @bp.route('/reports/margin')
 @login_required
 def reports_margin():
-    if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     year = int(request.args.get('year', msk_now().year))
     view = (request.args.get('view') or 'snapshot').lower()
     if view not in ('snapshot', 'dynamics'):
@@ -4184,7 +4237,7 @@ def _build_margin_dynamics(year_from, year_to, f_plants=None, f_sizes=None, f_fi
 @bp.route('/reports/investor')
 @login_required
 def reports_investor():
-    if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     f_start = request.args.get('start_date')
     f_end = request.args.get('end_date')
     real_picture = request.args.get('real_picture', '0') == '1'
@@ -4301,7 +4354,7 @@ def reports_investor():
 @bp.route('/reports/investor/export')
 @login_required
 def reports_investor_export():
-    if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     
     # Получаем параметры (так же как в view)
     f_start = request.args.get('start_date')
@@ -4386,7 +4439,7 @@ def reports_investor_export():
 @bp.route('/reports/calculator', methods=['GET', 'POST'])
 @login_required
 def reports_calculator():
-    if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     
     calc_results = []
     current_y = msk_now().year
@@ -4517,7 +4570,7 @@ def save_cost_to_db():
 @bp.route('/reports/projects')
 @login_required
 def reports_projects():
-    if current_user.role not in ['admin', 'executive']: 
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: 
         return redirect(url_for('main.index'))
     
     # Фильтр по году создания
@@ -5428,7 +5481,7 @@ def apply_project_item_potting_receipt(project, item_id, user_id):
 @bp.route('/project/<int:project_id>/potting-recount', methods=['POST'])
 @login_required
 def project_potting_recount(project_id):
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         flash('Недостаточно прав', 'warning')
         return redirect(url_for('main.index'))
 
@@ -5441,7 +5494,7 @@ def project_potting_recount(project_id):
 @bp.route('/project/<int:project_id>', methods=['GET', 'POST'])
 @login_required
 def project_detail(project_id):
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
         
     project = Project.query.get_or_404(project_id)
@@ -5690,7 +5743,7 @@ def project_detail(project_id):
 @bp.route('/project/<int:project_id>/seedling_dieback.xlsx')
 @login_required
 def seedling_dieback_export(project_id):
-    if current_user.role not in ['admin', 'executive', 'user']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager', 'user']:
         return redirect(url_for('main.index'))
     project = Project.query.get_or_404(project_id)
     from app.seedlings import export_dieback_workbook
@@ -5709,7 +5762,7 @@ def seedling_dieback_export(project_id):
 @bp.route('/project/<int:project_id>/seedling_dieback_summary.xlsx')
 @login_required
 def seedling_dieback_summary_export(project_id):
-    if current_user.role not in ['admin', 'executive', 'user']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager', 'user']:
         return redirect(url_for('main.index'))
     project = Project.query.get_or_404(project_id)
     from app.seedlings import export_dieback_summary_workbook
@@ -5740,7 +5793,7 @@ def seedling_dieback_summary_export(project_id):
 @bp.route('/project/<int:project_id>/yard_stock.xlsx')
 @login_required
 def seedling_yard_stock_export(project_id):
-    if current_user.role not in ['admin', 'executive', 'user']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager', 'user']:
         return redirect(url_for('main.index'))
     project = Project.query.get_or_404(project_id)
     from app.seedlings import export_yard_stock_workbook
@@ -5770,7 +5823,7 @@ def invoices_list():
 @bp.route('/finance/invoices/download/<int:inv_id>')
 @login_required
 def invoice_download(inv_id):
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
     
     inv = PaymentInvoice.query.get_or_404(inv_id)
@@ -5878,7 +5931,7 @@ def invoices_summary():
 @bp.route('/projects', methods=['GET', 'POST'])
 @login_required
 def projects_list():
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
 
     tab = request.args.get('tab', 'list')

@@ -25,7 +25,7 @@ RUSSIAN_REGIONS_LIST = [
 @bp.route('/crm/client_analytics')
 @login_required
 def crm_client_analytics():
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
 
     # Фильтры
@@ -168,7 +168,7 @@ def crm_client_analytics():
 @bp.route('/crm/abc')
 @login_required
 def crm_abc():
-    if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     
     start_year = request.args.get('year_start', 2017, type=int)
     end_year = request.args.get('year_end', msk_now().year, type=int)
@@ -290,7 +290,7 @@ def crm_abc():
 @bp.route('/crm/yoy')
 @login_required
 def crm_yoy():
-    if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     
     f_clients = [int(x) for x in request.args.getlist('client_id')]
     start_year = request.args.get('year_start', 2017, type=int)
@@ -346,7 +346,7 @@ def crm_yoy():
 @bp.route('/crm/seasonality')
 @login_required
 def crm_seasonality():
-    if current_user.role not in ['admin', 'executive']: return redirect(url_for('main.index'))
+    if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     
     year = request.args.get('year', msk_now().year, type=int)
     
@@ -385,7 +385,7 @@ def crm_seasonality():
 @bp.route('/crm/price_calculator', methods=['GET', 'POST'])
 @login_required
 def crm_price_calculator():
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
 
     # ... (код обработки POST/загрузки файла оставляем без изменений, он выше) ...
@@ -619,7 +619,7 @@ def crm_price_calculator():
 @bp.route('/crm/price_calculator/template')
 @login_required
 def crm_price_calculator_template():
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
 
     wb = Workbook()
@@ -716,7 +716,7 @@ def crm_delete_row(row_id):
 @login_required
 def crm_restore_row(row_id):
     """Вернуть строку из «Отклонено» в основной список (сбросить is_rejected)."""
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         flash('Только администратор или руководитель может восстанавливать строки')
         return redirect(url_for('crm.crm_price_calculator'))
 
@@ -1216,7 +1216,7 @@ def _groq_json_request(prompt_text, model=None, temperature=0.1, timeout_sec=Non
 @login_required
 def crm_ai_run():
     """Полный авто-цикл: xlsx -> промт -> Groq -> JSON -> валидатор -> Snapshot."""
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         flash('Нет прав на авто-анализ')
         return redirect(url_for('crm.crm_price_calculator'))
 
@@ -1406,7 +1406,7 @@ def crm_ai_run():
 def crm_avito_scan():
     """Сканирует Avito по позициям из загруженного XLSX и сохраняет
     найденное в CompetitorSnapshot. Работает без Groq — чистый парсинг."""
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         flash('Нет прав на поиск по Avito')
         return redirect(url_for('crm.crm_price_calculator'))
 

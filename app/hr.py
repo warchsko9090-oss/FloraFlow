@@ -128,7 +128,7 @@ def _build_hours_details(logs):
 
 
 def _ensure_hr_access():
-    if current_user.role not in ['admin', 'user2', 'executive', 'brigadier']:
+    if current_user.role not in ['admin', 'user2', 'executive', 'shop_manager', 'brigadier']:
         return False
     return True
 
@@ -194,14 +194,16 @@ def _ensure_registration_period_from_profile(employee, profile):
 @login_required
 def personnel():
     # Впустили Руководителя
-    if current_user.role not in['admin', 'user2', 'brigadier', 'executive']:
+    if current_user.role not in['admin', 'user2', 'brigadier', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
         
     active_tab = request.args.get('tab', 'summary')
+    if active_tab == 'adjustments' and current_user.role != 'admin':
+        active_tab = 'summary'
     
     if request.method == 'POST':
         # Руководитель может только смотреть
-        if current_user.role == 'executive':
+        if current_user.role in ('executive', 'shop_manager'):
             flash('У вас права только на просмотр')
             return redirect(url_for('hr.personnel', tab=active_tab))
             
@@ -220,7 +222,7 @@ def personnel():
     end_date = date(selected_year, selected_month, last_day)
     
     filter_emp_ids = []
-    if active_tab == 'summary':
+    if active_tab in ('summary', 'adjustments'):
         for x in request.args.getlist('employee_id'):
             if x and str(x).isdigit():
                 filter_emp_ids.append(int(x))
@@ -285,6 +287,11 @@ def personnel():
                 )
                 db.session.add(ex)
                 db.session.commit()
+                try:
+                    from app.expense_chat import reconcile_payroll_for_month
+                    reconcile_payroll_for_month(selected_month, selected_year)
+                except Exception:
+                    current_app.logger.exception('reconcile payroll chat after individual pay')
                 flash(f'Выплата {amount:,.0f} руб. для {emp.name} успешно проведена'.replace(',', ' '))
                 log_action(f"Выдал индивидуальную ЗП: {emp.name} ({amount} руб.)")
             else:
@@ -414,12 +421,17 @@ def personnel():
                 db.session.add(ex_brig)
                 
             db.session.commit()
+            try:
+                from app.expense_chat import reconcile_payroll_for_month
+                reconcile_payroll_for_month(selected_month, selected_year)
+            except Exception:
+                current_app.logger.exception('reconcile payroll chat after bulk pay')
             flash(f'Котловая выплата распределена! Остаток бригадиру: {remaining_amount:,.0f} руб.'.replace(',', ' '))
             log_action(f"Котловая выплата ЗП: {total_amount} (Ост. бригадиру: {remaining_amount})")
             return redirect(url_for('hr.personnel', year=selected_year, month=selected_month, tab=active_tab))
         
         # --- ОСТАЛЬНЫЕ ДЕЙСТВИЯ ---
-        if action in['save_employee', 'save_rates', 'save_settings', 'delete_employee', 'add_adjustment'] and current_user.role in ['user2', 'brigadier']:
+        if action in['save_employee', 'save_rates', 'save_settings', 'delete_employee', 'add_adjustment', 'save_adjustment', 'delete_adjustment'] and current_user.role in ['user2', 'brigadier']:
             flash('Доступ запрещен, только просмотр')
             return redirect(url_for('hr.personnel', year=selected_year, month=selected_month, tab=active_tab))
             
@@ -534,9 +546,43 @@ def personnel():
             flash('Часы внесены')
             
         elif action == 'add_adjustment':
-            db.session.add(EmployeePayment(employee_id=int(request.form.get('employee_id')), date=datetime.strptime(request.form.get('date'), '%Y-%m-%d').date(), amount=float(request.form.get('amount') or 0), payment_type='other_manual', comment=request.form.get('comment')))
+            emp_id = int(request.form.get('employee_id'))
+            adj_date = datetime.strptime(request.form.get('date'), '%Y-%m-%d').date()
+            amount = float(request.form.get('amount') or 0)
+            comment = (request.form.get('comment') or '').strip() or None
+            db.session.add(EmployeePayment(
+                employee_id=emp_id, date=adj_date, amount=amount,
+                payment_type='other_manual', comment=comment,
+            ))
             db.session.commit()
+            emp = Employee.query.get(emp_id)
+            log_action(f"Корректировка ЗП {emp.name if emp else emp_id}: {amount} ({adj_date})")
             flash('Корректировка добавлена')
+
+        elif action == 'save_adjustment' and current_user.role == 'admin':
+            adj = EmployeePayment.query.get(request.form.get('adjustment_id'))
+            if not adj:
+                flash('Корректировка не найдена', 'warning')
+            else:
+                adj.employee_id = int(request.form.get('employee_id'))
+                adj.date = datetime.strptime(request.form.get('date'), '%Y-%m-%d').date()
+                adj.amount = float(request.form.get('amount') or 0)
+                adj.comment = (request.form.get('comment') or '').strip() or None
+                db.session.commit()
+                emp = adj.employee
+                log_action(f"Изменил корректировку ЗП #{adj.id} {emp.name if emp else adj.employee_id}: {adj.amount} ({adj.date})")
+                flash('Корректировка сохранена')
+
+        elif action == 'delete_adjustment' and current_user.role == 'admin':
+            adj = EmployeePayment.query.get(request.form.get('adjustment_id'))
+            if not adj:
+                flash('Корректировка не найдена', 'warning')
+            else:
+                emp_name = adj.employee.name if adj.employee else adj.employee_id
+                log_action(f"Удалил корректировку ЗП #{adj.id} {emp_name}: {adj.amount} ({adj.date})")
+                db.session.delete(adj)
+                db.session.commit()
+                flash('Корректировка удалена')
             
         elif action == 'send_daily_report':
             report_date = datetime.strptime(request.form.get('date'), '%Y-%m-%d').date()
@@ -613,13 +659,13 @@ def personnel():
         emp_query = emp_query.filter(Employee.id.in_(filter_emp_ids))
     
     # ПРЯЧЕМ МЕНЕДЖЕРОВ ОТ ВСЕХ, КРОМЕ АДМИНА И РУКОВОДИТЕЛЯ
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         emp_query = emp_query.filter(Employee.role != 'manager')
         
     employees = emp_query.order_by(Employee.name).all()
     
     # Скрываем их и из выпадающего списка фильтра
-    if current_user.role not in ['admin', 'executive']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager']:
         all_employees_list = Employee.query.filter(Employee.role != 'manager').order_by(Employee.name).all()
     else:
         all_employees_list = Employee.query.order_by(Employee.name).all()
@@ -686,6 +732,19 @@ def personnel():
         EmployeePayment.employee_id, func.sum(EmployeePayment.amount)
     ).filter(EmployeePayment.date >= start_date, EmployeePayment.date <= end_date).group_by(EmployeePayment.employee_id).all()
     adj_map = {r[0]: r[1] or 0 for r in adj_agg}
+
+    adjustments = []
+    adjustments_total = Decimal(0)
+    if active_tab == 'adjustments' and current_user.role == 'admin':
+        adj_q = (
+            EmployeePayment.query.options(joinedload(EmployeePayment.employee))
+            .filter(EmployeePayment.date >= start_date, EmployeePayment.date <= end_date)
+            .order_by(EmployeePayment.date.desc(), EmployeePayment.id.desc())
+        )
+        if filter_emp_ids:
+            adj_q = adj_q.filter(EmployeePayment.employee_id.in_(filter_emp_ids))
+        adjustments = adj_q.all()
+        adjustments_total = sum((Decimal(str(a.amount or 0)) for a in adjustments), Decimal(0))
 
     def _calc_payroll_row(emp):
         h = hours_map.get(emp.id, {'norm': 0.0, 'norm_over': 0.0, 'spec': 0.0, 'spec_over': 0.0, 'day_offs':[], 'worked_days': 0})
@@ -842,7 +901,9 @@ def personnel():
                            roles=EMPLOYEE_ROLES, 
                            budget_items=BudgetItem.query.all(), 
                            settings={'off': official_item_id, 'unoff': unofficial_item_id, 'others': other_salary_item_ids},
-                           today_str=today_str)
+                           today_str=today_str,
+                           adjustments=adjustments,
+                           adjustments_total=adjustments_total)
 
 @bp.route('/personnel/export')
 @login_required
@@ -892,7 +953,7 @@ def foreign_employees():
 @login_required
 def foreign_registration_digest():
     """Ручная сводка регистраций в Telegram (чат patents) — для проверки."""
-    if current_user.role not in ('admin', 'executive', 'user2'):
+    if current_user.role not in ('admin', 'executive', 'shop_manager', 'user2'):
         flash('Недостаточно прав')
         return redirect(url_for('hr.foreign_employees'))
     from app.patent_reminders import send_registration_status_digest
@@ -1250,6 +1311,6 @@ def run_patent_reminders():
 @login_required
 def report_success():
     """Страница успешной отправки отчета (предотвращает повторную отправку при перезагрузке)"""
-    if current_user.role not in['admin', 'user2', 'brigadier', 'executive']:
+    if current_user.role not in['admin', 'user2', 'brigadier', 'executive', 'shop_manager']:
         return redirect(url_for('main.index'))
     return render_template('hr/report_success.html')

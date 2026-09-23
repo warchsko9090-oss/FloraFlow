@@ -1442,7 +1442,7 @@ def stock_receipts():
     from app.models import Supplier
     from app.purchase_lots import apply_purchase_lot
 
-    if current_user.role not in ['admin', 'executive', 'user']:
+    if current_user.role not in ['admin', 'executive', 'shop_manager', 'user']:
         flash('Недостаточно прав', 'warning')
         return redirect(url_for('stock.stock_report'))
 

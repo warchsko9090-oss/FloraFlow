@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Заказ №{{ order.id }} — печать</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            color: #222;
+            margin: 24px;
+            background: #fff;
+        }
+        .sheet { max-width: 960px; margin: 0 auto; }
+        .no-print {
+            margin-bottom: 16px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .no-print a, .no-print button {
+            display: inline-block;
+            padding: 8px 14px;
+            border-radius: 6px;
+            border: 1px solid #2E7D32;
+            background: #2E7D32;
+            color: #fff;
+            text-decoration: none;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .no-print a.ghost {
+            background: #fff;
+            color: #2E7D32;
+        }
+        .hint { color: #666; font-size: 13px; }
+        .hdr {
+            background: #2E7D32;
+            color: #fff;
+            font-weight: 700;
+            font-size: 18px;
+            text-align: center;
+            padding: 12px 8px;
+        }
+        .sub {
+            background: #E8F5E9;
+            color: #1B5E20;
+            font-weight: 700;
+            text-align: center;
+            padding: 10px 8px;
+            margin-bottom: 12px;
+        }
+        table.items {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-bottom: 14px;
+        }
+        table.items th {
+            background: #C8E6C9;
+            border: 1px solid #999;
+            padding: 8px 6px;
+            text-align: center;
+        }
+        table.items td {
+            border: 1px solid #999;
+            padding: 7px 6px;
+            vertical-align: middle;
+        }
+        table.items td.num { text-align: center; }
+        table.items td.money { text-align: right; white-space: nowrap; }
+        table.items td.size { white-space: nowrap; }
+        table.items tr.total td {
+            background: #F1F8E9;
+            font-weight: 700;
+            border-top: 2px solid #333;
+        }
+        table.summary {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 18px;
+            font-size: 13px;
+        }
+        table.summary th, table.summary td {
+            border: 1px solid #999;
+            padding: 8px;
+            text-align: center;
+        }
+        table.summary th {
+            background: #E8F5E9;
+            color: #1B5E20;
+            font-weight: 700;
+        }
+        table.summary td {
+            font-weight: 700;
+            color: #1B5E20;
+            font-size: 15px;
+        }
+        table.dates {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        table.dates td {
+            border: 1px solid #999;
+            background: #EEEEEE;
+            padding: 10px 12px;
+            font-weight: 700;
+        }
+        table.dates td.blank {
+            width: 45%;
+            font-weight: 400;
+            min-height: 28px;
+        }
+        @media print {
+            body { margin: 0; }
+            .no-print { display: none !important; }
+            .sheet { max-width: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="sheet">
+        <div class="no-print">
+            <button type="button" onclick="window.print()">Печать</button>
+            <a class="ghost" href="{{ xlsx_url }}" download>Скачать Excel</a>
+            <span class="hint">Excel скачивается автоматически · диалог печати откроется сам</span>
+        </div>
+
+        <div class="hdr">Заказ №{{ order.id }} от {{ order.date|dateru }}</div>
+        <div class="sub">
+            Клиент: {{ order.client.name if order.client else '—' }}
+            &nbsp;|&nbsp; Статус: {{ order.status }}
+            {% if order.invoice_number %}
+            &nbsp;|&nbsp; Счёт: {{ order.invoice_number }}{% if order.invoice_date %} от {{ order.invoice_date|dateru }}{% endif %}
+            {% endif %}
+        </div>
+
+        <table class="items">
+            <thead>
+                <tr>
+                    <th>Растение</th>
+                    <th>Размер</th>
+                    <th>Поле</th>
+                    <th>Год</th>
+                    <th>Цена</th>
+                    <th>Кол-во</th>
+                    <th>Сумма</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ln in lines %}
+                <tr>
+                    <td>{{ ln.plant }}</td>
+                    <td class="size">{{ ln.size }}</td>
+                    <td class="num">{{ ln.field }}</td>
+                    <td class="num">{{ ln.year or '' }}</td>
+                    <td class="money">{{ ln.price|money }}</td>
+                    <td class="num">{{ ln.qty }}</td>
+                    <td class="money">{{ ln.sum|money }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="num">Нет позиций</td></tr>
+                {% endfor %}
+                <tr class="total">
+                    <td colspan="4"></td>
+                    <td class="money">ИТОГО:</td>
+                    <td class="num">{{ total_qty }}</td>
+                    <td class="money">{{ total_sum|money }}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <table class="summary">
+            <tr>
+                <th>Сумма заказа</th>
+                <th>Оплачено</th>
+                <th>Остаток</th>
+            </tr>
+            <tr>
+                <td>{{ (order.total_sum or 0)|money }}</td>
+                <td>{{ paid_sum|money }}</td>
+                <td>{{ debt|money }}</td>
+            </tr>
+        </table>
+
+        <table class="dates">
+            <tr>
+                <td>Дата биркования</td>
+                <td class="blank">&nbsp;</td>
+            </tr>
+            <tr>
+                <td>Дата начала копки</td>
+                <td class="blank">&nbsp;</td>
+            </tr>
+            <tr>
+                <td>Дата отгрузки</td>
+                <td class="blank">&nbsp;</td>
+            </tr>
+        </table>
+    </div>
+
+    <iframe id="xlsxDl" style="display:none" title="xlsx"></iframe>
+    <script>
+    (function () {
+        var xlsxUrl = {{ xlsx_url|tojson }};
+        // Скачиваем Excel-файл того же формата, что «Excel» на списке заказов.
+        try {
+            var iframe = document.getElementById('xlsxDl');
+            if (iframe) iframe.src = xlsxUrl;
+        } catch (e) {}
+        // Диалог печати — после отрисовки листа.
+        window.addEventListener('load', function () {
+            setTimeout(function () {
+                try { window.print(); } catch (e) {}
+            }, 350);
+        });
+    })();
+    </script>
+</body>
+</html>

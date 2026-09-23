@@ -1168,37 +1168,7 @@
 
         <nav class="sidebar-nav">
 
-        {% if current_user.role == 'shop_manager' %}
-            {# ---------- МЕНЮ АКТИВНОГО МЕНЕДЖЕРА ПРОДАЖ ---------- #}
-            <div class="sidebar-group-title">Главное</div>
-            <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('orders.') and request.endpoint not in ('orders.client_drafts_list', 'orders.client_draft_detail') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
-                <span class="sl-icon"><i class="fas fa-shopping-basket"></i></span>
-                <span class="sl-label">Заказы</span>
-            </a>
-            <a class="sidebar-link {% if request.endpoint in ('orders.client_drafts_list', 'orders.client_draft_detail') %}active{% endif %}" href="{{ url_for('orders.client_drafts_list') }}">
-                <span class="sl-icon"><i class="fas fa-file-signature"></i></span>
-                <span class="sl-label">На согласование</span>
-            </a>
-            <a class="sidebar-link {% if request.endpoint == 'stock.stock_report' %}active{% endif %}" href="{{ url_for('stock.stock_report') }}">
-                <span class="sl-icon"><i class="fas fa-boxes-stacked"></i></span>
-                <span class="sl-label">Остатки</span>
-            </a>
-            <div class="sidebar-group-title">Сайт</div>
-            <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('shop_admin.') %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index') }}">
-                <span class="sl-icon"><i class="fas fa-store"></i></span>
-                <span class="sl-label">Витрина «Княжество»</span>
-            </a>
-            <div class="sidebar-group-title">Система</div>
-            <a class="sidebar-link {% if request.endpoint == 'directory.directory' %}active{% endif %}" href="{{ url_for('directory.directory') }}">
-                <span class="sl-icon"><i class="fas fa-book"></i></span>
-                <span class="sl-label">Справочники</span>
-            </a>
-            <a class="sidebar-link {% if request.endpoint == 'stock.changelog' %}active{% endif %}" href="{{ url_for('stock.changelog') }}">
-                <span class="sl-icon"><i class="fas fa-rocket"></i></span>
-                <span class="sl-label">Обновления</span>
-            </a>
-        {% else %}
-
+        
             {# ---------- ГЛАВНОЕ ---------- #}
             <div class="sidebar-group-title">Главное</div>
 
@@ -1255,7 +1225,7 @@
                         <span class="sl-label">Оборотная ведомость</span>
                     </a>
                     {% endif %}
-                    {% if current_user.role in ['admin', 'executive'] %}
+                    {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
                     <a class="sidebar-link {% if request.endpoint == 'stock.price_history' %}active{% endif %}" href="{{ url_for('stock.price_history') }}">
                         <span class="sl-icon"><i class="fas fa-clock-rotate-left"></i></span>
                         <span class="sl-label">История цен</span>
@@ -1284,7 +1254,7 @@
                         <span class="sl-icon"><i class="fas fa-chart-area"></i></span>
                         <span class="sl-label">Аналитика выкопки</span>
                     </a>
-                    {% if current_user.role in ['admin', 'executive', 'user'] %}
+                    {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
                     <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('production.') %}active{% endif %}" href="{{ url_for('production.projects_list') }}">
                         <span class="sl-icon"><i class="fas fa-seedling"></i></span>
                         <span class="sl-label">Посадка в горшки</span>
@@ -1296,7 +1266,7 @@
                         <span class="sl-label">Отчёт по выкопке</span>
                     </a>
                     {% endif %}
-                    {% if current_user.role in ['admin', 'executive'] %}
+                    {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
                     <a class="sidebar-link {% if request.endpoint == 'vium.vium_report' or (request.endpoint and request.endpoint.startswith('vium.') and 'techcard' not in request.endpoint and 'plan_report' not in request.endpoint) %}active{% endif %}"
                        href="{{ url_for('vium.vium_report') }}">
                         <span class="sl-icon"><i class="fas fa-boxes-stacked"></i></span>
@@ -1316,7 +1286,7 @@
                 </div>
             </div>
 
-            {% if current_user.role in ['admin', 'executive', 'user'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
             {# ---------- АНАЛИТИКА ---------- #}
             <div class="sidebar-group-title">Аналитика</div>
 
@@ -1333,7 +1303,7 @@
                     <i class="fas fa-chevron-right sl-chevron"></i>
                 </button>
                 <div class="sidebar-sub">
-                    {% if current_user.role in ['admin', 'executive'] %}
+                    {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
                     <a class="sidebar-link {% if request.endpoint == 'crm.crm_client_analytics' %}active{% endif %}" href="{{ url_for('crm.crm_client_analytics') }}">
                         <span class="sl-icon"><i class="fas fa-users"></i></span>
                         <span class="sl-label">Аналитика по клиентам</span>
@@ -1374,13 +1344,13 @@
                         <span class="sl-icon"><i class="fas fa-handshake"></i></span>
                         <span class="sl-label">Акт сверки</span>
                     </a>
-                    {% if current_user.role in ['admin', 'executive', 'user'] %}
+                    {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
                     <a class="sidebar-link {% if request.endpoint == 'finance.reports_order_payments' %}active{% endif %}" href="{{ url_for('finance.reports_order_payments') }}">
                         <span class="sl-icon"><i class="fas fa-money-bill-wave"></i></span>
                         <span class="sl-label">Поступления ДС</span>
                     </a>
                     {% endif %}
-                    {% if current_user.role in ['admin', 'executive'] %}
+                    {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
                     <a class="sidebar-link {% if request.endpoint == 'finance.projects_list' %}active{% endif %}" href="{{ url_for('finance.projects_list') }}">
                         <span class="sl-icon"><i class="fas fa-tasks"></i></span>
                         <span class="sl-label">Проекты</span>
@@ -1424,7 +1394,7 @@
             </div>
             {% endif %}
 
-            {% if current_user.role in ['admin', 'executive', 'user2', 'brigadier'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user2', 'brigadier'] %}
             {# ---------- КОМАНДА ---------- #}
             <div class="sidebar-group-title">Команда</div>
             <div class="sidebar-group {% if request.endpoint and request.endpoint.startswith('hr.') %}open has-active{% endif %}">
@@ -1454,13 +1424,13 @@
                 <span class="sl-label">Справочники</span>
             </a>
 
-            {% if current_user.role in ['admin', 'executive', 'user'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
             <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('shop_admin.') %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index') }}">
                 <span class="sl-icon"><i class="fas fa-store"></i></span>
                 <span class="sl-label">Витрина «Княжество»</span>
             </a>
             {% endif %}
-            {% if current_user.role in ['admin', 'executive'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
             <a class="sidebar-link {% if request.endpoint == 'directory.archive' %}active{% endif %}" href="{{ url_for('directory.archive') }}">
                 <span class="sl-icon"><i class="fas fa-archive"></i></span>
                 <span class="sl-label">Архив файлов</span>
@@ -1487,8 +1457,7 @@
                 <span class="sl-icon"><i class="fas fa-circle-question"></i></span>
                 <span class="sl-label">Справка</span>
             </a>
-        {% endif %}
-        </nav>
+                </nav>
 
     </aside>
 
@@ -1506,7 +1475,6 @@
         </button>
 
         <div class="app-header-actions">
-            {% if current_user.role != 'shop_manager' %}
             <a href="{{ url_for('main.index') }}" class="header-icon-btn" title="Дашборд — задачи и уведомления">
                 <i class="fas fa-bell"></i>
                 {% if dashboard_counts and (dashboard_counts.today or dashboard_counts.overdue) %}
@@ -1519,7 +1487,6 @@
             <a href="{{ url_for('main.guide') }}" class="header-icon-btn" title="Справка">
                 <i class="fas fa-circle-question"></i>
             </a>
-            {% endif %}
 
             <div class="dropdown">
                 <div class="user-chip" data-bs-toggle="dropdown" aria-expanded="false">
@@ -1564,21 +1531,7 @@
 {# ---------- BOTTOM NAV (mobile) ---------- #}
 <nav class="bottom-nav" aria-label="Главная навигация">
     <div class="bottom-nav-inner">
-    {% if current_user.role == 'shop_manager' %}
-        <a class="bn-link {% if request.endpoint and request.endpoint.startswith('orders.') %}active{% endif %}" href="{{ url_for('orders.orders_list') }}">
-            <i class="fas fa-shopping-basket"></i><span>Заказы</span>
-        </a>
-        <a class="bn-link {% if request.endpoint == 'stock.stock_report' %}active{% endif %}" href="{{ url_for('stock.stock_report') }}">
-            <i class="fas fa-boxes-stacked"></i><span>Остатки</span>
-        </a>
-        <a class="bn-link {% if request.endpoint and request.endpoint.startswith('shop_admin.') %}active{% endif %}" href="{{ url_for('shop_admin.shop_admin_index') }}">
-            <i class="fas fa-store"></i><span>Сайт</span>
-        </a>
-        <button type="button" class="bn-link" id="bnMoreBtn" aria-label="Открыть все разделы">
-            <i class="fas fa-bars"></i><span>Ещё</span>
-        </button>
-    {% else %}
-        <a class="bn-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index') }}">
+            <a class="bn-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index') }}">
             <i class="fas fa-gauge-high"></i><span>Дашборд</span>
             {% if dashboard_counts and (dashboard_counts.today or dashboard_counts.overdue) %}
             <span class="dash-badge" aria-label="Задачи: {{ dashboard_counts.today }} на сегодня, {{ dashboard_counts.overdue }} просрочено">
@@ -1606,8 +1559,7 @@
         <button type="button" class="bn-link" id="bnMoreBtn" aria-label="Открыть все разделы">
             <i class="fas fa-bars"></i><span>Ещё</span>
         </button>
-    {% endif %}
-    </div>
+        </div>
 </nav>
 
 {# ---------- MOBILE DRAWER (Ещё) ---------- #}
@@ -1619,19 +1571,7 @@
         <button type="button" class="btn-close" aria-label="Закрыть" id="drawerCloseBtn"></button>
     </div>
     <div class="drawer-body">
-        {% if current_user.role == 'shop_manager' %}
-        <div class="drawer-group">
-            <div class="drawer-group-title">Разделы</div>
-            <a class="drawer-link" href="{{ url_for('orders.orders_list') }}"><i class="fas fa-shopping-basket"></i> Заказы</a>
-            <a class="drawer-link" href="{{ url_for('orders.client_drafts_list') }}"><i class="fas fa-file-signature"></i> На согласование</a>
-            <a class="drawer-link" href="{{ url_for('stock.stock_report') }}"><i class="fas fa-boxes"></i> Остатки</a>
-            <a class="drawer-link" href="{{ url_for('shop_admin.shop_admin_index') }}"><i class="fas fa-store"></i> Витрина «Княжество»</a>
-            <a class="drawer-link" href="{{ url_for('directory.directory') }}"><i class="fas fa-book"></i> Справочники</a>
-            <a class="drawer-link" href="{{ url_for('stock.changelog') }}"><i class="fas fa-rocket"></i> Обновления</a>
-            <a class="drawer-link text-danger" href="{{ url_for('auth.logout') }}"><i class="fas fa-sign-out-alt"></i> Выйти</a>
-        </div>
-        {% else %}
-        <div class="drawer-group">
+                <div class="drawer-group">
             <div class="drawer-group-title">Главное</div>
             <a class="drawer-link" href="{{ url_for('main.index') }}"><i class="fas fa-gauge-high"></i> Дашборд</a>
             <a class="drawer-link" href="{{ url_for('orders.orders_list') }}"><i class="fas fa-shopping-basket"></i> Заказы</a>
@@ -1649,7 +1589,7 @@
             {% if current_user.role != 'user2' %}
             <a class="drawer-link" href="{{ url_for('finance.reports_turnover') }}"><i class="fas fa-exchange-alt"></i> Оборотная ведомость</a>
             {% endif %}
-            {% if current_user.role in ['admin', 'executive'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
             <a class="drawer-link" href="{{ url_for('stock.price_history') }}"><i class="fas fa-clock-rotate-left"></i> История цен</a>
             {% endif %}
         </div>
@@ -1662,13 +1602,13 @@
             <a class="drawer-link" href="{{ url_for('digging.digging_planning') }}" data-hx-boost="false"><i class="fas fa-calendar-check"></i> План выкопки</a>
             <a class="drawer-link" href="{{ url_for('digging.mobile_index') }}"><i class="fas fa-trowel"></i> Ввод выкопки</a>
             <a class="drawer-link" href="{{ url_for('digging.analytics') }}"><i class="fas fa-chart-area"></i> Аналитика выкопки</a>
-            {% if current_user.role in ['admin', 'executive', 'user'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
             <a class="drawer-link" href="{{ url_for('production.projects_list') }}"><i class="fas fa-seedling"></i> Посадка в горшки</a>
             {% endif %}
             {% if current_user.role != 'user2' %}
             <a class="drawer-link" href="{{ url_for('digging.manager_report') }}"><i class="fas fa-clipboard-check"></i> Отчёт по выкопке</a>
             {% endif %}
-            {% if current_user.role in ['admin', 'executive'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
             <a class="drawer-link" href="{{ url_for('vium.vium_report') }}"><i class="fas fa-boxes-stacked"></i> Учёт ВиУМ</a>
             <a class="drawer-link" href="{{ url_for('vium.vium_techcards') }}"><i class="fas fa-clipboard-list"></i> Тех.карты ВиУМ</a>
             <a class="drawer-link" href="{{ url_for('vium.vium_plan_report') }}"><i class="fas fa-chart-line"></i> План ВиУМ</a>
@@ -1676,11 +1616,11 @@
             {% endif %}
         </div>
 
-        {% if current_user.role in ['admin', 'executive', 'user'] %}
+        {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
         <div class="drawer-group">
             <div class="drawer-group-title">Аналитика и CRM</div>
             <a class="drawer-link" href="{{ url_for('main.analytics') }}"><i class="fas fa-chart-line"></i> Отчёты и метрики</a>
-            {% if current_user.role in ['admin', 'executive'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
             <a class="drawer-link" href="{{ url_for('crm.crm_client_analytics') }}"><i class="fas fa-users"></i> Аналитика по клиентам</a>
             <a class="drawer-link" href="{{ url_for('crm.crm_abc') }}"><i class="fas fa-sort-amount-down"></i> ABC / XYZ</a>
             <a class="drawer-link" href="{{ url_for('crm.crm_seasonality') }}"><i class="fas fa-calendar-alt"></i> Сезонность</a>
@@ -1694,7 +1634,7 @@
             <a class="drawer-link" href="{{ url_for('finance.invoices_summary') }}"><i class="fas fa-list-alt"></i> Реестр счетов</a>
             <a class="drawer-link" href="{{ url_for('finance.reports_reconciliation') }}"><i class="fas fa-handshake"></i> Акт сверки</a>
             <a class="drawer-link" href="{{ url_for('finance.reports_order_payments') }}"><i class="fas fa-money-bill-wave"></i> Поступления ДС</a>
-            {% if current_user.role in ['admin', 'executive'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
             <a class="drawer-link" href="{{ url_for('finance.projects_list') }}"><i class="fas fa-tasks"></i> Проекты</a>
             <a class="drawer-link" href="{{ url_for('finance.expenses') }}?tab=invoices"><i class="fas fa-file-invoice-dollar"></i> Счета и расходы</a>
             <a class="drawer-link" href="{{ url_for('finance.budget') }}"><i class="fas fa-wallet"></i> Бюджет</a>
@@ -1710,7 +1650,7 @@
         </div>
         {% endif %}
 
-        {% if current_user.role in ['admin', 'executive', 'user2', 'brigadier'] %}
+        {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user2', 'brigadier'] %}
         <div class="drawer-group">
             <div class="drawer-group-title">Команда</div>
             <a class="drawer-link" href="{{ url_for('hr.personnel') }}"><i class="fas fa-users"></i> Табель и выплаты</a>
@@ -1721,10 +1661,10 @@
         <div class="drawer-group">
             <div class="drawer-group-title">Система</div>
             <a class="drawer-link" href="{{ url_for('directory.directory') }}"><i class="fas fa-book"></i> Справочники</a>
-            {% if current_user.role in ['admin', 'executive', 'user'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
             <a class="drawer-link" href="{{ url_for('shop_admin.shop_admin_index') }}"><i class="fas fa-store"></i> Витрина «Княжество»</a>
             {% endif %}
-            {% if current_user.role in ['admin', 'executive'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
             <a class="drawer-link" href="{{ url_for('directory.archive') }}"><i class="fas fa-archive"></i> Архив файлов</a>
             <a class="drawer-link" href="{{ url_for('auth.users_manage') }}"><i class="fas fa-users-cog"></i> Пользователи</a>
             <a class="drawer-link" href="{{ url_for('chat.manage') }}"><i class="fas fa-robot"></i> AI-помощник</a>
@@ -1734,8 +1674,7 @@
             <a class="drawer-link" href="{{ url_for('main.guide') }}"><i class="fas fa-circle-question"></i> Справка</a>
             <a class="drawer-link text-danger" href="{{ url_for('auth.logout') }}"><i class="fas fa-sign-out-alt"></i> Выйти</a>
         </div>
-        {% endif %}
-    </div>
+            </div>
 </div>
 
 {# ---------- COMMAND PALETTE (Cmd/Ctrl + K) ---------- #}

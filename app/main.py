@@ -1,16 +1,18 @@
 import os
 import re
 import json
+import io
 from decimal import Decimal
 from calendar import monthrange
-from flask import Blueprint, redirect, url_for, send_file, send_from_directory, current_app, render_template, jsonify, request, make_response
+from flask import Blueprint, redirect, url_for, send_file, send_from_directory, current_app, render_template, jsonify, request, make_response, abort
 from flask_login import current_user, login_required
 from datetime import timedelta, date, datetime
 from sqlalchemy import func, and_, or_, text
+from sqlalchemy.orm import undefer
 from app.models import (
     db, Order, OrderItem, Payment, PaymentInvoice, Document,
     DiggingTask, DiggingLog, ActionLog, TgTask, Client, Plant, Size, Field,
-    Expense, TimeLog, Employee, User, MapSettings, DocumentRow
+    Expense, TimeLog, Employee, User, MapSettings, DocumentRow, BankSlip
 )
 from app.utils import msk_today, msk_now, natural_key
 
@@ -378,7 +380,7 @@ def _collect_kpis(user, today):
     role = user.role or ''
     if role in ('user2', 'brigadier'):
         return tiles
-    is_boss = role in ('admin', 'executive')
+    is_boss = role in ('admin', 'executive', 'shop_manager')
     is_manager = role == 'user'
     is_prod = role == 'user2'
 
@@ -551,7 +553,7 @@ def _collect_kpis(user, today):
 def _analytics_data(user, today):
     """Данные для страницы /analytics — графики и таблицы."""
     role = user.role or ''
-    is_boss = role in ('admin', 'executive')
+    is_boss = role in ('admin', 'executive', 'shop_manager')
 
     data = {
         'revenue_months': [],   # [{label, value}] за последние 12 календарных месяцев
@@ -720,7 +722,7 @@ def index():
     # Для руководителей — при первом заходе в день прогоняем сканер аномалий,
     # а по понедельникам после 10:00 МСК — генерим еженедельный дайджест.
     # Обе операции идемпотентны: второй вызов за день ничего не делает.
-    if (current_user.role or '') in ('admin', 'executive'):
+    if (current_user.role or '') in ('admin', 'executive', 'shop_manager'):
         try:
             from app.anomaly_engine import ensure_daily_scan
             ensure_daily_scan()
@@ -781,7 +783,7 @@ def index():
     is_topic_scope = is_admin and admin_scope in ('sales', 'finance', 'field')
 
     # 1. Счета на оплату
-    if current_user.role in ['admin', 'executive']:
+    if current_user.role in ['admin', 'executive', 'shop_manager']:
         try:
             invoices = PaymentInvoice.query.filter(
                 PaymentInvoice.status != 'paid',
@@ -955,6 +957,10 @@ def index():
                             'tg_chat_id': pl.get('tg_chat_id'),
                             'tg_message_id': pl.get('tg_message_id'),
                             'sender': pl.get('sender'),
+                            'slip_id': pl.get('slip_id'),
+                            'file_url': pl.get('file_url') or (
+                                f"/api/bank-slips/{pl.get('slip_id')}/file" if pl.get('slip_id') else ''
+                            ),
                         }
                     except Exception:
                         chat_expense = None
@@ -996,7 +1002,7 @@ def index():
     # его stale_reserved, а бригадиру (если появятся полевые аномалии) —
     # профильные. Финансовые аномалии с ролями 'admin,executive' к менеджеру
     # не попадут: _role_match('user') их не ловит.
-    if (current_user.role or '') in ('admin', 'executive', 'user', 'user2'):
+    if (current_user.role or '') in ('admin', 'executive', 'shop_manager', 'user', 'user2'):
         try:
             # Дайджест — персональный (assignee_id == current_user.id),
             # иначе каждый админ видел бы дайджесты коллег. Аномалии —
@@ -1412,7 +1418,7 @@ def anomaly_history():
         get_anomaly_threshold_pct,
         set_anomaly_threshold_pct,
     )
-    if (current_user.role or '') not in ('admin', 'executive'):
+    if (current_user.role or '') not in ('admin', 'executive', 'shop_manager'):
         flash('Раздел доступен только руководителям.', 'warning')
         return redirect(url_for('main.index'))
 
@@ -1532,6 +1538,25 @@ def complete_task():
         </div>
         """
     return "Ошибка ввода", 400
+
+
+@bp.route('/api/bank-slips/<int:slip_id>/file')
+@login_required
+def bank_slip_file(slip_id):
+    if current_user.role not in ('admin', 'executive', 'shop_manager'):
+        abort(403)
+    slip = BankSlip.query.options(undefer(BankSlip.file_blob)).get_or_404(slip_id)
+    blob = slip.file_blob
+    if not blob:
+        abort(404)
+    name = slip.original_name or 'receipt.jpg'
+    ext = (name.rsplit('.', 1)[-1] if '.' in name else 'jpg').lower()
+    mime = {
+        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+        'webp': 'image/webp', 'pdf': 'application/pdf', 'heic': 'image/heic',
+    }.get(ext, 'application/octet-stream')
+    return send_file(io.BytesIO(blob), mimetype=mime, download_name=name)
+
 
 @bp.route('/api/feed/complete_tg_task', methods=['POST'])
 @login_required
@@ -1783,7 +1808,7 @@ def chat_expense_reclassify(msg_id):
 @bp.route('/api/anomaly/rescan', methods=['POST'])
 @login_required
 def anomaly_force_rescan():
-    if (current_user.role or '') not in ('admin', 'executive'):
+    if (current_user.role or '') not in ('admin', 'executive', 'shop_manager'):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     try:
         from app.anomaly_engine import run_daily_scan
@@ -2278,7 +2303,7 @@ def telegram_set_webhook():
 _TG_TASK_MANUAL_ACTION_TYPES = {
     'info', 'create_order', 'digging', 'shipment', 'income', 'payment',
 }
-_TG_TASK_ROLES = {'admin', 'executive', 'user', 'user2'}
+_TG_TASK_ROLES = {'admin', 'executive', 'shop_manager', 'user', 'user2'}
 
 
 def _tg_task_can_create(user):
@@ -2412,7 +2437,7 @@ def api_tg_task_recent():
     какой source и кем создано. Именно от этих полей зависит, кому
     задача покажется в ленте. Доступ — только admin/executive.
     """
-    if current_user.role not in ('admin', 'executive'):
+    if current_user.role not in ('admin', 'executive', 'shop_manager'):
         return jsonify({'error': 'forbidden'}), 403
 
     rows = TgTask.query.order_by(TgTask.id.desc()).limit(30).all()
@@ -3027,7 +3052,7 @@ def inject_global_vars():
             counts['today'] += max(0, anom_total - anom_danger)
 
             # --- 3) Персональный дайджест — только для admin/executive ---
-            if role in ('admin', 'executive'):
+            if role in ('admin', 'executive', 'shop_manager'):
                 digest_count = TgTask.query.filter(
                     TgTask.status == 'new',
                     TgTask.action_type == 'digest',

@@ -3,12 +3,95 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 from sqlalchemy import func, inspect, text, or_
 from sqlalchemy.exc import OperationalError
-from app.models import db, Order, OrderItem, DiggingLog, Client, Plant, Size, Field, TimeLog, ActionLog, DiggingTask
+from app.models import (
+    db, Order, OrderItem, DiggingLog, Client, Plant, Size, Field, TimeLog, ActionLog,
+    DiggingTask, ShipmentPlan, DiggingCalendarMark,
+)
 from app.utils import msk_now, msk_today, log_action, natural_key
 import requests # <--- ДОБАВИЛИ ИМПОРТ
 import os       # <--- ДОБАВЛЯЕМ ДЛЯ РАБОТЫ С СЕКРЕТАМИ
 
 from app.telegram import send_message as _tg_send
+
+# План выкопки: кто видит календарь.
+_PLANNING_ROLES = ('admin', 'user', 'executive', 'shop_manager')
+# Отгрузки и выходные: админ и руководитель (менеджер сайта — только просмотр).
+_CALENDAR_EDIT_ROLES = ('admin', 'executive')
+
+_MARK_KIND_LABELS = {
+    DiggingCalendarMark.KIND_CREW_OFF: 'Выходной рабочей бригады',
+    DiggingCalendarMark.KIND_BRIGADIER_OFF: 'Выходной бригадира',
+}
+
+
+def _can_plan_digging(user) -> bool:
+    return (getattr(user, 'role', None) or '') in _PLANNING_ROLES
+
+
+def _can_edit_shipment(user) -> bool:
+    return (getattr(user, 'role', None) or '') in _CALENDAR_EDIT_ROLES
+
+
+def _can_edit_calendar_marks(user) -> bool:
+    return _can_edit_shipment(user)
+
+
+def _toggle_calendar_mark(planned_date, kind: str, user_id: int | None) -> tuple[bool, str]:
+    """Включает/выключает метку дня. True = поставлена, False = снята."""
+    if kind not in DiggingCalendarMark.KINDS:
+        raise ValueError('bad_kind')
+    existing = DiggingCalendarMark.query.filter_by(planned_date=planned_date, kind=kind).first()
+    label = _MARK_KIND_LABELS.get(kind, kind)
+    if existing:
+        db.session.delete(existing)
+        return False, label
+    db.session.add(DiggingCalendarMark(
+        planned_date=planned_date,
+        kind=kind,
+        created_by_user_id=user_id,
+    ))
+    return True, label
+
+
+def _orders_for_shipment_select():
+    """Активные заказы для выбора даты отгрузки."""
+    rows = (
+        Order.query
+        .filter(
+            Order.is_deleted.is_(False),
+            Order.status.in_(['reserved', 'in_progress', 'ready']),
+        )
+        .order_by(Order.id.desc())
+        .limit(300)
+        .all()
+    )
+    return [
+        {
+            'id': o.id,
+            'label': f'#{o.id} — {(o.client.name if o.client else "—")}',
+            'client': o.client.name if o.client else '—',
+        }
+        for o in rows
+    ]
+
+
+def _upsert_shipment_plan(order_id: int, planned_date, comment: str | None, user_id: int | None) -> ShipmentPlan:
+    """Одна дата отгрузки на заказ: если уже есть — переносим на новый день."""
+    plan = ShipmentPlan.query.filter_by(order_id=order_id).first()
+    if plan:
+        plan.planned_date = planned_date
+        if comment is not None:
+            plan.comment = (comment or '')[:500] or None
+        plan.created_by_user_id = user_id or plan.created_by_user_id
+        return plan
+    plan = ShipmentPlan(
+        order_id=order_id,
+        planned_date=planned_date,
+        comment=(comment or '')[:500] or None,
+        created_by_user_id=user_id,
+    )
+    db.session.add(plan)
+    return plan
 
 
 def _is_sqlite_engine() -> bool:
@@ -868,8 +951,10 @@ from app.utils import msk_today, MONTH_NAMES
 @bp.route('/digging/planning', methods=['GET', 'POST'])
 @login_required
 def digging_planning():
-    if current_user.role not in ['admin', 'user', 'executive']:
+    if not _can_plan_digging(current_user):
         return redirect(url_for('main.index'))
+
+    can_ship = _can_edit_shipment(current_user)
 
     if request.method == 'POST':
         action = request.form.get('action')
@@ -907,6 +992,66 @@ def digging_planning():
                 db.session.delete(task)
                 db.session.commit()
                 flash('Задание отменено, объем вернулся в заказ.', 'info')
+
+        elif action == 'create_shipment':
+            if not can_ship:
+                flash('Добавлять дату отгрузки могут админ и руководитель.', 'danger')
+                return redirect(url_for('digging.digging_planning'))
+            try:
+                order_id = int(request.form.get('order_id') or 0)
+                date_str = (request.form.get('planned_date') or '').strip()
+                target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except (TypeError, ValueError):
+                flash('Укажите заказ и дату отгрузки.', 'danger')
+                return redirect(url_for('digging.digging_planning'))
+            order = Order.query.get(order_id)
+            if not order or order.is_deleted or (order.status or '') in ('canceled', 'ghost'):
+                flash('Заказ не найден или закрыт.', 'danger')
+                return redirect(url_for('digging.digging_planning'))
+            comment = (request.form.get('comment') or '').strip()
+            _upsert_shipment_plan(order.id, target_date, comment, current_user.id)
+            db.session.commit()
+            flash(
+                f'Отгрузка заказа #{order.id} ({order.client.name if order.client else "—"}) '
+                f'на {target_date.strftime("%d.%m.%Y")}.',
+                'success',
+            )
+            return redirect(url_for('digging.digging_planning'))
+
+        elif action == 'delete_shipment':
+            if not can_ship:
+                flash('Недостаточно прав', 'danger')
+                return redirect(url_for('digging.digging_planning'))
+            plan = ShipmentPlan.query.get(request.form.get('shipment_id'))
+            if plan:
+                oid = plan.order_id
+                db.session.delete(plan)
+                db.session.commit()
+                flash(f'Дата отгрузки заказа #{oid} снята.', 'info')
+            return redirect(url_for('digging.digging_planning'))
+
+        elif action == 'toggle_day_mark':
+            if not _can_edit_calendar_marks(current_user):
+                flash('Менять выходные могут админ и руководитель.', 'danger')
+                return redirect(url_for('digging.digging_planning'))
+            kind = (request.form.get('kind') or '').strip()
+            date_str = (request.form.get('planned_date') or '').strip()
+            try:
+                target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                flash('Укажите дату.', 'danger')
+                return redirect(url_for('digging.digging_planning'))
+            try:
+                enabled, label = _toggle_calendar_mark(target_date, kind, current_user.id)
+            except ValueError:
+                flash('Неизвестный тип метки.', 'danger')
+                return redirect(url_for('digging.digging_planning'))
+            db.session.commit()
+            flash(
+                f'{label}: {"отмечен" if enabled else "снят"} {target_date.strftime("%d.%m.%Y")}.',
+                'success' if enabled else 'info',
+            )
+            return redirect(url_for('digging.digging_planning'))
                 
         return redirect(url_for('digging.digging_planning'))
 
@@ -972,6 +1117,40 @@ def digging_planning():
         DiggingTask.status == 'pending'
     ).all()
 
+    ship_plans = (
+        ShipmentPlan.query
+        .filter(
+            ShipmentPlan.planned_date >= first_monday,
+            ShipmentPlan.planned_date <= last_sunday,
+        )
+        .all()
+    )
+    ships_by_date: dict = {}
+    for sp in ship_plans:
+        o = sp.order
+        if not o or o.is_deleted:
+            continue
+        ships_by_date.setdefault(sp.planned_date, []).append({
+            'id': sp.id,
+            'order_id': o.id,
+            'client': o.client.name if o.client else '—',
+            'comment': sp.comment or '',
+        })
+    for dkey in ships_by_date:
+        ships_by_date[dkey].sort(key=lambda g: (g['client'].lower(), g['order_id']))
+
+    day_marks = (
+        DiggingCalendarMark.query
+        .filter(
+            DiggingCalendarMark.planned_date >= first_monday,
+            DiggingCalendarMark.planned_date <= last_sunday,
+        )
+        .all()
+    )
+    marks_by_date: dict = {}
+    for mk in day_marks:
+        marks_by_date.setdefault(mk.planned_date, set()).add(mk.kind)
+
     weeks_data = []
     prev_month_label = None
     total_weeks = weeks_before + 1 + weeks_after
@@ -1006,6 +1185,8 @@ def digging_planning():
                 })
             orders_groups = sorted(orders_map.values(), key=lambda g: (-g['total_qty'], g['client']))
             clients_summary = [{'client': g['client'], 'qty': g['total_qty']} for g in orders_groups]
+            day_ships = ships_by_date.get(d, [])
+            kinds = marks_by_date.get(d, set())
             days_arr.append({
                 'date_obj': d,
                 'date_str': d.strftime('%Y-%m-%d'),
@@ -1016,6 +1197,10 @@ def digging_planning():
                 'total_plants': sum(t.planned_qty for t in day_tasks),
                 'orders_groups': orders_groups,
                 'clients_summary': clients_summary,
+                'shipments': day_ships,
+                'shipments_count': len(day_ships),
+                'crew_off': DiggingCalendarMark.KIND_CREW_OFF in kinds,
+                'brigadier_off': DiggingCalendarMark.KIND_BRIGADIER_OFF in kinds,
             })
 
         # Заголовок месяца показываем при первом появлении нового месяца на
@@ -1053,7 +1238,9 @@ def digging_planning():
                            prev_center_iso=(center_monday - timedelta(weeks=weeks_before)).strftime('%Y-%m-%d'),
                            next_center_iso=(center_monday + timedelta(weeks=weeks_after)).strftime('%Y-%m-%d'),
                            current_year=center_monday.year,
-                           month_name=MONTH_NAMES.get(center_monday.month, '')))
+                           month_name=MONTH_NAMES.get(center_monday.month, ''),
+                           can_edit_shipment=can_ship,
+                           ship_orders=_orders_for_shipment_select() if can_ship else []))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'
     return resp
@@ -1113,16 +1300,139 @@ def _render_day_details_html(target_date):
     тот же рендер использовать и при первичной загрузке, и при массовом
     удалении (свап в ту же модалку без её закрытия)."""
     tasks = DiggingTask.query.filter_by(planned_date=target_date, status='pending').all()
+    ships = (
+        ShipmentPlan.query
+        .filter_by(planned_date=target_date)
+        .order_by(ShipmentPlan.id.asc())
+        .all()
+    )
+    mark_kinds = {
+        m.kind
+        for m in DiggingCalendarMark.query.filter_by(planned_date=target_date).all()
+    }
+    crew_off = DiggingCalendarMark.KIND_CREW_OFF in mark_kinds
+    brigadier_off = DiggingCalendarMark.KIND_BRIGADIER_OFF in mark_kinds
     date_formatted = target_date.strftime("%d.%m.%Y")
     date_str = target_date.strftime("%Y-%m-%d")
+    can_ship = _can_edit_shipment(current_user)
+    can_marks = _can_edit_calendar_marks(current_user)
 
-    if not tasks:
+    marks_html = ""
+    if crew_off or brigadier_off or can_marks:
+        chips = []
+        if crew_off:
+            chips.append(
+                '<span class="badge rounded-pill px-3 py-2" style="background:#7c3aed;color:#fff;">'
+                'Выходной бригады</span>'
+            )
+        if brigadier_off:
+            chips.append(
+                '<span class="badge rounded-pill px-3 py-2" style="background:#ea580c;color:#fff;">'
+                'Выходной бригадира</span>'
+            )
+        chips_html = ' '.join(chips) if chips else '<span class="text-muted small">Выходных нет</span>'
+        toggles = ''
+        if can_marks:
+            def _toggle_btn(kind, active, label, color):
+                action_label = 'Снять' if active else 'Отметить'
+                return f"""
+                <form method="POST" action="/digging/planning" hx-boost="false" class="m-0">
+                    <input type="hidden" name="action" value="toggle_day_mark">
+                    <input type="hidden" name="kind" value="{kind}">
+                    <input type="hidden" name="planned_date" value="{date_str}">
+                    <button type="submit" class="btn btn-sm {'btn-outline-secondary' if active else 'btn-outline-dark'}"
+                            style="border-color:{color};color:{color};">
+                        {action_label}: {label}
+                    </button>
+                </form>
+                """
+            toggles = f"""
+            <div class="d-flex flex-wrap gap-2 mt-2">
+                {_toggle_btn(DiggingCalendarMark.KIND_CREW_OFF, crew_off, 'бригада', '#7c3aed')}
+                {_toggle_btn(DiggingCalendarMark.KIND_BRIGADIER_OFF, brigadier_off, 'бригадир', '#ea580c')}
+            </div>
+            """
+        marks_html = f"""
+        <div class="mb-3 p-3 rounded border" style="background:#fafafa;">
+            <div class="small text-muted text-uppercase fw-bold mb-2">Выходные</div>
+            <div class="d-flex flex-wrap gap-2 align-items-center">{chips_html}</div>
+            {toggles}
+        </div>
+        """
+
+    ships_html = ""
+    if ships:
+        cards = ""
+        for sp in ships:
+            o = sp.order
+            if not o:
+                continue
+            client = o.client.name if o.client else '—'
+            comment_html = (
+                f'<div class="small text-muted mt-1"><i class="fas fa-comment-dots me-1"></i>{sp.comment}</div>'
+            ) if sp.comment else ''
+            del_btn = ''
+            if can_ship:
+                del_btn = f"""
+                <form method="POST" action="/digging/planning" hx-boost="false" class="m-0"
+                      onsubmit="return confirm('Снять дату отгрузки заказа #{o.id}?');">
+                    <input type="hidden" name="action" value="delete_shipment">
+                    <input type="hidden" name="shipment_id" value="{sp.id}">
+                    <button type="submit" class="btn btn-link text-danger p-0" title="Снять дату отгрузки">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                </form>
+                """
+            cards += f"""
+            <div class="card mb-2 border-0 shadow-sm border-start border-4 border-danger">
+                <div class="card-body p-3 d-flex justify-content-between align-items-start gap-2">
+                    <div>
+                        <div class="small text-danger text-uppercase fw-bold mb-1">
+                            <i class="fas fa-truck me-1"></i>Отгрузка
+                        </div>
+                        <div class="fw-bold text-dark">Заказ #{o.id} · {client}</div>
+                        {comment_html}
+                    </div>
+                    {del_btn}
+                </div>
+            </div>
+            """
+        ships_html = f"""
+        <div class="mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="fw-bold text-danger m-0"><i class="fas fa-truck me-1"></i>Отгрузки на этот день</h6>
+                <span class="badge bg-danger">{len(ships)}</span>
+            </div>
+            {cards}
+        </div>
+        """
+
+    add_ship_btn = ''
+    if can_ship:
+        add_ship_btn = f"""
+        <button type="button" class="btn btn-outline-danger btn-sm fw-bold js-open-shipment-form"
+                data-date="{date_str}">
+            <i class="fas fa-truck me-1"></i>Добавить отгрузку
+        </button>
+        """
+
+    if not tasks and not ships and not crew_off and not brigadier_off and not can_marks:
         return (
             f"<div id='dayDetailsBody' data-date='{date_str}'>"
             f"<div class='text-center p-4 text-muted'>"
             f"<h5 class='fw-bold'>{date_formatted}</h5>"
-            f"На этот день заданий нет. Перетащите сюда заказ."
+            f"<p class='mb-3'>На этот день заданий нет. Перетащите сюда заказ.</p>"
+            f"{add_ship_btn}"
             f"</div></div>"
+        )
+
+    if not tasks and not ships:
+        return (
+            f"<div id='dayDetailsBody' data-date='{date_str}'>"
+            f"<div class='mb-2'><h5 class='fw-bold text-dark m-0'>{date_formatted}</h5></div>"
+            f"{marks_html}"
+            f"<div class='d-flex justify-content-end'>{add_ship_btn}</div>"
+            f"</div>"
         )
 
     total_qty = sum(t.planned_qty or 0 for t in tasks)
@@ -1176,24 +1486,43 @@ def _render_day_details_html(target_date):
         </div>
         """
 
+    dig_block = ""
+    if tasks:
+        dig_block = f"""
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <div>
+            <h5 class="fw-bold text-dark m-0">План выкопки на {date_formatted}</h5>
+            <div class="small text-muted">{len(tasks)} задан. · {total_qty} шт</div>
+          </div>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            {add_ship_btn}
+            <label class="d-flex align-items-center gap-2 small text-muted" style="cursor:pointer;">
+              <input type="checkbox" class="form-check-input js-task-check-all" style="width:16px;height:16px;margin:0;">
+              Выбрать все
+            </label>
+            <button type="button" class="btn btn-danger btn-sm fw-bold js-task-delete-bulk" disabled>
+              <i class="fas fa-trash-alt me-1"></i>Удалить выбранные (<span class="js-selected-count">0</span>)
+            </button>
+          </div>
+        </div>
+        {cards_html}
+        """
+    else:
+        dig_block = f"""
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <div>
+            <h5 class="fw-bold text-dark m-0">{date_formatted}</h5>
+            <div class="small text-muted">Плана выкопки нет</div>
+          </div>
+          {add_ship_btn}
+        </div>
+        """
+
     header_html = f"""
     <div id='dayDetailsBody' data-date='{date_str}'>
-      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <div>
-          <h5 class="fw-bold text-dark m-0">План на {date_formatted}</h5>
-          <div class="small text-muted">{len(tasks)} задан. · {total_qty} шт</div>
-        </div>
-        <div class="d-flex align-items-center gap-2">
-          <label class="d-flex align-items-center gap-2 small text-muted" style="cursor:pointer;">
-            <input type="checkbox" class="form-check-input js-task-check-all" style="width:16px;height:16px;margin:0;">
-            Выбрать все
-          </label>
-          <button type="button" class="btn btn-danger btn-sm fw-bold js-task-delete-bulk" disabled>
-            <i class="fas fa-trash-alt me-1"></i>Удалить выбранные (<span class="js-selected-count">0</span>)
-          </button>
-        </div>
-      </div>
-      {cards_html}
+      {marks_html}
+      {ships_html}
+      {dig_block}
     </div>
     """
     return header_html
@@ -1213,7 +1542,7 @@ def get_day_details(date_str):
 @bp.route('/api/digging/day_tasks_bulk_delete', methods=['POST'])
 @login_required
 def digging_day_tasks_bulk_delete():
-    if current_user.role not in ['admin', 'user', 'executive']:
+    if not _can_plan_digging(current_user):
         return ("forbidden", 403)
 
     date_str = request.form.get('date_str') or ''
@@ -1252,7 +1581,7 @@ def digging_day_tasks_bulk_delete():
 @bp.route('/api/digging/day_move', methods=['POST'])
 @login_required
 def digging_day_move():
-    if current_user.role not in ['admin', 'user', 'executive']:
+    if not _can_plan_digging(current_user):
         return ({"ok": False, "error": "forbidden"}, 403)
 
     from_str = (request.form.get('from_date') or '').strip()
