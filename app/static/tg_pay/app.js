@@ -46,7 +46,7 @@
   }
 
   (function bindPress() {
-    const sel = 'button, .btn, .fab, .back, a.row, a.choice, a.inbox-banner, a.inbox-link';
+    const sel = 'button, .btn, .fab, .back, a.row, a.choice, a.inbox-banner, a.inbox-link, a.week-plan-link';
     let cur = null;
     let downAt = 0;
     function clear() {
@@ -80,6 +80,7 @@
     const parts = path.split('/').filter(Boolean);
     if (parts[0] === 'inv' && parts[1]) return renderDetail(+parts[1]);
     if (parts[0] === 'new') return renderNew();
+    if (parts[0] === 'week-plan') return renderWeekPlan();
     if (parts[0] === 'plan') return renderPlan();
     if (parts[0] === 'file') return renderUpload();
     if (parts[0] === 'bank') return renderBank();
@@ -168,8 +169,6 @@
     const drafts = me.can_edit ? rows.filter((x) => x.status === 'draft') : [];
     const live = rows.filter((x) => x.status !== 'draft');
     const shown = me.can_edit ? live : live.filter((x) => x.status === 'new' && isFact(x));
-    const cash = shown.filter((x) => x.payment_type === 'cash');
-    const cashless = shown.filter((x) => x.payment_type !== 'cash');
     const plan = Number(data.total_plan) || 0;
     const fact = Number(data.total_fact) || 0;
     let delta = '';
@@ -178,35 +177,31 @@
         ? 'экономия ' + money(plan - fact)
         : 'перерасход ' + money(fact - plan);
     }
+    const planMeta = plan
+      ? `план ${money(plan)}${fact ? ' · факт ' + money(fact) : ''}${delta ? ' · ' + delta : ''}`
+      : `${shown.filter(isFact).length} счёт(ов)`;
 
     let html = `
       <div class="hero">
         <div class="label">К оплате</div>
         <div class="sum">${money(data.total_new)}</div>
-        <div class="split">
-          <span>Безнал ${money(data.total_cashless || 0)}</span>
-          <span>Нал ${money(data.total_cash || 0)}</span>
-        </div>
-        ${plan ? `<div class="meta">план на неделю ${money(plan)}${fact ? ' · факт ' + money(fact) : ''}${delta ? ' · ' + delta : ''}</div>` : `<div class="meta">${shown.filter(isFact).length} счёт(ов)</div>`}
+        <div class="meta">${esc(planMeta)}</div>
       </div>
     `;
+    if (me.can_edit || me.role === 'executive') {
+      html += `<a class="week-plan-link" href="#/week-plan">План недели →</a>`;
+    }
     if (me.can_inbox && data.inbox_count) {
       html += `<a class="inbox-banner" href="#/inbox">Входящие из чата · ${data.inbox_count}</a>`;
-    } else if (me.can_inbox) {
-      html += `<a class="inbox-link" href="#/inbox">Входящие из чата</a>`;
     }
     if (drafts.length) {
-      html += '<h2 class="sec">Черновики</h2><div class="list">' + drafts.map(rowHtml).join('') + '</div>';
+      html += `<details class="drafts-acc"><summary>Черновики (${drafts.length})</summary>`
+        + `<div class="list">${drafts.map(rowHtml).join('')}</div></details>`;
     }
     if (!shown.length && !drafts.length) {
-      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План, счёт или выписка банка — кнопка +.' : 'Неоплаченных счетов нет.'}</p></div>`;
-    } else {
-      if (cashless.length) {
-        html += '<h2 class="sec">Безнал</h2><div class="list">' + cashless.map(rowHtml).join('') + '</div>';
-      }
-      if (cash.length) {
-        html += '<h2 class="sec">Нал</h2><div class="list">' + cash.map(rowHtml).join('') + '</div>';
-      }
+      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План недели, счёт или выписка — кнопка +.' : 'Неоплаченных счетов нет.'}</p></div>`;
+    } else if (shown.length) {
+      html += '<div class="list">' + shown.map(rowHtml).join('') + '</div>';
     }
     if (me.can_edit) {
       html += `<button class="fab" type="button" id="fabAdd" aria-label="Добавить">+</button>`;
@@ -259,7 +254,7 @@
     let editPanel = '';
     if (can) {
       editPanel = `
-        <button class="btn btn-quiet" type="button" id="btnMore">Правки</button>
+        <button class="btn btn-quiet" type="button" id="btnMore">Ещё</button>
         <div id="editPanel" hidden>
           <div class="field"><label>Назначение</label>
             <textarea id="fSummary">${esc(inv.summary)}</textarea></div>
@@ -287,6 +282,13 @@
           <div class="field"><label>План на неделю</label>
             <input id="fPlan" inputmode="decimal" value="${inv.planned_amount || ''}" placeholder="сумма в пятницу"></div>
           <button class="btn btn-quiet" type="button" id="btnSave">Сохранить правки</button>
+          ${inv.has_receipt ? '<button class="btn btn-quiet" type="button" id="btnReceipt">Квитанция в чат</button>' : ''}
+          ${(inv.status !== 'paid')
+            ? `<div class="field"><label>${inv.has_file ? 'Заменить PDF' : 'Прикрепить PDF'}</label>
+                <input id="fAttach" type="file" accept="application/pdf,image/*"></div>
+              <button class="btn btn-quiet" type="button" id="btnAttach">${inv.has_file ? 'Заменить файл' : 'Прикрепить файл'}</button>
+              <button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>`
+            : ''}
         </div>
       `;
     }
@@ -294,31 +296,18 @@
     const payBtn = (!isDraft && inv.status !== 'paid')
       ? '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>'
       : '';
-    const fileBtns = (inv.has_file
+    const openBtnHtml = inv.has_file
       ? '<button class="btn btn-brass" type="button" id="btnOpen">Счёт в чат</button>'
-      : '<p class="warn">Файл счёта не найден — прикрепите PDF.</p>')
-      + (inv.has_receipt
-        ? '<button class="btn btn-quiet" type="button" id="btnReceipt">Квитанция в чат</button>'
-        : '');
-    const attachBlock = (can && inv.status !== 'paid')
-      ? `<div class="field"><label>${inv.has_file ? 'Заменить PDF' : 'Прикрепить PDF'}</label>
-            <input id="fAttach" type="file" accept="application/pdf,image/*"></div>
-          <button class="btn btn-quiet" type="button" id="btnAttach">${inv.has_file ? 'Заменить файл' : 'Прикрепить файл'}</button>`
-      : '';
-    const dropBtn = (can && inv.status !== 'paid')
-      ? '<button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>'
-      : '';
+      : (can ? '<p class="warn">Файл счёта не найден — прикрепите в «Ещё».</p>' : '<p class="warn">Файл счёта не найден.</p>');
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
       <div class="card">
         <div class="amount-xl">${money(shownAmt)}</div>
         ${payHint}
-        ${fileBtns}
+        ${openBtnHtml}
         ${assignPanel}
         ${payBtn}
-        ${attachBlock}
-        ${dropBtn}
         ${editPanel}
         ${lines}
       </div>
@@ -335,7 +324,7 @@
         const open = panel.hasAttribute('hidden');
         if (open) panel.removeAttribute('hidden');
         else panel.setAttribute('hidden', '');
-        more.textContent = open ? 'Скрыть правки' : 'Правки';
+        more.textContent = open ? 'Скрыть' : 'Ещё';
       };
     }
     const save = document.getElementById('btnSave');
@@ -477,9 +466,13 @@
     setTitle('Добавить');
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
+      <a class="choice" href="#/week-plan">
+        <div class="choice-k">План недели</div>
+        <p>Пятничный план: нал и безнал, сохранить и закрепить у бота.</p>
+      </a>
       <a class="choice" href="#/plan">
-        <div class="choice-k">План</div>
-        <p>На неделю вперёд — сумма без файла. В пт для руководителя.</p>
+        <div class="choice-k">Одна строка плана</div>
+        <p>Одна позиция плана без общего закрепа.</p>
       </a>
       <a class="choice" href="#/file">
         <div class="choice-k">Файл</div>
@@ -487,10 +480,142 @@
       </a>
       <a class="choice" href="#/bank">
         <div class="choice-k">Выписка</div>
-        <p>Квитанция Альфа-Банка, платёжка или скрин списаний. Разнесём по счетам.</p>
+        <p>Квитанция Альфа-Банка, платёжка или скрин списаний.</p>
       </a>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+  }
+
+  function weekPlanRowHtml(item, idx, canEdit) {
+    const id = item.id || '';
+    const ptype = item.payment_type === 'cash' ? 'cash' : 'cashless';
+    const locked = item.has_fact ? ' data-locked="1"' : '';
+    if (!canEdit) {
+      return `<div class="week-row">
+        <div class="week-row-main"><b>${esc(_fmtPreviewAmt(item.planned_amount))}</b> — ${esc(item.summary || '')}</div>
+        <div class="muted">${ptype === 'cash' ? 'нал' : 'безнал'}${item.has_fact ? ' · есть факт' : ''}</div>
+      </div>`;
+    }
+    return `<div class="week-row" data-idx="${idx}"${locked}>
+      <input type="hidden" class="wp-id" value="${id}">
+      <div class="week-row-grid">
+        <input class="wp-amt" inputmode="decimal" placeholder="сумма" value="${item.planned_amount || ''}">
+        <select class="wp-type">
+          <option value="cash" ${ptype === 'cash' ? 'selected' : ''}>Нал</option>
+          <option value="cashless" ${ptype !== 'cash' ? 'selected' : ''}>Безнал</option>
+        </select>
+      </div>
+      <textarea class="wp-sum" rows="2" placeholder="назначение">${String(item.summary || '').replace(/<\/textarea/gi, '')}</textarea>
+      <button type="button" class="btn btn-ghost week-del" ${item.has_fact ? 'disabled title="Есть исполнение — нельзя удалить"' : ''}>Удалить</button>
+    </div>`;
+  }
+
+  function _fmtPreviewAmt(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '0';
+    if (v >= 1000 && Math.abs(v % 1000) < 0.001) return Math.round(v / 1000) + ' тр';
+    return money(v).replace(/\u00a0₽$/, '').trim();
+  }
+
+  function collectWeekPlanRows() {
+    const items = [];
+    view.querySelectorAll('.week-row[data-idx]').forEach((row) => {
+      const summary = ((row.querySelector('.wp-sum') || {}).value || '').trim();
+      const planned_amount = ((row.querySelector('.wp-amt') || {}).value || '').trim();
+      const payment_type = ((row.querySelector('.wp-type') || {}).value || 'cashless');
+      const idRaw = ((row.querySelector('.wp-id') || {}).value || '').trim();
+      if (!summary && !planned_amount) return;
+      const item = { summary, planned_amount, payment_type };
+      if (idRaw) item.id = Number(idRaw);
+      items.push(item);
+    });
+    return items;
+  }
+
+  async function renderWeekPlan() {
+    setTitle('План недели');
+    const data = await api('/tg/pay/api/week-plan');
+    const canEdit = !!(me && me.can_edit);
+    const items = data.items || [];
+    let body;
+    if (canEdit) {
+      body = items.map((it, i) => weekPlanRowHtml(it, i, true)).join('')
+        || '<p class="hint">Пока пусто — добавьте строки нал и безнал.</p>';
+      body = `<div id="weekRows">${body}</div>
+        <button class="btn btn-quiet" type="button" id="btnAddRow">+ строка</button>
+        <button class="btn btn-ink" type="button" id="btnSavePin">Сохранить и закрепить</button>
+        <p class="hint" id="weekStatus">${data.pinned ? 'Уже закреплён у админа и руководителя. Повторное сохранение обновит закреп.' : 'После сохранения план уйдёт в личку бота и закрепится у админа и руководителя.'}</p>`;
+    } else {
+      const cash = (data.cash || []).map((it, i) => weekPlanRowHtml(it, i, false)).join('') || '<p class="muted">пусто</p>';
+      const cashless = (data.cashless || []).map((it, i) => weekPlanRowHtml(it, i, false)).join('') || '<p class="muted">пусто</p>';
+      body = `<h2 class="sec">НАЛ</h2><div class="card">${cash}</div>
+        <h2 class="sec">БЕЗНАЛ</h2><div class="card">${cashless}</div>
+        <p class="hint">${data.pinned ? 'Закреплён в чате с ботом.' : 'Админ ещё не закрепил план.'}</p>`;
+    }
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← к списку</button>
+      <div class="card">
+        <p class="hint" style="margin:0">Период: <b>${esc(data.period_label || '')}</b></p>
+      </div>
+      ${body}
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+    const addBtn = document.getElementById('btnAddRow');
+    if (addBtn) {
+      addBtn.onclick = () => {
+        const wrap = document.getElementById('weekRows');
+        const idx = wrap.querySelectorAll('.week-row').length;
+        wrap.insertAdjacentHTML('beforeend', weekPlanRowHtml({
+          summary: '', planned_amount: '', payment_type: 'cashless',
+        }, idx, true));
+        bindWeekRowDeletes();
+      };
+    }
+    const saveBtn = document.getElementById('btnSavePin');
+    if (saveBtn) {
+      saveBtn.onclick = async () => {
+        const status = document.getElementById('weekStatus');
+        const items = collectWeekPlanRows();
+        if (!items.length) {
+          alert('Добавьте хотя бы одну строку плана.');
+          return;
+        }
+        view.classList.add('busy');
+        try {
+          const res = await api('/tg/pay/api/week-plan', {
+            method: 'POST',
+            body: JSON.stringify({
+              week_start: data.week_start,
+              items,
+              pin: true,
+            }),
+          });
+          haptic('medium');
+          const pin = res.pin || {};
+          status.textContent = pin.pinned_to
+            ? `Сохранено и закреплено у ${pin.pinned_to} чел.`
+            : 'Сохранено, но закрепить не удалось — проверьте telegram_id админа/руководителя.';
+          if (pin.errors && pin.errors.length) {
+            status.textContent += ' ' + pin.errors.slice(0, 2).join('; ');
+          }
+        } catch (e) {
+          status.textContent = e.message || 'Ошибка сохранения';
+        } finally {
+          view.classList.remove('busy');
+        }
+      };
+    }
+    bindWeekRowDeletes();
+  }
+
+  function bindWeekRowDeletes() {
+    view.querySelectorAll('.week-del').forEach((btn) => {
+      btn.onclick = () => {
+        const row = btn.closest('.week-row');
+        if (!row || row.dataset.locked === '1') return;
+        row.remove();
+      };
+    });
   }
 
   async function renderPlan() {

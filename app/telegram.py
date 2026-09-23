@@ -380,6 +380,14 @@ def send_chat_message(chat_id, text, reply_markup=None):
     Если Telegram отклоняет HTML или кнопку Mini App — повторяем без них,
     иначе пользователь видит полное молчание при живом вебхуке.
     """
+    ok, mid_or_err = send_chat_message_id(chat_id, text, reply_markup=reply_markup)
+    if ok:
+        return True, "ok"
+    return False, mid_or_err
+
+
+def send_chat_message_id(chat_id, text, reply_markup=None):
+    """Как send_chat_message, но при успехе возвращает (True, message_id)."""
     bot_token = _get_bot_token()
     if not bot_token or not chat_id:
         return False, "TG creds not configured"
@@ -396,11 +404,55 @@ def send_chat_message(chat_id, text, reply_markup=None):
         try:
             r = _http().post(url, json=payload, timeout=8)
             if r.ok:
-                return True, "ok"
+                mid = None
+                try:
+                    mid = (r.json().get('result') or {}).get('message_id')
+                except Exception:
+                    mid = None
+                return True, mid
             last_err = r.text
         except Exception as exc:
             last_err = str(exc)
     return False, last_err
+
+
+def pin_chat_message(chat_id, message_id, *, disable_notification: bool = True):
+    """Закрепляет сообщение в чате (личка с ботом или группа)."""
+    bot_token = _get_bot_token()
+    if not bot_token or not chat_id or not message_id:
+        return False, "TG creds not configured"
+    url = f"{_tg_root()}/bot{bot_token}/pinChatMessage"
+    try:
+        r = _http().post(url, json={
+            'chat_id': chat_id,
+            'message_id': int(message_id),
+            'disable_notification': bool(disable_notification),
+        }, timeout=8)
+        if r.ok:
+            return True, "ok"
+        return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+
+
+def unpin_chat_message(chat_id, message_id=None):
+    """Снимает закреп. Без message_id — снимает все закрепы чата."""
+    bot_token = _get_bot_token()
+    if not bot_token or not chat_id:
+        return False, "TG creds not configured"
+    payload = {'chat_id': chat_id}
+    if message_id:
+        url = f"{_tg_root()}/bot{bot_token}/unpinChatMessage"
+        payload['message_id'] = int(message_id)
+    else:
+        url = f"{_tg_root()}/bot{bot_token}/unpinAllChatMessages"
+    try:
+        r = _http().post(url, json=payload, timeout=8)
+        if r.ok:
+            return True, "ok"
+        return False, r.text
+    except Exception as exc:
+        return False, str(exc)
 
 
 def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes=None):

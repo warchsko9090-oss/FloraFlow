@@ -200,7 +200,7 @@ h1 {
 .badge-high { color: #b42318; }
 .badge-low { color: var(--mute); }
 
-.inbox-banner, .inbox-link {
+.inbox-banner, .inbox-link, .week-plan-link {
     display: block;
     text-decoration: none;
     border-radius: var(--radius);
@@ -215,10 +215,56 @@ h1 {
     background: var(--ink);
     color: var(--white);
 }
-.inbox-link {
+.inbox-link, .week-plan-link {
     background: var(--white);
     color: var(--brass);
 }
+.drafts-acc {
+    background: var(--white);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    padding: 4px 12px 8px;
+}
+.drafts-acc > summary {
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 14px;
+    padding: 10px 4px;
+    list-style: none;
+}
+.drafts-acc > summary::-webkit-details-marker { display: none; }
+.week-row {
+    background: var(--white);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-bottom: 10px;
+}
+.week-row-grid {
+    display: grid;
+    grid-template-columns: 1fr 110px;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.week-row .wp-sum {
+    width: 100%;
+    min-height: 52px;
+    border: 1px solid #e4dcc8;
+    border-radius: 12px;
+    padding: 10px;
+    font: inherit;
+    resize: vertical;
+    background: var(--paper);
+}
+.week-row .wp-amt, .week-row .wp-type {
+    width: 100%;
+    border: 1px solid #e4dcc8;
+    border-radius: 12px;
+    padding: 10px;
+    font: inherit;
+    background: var(--paper);
+}
+.week-row-main { font-size: 15px; margin-bottom: 4px; }
+.week-del { margin-top: 8px; width: 100%; }
 
 .inbox-card .sub { color: var(--mute); font-size: 12px; margin-top: 4px; }
 

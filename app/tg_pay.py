@@ -27,12 +27,12 @@ from flask import (
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.utils import secure_filename
 
-from app.models import db, User, PaymentInvoice, BudgetItem, ChatExpenseMessage
+from app.models import db, User, PaymentInvoice, BudgetItem, ChatExpenseMessage, AppSetting
 from app.tg_pay_parse import parse_invoice_file
 from app.utils import msk_now, msk_today
 from app.telegram import (
-    _get_bot_token, send_chat_message, send_chat_document, download_bot_file,
-    default_miniapp_url,
+    _get_bot_token, send_chat_message, send_chat_message_id, send_chat_document,
+    download_bot_file, default_miniapp_url, pin_chat_message, unpin_chat_message,
 )
 from app.invoice_files import (
     invoice_bytes, receipt_bytes, has_file as invoice_has_file, has_receipt as invoice_has_receipt,
@@ -707,6 +707,161 @@ def _default_plan_week(today: date | None = None) -> date:
     return _monday(today)
 
 
+def _week_end(week_start: date) -> date:
+    return week_start + timedelta(days=6)
+
+
+def _fmt_plan_amt(value) -> str:
+    """10 000 → «10 тр»; 570961.33 → «570 961,33»."""
+    try:
+        d = Decimal(str(value or 0)).quantize(Decimal('0.01'))
+    except (InvalidOperation, TypeError, ValueError):
+        return '0'
+    if d == d.to_integral_value() and d >= 1000 and (d % 1000) == 0:
+        return f'{int(d // 1000)} тр'
+    whole = int(d)
+    frac = int((d - whole) * 100)
+    whole_s = f'{whole:,}'.replace(',', ' ')
+    if frac:
+        return f'{whole_s},{frac:02d}'
+    return whole_s
+
+
+def _html_escape_plan(text: str) -> str:
+    return (
+        str(text or '')
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+    )
+
+
+def _week_plan_pin_key(week_start: date) -> str:
+    return f'pay_week_pin:{week_start.isoformat()}'
+
+
+def _load_week_pin_map(week_start: date) -> dict:
+    row = AppSetting.query.get(_week_plan_pin_key(week_start))
+    if not row or not row.value:
+        return {}
+    try:
+        data = json.loads(row.value)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_week_pin_map(week_start: date, mapping: dict) -> None:
+    key = _week_plan_pin_key(week_start)
+    row = AppSetting.query.get(key)
+    raw = json.dumps(mapping, ensure_ascii=False)
+    if row:
+        row.value = raw
+    else:
+        db.session.add(AppSetting(key=key, value=raw))
+
+
+def _week_plan_rows(week_start: date) -> list[PaymentInvoice]:
+    return (
+        PaymentInvoice.query
+        .filter(
+            PaymentInvoice.kind == 'plan',
+            PaymentInvoice.week_start == week_start,
+            PaymentInvoice.status != 'paid',
+        )
+        .order_by(PaymentInvoice.id.asc())
+        .all()
+    )
+
+
+def _serialize_week_plan_item(inv: PaymentInvoice) -> dict:
+    return {
+        'id': inv.id,
+        'summary': _purpose(inv),
+        'planned_amount': float(inv.planned_amount or 0),
+        'payment_type': 'cash' if (inv.payment_type or '') == 'cash' else 'cashless',
+        'has_fact': bool(list(getattr(inv, 'fact_invoices', None) or [])) or (
+            invoice_has_file(inv) and float(inv.amount or 0) > 0
+        ),
+        'status': inv.status,
+    }
+
+
+def _format_week_plan_message(week_start: date, items: list[dict]) -> str:
+    end = _week_end(week_start)
+    period = f'{week_start.strftime("%d.%m")} — {end.strftime("%d.%m.%Y")}'
+    cash = [x for x in items if x.get('payment_type') == 'cash']
+    cashless = [x for x in items if x.get('payment_type') != 'cash']
+
+    def block(title: str, rows: list[dict], total_label: str) -> str:
+        lines = [f'<b>{_html_escape_plan(title)}</b>']
+        if not rows:
+            lines.append('<i>пусто</i>')
+            lines.append(f'<b>{total_label}:</b> 0')
+            return '\n'.join(lines)
+        total = Decimal('0')
+        for i, row in enumerate(rows, 1):
+            amt = Decimal(str(row.get('planned_amount') or 0))
+            total += amt
+            summary = _html_escape_plan(row.get('summary') or '—')
+            lines.append(f'{i}. {_fmt_plan_amt(amt)} — {summary}')
+        lines.append('')
+        lines.append(f'<b>{total_label}:</b> {_fmt_plan_amt(total)} руб')
+        return '\n'.join(lines)
+
+    parts = [
+        '📌 <b>План расходов</b>',
+        f'<i>{period}</i>',
+        '',
+        block('НАЛ', cash, 'итого'),
+        '',
+        block('БЕЗНАЛ на след. неделю', cashless, 'ИТОГО'),
+    ]
+    return '\n'.join(parts)
+
+
+def _pin_recipients() -> list[User]:
+    return (
+        User.query
+        .filter(
+            User.role.in_(('admin', 'executive')),
+            User.telegram_id.isnot(None),
+        )
+        .all()
+    )
+
+
+def _publish_week_plan_pin(week_start: date, items: list[dict]) -> dict:
+    """Шлёт и закрепляет план в личках админа и руководителя."""
+    text = _format_week_plan_message(week_start, items)
+    old = _load_week_pin_map(week_start)
+    for chat_id, mid in list(old.items()):
+        try:
+            unpin_chat_message(chat_id, mid)
+        except Exception:
+            current_app.logger.exception('unpin week plan chat=%s mid=%s', chat_id, mid)
+
+    mapping = {}
+    errors = []
+    for user in _pin_recipients():
+        chat_id = str(user.telegram_id)
+        ok, mid = send_chat_message_id(chat_id, text)
+        if not ok or not mid:
+            errors.append(f'{user.username}:{mid}')
+            continue
+        pok, perr = pin_chat_message(chat_id, mid)
+        if not pok:
+            errors.append(f'{user.username}:pin:{perr}')
+        mapping[chat_id] = mid
+
+    _save_week_pin_map(week_start, mapping)
+    return {
+        'pinned_to': len(mapping),
+        'errors': errors,
+        'text_preview': text,
+    }
+
+
 def _parse_money(value) -> Decimal:
     return Decimal(str(value or 0).replace(',', '.').replace(' ', '').replace('\xa0', ''))
 
@@ -1259,6 +1414,142 @@ def api_create_plan(user: User):
     db.session.commit()
     _notify_watchers(inv, except_user=user)
     return jsonify(serialize_invoice(inv, detail=True))
+
+
+@bp.route('/api/week-plan')
+@require_user
+def api_week_plan_get(_user: User):
+    week_raw = (request.args.get('week_start') or '').strip()
+    try:
+        week = date.fromisoformat(week_raw) if week_raw else _default_plan_week()
+        week = _monday(week)
+    except ValueError:
+        week = _default_plan_week()
+    rows = _week_plan_rows(week)
+    items = [_serialize_week_plan_item(inv) for inv in rows]
+    pins = _load_week_pin_map(week)
+    return jsonify({
+        'week_start': week.isoformat(),
+        'week_end': _week_end(week).isoformat(),
+        'period_label': f'{week.strftime("%d.%m")} — {_week_end(week).strftime("%d.%m.%Y")}',
+        'items': items,
+        'cash': [x for x in items if x['payment_type'] == 'cash'],
+        'cashless': [x for x in items if x['payment_type'] != 'cash'],
+        'pinned': bool(pins),
+        'pin_chats': len(pins),
+        'can_edit': _can_edit(_user),
+    })
+
+
+@bp.route('/api/week-plan', methods=['POST'])
+@require_user
+def api_week_plan_save(user: User):
+    if not _can_edit(user):
+        return jsonify({'error': 'forbidden', 'hint': 'План недели редактирует только админ'}), 403
+    body = request.get_json(silent=True) or {}
+    week_raw = (body.get('week_start') or '').strip()
+    try:
+        week = date.fromisoformat(week_raw) if week_raw else _default_plan_week()
+        week = _monday(week)
+    except ValueError:
+        week = _default_plan_week()
+
+    raw_items = body.get('items')
+    if not isinstance(raw_items, list):
+        return jsonify({'error': 'need_items'}), 400
+
+    existing = {inv.id: inv for inv in _week_plan_rows(week)}
+    kept_ids: set[int] = set()
+    normalized: list[dict] = []
+
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        summary = (raw.get('summary') or '').strip()[:500]
+        if not summary:
+            continue
+        try:
+            planned = _parse_money(raw.get('planned_amount'))
+        except (InvalidOperation, TypeError, ValueError):
+            return jsonify({'error': 'bad_amount', 'hint': summary}), 400
+        if planned <= 0:
+            return jsonify({'error': 'bad_amount', 'hint': summary}), 400
+        ptype = 'cash' if raw.get('payment_type') == 'cash' else 'cashless'
+        inv = None
+        try:
+            rid = int(raw.get('id')) if raw.get('id') not in (None, '', 0, '0') else None
+        except (TypeError, ValueError):
+            rid = None
+        if rid and rid in existing:
+            inv = existing[rid]
+            inv.summary = summary
+            inv.comment = summary
+            inv.original_name = summary[:255]
+            inv.planned_amount = planned
+            inv.payment_type = ptype
+            inv.week_start = week
+            inv.kind = 'plan'
+            if inv.status == 'draft':
+                inv.status = 'new'
+            kept_ids.add(inv.id)
+        else:
+            stamp = f"plan_{int(msk_now().timestamp())}_{len(normalized)}"
+            inv = PaymentInvoice(
+                filename=stamp,
+                original_name=summary[:255],
+                summary=summary,
+                source='miniapp',
+                amount=Decimal('0'),
+                planned_amount=planned,
+                status='new',
+                priority='normal',
+                comment=summary,
+                payment_type=ptype,
+                kind='plan',
+                week_start=week,
+            )
+            db.session.add(inv)
+            db.session.flush()
+            kept_ids.add(inv.id)
+        normalized.append({
+            'id': inv.id,
+            'summary': summary,
+            'planned_amount': float(planned),
+            'payment_type': ptype,
+        })
+
+    for oid, inv in existing.items():
+        if oid in kept_ids:
+            continue
+        facts = list(getattr(inv, 'fact_invoices', None) or [])
+        if facts or (invoice_has_file(inv) and float(inv.amount or 0) > 0):
+            # Уже есть исполнение — не трогаем строку, в закрепе её не будет.
+            continue
+        err = delete_unpaid_invoice(inv)
+        if err:
+            current_app.logger.warning('week-plan skip delete id=%s err=%s', oid, err)
+
+    db.session.commit()
+
+    do_pin = body.get('pin', True)
+    pin_info = {'pinned_to': 0, 'errors': []}
+    if do_pin:
+        pin_info = _publish_week_plan_pin(week, normalized)
+        db.session.commit()
+
+    rows = _week_plan_rows(week)
+    items = [_serialize_week_plan_item(inv) for inv in rows]
+    return jsonify({
+        'ok': True,
+        'week_start': week.isoformat(),
+        'week_end': _week_end(week).isoformat(),
+        'period_label': f'{week.strftime("%d.%m")} — {_week_end(week).strftime("%d.%m.%Y")}',
+        'items': items,
+        'cash': [x for x in items if x['payment_type'] == 'cash'],
+        'cashless': [x for x in items if x['payment_type'] != 'cash'],
+        'pinned': bool(_load_week_pin_map(week)),
+        'pin': pin_info,
+    })
 
 
 @bp.route('/api/invoices/<int:inv_id>/attach', methods=['POST'])
