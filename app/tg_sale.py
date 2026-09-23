@@ -110,14 +110,17 @@ def _is_accountant(user: User | None) -> bool:
 
 def _sale_me_payload(user: User, *, is_dev: bool = False) -> dict:
     accountant = _is_accountant(user)
+    role = (user.role or '')
     return {
         'id': user.id,
         'username': user.username,
-        'role': user.role,
+        'role': role,
         'can_firms': _can_firms(user),
         'can_edit_firms': _can_firms(user),
-        'can_delete_approved': (user.role or '') == 'admin',
+        'can_delete_approved': role == 'admin',
+        # Бухгалтер — только вкладка УПД; админ — и счета, и вкладка УПД.
         'accountant_only': accountant,
+        'can_buh': accountant or role == 'admin',
         'dev': is_dev,
     }
 

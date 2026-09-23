@@ -114,6 +114,11 @@
             else renderBuhList();
             return;
         }
+        if (state.screen === "buh" || state.screen === "buh-view") {
+            if (state.screen === "buh-view") renderBuhView();
+            else renderBuhList();
+            return;
+        }
         if (state.screen === "list") renderList();
         else if (state.screen === "edit") renderEdit();
         else if (state.screen === "firms") renderFirms();
@@ -145,10 +150,17 @@
                 <button class="btn gold" id="btnNew">Новый счёт</button>
                 <button class="btn ghost" id="btnFromOrder">На заказ</button>
             </div>
+            ${state.me && state.me.can_buh ? `<button class="btn ghost" id="btnBuh" style="margin-bottom:12px">Отгрузки · УПД</button>` : ""}
             ${state.me && (state.me.can_firms || state.me.can_edit_firms) ? `<button class="btn ghost" id="btnFirms" style="margin-bottom:12px">Фирмы</button>` : ""}
             <div class="card">${rows}</div>`;
         document.getElementById("btnNew").onclick = () => startNewInvoice();
         document.getElementById("btnFromOrder").onclick = () => startPickOrder();
+        const bb = document.getElementById("btnBuh");
+        if (bb) bb.onclick = async () => {
+            state.screen = "buh";
+            await loadBuh();
+            render();
+        };
         const bf = document.getElementById("btnFirms");
         if (bf) bf.onclick = () => { state.screen = "firms"; render(); };
         view.querySelectorAll("[data-open]").forEach((el) => {
@@ -1085,7 +1097,12 @@
                 ${inv.more_count ? `<p class="muted">ещё ${inv.more_count} поз.</p>` : ""}
             </div>`;
         }).join("") || `<p class="muted">Пока нет отгруженных заказов со счетами</p>`;
-        view.innerHTML = `<p class="muted" style="margin-top:0">Только счета, привязанные к заказам с отгрузкой. Сумма счёта не меняет сумму заказа.</p><div class="card">${rows}</div>`;
+        const backSale = state.me && !state.me.accountant_only && state.me.can_buh
+            ? `<button class="btn ghost" id="backSale" style="margin-bottom:10px">← К счетам</button>`
+            : "";
+        view.innerHTML = `${backSale}<p class="muted" style="margin-top:0">Только счета, привязанные к заказам с отгрузкой. Сумма счёта не меняет сумму заказа.</p><div class="card">${rows}</div>`;
+        const back = document.getElementById("backSale");
+        if (back) back.onclick = () => { state.screen = "list"; render(); };
         view.querySelectorAll("[data-buh]").forEach((el) => {
             el.onclick = () => openBuh(Number(el.dataset.buh));
         });
