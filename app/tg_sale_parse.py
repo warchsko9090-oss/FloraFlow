@@ -1,7 +1,7 @@
 """Разбор реквизитов покупателя из PDF / Word / изображения."""
 from __future__ import annotations
 
-from app.groq_util import groq_model
+from app.groq_util import groq_model_text, groq_model_vision
 import base64
 import json
 import logging
@@ -74,7 +74,7 @@ def _groq_from_text(text: str) -> dict:
         from groq import Groq
         client = Groq(api_key=api_key)
         resp = client.chat.completions.create(
-            model=groq_model(),
+            model=groq_model_text(),
             messages=[
                 {'role': 'system', 'content': _SYSTEM},
                 {'role': 'user', 'content': text[:8000]},
@@ -93,10 +93,7 @@ def _groq_from_image(data: bytes, mime: str) -> dict:
     api_key = os.environ.get('GROQ_API_KEY', '').strip()
     if not api_key or not data:
         return {}
-    model = os.environ.get(
-        'GROQ_VISION_MODEL',
-        'meta-llama/llama-4-scout-17b-16e-instruct',
-    )
+    model = groq_model_vision()
     b64 = base64.b64encode(data).decode('ascii')
     url = f'data:{mime};base64,{b64}'
     try:

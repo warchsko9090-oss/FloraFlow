@@ -10,7 +10,7 @@ from openpyxl import load_workbook, Workbook
 from app.models import db, Order, OrderItem, Client, CompetitorSnapshot, CompetitorRow, Plant, Size, StockBalance, Field
 from app.utils import msk_now, MONTH_NAMES, log_action
 from app.services import calculate_cost_data
-from app.groq_util import groq_model
+from app.groq_util import groq_model_crm
 
 bp = Blueprint('crm', __name__)
 
@@ -605,7 +605,7 @@ def crm_price_calculator():
     # Есть ли ключ Groq — для UI (включать/отключать кнопку авто-анализа).
     import os as _os
     ai_enabled = bool(_os.environ.get('GROQ_API_KEY'))
-    groq_model_name = groq_model()
+    groq_model_name = groq_model_crm()
 
     return render_template('crm/crm_price_calc.html',
                            snapshots=snapshots,
@@ -1157,9 +1157,8 @@ def _groq_json_request(prompt_text, model=None, temperature=0.1, timeout_sec=Non
     """Отправляет один запрос в Groq, требует JSON-объект в ответе. Возвращает
     (dict, raw_content), либо бросает исключение.
 
-    Модель берётся из env GROQ_MODEL (через groq_model()). По умолчанию —
-    openai/gpt-oss-120b (замена снятого llama-3.3-70b-versatile).
-    Для grounded-поиска можно переключить на 'groq/compound-beta'.
+    Модель берётся из groq_model_crm() / env GROQ_MODEL_CRM.
+    По умолчанию groq/compound-beta (web search для цен конкурентов).
 
     timeout_sec — жёсткий HTTP-таймаут на ответ модели, чтобы один зависший
     батч не съедал весь gunicorn timeout. Дефолт — из env GROQ_TIMEOUT_SEC (45).
@@ -1173,7 +1172,7 @@ def _groq_json_request(prompt_text, model=None, temperature=0.1, timeout_sec=Non
         raise RuntimeError('GROQ_API_KEY не задан в окружении')
 
     if model is None:
-        model = groq_model()
+        model = groq_model_crm()
     if timeout_sec is None:
         try:
             timeout_sec = float(_os.environ.get('GROQ_TIMEOUT_SEC', '45'))
@@ -1252,7 +1251,7 @@ def crm_ai_run():
     # Держим batch небольшим, чтобы уложиться в gunicorn timeout (120с по умолчанию).
     BATCH_SIZE = 10
     batches = [enriched[i:i + BATCH_SIZE] for i in range(0, len(enriched), BATCH_SIZE)]
-    model_name = groq_model()
+    model_name = groq_model_crm()
     current_app.logger.info(
         'crm_ai_run: user=%s items=%s batches=%s model=%s regions=%r',
         current_user.id, len(enriched), len(batches), model_name, regions_str[:120]

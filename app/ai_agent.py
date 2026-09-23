@@ -4,7 +4,7 @@ from sqlalchemy import text, or_
 from groq import Groq
 from app.models import db, Plant, Field, Size, Client, Employee, SQLExample
 from app.utils import msk_now
-from app.groq_util import groq_model
+from app.groq_util import groq_model_chat
 import traceback
 
 # Настройка API ключа
@@ -108,7 +108,7 @@ def process_query(user_query, role='admin'):
         return "Ошибка конфигурации: Отсутствует API ключ Groq."
 
     client = Groq(api_key=GROQ_API_KEY)
-    model = groq_model()
+    model = groq_model_chat()
     
     context_data = get_relevant_context(user_query)
     all_examples = get_all_examples()
@@ -232,7 +232,7 @@ def generate_sql_only(description):
     
     try:
         client = Groq(api_key=GROQ_API_KEY)
-        resp = client.chat.completions.create(messages=[{"role": "user", "content": prompt}], model=groq_model(), temperature=0.1)
+        resp = client.chat.completions.create(messages=[{"role": "user", "content": prompt}], model=groq_model_chat(), temperature=0.1)
         content = resp.choices[0].message.content
         match = re.search(r'```sql(.*?)```', content, re.DOTALL | re.IGNORECASE)
         return match.group(1).strip() if match else content.strip()

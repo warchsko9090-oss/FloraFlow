@@ -19,7 +19,7 @@
 """
 from __future__ import annotations
 
-from app.groq_util import groq_model
+from app.groq_util import groq_model_text
 import json
 import logging
 import os
@@ -162,7 +162,7 @@ def _normalize_with_groq(raw_text: str) -> list[dict] | None:
         # Усечём слишком длинный текст, чтобы влезть в окно.
         text = raw_text[:8000]
         resp = client.chat.completions.create(
-            model=groq_model(),
+            model=groq_model_text(),
             messages=[
                 {'role': 'system', 'content': _SYSTEM_PROMPT},
                 {'role': 'user', 'content': text},

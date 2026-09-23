@@ -294,7 +294,7 @@ def _llm_classify(description: str) -> int | None:
         return None
     try:
         from groq import Groq
-        from app.groq_util import groq_model
+        from app.groq_util import groq_model_classify
         client = Groq(api_key=api_key, timeout=10)
 
         catalog = "\n".join(
@@ -311,7 +311,7 @@ def _llm_classify(description: str) -> int | None:
             f"Статьи:\n{catalog}"
         )
         resp = client.chat.completions.create(
-            model=groq_model(),
+            model=groq_model_classify(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=8,

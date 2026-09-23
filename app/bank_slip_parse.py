@@ -1,7 +1,6 @@
 """Разбор выписки Альфа-Банка, квитанции или платёжного поручения (0401060)."""
 from __future__ import annotations
-
-from app.groq_util import groq_model
+from app.groq_util import groq_model_text, groq_model_vision
 import base64
 import json
 import logging
@@ -233,12 +232,11 @@ def _groq_json(messages: list, *, max_tokens: int = 2500) -> dict:
         from groq import Groq
         client = Groq(api_key=api_key, timeout=90)
         resp = client.chat.completions.create(
-            model=os.environ.get(
-                'GROQ_VISION_MODEL',
-                'meta-llama/llama-4-scout-17b-16e-instruct',
-            ) if any(
-                isinstance(m.get('content'), list) for m in messages
-            ) else groq_model(),
+            model=(
+                groq_model_vision()
+                if any(isinstance(m.get('content'), list) for m in messages)
+                else groq_model_text()
+            ),
             messages=messages,
             temperature=0.0,
             max_tokens=max_tokens,

@@ -80,7 +80,7 @@ def _groq_purpose(text: str, lines: list[dict], fallback: str) -> tuple[str, Dec
         return fallback, None
     try:
         from groq import Groq
-        from app.groq_util import groq_model
+        from app.groq_util import groq_model_text
     except ImportError:
         return fallback, None
     try:
@@ -90,7 +90,7 @@ def _groq_purpose(text: str, lines: list[dict], fallback: str) -> tuple[str, Dec
             'lines': lines[:40],
         }
         resp = client.chat.completions.create(
-            model=groq_model(),
+            model=groq_model_text(),
             messages=[
                 {
                     'role': 'system',
