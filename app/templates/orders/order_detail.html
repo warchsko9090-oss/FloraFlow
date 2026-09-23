@@ -376,6 +376,65 @@
                     <button type="submit" class="btn btn-primary btn-sm w-100">Сохранить изменения</button>
                     {% endif %}
                 </form>
+                {% if current_user.role in ['admin', 'executive', 'shop_manager'] and order.status not in ['canceled', 'ghost'] and not order.is_deleted %}
+                <div class="border rounded p-2 mt-2 mb-2 bg-light">
+                    <div class="small fw-bold mb-1"><i class="fas fa-file-invoice-dollar me-1"></i> Счёт клиенту</div>
+                    {% if sale_mini_invoice %}
+                    <div class="small text-muted mb-2">
+                        Счёт №{{ sale_mini_invoice.doc_number or sale_mini_invoice.id }}
+                        · <a href="{{ url_for('orders.sale_invoice_pdf', inv_id=sale_mini_invoice.id) }}" target="_blank" rel="noopener">PDF</a>
+                        {% if current_user.role == 'admin' %}
+                        · <a href="{{ url_for('orders.sale_invoice_print_edit', inv_id=sale_mini_invoice.id) }}">Правка перед печатью</a>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% if sale_companies %}
+                    <form method="POST" action="{{ url_for('orders.order_export_sale_invoice', order_id=order.id) }}" hx-boost="false">
+                        <label class="small text-muted">Фирма</label>
+                        <select name="company_id" class="form-select form-select-sm mb-2" required>
+                            {% for c in sale_companies %}
+                            <option value="{{ c.id }}" {% if sale_mini_invoice and sale_mini_invoice.company_id == c.id %}selected{% endif %}>
+                                {{ c.short_name }}{% if c.vat_mode in ('included_20', 'included_22') %} · НДС 22%{% else %} · без НДС{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-dark btn-sm w-100 mb-1">
+                            {% if sale_mini_invoice %}Обновить и открыть PDF{% else %}Сформировать счёт / PDF{% endif %}
+                        </button>
+                    </form>
+                    {% if current_user.role == 'admin' %}
+                    <a class="btn btn-outline-secondary btn-sm w-100" href="{{ url_for('orders.sale_invoice_custom_print') }}">Произвольный счёт</a>
+                    {% endif %}
+                    {% else %}
+                    <div class="small text-warning mb-2">Заполните фирму: ИНН, банк, р/с, БИК.</div>
+                    {% if current_user.role == 'admin' %}
+                    <a class="btn btn-outline-secondary btn-sm w-100" href="{{ url_for('orders.sale_invoice_custom_print') }}">Произвольный счёт (без БД)</a>
+                    {% endif %}
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% if can_use_price_editor %}
+                <div class="border rounded p-2 mt-2 mb-2" style="border-color:#b6d4fe!important;background:#f8fbff;">
+                    <div class="small fw-bold mb-2"><i class="fas fa-tags me-1 text-primary"></i> Редактор цен</div>
+                    <div class="d-flex gap-1 mb-2">
+                        <form method="POST" action="{{ url_for('orders.order_apply_prices', order_id=order.id) }}" class="flex-fill" hx-boost="false"
+                              onsubmit="return confirm('Поставить всем позициям оптовые цены из прайса?');">
+                            <input type="hidden" name="price_mode" value="wholesale">
+                            <input type="hidden" name="discount_pct" value="0">
+                            <button type="submit" class="btn btn-outline-primary btn-sm w-100">Опт</button>
+                        </form>
+                        <form method="POST" action="{{ url_for('orders.order_apply_prices', order_id=order.id) }}" class="flex-fill" hx-boost="false"
+                              onsubmit="return confirm('Поставить всем позициям розничные цены из прайса?');">
+                            <input type="hidden" name="price_mode" value="retail">
+                            <input type="hidden" name="discount_pct" value="0">
+                            <button type="submit" class="btn btn-outline-success btn-sm w-100">Розница</button>
+                        </form>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm w-100" data-bs-toggle="modal" data-bs-target="#priceEditorModal">
+                        <i class="fas fa-percent me-1"></i> Скидки и пересчёт
+                    </button>
+                </div>
+                {% endif %}
                 <div class="d-md-none">
                     <p class="mb-2"><i class="fas fa-user me-2 text-muted"></i>{{ order.client.name }}</p>
                     <p class="mb-2">Счет: <b>{{ order.invoice_number or '-' }}</b></p>
@@ -679,7 +738,7 @@
                                 <td class="align-middle td-price" data-label="Цена">
                                     {% if order.status != 'canceled' %}
                                     <div class="d-none d-md-block">
-                                        <input type="number" step="0.01" name="price[]" value="{{ item.price }}" class="form-control form-control-sm text-end p-1" {% if meta_locked %}readonly title="Цену менять нельзя"{% endif %}>
+                                        <input type="number" step="0.01" name="price[]" value="{{ item.price }}" class="form-control form-control-sm text-end p-1" {% if price_locked %}readonly title="Цену менять нельзя"{% endif %}>
                                     </div>
                                     <div class="d-md-none text-end">{{ item.price|money }}</div>
                                     {% else %}{{ item.price|money }}{% endif %}
@@ -1240,6 +1299,184 @@
     } else {
         bindSplitListeners();
     }
+})();
+</script>
+{% endif %}
+
+{% if can_use_price_editor %}
+<div class="modal fade" id="priceEditorModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <form method="POST" action="{{ url_for('orders.order_apply_prices', order_id=order.id) }}" class="modal-content" hx-boost="false" id="priceEditorForm">
+      <div class="modal-header bg-primary text-white py-2">
+        <h6 class="modal-title"><i class="fas fa-tags me-2"></i>Редактор цен · заказ №{{ order.id }}</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2 mb-3">
+          <div class="col-md-6">
+            <label class="small fw-bold text-muted">Режим прайса</label>
+            <div class="btn-group w-100" role="group">
+              <input type="radio" class="btn-check" name="price_mode" id="peModeWholesale" value="wholesale" autocomplete="off">
+              <label class="btn btn-outline-primary" for="peModeWholesale">Опт</label>
+              <input type="radio" class="btn-check" name="price_mode" id="peModeRetail" value="retail" autocomplete="off" checked>
+              <label class="btn btn-outline-success" for="peModeRetail">Розница</label>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="small fw-bold text-muted">Скидка ко всем отмеченным</label>
+            <div class="d-flex flex-wrap gap-1 mb-1" id="peDiscountChips">
+              {% for d in [0, 5, 10, 15, 20, 25] %}
+              <button type="button" class="btn btn-sm btn-outline-secondary pe-chip" data-pct="{{ d }}">{{ d }}%</button>
+              {% endfor %}
+            </div>
+            <div class="input-group input-group-sm">
+              <span class="input-group-text">своя</span>
+              <input type="number" step="0.1" min="0" max="100" class="form-control" id="peDiscountGlobal" name="discount_pct" value="0">
+              <span class="input-group-text">%</span>
+              <button type="button" class="btn btn-outline-primary" id="peApplyGlobalDisc">На все ✓</button>
+            </div>
+          </div>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mb-2 small">
+          <div>
+            <button type="button" class="btn btn-link btn-sm p-0 me-2" id="peSelectAll">Выбрать все</button>
+            <button type="button" class="btn btn-link btn-sm p-0" id="peSelectNone">Снять</button>
+          </div>
+          <div class="text-muted">Итого после: <strong class="text-dark" id="pePreviewTotal">—</strong></div>
+        </div>
+        <div class="table-responsive" style="max-height: 50vh;">
+          <table class="table table-sm table-hover align-middle mb-0">
+            <thead class="table-light sticky-top">
+              <tr>
+                <th style="width:2rem;"></th>
+                <th>Позиция</th>
+                <th class="text-end">Сейчас</th>
+                <th class="text-end">Прайс</th>
+                <th class="text-end" style="width:5.5rem;">Скидка %</th>
+                <th class="text-end">Новая</th>
+              </tr>
+            </thead>
+            <tbody id="peRows">
+              {% for r in price_editor_rows %}
+              <tr class="pe-row"
+                  data-id="{{ r.id }}"
+                  data-qty="{{ r.qty }}"
+                  data-wholesale="{{ r.wholesale }}"
+                  data-retail="{{ r.retail }}"
+                  data-current="{{ r.current_price }}">
+                <td>
+                  <input type="checkbox" class="form-check-input pe-check" name="item_id" value="{{ r.id }}" checked>
+                </td>
+                <td class="small">
+                  <div class="fw-semibold">{{ r.plant_name }}</div>
+                  <div class="text-muted">{{ r.size_name }} · {{ r.qty }} шт.</div>
+                </td>
+                <td class="text-end small pe-current">{{ '%.2f'|format(r.current_price) }}</td>
+                <td class="text-end small pe-list">—</td>
+                <td>
+                  <input type="number" step="0.1" min="0" max="100" class="form-control form-control-sm text-end pe-disc"
+                         name="discount_{{ r.id }}" value="0">
+                </td>
+                <td class="text-end fw-bold pe-new">—</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="6" class="text-center text-muted py-3">Нет позиций</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="small text-muted mt-2 mb-0">
+          База — прайс-лист (опт из «Истории цен», розница — override витрины или опт×2). Скидка применяется к выбранному режиму.
+        </p>
+      </div>
+      <div class="modal-footer py-2">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-primary" {% if not price_editor_rows %}disabled{% endif %}>
+          Применить к отмеченным
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+(function() {
+  const form = document.getElementById('priceEditorForm');
+  if (!form) return;
+  const money = (n) => (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
+  const modeOf = () => (form.querySelector('input[name="price_mode"]:checked') || {}).value || 'retail';
+  const clampPct = (v) => {
+    let n = parseFloat(String(v).replace(',', '.'));
+    if (isNaN(n) || n < 0) n = 0;
+    if (n > 100) n = 100;
+    return n;
+  };
+  function refresh() {
+    const mode = modeOf();
+    let total = 0;
+    form.querySelectorAll('.pe-row').forEach((row) => {
+      const wholesale = parseFloat(row.dataset.wholesale) || 0;
+      const retail = parseFloat(row.dataset.retail) || 0;
+      const qty = parseFloat(row.dataset.qty) || 0;
+      const base = mode === 'wholesale' ? wholesale : retail;
+      const check = row.querySelector('.pe-check');
+      const discInp = row.querySelector('.pe-disc');
+      const listCell = row.querySelector('.pe-list');
+      const newCell = row.querySelector('.pe-new');
+      listCell.textContent = base > 0 ? money(base) : 'нет';
+      if (!check.checked) {
+        const cur = parseFloat(row.dataset.current) || 0;
+        newCell.textContent = money(cur);
+        newCell.classList.remove('text-success');
+        total += cur * qty;
+        return;
+      }
+      const disc = clampPct(discInp.value);
+      const neu = base > 0 ? Math.max(0, base * (1 - disc / 100)) : (parseFloat(row.dataset.current) || 0);
+      newCell.textContent = money(neu);
+      newCell.classList.toggle('text-success', Math.abs(neu - (parseFloat(row.dataset.current) || 0)) > 0.004);
+      total += neu * qty;
+    });
+    const el = document.getElementById('pePreviewTotal');
+    if (el) el.textContent = money(total) + ' ₽';
+  }
+  form.querySelectorAll('input[name="price_mode"]').forEach((el) => el.addEventListener('change', refresh));
+  form.querySelectorAll('.pe-check, .pe-disc').forEach((el) => el.addEventListener('input', refresh));
+  form.querySelectorAll('.pe-check').forEach((el) => el.addEventListener('change', refresh));
+  const global = document.getElementById('peDiscountGlobal');
+  document.getElementById('peApplyGlobalDisc')?.addEventListener('click', () => {
+    const pct = clampPct(global.value);
+    global.value = pct;
+    form.querySelectorAll('.pe-row').forEach((row) => {
+      if (row.querySelector('.pe-check')?.checked) {
+        row.querySelector('.pe-disc').value = pct;
+      }
+    });
+    refresh();
+  });
+  document.querySelectorAll('#peDiscountChips .pe-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pct = clampPct(btn.dataset.pct);
+      global.value = pct;
+      document.querySelectorAll('#peDiscountChips .pe-chip').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      form.querySelectorAll('.pe-row').forEach((row) => {
+        if (row.querySelector('.pe-check')?.checked) {
+          row.querySelector('.pe-disc').value = pct;
+        }
+      });
+      refresh();
+    });
+  });
+  document.getElementById('peSelectAll')?.addEventListener('click', () => {
+    form.querySelectorAll('.pe-check').forEach((c) => { c.checked = true; });
+    refresh();
+  });
+  document.getElementById('peSelectNone')?.addEventListener('click', () => {
+    form.querySelectorAll('.pe-check').forEach((c) => { c.checked = false; });
+    refresh();
+  });
+  document.getElementById('priceEditorModal')?.addEventListener('shown.bs.modal', refresh);
+  refresh();
 })();
 </script>
 {% endif %}

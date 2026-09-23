@@ -219,3 +219,63 @@ def draft_row_price(payload, plant_id, size_id, fallback=None):
     if key in prices:
         return prices[key]
     return fallback
+
+
+def wholesale_for_order_item(item, hist_map=None):
+    """Оптовая цена позиции из прайса (История цен / остатки)."""
+    from app.utils import get_actual_price
+    from app.shop_catalog import _price_history_map
+
+    pid = int(item.plant_id or 0)
+    sid = int(item.size_id or 0)
+    if not pid or not sid:
+        return 0.0
+    wholesale = _to_float(get_actual_price(pid, sid, item.field_id, item.year))
+    if wholesale > 0:
+        return wholesale
+    hist = hist_map if hist_map is not None else _price_history_map()
+    return _to_float(hist.get((pid, sid), 0))
+
+
+def list_prices_for_order_item(item, overrides=None, hist_map=None):
+    """(wholesale, retail) для позиции заказа."""
+    wholesale = wholesale_for_order_item(item, hist_map=hist_map)
+    retail = resolve_shop_price(item.plant_id, item.size_id, wholesale, overrides)
+    return wholesale, _to_float(retail)
+
+
+def price_with_discount(base_price, discount_pct):
+    """База минус скидка %. Не уходит ниже 0."""
+    base = _to_float(base_price)
+    try:
+        pct = float(discount_pct or 0)
+    except (TypeError, ValueError):
+        pct = 0.0
+    if pct < 0:
+        pct = 0.0
+    if pct > 100:
+        pct = 100.0
+    return round(max(0.0, base * (1.0 - pct / 100.0)), 2)
+
+
+def build_order_price_editor_rows(items):
+    """Строки для UI редактора цен в заказе."""
+    ov = get_shop_price_map()
+    try:
+        from app.shop_catalog import _price_history_map
+        hist = _price_history_map()
+    except Exception:
+        hist = {}
+    rows = []
+    for it in items or []:
+        wholesale, retail = list_prices_for_order_item(it, overrides=ov, hist_map=hist)
+        rows.append({
+            'id': it.id,
+            'plant_name': it.plant.name if it.plant else '',
+            'size_name': it.size.name if it.size else '',
+            'qty': int(it.quantity or 0),
+            'current_price': _to_float(it.price),
+            'wholesale': wholesale,
+            'retail': retail,
+        })
+    return rows

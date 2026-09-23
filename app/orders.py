@@ -116,6 +116,18 @@ def _shop_manager_locks_meta(user):
     return _is_shop_sales_manager(user)
 
 
+def _can_use_price_editor(user, order=None):
+    """Редактор цен: все роли, кроме бригадира и кадровика (user2)."""
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return False
+    role = getattr(user, 'role', None)
+    if role in (None, 'brigadier', 'user2'):
+        return False
+    if order is not None and _is_order_locked_for_manager(order, user):
+        return False
+    return True
+
+
 def _notify_assign_batch_task(order, item):
     """Задача менеджеру питомника + админу: проставить поле и партию."""
     try:
@@ -1267,6 +1279,99 @@ def order_export_sale_invoice(order_id):
     log_action(f"Выгрузил счёт Mini App №{sale_public_number(inv)} из заказа #{o.id}")
     flash(f'Счёт №{sale_public_number(inv)} в Mini App. PDF как в боте.')
     return redirect(url_for('orders.sale_invoice_pdf', inv_id=inv.id))
+
+
+@bp.route('/order/<int:order_id>/apply-prices', methods=['POST'])
+@login_required
+def order_apply_prices(order_id):
+    """Пересчитать цены позиций: опт/розница из прайса + скидка % (общая или по строкам)."""
+    o = Order.query.get_or_404(order_id)
+    if not _can_use_price_editor(current_user, o):
+        flash('Редактор цен недоступен')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+    if o.status in ('canceled', 'ghost') or o.is_deleted:
+        flash('Нельзя менять цены в этом заказе')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+
+    from app.shop_prices import (
+        get_shop_price_map,
+        list_prices_for_order_item,
+        price_with_discount,
+    )
+
+    mode = (request.form.get('price_mode') or 'retail').strip().lower()
+    if mode not in ('wholesale', 'retail'):
+        mode = 'retail'
+
+    try:
+        default_discount = float((request.form.get('discount_pct') or '0').replace(',', '.'))
+    except (TypeError, ValueError):
+        default_discount = 0.0
+    default_discount = max(0.0, min(100.0, default_discount))
+
+    selected = request.form.getlist('item_id')
+    if not selected:
+        # Быстрый переключатель опт/розница без модалки — все позиции
+        selected = [str(it.id) for it in (o.items or [])]
+
+    item_ids = []
+    for raw in selected:
+        try:
+            item_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    item_ids = list(dict.fromkeys(item_ids))
+    if not item_ids:
+        flash('Не выбраны позиции')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+
+    items_by_id = {it.id: it for it in (o.items or [])}
+    overrides = get_shop_price_map()
+    changed = 0
+    skipped_no_list = 0
+
+    for iid in item_ids:
+        it = items_by_id.get(iid)
+        if not it:
+            continue
+        wholesale, retail = list_prices_for_order_item(it, overrides=overrides)
+        base = wholesale if mode == 'wholesale' else retail
+        if base <= 0:
+            skipped_no_list += 1
+            continue
+        raw_d = request.form.get(f'discount_{iid}')
+        if raw_d is None or str(raw_d).strip() == '':
+            disc = default_discount
+        else:
+            try:
+                disc = float(str(raw_d).replace(',', '.'))
+            except (TypeError, ValueError):
+                disc = default_discount
+        disc = max(0.0, min(100.0, disc))
+        new_price = price_with_discount(base, disc)
+        try:
+            old = float(it.price or 0)
+        except (TypeError, ValueError):
+            old = 0.0
+        if abs(old - new_price) < 0.005:
+            continue
+        it.price = new_price
+        changed += 1
+
+    if changed:
+        db.session.commit()
+        mode_label = 'опт' if mode == 'wholesale' else 'розница'
+        log_action(
+            f'Редактор цен заказа #{o.id}: {mode_label}, скидка {default_discount:g}%, '
+            f'изменено позиций {changed}'
+        )
+        flash(f'Цены обновлены ({mode_label}'
+              + (f', скидка {default_discount:g}%' if default_discount else '')
+              + f'): {changed} поз.')
+    else:
+        flash('Цены не изменились' + (f' (нет прайса у {skipped_no_list} поз.)' if skipped_no_list else ''))
+
+    return redirect(url_for('orders.order_detail', order_id=order_id))
 
 
 @bp.route('/orders/client_draft/<int:doc_id>', methods=['GET', 'POST'])
@@ -2705,6 +2810,20 @@ def order_detail(order_id):
     except Exception:
         current_app.logger.exception('order_detail sale invoice block')
 
+    can_use_price_editor = (
+        _can_use_price_editor(current_user, o)
+        and o.status not in ('canceled', 'ghost')
+        and not o.is_deleted
+    )
+    price_editor_rows = []
+    if can_use_price_editor:
+        try:
+            from app.shop_prices import build_order_price_editor_rows
+            price_editor_rows = build_order_price_editor_rows(o.items or [])
+        except Exception:
+            current_app.logger.exception('order_detail price editor rows')
+            price_editor_rows = []
+
     # История изменений позиций — только для админа. Запросом не утяжеляем
     # страницу для других ролей. Лимит 200 событий хватает с запасом, кнопка
     # «История .xlsx» уже есть рядом для полного экспорта.
@@ -2755,7 +2874,9 @@ def order_detail(order_id):
                            order_history_rows=order_history_rows,
                            return_to=return_to,
                            sale_mini_invoice=sale_mini_invoice,
-                           sale_companies=sale_companies)
+                           sale_companies=sale_companies,
+                           can_use_price_editor=can_use_price_editor,
+                           price_editor_rows=price_editor_rows)
 
 @bp.route('/order/download_payment_file/<int:payment_id>')
 @login_required
