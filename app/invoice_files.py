@@ -267,7 +267,7 @@ def invoice_paid_amount(inv: PaymentInvoice) -> Decimal:
             kids = PI.query.filter_by(plan_id=inv.id).all()
         for kid in kids:
             total += Decimal(str(kid.amount or 0))
-        if invoice_has_file(inv):
+        if has_file(inv):
             total += Decimal(str(inv.amount or 0))
         return total
     for e in (getattr(inv, 'expenses', None) or []):
