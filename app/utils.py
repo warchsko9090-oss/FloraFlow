@@ -264,13 +264,17 @@ def build_pdf_bytes(html_content, *, page_bg=None, page_margin='1cm'):
     """Собирает PDF в bytes через xhtml2pdf.
 
     На Windows без системного Cairo reportlab тянет rlPyCairo и падает.
-    Принудительно используем PIL-бэкенд `_renderPM` (пакет rl_renderPM).
+    Если установлен rl_renderPM — включаем PIL-бэкенд `_renderPM`.
+    На Linux (Amvera) пакет не ставим: там обычно работает cairo/по умолчанию.
     """
     try:
-        from reportlab import rl_config
-        # До импорта xhtml2pdf/renderPM — иначе подтянется cairocffi.
-        if getattr(rl_config, 'renderPMBackend', None) != '_renderPM':
-            rl_config.renderPMBackend = '_renderPM'
+        import sys
+        if sys.platform.startswith('win'):
+            import importlib.util
+            if importlib.util.find_spec('rl_renderPM') or importlib.util.find_spec('_rl_renderPM'):
+                from reportlab import rl_config
+                if getattr(rl_config, 'renderPMBackend', None) != '_renderPM':
+                    rl_config.renderPMBackend = '_renderPM'
     except Exception:
         pass
 
