@@ -4353,6 +4353,407 @@ def export_orders():
     )
 
 
+def _commercial_proposal_styles():
+    """Общие стили листа «Коммерческое предложение» (список заказов / печать)."""
+    return {
+        'style_order_header': PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid"),
+        'style_sub_header': PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid"),
+        'style_table_header': PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid"),
+        'style_total': PatternFill(start_color="F1F8E9", end_color="F1F8E9", fill_type="solid"),
+        'style_grand_total': PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid"),
+        'style_date_row': PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid"),
+        'font_order_header': Font(bold=True, color="FFFFFF", size=13),
+        'font_sub_header': Font(bold=True, color="1B5E20", size=11),
+        'font_table_header': Font(bold=True, color="000000"),
+        'font_total': Font(bold=True),
+        'border_total': Border(top=Side(style='thick')),
+        'thin_border': Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin'),
+        ),
+        'align_center': Alignment(horizontal="center", vertical="center"),
+        'align_right': Alignment(horizontal="right", vertical="center"),
+        'align_left': Alignment(horizontal="left", vertical="center"),
+        # Колонка «Размер» шире 14: длинные значения вида «140-160 * 100-120»
+        # иначе обрезаются в Excel (отображается «...»).
+        'columns': ["Растение", "Размер", "Поле", "Год", "Цена", "Кол-во", "Сумма"],
+        'col_widths': [33, 28, 12, 8, 14, 10, 18],
+    }
+
+
+
+def _fit_commercial_size_column(ws, size_names, col_idx=2, min_width=28, max_width=48):
+    """Подгоняет ширину столбца «Размер» под самый длинный размер в выгрузке."""
+    longest = max((len(str(n or '')) for n in size_names), default=0)
+    width = max(min_width, min(max_width, longest + 2))
+    ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+
+
+def _append_order_commercial_block(ws, o, row_idx, styles, *, with_print_dates=False):
+    """Рисует один заказ в формате «Коммерческое предложение».
+
+    Возвращает (next_row_idx, order_total_qty, order_total_sum, paid_sum, size_names).
+    При with_print_dates=True под блоком оплаты добавляются пустые строки
+    «Дата биркования / Дата начала копки / Дата отгрузки» — для печати.
+    """
+    style_order_header = styles['style_order_header']
+    style_sub_header = styles['style_sub_header']
+    style_table_header = styles['style_table_header']
+    style_total = styles['style_total']
+    style_date_row = styles['style_date_row']
+    font_order_header = styles['font_order_header']
+    font_sub_header = styles['font_sub_header']
+    font_table_header = styles['font_table_header']
+    font_total = styles['font_total']
+    border_total = styles['border_total']
+    thin_border = styles['thin_border']
+    align_center = styles['align_center']
+    align_right = styles['align_right']
+    align_left = styles['align_left']
+    columns = styles['columns']
+
+    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
+    cell = ws.cell(
+        row=row_idx, column=1,
+        value=f"Заказ №{o.id} от {o.date.strftime('%d.%m.%Y')}"
+    )
+    cell.fill = style_order_header
+    cell.font = font_order_header
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row_idx].height = 26
+    row_idx += 1
+
+    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
+    client_name = o.client.name if o.client else '—'
+    sub_parts = [f"Клиент: {client_name}", f"Статус: {o.status}"]
+    if o.invoice_number:
+        inv_part = f"Счёт: {o.invoice_number}"
+        if o.invoice_date:
+            inv_part += f" от {o.invoice_date.strftime('%d.%m.%Y')}"
+        sub_parts.append(inv_part)
+    c_client = ws.cell(row=row_idx, column=1, value="    |    ".join(sub_parts))
+    c_client.fill = style_sub_header
+    c_client.font = font_sub_header
+    c_client.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row_idx].height = 22
+    row_idx += 2
+
+    for col_num, col_name in enumerate(columns, 1):
+        c = ws.cell(row=row_idx, column=col_num, value=col_name)
+        c.fill = style_table_header
+        c.font = font_table_header
+        c.border = thin_border
+        c.alignment = align_center
+    row_idx += 1
+
+    items_sorted = sorted(
+        o.items,
+        key=lambda it: (
+            (it.plant.name if it.plant else '').lower(),
+            natural_key(it.size.name if it.size else ''),
+            (it.field.name if it.field else '').lower(),
+            it.year or 0,
+        ),
+    )
+
+    order_total_qty = 0
+    order_total_sum = Decimal('0')
+    size_names = []
+
+    for item in items_sorted:
+        plant_name = item.plant.name if item.plant else '—'
+        size_name = item.size.name if item.size else '—'
+        field_name = item.field.name if item.field else '—'
+        size_names.append(size_name)
+        qty = int(item.quantity or 0)
+        price = Decimal(str(item.price or 0))
+        line_sum = price * Decimal(qty)
+
+        c_plant = ws.cell(row=row_idx, column=1, value=plant_name)
+        c_plant.border = thin_border
+        c_size = ws.cell(row=row_idx, column=2, value=size_name)
+        c_size.border = thin_border
+        c_size.alignment = align_left
+        c_field = ws.cell(row=row_idx, column=3, value=field_name)
+        c_field.border = thin_border
+        c_field.alignment = align_center
+
+        c_year = ws.cell(row=row_idx, column=4, value=item.year)
+        c_year.border = thin_border
+        c_year.alignment = align_center
+
+        c_price = ws.cell(row=row_idx, column=5, value=float(price))
+        c_price.border = thin_border
+        c_price.number_format = '#,##0.00 "₽"'
+
+        c_qty = ws.cell(row=row_idx, column=6, value=qty)
+        c_qty.border = thin_border
+        c_qty.alignment = align_center
+
+        c_sum = ws.cell(row=row_idx, column=7, value=float(line_sum))
+        c_sum.border = thin_border
+        c_sum.number_format = '#,##0.00 "₽"'
+        c_sum.font = Font(bold=True)
+
+        order_total_qty += qty
+        order_total_sum += line_sum
+        row_idx += 1
+
+    c_label = ws.cell(row=row_idx, column=5, value="ИТОГО:")
+    c_label.font = font_total
+    c_label.alignment = align_right
+    c_label.border = border_total
+    c_label.fill = style_total
+    c_t_qty = ws.cell(row=row_idx, column=6, value=order_total_qty)
+    c_t_qty.font = font_total
+    c_t_qty.alignment = align_center
+    c_t_qty.border = border_total
+    c_t_qty.fill = style_total
+    c_t_sum = ws.cell(row=row_idx, column=7, value=float(order_total_sum))
+    c_t_sum.font = font_total
+    c_t_sum.number_format = '#,##0.00 "₽"'
+    c_t_sum.border = border_total
+    c_t_sum.fill = style_total
+    for col_idx in range(1, 5):
+        cc = ws.cell(row=row_idx, column=col_idx)
+        cc.fill = style_total
+        cc.border = border_total
+    row_idx += 2
+
+    total_sum = Decimal(str(o.total_sum or 0))
+    paid_sum = Decimal(str(o.paid_sum or 0))
+    debt = total_sum - paid_sum
+    summary_titles = ["Сумма заказа", "Оплачено", "Остаток"]
+    summary_values = [float(total_sum), float(paid_sum), float(debt)]
+    summary_cols = [(1, 2), (3, 4), (5, 7)]
+
+    for idx, title in enumerate(summary_titles):
+        start_col, end_col = summary_cols[idx]
+        ws.merge_cells(start_row=row_idx, start_column=start_col,
+                       end_row=row_idx, end_column=end_col)
+        t_cell = ws.cell(row=row_idx, column=start_col, value=title)
+        t_cell.fill = style_sub_header
+        t_cell.font = font_sub_header
+        t_cell.alignment = align_center
+        t_cell.border = thin_border
+        for c in range(start_col + 1, end_col + 1):
+            ws.cell(row=row_idx, column=c).border = thin_border
+    row_idx += 1
+
+    for idx, value in enumerate(summary_values):
+        start_col, end_col = summary_cols[idx]
+        ws.merge_cells(start_row=row_idx, start_column=start_col,
+                       end_row=row_idx, end_column=end_col)
+        v_cell = ws.cell(row=row_idx, column=start_col, value=value)
+        v_cell.font = Font(bold=True, size=12, color="1B5E20")
+        v_cell.alignment = align_center
+        v_cell.number_format = '#,##0.00 "₽"'
+        v_cell.border = thin_border
+        for c in range(start_col + 1, end_col + 1):
+            ws.cell(row=row_idx, column=c).border = thin_border
+    row_idx += 2
+
+    if with_print_dates:
+        for label in ("Дата биркования", "Дата начала копки", "Дата отгрузки"):
+            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=4)
+            lbl = ws.cell(row=row_idx, column=1, value=label)
+            lbl.fill = style_date_row
+            lbl.font = Font(bold=True, size=11)
+            lbl.alignment = align_left
+            lbl.border = thin_border
+            for c in range(2, 5):
+                cell_mid = ws.cell(row=row_idx, column=c)
+                cell_mid.fill = style_date_row
+                cell_mid.border = thin_border
+            ws.merge_cells(start_row=row_idx, start_column=5, end_row=row_idx, end_column=7)
+            blank = ws.cell(row=row_idx, column=5, value="")
+            blank.fill = style_date_row
+            blank.border = thin_border
+            for c in range(6, 8):
+                cell_r = ws.cell(row=row_idx, column=c)
+                cell_r.fill = style_date_row
+                cell_r.border = thin_border
+            ws.row_dimensions[row_idx].height = 22
+            row_idx += 1
+        row_idx += 1
+
+    # Пустая строка-разделитель между заказами.
+    row_idx += 1
+    return row_idx, order_total_qty, order_total_sum, paid_sum, size_names
+
+
+
+def _build_commercial_workbook(orders, *, with_print_dates=False):
+    """Собирает xlsx «Коммерческое предложение» по списку заказов."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Заказы"
+    styles = _commercial_proposal_styles()
+    style_grand_total = styles['style_grand_total']
+    font_sub_header = styles['font_sub_header']
+    thin_border = styles['thin_border']
+    align_center = styles['align_center']
+    align_right = styles['align_right']
+
+    for i, w in enumerate(styles['col_widths'], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    row_idx = 1
+    grand_total_qty = 0
+    grand_total_sum = Decimal('0')
+    grand_total_paid = Decimal('0')
+    exported_count = 0
+    all_size_names = []
+
+    for o in orders:
+        if not o.items:
+            continue
+        row_idx, order_total_qty, order_total_sum, paid_sum, size_names = _append_order_commercial_block(
+            ws, o, row_idx, styles, with_print_dates=with_print_dates,
+        )
+        all_size_names.extend(size_names)
+        grand_total_qty += order_total_qty
+        grand_total_sum += order_total_sum
+        grand_total_paid += paid_sum
+        exported_count += 1
+
+    _fit_commercial_size_column(ws, all_size_names)
+
+    if exported_count > 1:
+        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
+        gh = ws.cell(
+            row=row_idx, column=1,
+            value=f"ВСЕГО ПО ВЫГРУЗКЕ ({exported_count} заказов)",
+        )
+        gh.fill = style_grand_total
+        gh.font = Font(bold=True, color="1B5E20", size=12)
+        gh.alignment = Alignment(horizontal="center", vertical="center")
+        gh.border = thin_border
+        ws.row_dimensions[row_idx].height = 24
+        row_idx += 1
+
+        grand_total_debt = grand_total_sum - grand_total_paid
+        grand_titles = ["Сумма заказов", "Всего оплачено", "Всего остаток"]
+        grand_values = [
+            float(grand_total_sum),
+            float(grand_total_paid),
+            float(grand_total_debt),
+        ]
+
+        for idx, title in enumerate(grand_titles):
+            start_col, end_col = ((1, 2), (3, 4), (5, 7))[idx]
+            ws.merge_cells(start_row=row_idx, start_column=start_col,
+                           end_row=row_idx, end_column=end_col)
+            t_cell = ws.cell(row=row_idx, column=start_col, value=title)
+            t_cell.fill = style_grand_total
+            t_cell.font = font_sub_header
+            t_cell.alignment = align_center
+            t_cell.border = thin_border
+            for c in range(start_col + 1, end_col + 1):
+                ws.cell(row=row_idx, column=c).border = thin_border
+        row_idx += 1
+
+        for idx, value in enumerate(grand_values):
+            start_col, end_col = ((1, 2), (3, 4), (5, 7))[idx]
+            ws.merge_cells(start_row=row_idx, start_column=start_col,
+                           end_row=row_idx, end_column=end_col)
+            v_cell = ws.cell(row=row_idx, column=start_col, value=value)
+            v_cell.font = Font(bold=True, size=13, color="1B5E20")
+            v_cell.alignment = align_center
+            v_cell.number_format = '#,##0.00 "₽"'
+            v_cell.border = thin_border
+            for c in range(start_col + 1, end_col + 1):
+                ws.cell(row=row_idx, column=c).border = thin_border
+        row_idx += 1
+
+        c_qty = ws.cell(row=row_idx, column=6, value=grand_total_qty)
+        c_qty.font = font_sub_header
+        c_qty.alignment = align_center
+        c_qty.border = thin_border
+        c_qty.fill = style_grand_total
+        c_qty_lbl = ws.cell(row=row_idx, column=5, value="Всего шт.:")
+        c_qty_lbl.font = font_sub_header
+        c_qty_lbl.alignment = align_right
+        c_qty_lbl.border = thin_border
+        c_qty_lbl.fill = style_grand_total
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf, exported_count
+
+
+
+@bp.route('/order/<int:order_id>/print.xlsx')
+@login_required
+def export_order_print(order_id):
+    """Excel одного заказа для печати: тот же формат, что у /orders/export,
+    плюс поля «Дата биркования / Дата начала копки / Дата отгрузки».
+    """
+    o = Order.query.get_or_404(order_id)
+    buf, _n = _build_commercial_workbook([o], with_print_dates=True)
+    filename = f'Заказ №{o.id} от {o.date.strftime("%d.%m.%Y")}.xlsx'
+    return send_file(
+        buf,
+        download_name=filename,
+        as_attachment=True,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+
+
+@bp.route('/order/<int:order_id>/print')
+@login_required
+def order_print_page(order_id):
+    """Страница печати заказа: скачивает xlsx и сразу открывает диалог печати.
+
+    Браузер не умеет корректно «напечатать» xlsx сам, поэтому файл
+    скачивается в формате Excel, а на принтер уходит HTML-копия того же
+    макета (включая пустые поля дат под заказом).
+    """
+    o = Order.query.get_or_404(order_id)
+    items_sorted = sorted(
+        o.items or [],
+        key=lambda it: (
+            (it.plant.name if it.plant else '').lower(),
+            natural_key(it.size.name if it.size else ''),
+            (it.field.name if it.field else '').lower(),
+            it.year or 0,
+        ),
+    )
+    lines = []
+    total_qty = 0
+    total_sum = Decimal('0')
+    for item in items_sorted:
+        qty = int(item.quantity or 0)
+        price = Decimal(str(item.price or 0))
+        line_sum = price * Decimal(qty)
+        total_qty += qty
+        total_sum += line_sum
+        lines.append({
+            'plant': item.plant.name if item.plant else '—',
+            'size': item.size.name if item.size else '—',
+            'field': item.field.name if item.field else '—',
+            'year': item.year,
+            'price': price,
+            'qty': qty,
+            'sum': line_sum,
+        })
+    paid = Decimal(str(o.paid_sum or 0))
+    order_sum = Decimal(str(o.total_sum or 0))
+    return render_template(
+        'orders/order_print.html',
+        order=o,
+        lines=lines,
+        total_qty=total_qty,
+        total_sum=total_sum,
+        paid_sum=paid,
+        debt=order_sum - paid,
+        xlsx_url=url_for('orders.export_order_print', order_id=o.id),
+    )
+
+
 @bp.route('/order/<int:order_id>/export_history')
 @login_required
 def export_order_history(order_id):

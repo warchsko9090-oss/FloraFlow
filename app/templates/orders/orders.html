@@ -315,6 +315,13 @@
                         <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="btn btn-outline-primary btn-sm border-0 py-0" title="Открыть">
                             <i class="fas fa-folder-open fa-lg"></i>
                         </a>
+                        <a href="{{ url_for('orders.order_print_page', order_id=o.id) }}"
+                           class="btn btn-link text-success p-0"
+                           title="Печать заказа"
+                           target="_blank"
+                           hx-boost="false">
+                            <i class="fas fa-print"></i>
+                        </a>
                         {% if current_user.role == 'admin' %}
                             {% if o.is_deleted %}
                             <form method="POST" onsubmit="return confirm('Показать заказ?');">
@@ -540,6 +547,12 @@
 
             <div class="mobile-actions d-flex gap-2">
                 <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="btn btn-outline-primary btn-sm flex-grow-1">Открыть</a>
+                <a href="{{ url_for('orders.order_print_page', order_id=o.id) }}"
+                   class="btn btn-outline-success btn-sm flex-grow-1"
+                   target="_blank"
+                   hx-boost="false">
+                    <i class="fas fa-print"></i> Печать
+                </a>
                 {% if current_user.role == 'admin' %}
                 <form method="POST" class="flex-grow-1" onsubmit="return confirm('Удалить?');">
                     <input type="hidden" name="action" value="delete"><input type="hidden" name="order_id" value="{{ o.id }}">
