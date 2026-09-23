@@ -29,6 +29,7 @@ from app.models import (
     TgTask, User,
 )
 from app.utils import msk_today
+from app.groq_util import groq_model
 
 
 # --------------------------------------------------------------------------
@@ -980,7 +981,7 @@ tools_schema = [
 # ОРКЕСТРАТОР
 # --------------------------------------------------------------------------
 
-_MODEL = 'llama-3.3-70b-versatile'
+_MODEL = None  # set via groq_model() at call sites
 
 
 def _build_system_prompt():
@@ -1093,7 +1094,7 @@ def _fallback_plain_answer(client, user_query, last_tool_result):
     )
     try:
         resp = client.chat.completions.create(
-            model=_MODEL,
+            model=groq_model(),
             messages=[{'role': 'user', 'content': prompt}],
             temperature=0.2,
         )
@@ -1140,7 +1141,7 @@ def process_chat_query(user_query, role='admin'):
     for hop in range(MAX_HOPS):
         try:
             resp = client.chat.completions.create(
-                model=_MODEL,
+                model=groq_model(),
                 messages=messages,
                 tools=role_schema,
                 tool_choice='auto',

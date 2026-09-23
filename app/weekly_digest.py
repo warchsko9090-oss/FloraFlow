@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.utils import msk_now, msk_today
 from app.anomaly_engine import ANOMALY_ACTION_TYPE
+from app.groq_util import groq_model
 
 
 DIGEST_ACTION_TYPE = 'digest'
@@ -606,7 +607,7 @@ def _render_llm_intro(metrics, baseline, deviations, anomalies, threshold_pct):
             f'Отклонения: {json.dumps(deviations, ensure_ascii=False, default=str)}'
         )
         resp = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
+            model=groq_model(),
             messages=[{'role': 'user', 'content': prompt}],
             temperature=0.2,
         )

@@ -1,6 +1,7 @@
 """Антиспам заявок с сайта: ловушка, эвристика, ИИ. Спам не пишется в БД и не уходит менеджеру."""
 from __future__ import annotations
 
+from app.groq_util import groq_model
 import hashlib
 import hmac
 import os
@@ -160,7 +161,7 @@ def _ai_classify(name: str, phone: str, message: str) -> tuple[bool | None, str]
         from groq import Groq
 
         timeout = float(os.environ.get('SHOP_ANTISPAM_AI_TIMEOUT', '4'))
-        model = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
+        model = groq_model()
         client = Groq(api_key=api_key, timeout=timeout)
         prompt = (
             'Питомник «Княжество» (Тульская область, Россия). '

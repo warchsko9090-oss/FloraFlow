@@ -1,6 +1,7 @@
 """Разбор реквизитов покупателя из PDF / Word / изображения."""
 from __future__ import annotations
 
+from app.groq_util import groq_model
 import base64
 import json
 import logging
@@ -73,7 +74,7 @@ def _groq_from_text(text: str) -> dict:
         from groq import Groq
         client = Groq(api_key=api_key)
         resp = client.chat.completions.create(
-            model=os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            model=groq_model(),
             messages=[
                 {'role': 'system', 'content': _SYSTEM},
                 {'role': 'user', 'content': text[:8000]},
