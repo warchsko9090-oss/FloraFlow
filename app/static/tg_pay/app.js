@@ -229,26 +229,36 @@
     const data = await api('/tg/pay/api/invoices');
     const rows = data.invoices || [];
     const isFact = (x) => (Number(x.fact_amount) || 0) > 0 || (x.kind !== 'plan' && (Number(x.amount) || 0) > 0);
-    const drafts = me.can_edit ? rows.filter((x) => x.status === 'draft') : [];
+    const drafts = (me.can_edit || me.role === 'executive')
+      ? rows.filter((x) => x.status === 'draft')
+      : [];
     const live = rows.filter((x) => x.status !== 'draft');
     const shown = me.can_edit ? live : live.filter((x) => x.status === 'new' && isFact(x));
-    const plan = Number(data.total_plan) || 0;
-    const fact = Number(data.total_fact) || 0;
-    let delta = '';
-    if (plan > 0 && fact > 0) {
-      delta = fact <= plan
-        ? 'экономия ' + money(plan - fact)
-        : 'перерасход ' + money(fact - plan);
-    }
-    const planMeta = plan
-      ? `план ${money(plan)}${fact ? ' · факт ' + money(fact) : ''}${delta ? ' · ' + delta : ''}`
-      : `${shown.filter(isFact).length} счёт(ов)`;
+    const weekRemain = Number(data.week_remain);
+    const weekCash = Number(data.week_cash) || 0;
+    const weekCashless = Number(data.week_cashless) || 0;
+    const weekCount = Number(data.week_count) || 0;
+    const ws = data.week_start || '';
+    const we = data.week_end || '';
+    let period = '';
+    try {
+      if (ws && we) {
+        const a = new Date(ws + 'T12:00:00');
+        const b = new Date(we + 'T12:00:00');
+        period = a.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+          + ' — ' + b.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+      }
+    } catch (_) {}
 
     let html = `
       <div class="hero">
-        <div class="label">К оплате</div>
-        <div class="sum">${money(data.total_new)}</div>
-        <div class="meta">${esc(planMeta)}</div>
+        <div class="label">Осталось на неделе</div>
+        <div class="sum">${money(Number.isFinite(weekRemain) ? weekRemain : 0)}</div>
+        <div class="meta">${esc(period)}${weekCount ? ' · ' + weekCount + ' поз.' : ''}</div>
+        <div class="hero-split">
+          <div class="hero-pill"><span>Нал</span><b>${money(weekCash)}</b></div>
+          <div class="hero-pill"><span>Безнал</span><b>${money(weekCashless)}</b></div>
+        </div>
       </div>
     `;
     if (me.can_edit || me.role === 'executive') {
@@ -258,11 +268,11 @@
       html += `<a class="inbox-banner" href="#/inbox">Входящие из чата · ${data.inbox_count}</a>`;
     }
     if (drafts.length) {
-      html += `<details class="drafts-acc"><summary>Черновики (${drafts.length})</summary>`
+      html += `<details class="drafts-acc" open><summary>Черновики (${drafts.length})</summary>`
         + `<div class="list">${drafts.map(rowHtml).join('')}</div></details>`;
     }
     if (!shown.length && !drafts.length) {
-      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План недели, счёт или выписка — кнопка +.' : (me.role === 'executive' ? 'Быстрый расход — кнопка +.' : 'Неоплаченных счетов нет.')}</p></div>`;
+      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План недели, счёт или выписка — кнопка +.' : (me.role === 'executive' ? 'Быстрый расход — кнопка +, или скиньте файл боту.' : 'Неоплаченных счетов нет.')}</p></div>`;
     } else if (shown.length) {
       html += '<div class="list">' + shown.map(rowHtml).join('') + '</div>';
     }
@@ -293,6 +303,7 @@
     const inv = await api('/tg/pay/api/invoices/' + id);
     if (me.can_edit) await ensureBudgetItems();
     const can = me.can_edit;
+    const isExec = me.role === 'executive';
     let lines = '';
     if (inv.lines && inv.lines.length) {
       lines = '<ul class="lines">' + inv.lines.map((ln) => {
@@ -317,28 +328,116 @@
     const shownAmt = isPlan
       ? (planned || inv.amount || 0)
       : ((Number(inv.fact_amount) || 0) > 0 ? inv.fact_amount : (inv.amount || inv.planned_amount || 0));
-    const payHint = `<p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
-      <p class="ptype" style="margin-top:8px">${inv.payment_type === 'cash' ? 'Нал' : 'Безнал'}${isDraft ? ' · черновик' : ''}${isPlan ? ' · план' : ''}</p>
-      ${isPlan ? `<p class="hint">План ${money(planned)} · оплачено ${money(factPaid)} · остаток ${money(remaining)}</p>` : ''}
-      ${!inv.has_budget ? '<div class="warn-box">⚠ Статья бюджета не выбрана — укажите её ниже, иначе расход уйдёт «к разнесению».</div>' : ''}`;
 
-    let assignPanel = '';
-    if (can && isDraft) {
-      const plans = inv.open_plans || [];
-      assignPanel = `
-        <div class="field"><label>К плану</label>
-          <select id="fAssignPlan">
-            <option value="">— как новый счёт —</option>
-            ${plans.map((p) => `<option value="${p.id}">${esc(p.summary)} · план ${money(p.planned_amount)}</option>`).join('')}
-          </select>
+    // Черновик быстрого расхода
+    if (isDraft && (isExec || can)) {
+      setTitle('Быстрый расход');
+      const budgetHint = inv.budget && inv.budget.name
+        ? `<p class="hint">Подсказка статьи: <b>${esc(inv.budget.code || '')} ${esc(inv.budget.name)}</b> — админ подтвердит.</p>`
+        : '<p class="hint">Статья не определена — админ выберет на дашборде.</p>';
+      view.innerHTML = `
+        <button class="back" type="button" id="goBack">← к списку</button>
+        <div class="card">
+          <p class="hint" style="margin:0 0 12px">Файл из чата бота. Проверьте сумму и отправьте админу.</p>
+          <div class="field"><label>Сумма, ₽</label>
+            <input id="qAmount" inputmode="decimal" value="${inv.amount || ''}"></div>
+          <div class="field"><label>Назначение</label>
+            <input id="qSummary" type="text" value="${esc(inv.summary || '')}"></div>
+          <div class="field"><label>Оплата</label>
+            <div class="pay-toggle" id="qType">
+              <button type="button" class="pay-opt" data-v="cashless" aria-pressed="${inv.payment_type !== 'cash' ? 'true' : 'false'}">Безнал</button>
+              <button type="button" class="pay-opt" data-v="cash" aria-pressed="${inv.payment_type === 'cash' ? 'true' : 'false'}">Нал</button>
+            </div>
+          </div>
+          ${inv.has_file ? '<p class="hint">Файл прикреплён ✓</p>' : '<p class="hint">Файла нет — можно отправить без него.</p>'}
+          ${budgetHint}
+          ${can ? `
+            <div class="field"><label>Или привязать к плану</label>
+              <select id="fAssignPlan">
+                <option value="">— отправить админу как расход —</option>
+                ${(inv.open_plans || []).map((p) => `<option value="${p.id}">${esc(p.summary)} · план ${money(p.planned_amount)}</option>`).join('')}
+              </select>
+            </div>` : ''}
+          <button class="btn btn-ink" type="button" id="btnQuickSend">Отправить админу</button>
+          ${can ? '<button class="btn btn-quiet" type="button" id="btnAssign" hidden>В оплату</button>' : ''}
+          <button class="btn btn-ghost" type="button" id="btnDrop">Удалить черновик</button>
+          <p class="hint" id="qStatus"></p>
         </div>
-        <button class="btn btn-ink" type="button" id="btnAssign">В оплату</button>
       `;
+      document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+      let ptype = inv.payment_type === 'cash' ? 'cash' : 'cashless';
+      view.querySelectorAll('#qType .pay-opt').forEach((btn) => {
+        btn.onclick = () => {
+          ptype = btn.dataset.v;
+          view.querySelectorAll('#qType .pay-opt').forEach((b) => {
+            b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+          });
+        };
+      });
+      const sendBtn = document.getElementById('btnQuickSend');
+      const assignSel = document.getElementById('fAssignPlan');
+      const assignBtn = document.getElementById('btnAssign');
+      if (assignSel && assignBtn) {
+        assignSel.onchange = () => {
+          const hasPlan = !!assignSel.value;
+          assignBtn.hidden = !hasPlan;
+          sendBtn.hidden = hasPlan;
+        };
+        assignBtn.onclick = () => assignDraft(inv.id);
+      }
+      sendBtn.onclick = async () => {
+        const status = document.getElementById('qStatus');
+        const amount = (document.getElementById('qAmount') || {}).value;
+        const summary = (document.getElementById('qSummary') || {}).value;
+        if (!String(amount || '').trim() || !String(summary || '').trim()) {
+          status.textContent = 'Укажите сумму и назначение.';
+          return;
+        }
+        view.classList.add('busy');
+        status.textContent = 'Отправляю…';
+        try {
+          await api('/tg/pay/api/invoices/' + inv.id + '/submit-quick', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ amount, summary, payment_type: ptype }),
+          });
+          haptic('medium');
+          try { sessionStorage.setItem('ff_quick_ok', '1'); } catch (_) {}
+          location.hash = '#/';
+        } catch (e) {
+          status.textContent = e.message || 'Не удалось отправить';
+        } finally {
+          view.classList.remove('busy');
+        }
+      };
+      document.getElementById('btnDrop').onclick = async () => {
+        if (!confirm('Удалить черновик?')) return;
+        view.classList.add('busy');
+        try {
+          await api('/tg/pay/api/invoices/' + inv.id + '/discard', { method: 'POST' });
+          haptic('medium');
+          location.hash = '#/';
+        } catch (e) {
+          alert(e.message);
+        } finally {
+          view.classList.remove('busy');
+        }
+      };
+      return;
     }
+
+    const payHint = `<p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
+      <p class="ptype" style="margin-top:8px">${inv.payment_type === 'cash' ? 'Нал' : 'Безнал'}${isPlan ? ' · план' : ''}</p>
+      ${isPlan ? `<p class="hint">План ${money(planned)} · оплачено ${money(factPaid)} · остаток ${money(remaining)}</p>` : ''}
+      ${!inv.has_budget && can ? '<div class="warn-box">⚠ Статья бюджета не выбрана — укажите её ниже, иначе расход уйдёт «к разнесению».</div>' : ''}`;
 
     let editPanel = '';
     if (can) {
+      const chatBtn = (isPlan && inv.has_file)
+        ? '<button class="btn btn-brass" type="button" id="btnOpen">Счёт в чат</button>'
+        : '';
       editPanel = `
+        ${chatBtn}
         <button class="btn btn-quiet" type="button" id="btnMore">Ещё</button>
         <div id="editPanel" hidden>
           <div class="field"><label>Назначение</label>
@@ -376,6 +475,8 @@
             : ''}
         </div>
       `;
+    } else if (isPlan && inv.has_file) {
+      editPanel = '<button class="btn btn-brass" type="button" id="btnOpen">Счёт в чат</button>';
     }
 
     let payPanel = '';
@@ -390,21 +491,15 @@
           <p class="hint">Файл уйдёт в чат расходов: «сумма р- назначение. Нал/Безнал».</p>
           <button class="btn btn-ink" type="button" id="btnPaid">Оплатить</button>
         </div>`;
-    } else if (!isDraft && inv.status !== 'paid') {
+    } else if (!isDraft && inv.status !== 'paid' && can) {
       payPanel = '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>';
     }
-
-    const openBtnHtml = inv.has_file
-      ? '<button class="btn btn-brass" type="button" id="btnOpen">Счёт в чат</button>'
-      : (can && !isPlan ? '<p class="warn">Файл счёта не найден — прикрепите в «Ещё».</p>' : '');
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
       <div class="card">
         <div class="amount-xl">${money(shownAmt)}</div>
         ${payHint}
-        ${openBtnHtml}
-        ${assignPanel}
         ${payPanel}
         ${editPanel}
         ${isPlan ? '' : lines}
@@ -436,8 +531,6 @@
     if (attach) attach.onclick = () => attachPdf(inv.id);
     const paid = document.getElementById('btnPaid');
     if (paid) paid.onclick = () => markPaid(inv.id, isPlan);
-    const assignBtn = document.getElementById('btnAssign');
-    if (assignBtn) assignBtn.onclick = () => assignDraft(inv.id);
     const drop = document.getElementById('btnDrop');
     if (drop) drop.onclick = async () => {
       if (!confirm('Удалить счёт?')) return;

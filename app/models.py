@@ -846,8 +846,10 @@ class PaymentInvoice(db.Model):
     # Квитанция / выписка банка (не подменяет PDF счёта поставщика).
     receipt_blob = deferred(db.Column(db.LargeBinary))
     receipt_name = db.Column(db.String(255), nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
     item = db.relationship('BudgetItem')
+    created_by = db.relationship('User', foreign_keys=[created_by_user_id])
     fact_invoices = db.relationship(
         'PaymentInvoice',
         foreign_keys=[plan_id],

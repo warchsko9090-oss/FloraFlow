@@ -635,6 +635,16 @@ def _can_quick_expense(user: User) -> bool:
     return (user.role or '') in ('admin', 'executive')
 
 
+def _can_see_invoice(user: User, inv: PaymentInvoice) -> bool:
+    if _can_edit(user):
+        return True
+    if (inv.status or '') == 'new':
+        return True
+    if (inv.status or '') == 'draft' and _can_quick_expense(user):
+        return inv.created_by_user_id == user.id or inv.created_by_user_id is None
+    return False
+
+
 def _notify_admins(text: str, except_user: User | None = None):
     q = User.query.filter_by(role='admin').filter(User.telegram_id.isnot(None))
     for u in q.all():
@@ -984,6 +994,7 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
         'original_name': inv.original_name,
         'source': inv.source or 'web',
         'has_file': invoice_has_file(inv) or bool(linked and invoice_has_file(linked)),
+        'created_by_user_id': inv.created_by_user_id,
     }
     if detail:
         data['has_receipt'] = invoice_has_receipt(inv)
@@ -1008,6 +1019,7 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
 
 def _save_parsed_invoice(
     filename: str, original_name: str, parsed: dict, source: str, *, status: str = 'new',
+    created_by: User | None = None, payment_type: str = 'cashless',
 ) -> PaymentInvoice:
     amount = parsed.get('amount') or Decimal('0')
     if not isinstance(amount, Decimal):
@@ -1022,6 +1034,7 @@ def _save_parsed_invoice(
         budget_id, _src = classify_budget_item(summary)
     except Exception:
         budget_id = None
+    ptype = 'cash' if payment_type == 'cash' else 'cashless'
     inv = PaymentInvoice(
         filename=filename,
         original_name=original_name[:255],
@@ -1033,9 +1046,10 @@ def _save_parsed_invoice(
         status=status or 'new',
         priority='normal',
         comment=summary[:500],
-        payment_type='cashless',
+        payment_type=ptype,
         kind='invoice',
         week_start=_default_plan_week(),
+        created_by_user_id=created_by.id if created_by else None,
     )
     db.session.add(inv)
     db.session.flush()
@@ -1143,8 +1157,22 @@ def api_budget_items(_user: User):
 @bp.route('/api/invoices')
 @require_user
 def api_invoices(user: User):
+    from sqlalchemy import or_, and_
+    from app.invoice_files import invoice_remaining_amount
+
     q = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid')
-    if not _can_edit(user):
+    if _can_edit(user):
+        pass
+    elif _can_quick_expense(user):
+        # Руководитель: живые счета + свои черновики из бота/приложения
+        q = q.filter(or_(
+            PaymentInvoice.status == 'new',
+            and_(
+                PaymentInvoice.status == 'draft',
+                PaymentInvoice.created_by_user_id == user.id,
+            ),
+        ))
+    else:
         q = q.filter(PaymentInvoice.status == 'new')
     q = q.filter(PaymentInvoice.plan_id.is_(None))
     _prio = {'high': 0, 'normal': 1, 'low': 2}
@@ -1168,6 +1196,35 @@ def api_invoices(user: User):
     cashless = sum(_due_amt(x) for x in due if x.get('payment_type') != 'cash')
     plan_sum = sum((x.get('planned_amount') or 0) for x in live if x.get('planned_amount'))
     fact_sum = sum(_due_amt(x) for x in due)
+
+    # Остаток к оплате на этой неделе (план текущей недели + due на неделе)
+    week = _default_plan_week()
+    week_end = week + timedelta(days=6)
+    week_cash = Decimal('0')
+    week_cashless = Decimal('0')
+    week_count = 0
+    for inv in rows:
+        if (inv.status or '') in ('draft', 'paid'):
+            continue
+        if inv.plan_id:
+            continue
+        rem = invoice_remaining_amount(inv)
+        if rem <= 0:
+            continue
+        on_week = False
+        is_plan = (inv.kind or '') == 'plan'
+        if is_plan and (inv.week_start == week or inv.week_start is None):
+            on_week = True
+        elif inv.due_date and week <= inv.due_date <= week_end:
+            on_week = True
+        if not on_week:
+            continue
+        if (inv.payment_type or '') == 'cash':
+            week_cash += rem
+        else:
+            week_cashless += rem
+        week_count += 1
+
     inbox_count = 0
     if _can_inbox(user):
         inbox_count = ChatExpenseMessage.query.filter(
@@ -1180,7 +1237,12 @@ def api_invoices(user: User):
         'total_cashless': cashless,
         'total_plan': plan_sum,
         'total_fact': fact_sum,
-        'week_start': _default_plan_week().isoformat(),
+        'week_start': week.isoformat(),
+        'week_end': week_end.isoformat(),
+        'week_remain': float(week_cash + week_cashless),
+        'week_cash': float(week_cash),
+        'week_cashless': float(week_cashless),
+        'week_count': week_count,
         'count_new': len(unpaid),
         'inbox_count': inbox_count,
     })
@@ -1190,7 +1252,7 @@ def api_invoices(user: User):
 @require_user
 def api_invoice(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
-    if not _can_edit(user) and inv.status != 'new':
+    if not _can_see_invoice(user, inv):
         return jsonify({'error': 'not_found'}), 404
     return jsonify(serialize_invoice(inv, detail=True))
 
@@ -1199,7 +1261,7 @@ def api_invoice(user: User, inv_id: int):
 @require_user
 def api_invoice_file(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
-    if not _can_edit(user) and inv.status != 'new':
+    if not _can_see_invoice(user, inv):
         return jsonify({'error': 'not_found'}), 404
     resp = flask_send(_invoice_with_file(inv), as_attachment=False)
     if resp is None:
@@ -1211,7 +1273,7 @@ def api_invoice_file(user: User, inv_id: int):
 @require_user
 def api_invoice_receipt(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
-    if not _can_edit(user) and inv.status != 'new':
+    if not _can_see_invoice(user, inv):
         return jsonify({'error': 'not_found'}), 404
     resp = flask_send_receipt(inv, as_attachment=False)
     if resp is None:
@@ -1223,8 +1285,11 @@ def api_invoice_receipt(user: User, inv_id: int):
 @require_user
 def api_send_pdf(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
-    if not _can_edit(user) and inv.status != 'new':
+    if not _can_see_invoice(user, inv):
         return jsonify({'error': 'not_found'}), 404
+    # «Счёт в чат» для планов недели; админ может и для обычных.
+    if (inv.kind or '') != 'plan' and not _can_edit(user):
+        return jsonify({'error': 'forbidden'}), 403
     body = request.get_json(silent=True) if request.is_json else None
     kind = ''
     if isinstance(body, dict):
@@ -1253,6 +1318,82 @@ def api_send_pdf(user: User, inv_id: int):
     if not ok:
         return jsonify({'ok': False, 'error': err or 'send_failed'})
     return jsonify({'ok': True})
+
+
+@bp.route('/api/invoices/<int:inv_id>/submit-quick', methods=['POST'])
+@require_user
+def api_submit_quick_draft(user: User, inv_id: int):
+    """Черновик быстрого расхода → карточка админу (как AI из чата расходов)."""
+    if not _can_quick_expense(user):
+        return jsonify({'error': 'forbidden'}), 403
+    inv = PaymentInvoice.query.get_or_404(inv_id)
+    if (inv.status or '') != 'draft':
+        return jsonify({'error': 'not_draft'}), 400
+    if not _can_edit(user) and inv.created_by_user_id not in (None, user.id):
+        return jsonify({'error': 'forbidden'}), 403
+
+    body = request.get_json(silent=True) or {}
+    summary = (body.get('summary') or inv.summary or inv.original_name or '').strip()[:500]
+    ptype = body.get('payment_type') or inv.payment_type or 'cashless'
+    try:
+        if body.get('amount') not in (None, ''):
+            amount = _parse_money(body.get('amount'))
+        else:
+            amount = Decimal(str(inv.amount or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        return jsonify({'error': 'bad_amount'}), 400
+    if amount <= 0:
+        return jsonify({'error': 'bad_amount'}), 400
+    if not summary:
+        return jsonify({'error': 'need_summary'}), 400
+
+    file_bytes = invoice_bytes(inv)
+    filename = inv.original_name or inv.filename or 'receipt.jpg'
+
+    from app.expense_chat import ingest_miniapp_quick_expense
+    result = ingest_miniapp_quick_expense(
+        user,
+        amount=amount,
+        summary=summary,
+        payment_type=ptype,
+        file_bytes=file_bytes,
+        filename=filename,
+    )
+    if not result.get('ok'):
+        return jsonify({'ok': False, 'error': result.get('error') or 'failed'}), 400
+
+    # Убираем черновик — расход ушёл админу на разнесение
+    try:
+        err = delete_unpaid_invoice(inv)
+        if err:
+            current_app.logger.warning('submit-quick draft delete: %s', err)
+        else:
+            db.session.commit()
+    except Exception:
+        current_app.logger.exception('submit-quick draft cleanup')
+
+    amt_s = f"{float(amount):,.0f}".replace(',', ' ')
+    ptype_lbl = 'нал' if result.get('payment_type') == 'cash' else 'безнал'
+    text = (
+        f"Расход от {result.get('sender')}: {summary}\n"
+        f"{amt_s} ₽ · {ptype_lbl}\n"
+        f"Проверьте статью на дашборде."
+    )
+    try:
+        _notify_admins_quick_expense(
+            text,
+            except_user=user,
+            file_bytes=result.get('file_bytes'),
+            filename=result.get('filename'),
+        )
+    except Exception:
+        current_app.logger.exception('submit-quick notify failed')
+
+    return jsonify({
+        'ok': True,
+        'chat_expense_id': result.get('chat_expense_id'),
+        'task_id': result.get('task_id'),
+    })
 
 
 @bp.route('/api/invoices/upload', methods=['POST'])
@@ -1660,9 +1801,17 @@ def api_attach_file(user: User, inv_id: int):
 @bp.route('/api/invoices/<int:inv_id>/discard', methods=['POST'])
 @require_user
 def api_discard(user: User, inv_id: int):
-    if not _can_edit(user):
-        return jsonify({'error': 'forbidden'}), 403
     inv = PaymentInvoice.query.get_or_404(inv_id)
+    if _can_edit(user):
+        pass
+    elif (
+        _can_quick_expense(user)
+        and (inv.status or '') == 'draft'
+        and inv.created_by_user_id in (None, user.id)
+    ):
+        pass
+    else:
+        return jsonify({'error': 'forbidden'}), 403
     err = delete_unpaid_invoice(inv)
     if err:
         return jsonify({'error': 'locked', 'hint': err}), 400
@@ -1987,13 +2136,24 @@ def handle_private_update(msg: dict) -> bool:
     from app.bank_slip import extract_telegram_media, ingest_bytes, _chat_summary
 
     media = extract_telegram_media(msg)
+    user = _user_from_telegram(sender) if sender else None
+
+    # Руководитель: любой файл/фото → черновик быстрого расхода
+    if media and user and (user.role or '') == 'executive':
+        note_telegram_update('media_quick', tg_id)
+        try:
+            return _ingest_private_quick_draft(chat_id, sender, tg_id, msg, media)
+        except Exception:
+            current_app.logger.exception('tg_pay quick draft failed')
+            _tg_reply(chat_id, 'Не смог сохранить файл. Пришлите ещё раз или через «+» в приложении.')
+            return True
+
     if media and (msg.get('photo') or not _is_invoice_document(msg.get('document') or {})):
         note_telegram_update('media', tg_id)
         blob, err = download_bot_file(media.get('file_id'))
         if not blob:
             _tg_reply(chat_id, f'Не смог скачать файл: {err}')
             return True
-        user = _user_from_telegram(sender)
         result = ingest_bytes(
             blob,
             media.get('filename') or 'photo.jpg',
@@ -2024,6 +2184,94 @@ def handle_private_update(msg: dict) -> bool:
         return True
 
 
+def _ingest_private_quick_draft(chat_id, sender, tg_id, msg: dict, media: dict) -> bool:
+    """Файл от руководителя в личку бота → черновик с разобранной суммой/статьёй."""
+    user = _user_from_telegram(sender)
+    if not user:
+        mapped = _tg_user_id_map().get(str(tg_id), '')
+        hint = (
+            f'Этот Telegram не привязан к ERP.\n'
+            f'Ваш id: <code>{tg_id}</code>\n\n'
+            f'<code>TG_USER_ID_MAP={tg_id}:executive</code>'
+        )
+        if mapped:
+            hint = (
+                f'В карте указано «{mapped}», пользователя нет.\n'
+                f'<code>TG_USER_ID_MAP={tg_id}:executive</code>'
+            )
+        _tg_reply(chat_id, hint)
+        return True
+
+    name = media.get('filename') or 'photo.jpg'
+    blob, err = download_bot_file(media.get('file_id'))
+    if not blob:
+        _tg_reply(chat_id, f'Не смог скачать файл: {err}')
+        return True
+
+    caption = (msg.get('caption') or msg.get('text') or '').strip()
+    save_name, path = _store_upload(blob, name)
+    parsed = {'summary': '', 'amount': Decimal('0'), 'lines': [], 'error': None}
+    payment_type = 'cashless'
+    try:
+        parsed = parse_invoice_file(path, name)
+    except Exception:
+        current_app.logger.exception('parse quick draft file')
+
+    # Подпись к фото: «15000р - гсм. нал»
+    if caption:
+        try:
+            from app.expense_chat import parse_expense_text
+            cap = parse_expense_text(caption)
+            if cap:
+                if not parsed.get('amount') or Decimal(str(parsed.get('amount') or 0)) <= 0:
+                    parsed['amount'] = cap['amount']
+                if not (parsed.get('summary') or '').strip() or parsed.get('summary') == name:
+                    parsed['summary'] = cap['description']
+                payment_type = cap.get('payment_type') or 'cashless'
+            else:
+                if not (parsed.get('summary') or '').strip() or parsed.get('summary') == name:
+                    parsed['summary'] = caption[:500]
+        except Exception:
+            if caption and (not (parsed.get('summary') or '').strip() or parsed.get('summary') == name):
+                parsed['summary'] = caption[:500]
+
+    if not (parsed.get('summary') or '').strip():
+        parsed['summary'] = (name or 'Расход')[:500]
+
+    inv = _save_parsed_invoice(
+        save_name, name, parsed, source='tg', status='draft',
+        created_by=user, payment_type=payment_type,
+    )
+    attach_file(inv, blob, save_name)
+    db.session.commit()
+
+    purpose = _purpose(inv)
+    amount = f"{float(inv.amount or 0):,.0f}".replace(',', ' ')
+    budget = inv.item.name if inv.item else 'статья не определена'
+    extra = f"\n{parsed['error']}" if parsed.get('error') else ''
+    from app.telegram import miniapp_web_url
+    app_url = miniapp_web_url(_public_miniapp_url())
+    markup = None
+    if app_url.startswith('https://'):
+        markup = {
+            'inline_keyboard': [[{
+                'text': 'Открыть черновик',
+                'web_app': {'url': f'{app_url}#/inv/{inv.id}'},
+            }]]
+        }
+    ptype_lbl = 'нал' if (inv.payment_type or '') == 'cash' else 'безнал'
+    _tg_reply(
+        chat_id,
+        f'Черновик #{inv.id}\n'
+        f'<b>{purpose}</b>\n'
+        f'{amount} ₽ · {ptype_lbl}\n'
+        f'Статья: {budget}{extra}\n\n'
+        f'Проверьте сумму и отправьте админу в приложении.',
+        reply_markup=markup,
+    )
+    return True
+
+
 def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
     user = _user_from_telegram(sender)
     if not user:
@@ -2045,6 +2293,14 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
         _tg_reply(chat_id, hint)
         return True
 
+    # Руководитель PDF тоже через быстрый черновик
+    if (user.role or '') == 'executive':
+        media = {
+            'file_id': doc.get('file_id'),
+            'filename': doc.get('file_name') or 'invoice.pdf',
+        }
+        return _ingest_private_quick_draft(chat_id, sender, tg_id, {'caption': ''}, media)
+
     name = doc.get('file_name') or 'invoice.pdf'
     blob, err = download_bot_file(doc.get('file_id'))
     if not blob:
@@ -2053,7 +2309,9 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
 
     save_name, path = _store_upload(blob, name)
     parsed = parse_invoice_file(path, name)
-    inv = _save_parsed_invoice(save_name, name, parsed, source='tg', status='draft')
+    inv = _save_parsed_invoice(
+        save_name, name, parsed, source='tg', status='draft', created_by=user,
+    )
     attach_file(inv, blob, save_name)
     db.session.commit()
     purpose = _purpose(inv)
