@@ -23,7 +23,8 @@
 {% if inv and inv.order_id %}
 <div class="alert alert-success py-2">
     Привязан <a href="{{ url_for('orders.order_detail', order_id=inv.order_id) }}">заказ №{{ inv.order_id }}</a>
-    {% if inv.from_existing_order %}(существующий заказ, позиции заказа не перезаписывались){% else %}(создан из этого счёта){% endif %}
+    {% if inv.from_existing_order %}(существующий заказ, позиции заказа не перезаписывались){% else %}(создан из этого счёта){% endif %}.
+    К одному заказу можно привязать несколько счетов.
 </div>
 {% endif %}
 
@@ -83,6 +84,35 @@
         </div>
         {% endif %}
     </div>
+    {% if not (inv and inv.order_id) %}
+    <div class="border rounded p-2 mb-3 bg-light" id="salePriceToolbar">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="small fw-bold text-muted">Режим прайса</label>
+                <div class="btn-group w-100" role="group">
+                    <input type="radio" class="btn-check" name="_ui_price_mode" id="siModeWholesale" value="wholesale" autocomplete="off">
+                    <label class="btn btn-outline-primary btn-sm" for="siModeWholesale">Опт</label>
+                    <input type="radio" class="btn-check" name="_ui_price_mode" id="siModeRetail" value="retail" autocomplete="off" checked>
+                    <label class="btn btn-outline-success btn-sm" for="siModeRetail">Розница</label>
+                </div>
+            </div>
+            <div class="col-md-5">
+                <label class="small fw-bold text-muted">Скидка ко всем</label>
+                <div class="d-flex flex-wrap gap-1 mb-1">
+                    {% for d in [0, 5, 10, 15, 20, 25] %}
+                    <button type="button" class="btn btn-sm btn-outline-secondary si-disc-chip" data-pct="{{ d }}">{{ d }}%</button>
+                    {% endfor %}
+                </div>
+                <div class="input-group input-group-sm" style="max-width:200px">
+                    <input type="number" step="0.1" min="0" max="100" class="form-control" id="siDiscountPct" value="0">
+                    <span class="input-group-text">%</span>
+                    <button type="button" class="btn btn-primary" id="siApplyPrices">Применить</button>
+                </div>
+            </div>
+            <div class="col-md-3 small text-muted">Пересчитает цены строк по прайсу. У каждой строки можно задать свою скидку %.</div>
+        </div>
+    </div>
+    {% endif %}
     <p class="text-muted small mb-2">Кол-во не может превысить свободный остаток. При сохранении лишнее обрежется.</p>
     <div id="stockHits" class="mb-3"></div>
 
@@ -93,6 +123,7 @@
                     <th>Растение / размер</th>
                     <th style="width:110px">Свободно</th>
                     <th style="width:100px">Кол-во</th>
+                    <th style="width:90px">Скидка %</th>
                     <th style="width:120px">Цена</th>
                     <th style="width:48px"></th>
                 </tr>
@@ -101,7 +132,8 @@
                 {% if inv and inv.lines %}
                 {% for ln in inv.lines %}
                 {% set fk = (ln.plant_id|string) ~ ':' ~ (ln.size_id|string) %}
-                <tr class="line-row">
+                {% set lp = (line_prices or {}).get(fk, {}) %}
+                <tr class="line-row" data-wholesale="{{ lp.get('wholesale', 0) }}" data-retail="{{ lp.get('retail', ln.price or 0) }}">
                     <td>
                         <div class="fw-semibold">{{ ln.plant_name }} · {{ ln.size_name }}</div>
                         <input type="hidden" name="line_plant_id" value="{{ ln.plant_id or '' }}">
@@ -111,7 +143,8 @@
                     </td>
                     <td class="free-cell text-muted">{{ free_now.get(fk, '—') if free_now is defined else '—' }}</td>
                     <td><input type="number" min="1" name="line_qty" class="form-control form-control-sm" value="{{ ln.qty }}" {% if inv.order_id %}readonly{% endif %}></td>
-                    <td><input type="number" step="0.01" min="0" name="line_price" class="form-control form-control-sm" value="{{ ln.price }}" {% if inv.order_id %}readonly{% endif %}></td>
+                    <td><input type="number" step="0.1" min="0" max="100" class="form-control form-control-sm line-disc" value="0" {% if inv.order_id %}readonly{% endif %}></td>
+                    <td><input type="number" step="0.01" min="0" name="line_price" class="form-control form-control-sm line-price" value="{{ ln.price }}" {% if inv.order_id %}readonly{% endif %}></td>
                     <td>{% if not inv.order_id %}<button type="button" class="btn btn-sm btn-outline-danger rm-line">×</button>{% endif %}</td>
                 </tr>
                 {% endfor %}
@@ -139,14 +172,23 @@
             </form>
         </div>
         <div class="col-md-6">
-            <form method="POST" action="{{ url_for('orders.sale_invoice_link_order', inv_id=inv.id) }}" hx-boost="false" class="d-flex gap-2 align-items-end">
-                <div class="flex-grow-1">
-                    <label class="form-label">Привязать существующий заказ №</label>
-                    <input type="number" name="order_id" class="form-control" min="1" required placeholder="Номер заказа">
+            <form method="POST" action="{{ url_for('orders.sale_invoice_link_order', inv_id=inv.id) }}" hx-boost="false" id="linkOrderForm">
+                <label class="form-label">Привязать к существующему заказу</label>
+                <input type="hidden" name="order_id" id="linkOrderId" value="" required>
+                <div class="position-relative mb-2">
+                    <input type="search" class="form-control" id="orderSearchQ" autocomplete="off"
+                           placeholder="№ заказа, клиент или общий счёт…"
+                           {% if inv.client_id %}data-client-id="{{ inv.client_id }}"{% endif %}>
+                    <div id="orderSearchHits" class="list-group position-absolute w-100 shadow-sm"
+                         style="z-index: 20; max-height: 280px; overflow-y: auto; display: none;"></div>
                 </div>
-                <button type="submit" class="btn btn-outline-dark">Привязать</button>
+                <div id="orderSearchPicked" class="alert alert-light border py-2 small mb-2 d-none">
+                    Выбран: <b id="orderSearchPickedLabel">—</b>
+                    <button type="button" class="btn btn-link btn-sm p-0 ms-2" id="orderSearchClear">сбросить</button>
+                </div>
+                <button type="submit" class="btn btn-outline-dark" id="linkOrderBtn" disabled>Привязать</button>
+                <p class="small text-muted mt-1 mb-0">Начните вводить — выберите заказ из списка. Или несколько счетов разом из карточки заказа.</p>
             </form>
-            <p class="small text-muted mt-1 mb-0">Позиции и поля копки в заказе не меняются.</p>
         </div>
     </div>
 </div>
@@ -163,11 +205,46 @@
   function esc(s) {
     return String(s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
+  function clampPct(v) {
+    let n = parseFloat(String(v == null ? 0 : v).replace(',', '.'));
+    if (isNaN(n) || n < 0) n = 0;
+    if (n > 100) n = 100;
+    return n;
+  }
+  function modeOf() {
+    const el = document.querySelector('input[name="_ui_price_mode"]:checked');
+    return (el && el.value) || 'retail';
+  }
+  function priced(wholesale, retail, disc) {
+    const base = modeOf() === 'wholesale' ? (parseFloat(wholesale) || 0) : (parseFloat(retail) || 0);
+    return Math.round(Math.max(0, base * (1 - clampPct(disc) / 100)) * 100) / 100;
+  }
+  function applyPricesToRows(setGlobalDisc) {
+    if (locked) return;
+    const globalDisc = clampPct(document.getElementById('siDiscountPct')?.value || 0);
+    tbody.querySelectorAll('.line-row').forEach((tr) => {
+      const discInp = tr.querySelector('.line-disc');
+      if (setGlobalDisc && discInp) discInp.value = globalDisc;
+      const disc = clampPct(discInp ? discInp.value : globalDisc);
+      const priceInp = tr.querySelector('.line-price, input[name="line_price"]');
+      if (!priceInp) return;
+      const w = tr.dataset.wholesale;
+      const r = tr.dataset.retail;
+      if (!(parseFloat(w) > 0 || parseFloat(r) > 0)) return;
+      priceInp.value = priced(w, r, disc);
+    });
+  }
 
   function addLine(it) {
     if (locked) return;
+    const wholesale = it.wholesale != null ? it.wholesale : (it.wholesale_price != null ? it.wholesale_price : 0);
+    const retail = it.retail != null ? it.retail : (it.retail_price != null ? it.retail_price : (it.price || 0));
+    const disc = clampPct(document.getElementById('siDiscountPct')?.value || 0);
+    const price = priced(wholesale, retail, disc);
     const tr = document.createElement('tr');
     tr.className = 'line-row';
+    tr.dataset.wholesale = wholesale;
+    tr.dataset.retail = retail;
     tr.innerHTML = `
       <td>
         <div class="fw-semibold">${esc(it.plant_name)} · ${esc(it.size_name)}</div>
@@ -178,7 +255,8 @@
       </td>
       <td class="free-cell text-muted">${it.free}</td>
       <td><input type="number" min="1" max="${it.free}" name="line_qty" class="form-control form-control-sm" value="1"></td>
-      <td><input type="number" step="0.01" min="0" name="line_price" class="form-control form-control-sm" value="${it.price || 0}"></td>
+      <td><input type="number" step="0.1" min="0" max="100" class="form-control form-control-sm line-disc" value="${disc}"></td>
+      <td><input type="number" step="0.01" min="0" name="line_price" class="form-control form-control-sm line-price" value="${price}"></td>
       <td><button type="button" class="btn btn-sm btn-outline-danger rm-line">×</button></td>
     `;
     tbody.appendChild(tr);
@@ -199,7 +277,9 @@
         <button type="button" class="btn btn-sm btn-outline-success me-1 mb-1 stock-hit"
           data-plant="${it.plant_id}" data-size="${it.size_id}"
           data-pname="${esc(it.plant_name)}" data-sname="${esc(it.size_name)}"
-          data-free="${it.free}" data-price="${it.price}">
+          data-free="${it.free}" data-price="${it.price}"
+          data-wholesale="${it.wholesale || it.wholesale_price || 0}"
+          data-retail="${it.retail || it.retail_price || it.price || 0}">
           ${esc(it.plant_name)} · ${esc(it.size_name)}
           <span class="badge bg-light text-dark ms-1">своб. ${it.free}</span>
           <span class="badge bg-light text-dark">${Number(it.price||0).toLocaleString('ru-RU')} ₽</span>
@@ -225,6 +305,8 @@
         size_name: btn.dataset.sname,
         free: Number(btn.dataset.free || 0),
         price: Number(btn.dataset.price || 0),
+        wholesale: Number(btn.dataset.wholesale || 0),
+        retail: Number(btn.dataset.retail || 0),
       });
     });
   }
@@ -232,6 +314,121 @@
     const btn = e.target.closest('.rm-line');
     if (btn) btn.closest('tr').remove();
   });
+  document.getElementById('siApplyPrices')?.addEventListener('click', () => applyPricesToRows(true));
+  document.querySelectorAll('.si-disc-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const inp = document.getElementById('siDiscountPct');
+      if (inp) inp.value = btn.dataset.pct;
+      document.querySelectorAll('.si-disc-chip').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      applyPricesToRows(true);
+    });
+  });
+  document.querySelectorAll('input[name="_ui_price_mode"]').forEach((el) => {
+    el.addEventListener('change', () => applyPricesToRows(false));
+  });
 })();
 </script>
+{% if inv and not inv.order_id %}
+<script>
+(function () {
+  const qEl = document.getElementById('orderSearchQ');
+  const hits = document.getElementById('orderSearchHits');
+  const hidden = document.getElementById('linkOrderId');
+  const picked = document.getElementById('orderSearchPicked');
+  const pickedLabel = document.getElementById('orderSearchPickedLabel');
+  const btn = document.getElementById('linkOrderBtn');
+  const clearBtn = document.getElementById('orderSearchClear');
+  if (!qEl || !hits || !hidden) return;
+  const searchUrl = {{ url_for('orders.sale_invoice_search_orders_api')|tojson }};
+  const clientId = qEl.dataset.clientId || '';
+  let t = null;
+
+  function money(n) {
+    return Number(n || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+  }
+  function pick(it) {
+    hidden.value = String(it.id);
+    qEl.value = '';
+    hits.style.display = 'none';
+    hits.innerHTML = '';
+    if (picked && pickedLabel) {
+      picked.classList.remove('d-none');
+      pickedLabel.textContent = `#${it.id} · ${it.client_name || '—'} · ${money(it.total)}`
+        + (it.invoice_number ? ` · общий счёт ${it.invoice_number}` : '');
+    }
+    if (btn) btn.disabled = false;
+  }
+  function clearPick() {
+    hidden.value = '';
+    if (picked) picked.classList.add('d-none');
+    if (btn) btn.disabled = true;
+  }
+  async function search(q) {
+    if (!q || q.length < 1) { hits.style.display = 'none'; hits.innerHTML = ''; return; }
+    const url = searchUrl + '?q=' + encodeURIComponent(q) + (clientId ? '&client_id=' + encodeURIComponent(clientId) : '');
+    try {
+      const res = await fetch(url, { credentials: 'same-origin' });
+      const data = await res.json();
+      const items = data.items || [];
+      if (!items.length) {
+        hits.innerHTML = '<div class="list-group-item text-muted small">Ничего не найдено</div>';
+        hits.style.display = 'block';
+        return;
+      }
+      hits.innerHTML = items.map((it) => `
+        <button type="button" class="list-group-item list-group-item-action py-2 order-hit"
+          data-id="${it.id}"
+          data-client="${String(it.client_name || '').replace(/"/g, '&quot;')}"
+          data-total="${it.total || 0}"
+          data-inv="${String(it.invoice_number || '').replace(/"/g, '&quot;')}"
+          data-date="${String(it.date || '').replace(/"/g, '&quot;')}">
+          <div class="d-flex justify-content-between gap-2">
+            <span><b>#${it.id}</b> · ${it.client_name || '—'}</span>
+            <span class="text-muted small">${it.date || ''}</span>
+          </div>
+          <div class="small text-muted">
+            ${it.status || ''}
+            ${it.invoice_number ? ' · общий счёт ' + it.invoice_number : ''}
+            · ${money(it.total)}
+            ${Number(it.paid) > 0 ? ' · оплачено ' + money(it.paid) : ''}
+          </div>
+        </button>
+      `).join('');
+      hits.style.display = 'block';
+    } catch (e) {
+      hits.innerHTML = '<div class="list-group-item text-danger small">Ошибка поиска</div>';
+      hits.style.display = 'block';
+    }
+  }
+  qEl.addEventListener('input', () => {
+    clearTimeout(t);
+    t = setTimeout(() => search(qEl.value.trim()), 200);
+  });
+  qEl.addEventListener('focus', () => {
+    if (qEl.value.trim()) search(qEl.value.trim());
+  });
+  hits.addEventListener('click', (e) => {
+    const el = e.target.closest('.order-hit');
+    if (!el) return;
+    pick({
+      id: Number(el.dataset.id),
+      client_name: el.dataset.client || '',
+      total: Number(el.dataset.total || 0),
+      invoice_number: el.dataset.inv || '',
+    });
+  });
+  clearBtn && clearBtn.addEventListener('click', clearPick);
+  document.addEventListener('click', (e) => {
+    if (!hits.contains(e.target) && e.target !== qEl) hits.style.display = 'none';
+  });
+  document.getElementById('linkOrderForm')?.addEventListener('submit', (e) => {
+    if (!hidden.value) {
+      e.preventDefault();
+      alert('Выберите заказ из списка поиска');
+    }
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

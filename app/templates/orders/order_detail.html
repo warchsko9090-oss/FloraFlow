@@ -215,6 +215,27 @@
                             {% endfor %}
                             {% endif %}
 
+                            <!-- СЧЕТА КЛИЕНТУ -->
+                            {% if current_user.role != 'user2' %}
+                            {% for inv in item.sale_invoices|default([]) %}
+                            <div class="position-relative mb-2">
+                                <div class="sub-item-line"></div>
+                                <div class="doc-node node-invoice">
+                                    <div class="d-flex justify-content-between">
+                                        <a href="{{ url_for('orders.sale_invoice_pdf', inv_id=inv.id) }}" class="fw-bold text-decoration-none text-dark" target="_blank" rel="noopener">
+                                            <i class="fas fa-file-invoice-dollar"></i> Счёт №{{ inv.number }}
+                                        </a>
+                                        <small class="text-muted">{% if inv.created_at %}{{ inv.created_at|dateru }}{% endif %}</small>
+                                    </div>
+                                    <div class="small">
+                                        {% if inv.kind == 'advance' %}произвольный{% elif inv.kind == 'balance' %}остаток{% else %}позиции{% endif %}
+                                        · <b>{{ inv.amount|money }}</b>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                            {% endif %}
+
                             <!-- ОТГРУЗКИ -->
                             {% for group in item.shipments %}
                             <div class="position-relative mb-2">
@@ -378,42 +399,77 @@
                 </form>
                 {% if current_user.role in ['admin', 'executive', 'shop_manager'] and order.status not in ['canceled', 'ghost'] and not order.is_deleted %}
                 <div class="border rounded p-2 mt-2 mb-2 bg-light">
-                    <div class="small fw-bold mb-1"><i class="fas fa-file-invoice-dollar me-1"></i> Счёт клиенту</div>
-                    {% if sale_mini_invoice %}
-                    <div class="small text-muted mb-2">
-                        Счёт №{{ sale_mini_invoice.doc_number or sale_mini_invoice.id }}
-                        · <a href="{{ url_for('orders.sale_invoice_pdf', inv_id=sale_mini_invoice.id) }}" target="_blank" rel="noopener">PDF</a>
-                        {% if current_user.role == 'admin' %}
-                        · <a href="{{ url_for('orders.sale_invoice_print_edit', inv_id=sale_mini_invoice.id) }}">Правка перед печатью</a>
-                        {% endif %}
-                    </div>
+                    <div class="small fw-bold mb-1"><i class="fas fa-file-invoice-dollar me-1"></i> Счета (в базе ERP)</div>
+                    {% set _invs = sale_invoices|default([]) %}
+                    {% if _invs %}
+                    <ul class="list-unstyled small mb-2">
+                        {% for inv in _invs %}
+                        <li class="d-flex justify-content-between align-items-start gap-1 mb-1">
+                            <span>
+                                №{{ inv.doc_number or inv.id }}
+                                {% if inv.kind == 'advance' %}<span class="badge bg-warning text-dark">произв.</span>
+                                {% elif inv.kind == 'balance' %}<span class="badge bg-info text-dark">остаток</span>
+                                {% else %}<span class="badge bg-secondary">позиции</span>{% endif %}
+                                <span class="text-muted">{{ inv.amount|money }}</span>
+                            </span>
+                            <span class="text-nowrap">
+                                <a href="{{ url_for('orders.sale_invoice_pdf', inv_id=inv.id) }}" target="_blank" rel="noopener">PDF</a>
+                                {% if current_user.role == 'admin' %}
+                                · <a href="{{ url_for('orders.sale_invoice_edit', inv_id=inv.id) }}">Открыть</a>
+                                · <a href="{{ url_for('orders.sale_invoice_print_edit', inv_id=inv.id) }}">Правка</a>
+                                {% endif %}
+                            </span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <div class="small text-muted mb-2">Пока нет привязанных счетов.</div>
                     {% endif %}
                     {% if sale_companies %}
-                    <form method="POST" action="{{ url_for('orders.order_export_sale_invoice', order_id=order.id) }}" hx-boost="false">
+                    <form method="POST" action="{{ url_for('orders.order_export_sale_invoice', order_id=order.id) }}" hx-boost="false" class="mb-2">
                         <label class="small text-muted">Фирма</label>
-                        <select name="company_id" class="form-select form-select-sm mb-2" required>
+                        <select name="company_id" class="form-select form-select-sm mb-1" required>
                             {% for c in sale_companies %}
-                            <option value="{{ c.id }}" {% if sale_mini_invoice and sale_mini_invoice.company_id == c.id %}selected{% endif %}>
-                                {{ c.short_name }}{% if c.vat_mode in ('included_20', 'included_22') %} · НДС 22%{% else %} · без НДС{% endif %}
+                            <option value="{{ c.id }}">
+                                {{ c.short_name }}{% if c.vat_mode in ('included_20', 'included_22') %} · НДС{% else %} · без НДС{% endif %}
                             </option>
                             {% endfor %}
                         </select>
-                        <button type="submit" class="btn btn-dark btn-sm w-100 mb-1">
-                            {% if sale_mini_invoice %}Обновить и открыть PDF{% else %}Сформировать счёт / PDF{% endif %}
+                        <input type="hidden" name="kind" value="goods">
+                        <button type="submit" class="btn btn-dark btn-sm w-100"
+                                onclick="return confirm('Создать НОВЫЙ счёт по позициям заказа? Старые счета не изменятся.');">
+                            + Счёт по позициям заказа
                         </button>
                     </form>
-                    {% if current_user.role == 'admin' %}
-                    <a class="btn btn-outline-secondary btn-sm w-100" href="{{ url_for('orders.sale_invoice_custom_print') }}">Произвольный счёт</a>
+                    <a href="{{ url_for('orders.order_custom_sale_invoice', order_id=order.id) }}"
+                       class="btn btn-outline-dark btn-sm w-100 mb-2">
+                        + Произвольный счёт
+                    </a>
+                    <div class="form-text mb-2">Свободный текст → в БД. Без остатков и без изменения суммы заказа.</div>
+                    {% set _linkable = linkable_sale_invoices|default([]) %}
+                    {% if _linkable %}
+                    <form method="POST" action="{{ url_for('orders.order_link_sale_invoices', order_id=order.id) }}" hx-boost="false" class="border-top pt-2">
+                        <label class="small text-muted">Привязать существующие (без заказа)</label>
+                        <select name="invoice_id" class="form-select form-select-sm mb-1" multiple size="4" required>
+                            {% for inv in _linkable %}
+                            <option value="{{ inv.id }}">
+                                №{{ inv.doc_number or inv.id }} · {{ inv.buyer_name or '—' }} · {{ inv.amount|money }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text mb-1">Ctrl/⌘ — несколько. Клиентские сверху.</div>
+                        <button type="submit" class="btn btn-outline-primary btn-sm w-100">Привязать выбранные</button>
+                    </form>
                     {% endif %}
                     {% else %}
                     <div class="small text-warning mb-2">Заполните фирму: ИНН, банк, р/с, БИК.</div>
                     {% if current_user.role == 'admin' %}
-                    <a class="btn btn-outline-secondary btn-sm w-100" href="{{ url_for('orders.sale_invoice_custom_print') }}">Произвольный счёт (без БД)</a>
+                    <a class="btn btn-outline-secondary btn-sm w-100" href="{{ url_for('orders.sale_invoice_custom_print') }}">Произвольный счёт</a>
                     {% endif %}
                     {% endif %}
                 </div>
                 {% endif %}
-                {% if can_use_price_editor %}
+{% if can_use_price_editor %}
                 <div class="border rounded p-2 mt-2 mb-2" style="border-color:#b6d4fe!important;background:#f8fbff;">
                     <div class="small fw-bold mb-2"><i class="fas fa-tags me-1 text-primary"></i> Редактор цен</div>
                     <div class="d-flex gap-1 mb-2">
@@ -921,6 +977,12 @@
                   <label>Количество</label>
                   <input type="number" name="quantity" class="form-control" required min="1" value="1">
               </div>
+              {% if shop_manager_locks %}
+              <div class="mb-2">
+                  <label>Цена, ₽</label>
+                  <input type="number" name="price" class="form-control" step="0.01" min="0" placeholder="Цена сайта / оптовая, если пусто">
+              </div>
+              {% endif %}
             </div>
             <div class="modal-footer">
               <button type="submit" class="btn btn-success">Добавить в заказ</button>
@@ -1579,6 +1641,8 @@
     'split_item': ('Разделено', 'info'),
     'restore_item': ('Восстановлено', 'success'),
     'ship': ('Отгрузка', 'secondary'),
+    'sale_invoice': ('Счёт', 'dark'),
+    'initial_item': ('Позиция', 'secondary'),
 } %}
 <div class="card shadow-sm mt-3">
     <div class="card-header bg-white d-flex justify-content-between align-items-center"

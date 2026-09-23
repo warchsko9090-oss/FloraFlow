@@ -36,6 +36,38 @@
     <input class="form-check-input" type="checkbox" id="toggleSeedlings">
     <label class="form-check-label" for="toggleSeedlings">Показать саженцы</label>
 </div>
+{% if current_user.role not in ['brigadier', 'user2'] %}
+<div class="card mb-3 border-primary">
+    <div class="card-body py-2">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="small fw-bold text-muted mb-1">Режим цен при создании</label>
+                <div class="btn-group w-100" role="group">
+                    <input type="radio" class="btn-check" name="price_mode" id="createModeWholesale" value="wholesale" autocomplete="off">
+                    <label class="btn btn-outline-primary btn-sm" for="createModeWholesale">Опт</label>
+                    <input type="radio" class="btn-check" name="price_mode" id="createModeRetail" value="retail" autocomplete="off" checked>
+                    <label class="btn btn-outline-success btn-sm" for="createModeRetail">Розница</label>
+                </div>
+            </div>
+            <div class="col-md-5">
+                <label class="small fw-bold text-muted mb-1">Скидка %</label>
+                <div class="d-flex flex-wrap gap-1 mb-1" id="createDiscountChips">
+                    {% for d in [0, 5, 10, 15, 20, 25] %}
+                    <button type="button" class="btn btn-sm btn-outline-secondary create-disc-chip" data-pct="{{ d }}">{{ d }}%</button>
+                    {% endfor %}
+                </div>
+                <div class="input-group input-group-sm" style="max-width:180px">
+                    <input type="number" step="0.1" min="0" max="100" class="form-control" name="discount_pct" id="createDiscountPct" value="0">
+                    <span class="input-group-text">%</span>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="small text-muted">Цены в таблице пересчитаются по прайсу с учётом режима и скидки.</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 <div class="table-responsive">
     <table class="table table-bordered table-sm table-1c bg-white" id="orderTable">
         <thead>
@@ -226,7 +258,7 @@ function updateRowStats(yearEl) {
     const row = yearEl.closest('tr');
     const selectedOpt = yearEl.options[yearEl.selectedIndex];
     if (selectedOpt && selectedOpt.dataset.free) {
-        updateRowStatsImpl(row, selectedOpt.dataset.free, selectedOpt.dataset.price);
+        updateRowStatsImpl(row, selectedOpt.dataset.free, selectedOpt.dataset.wholesale, selectedOpt.dataset.retail);
     }
 }
 
@@ -258,7 +290,11 @@ async function updateRowInfo(row, targetYear = null) {
                     opt.value = b.year;
                     opt.innerText = `${b.year} (Ост: ${b.free})`;
                     opt.dataset.free = b.free;
-                    opt.dataset.price = b.price;
+                    const wholesale = (b.wholesale_price != null) ? b.wholesale_price : b.price;
+                    const retail = (b.retail_price != null) ? b.retail_price : b.price;
+                    opt.dataset.wholesale = wholesale;
+                    opt.dataset.retail = retail;
+                    opt.dataset.price = retail;
                     yearSelect.appendChild(opt);
 
                     // Если передан целевой год (из попапа), запоминаем его данные
@@ -282,7 +318,7 @@ async function updateRowInfo(row, targetYear = null) {
                     yearHidden.disabled = true;
                     yearLabel.classList.add('d-none');
                     
-                    updateRowStatsImpl(row, batchToSelect.free, batchToSelect.price);
+                    updateRowStatsImpl(row, batchToSelect.free, batchToSelect.wholesale_price, batchToSelect.retail_price);
 
                 } else if (data.batches.length === 1) {
                     // Вариант 2: Автовыбор единственной партии
@@ -297,7 +333,7 @@ async function updateRowInfo(row, targetYear = null) {
                     yearLabel.innerText = `${batch.year} г. (Авто)`;
                     yearLabel.classList.remove('d-none');
                     
-                    updateRowStatsImpl(row, batch.free, batch.price);
+                    updateRowStatsImpl(row, batch.free, batch.wholesale_price, batch.retail_price);
                 } else {
                     // Вариант 3: Много партий, ручной выбор (выбираем первую по дефолту для отображения)
                     yearSelect.style.display = 'block';
@@ -307,7 +343,7 @@ async function updateRowInfo(row, targetYear = null) {
                     
                     // Триггерим обновление статистики для первой опции
                     yearSelect.value = data.batches[0].year;
-                    updateRowStatsImpl(row, data.batches[0].free, data.batches[0].price);
+                    updateRowStatsImpl(row, data.batches[0].free, data.batches[0].wholesale_price, data.batches[0].retail_price);
                 }
             } else {
                 yearSelect.innerHTML = '<option disabled>Нет в наличии</option>';
@@ -320,12 +356,56 @@ async function updateRowInfo(row, targetYear = null) {
     }
 }
 
-function updateRowStatsImpl(row, free, price) {
+function getCreatePriceMode() {
+    const el = document.querySelector('input[name="price_mode"]:checked');
+    return (el && el.value) || 'retail';
+}
+function getCreateDiscountPct() {
+    const el = document.getElementById('createDiscountPct');
+    let n = el ? parseFloat(String(el.value).replace(',', '.')) : 0;
+    if (isNaN(n) || n < 0) n = 0;
+    if (n > 100) n = 100;
+    return n;
+}
+function pricedFromList(wholesale, retail) {
+    const w = parseFloat(wholesale) || 0;
+    const r = parseFloat(retail != null ? retail : wholesale) || 0;
+    const base = getCreatePriceMode() === 'wholesale' ? w : r;
+    const disc = getCreateDiscountPct();
+    return Math.round(Math.max(0, base * (1 - disc / 100)) * 100) / 100;
+}
+function updateRowStatsImpl(row, free, wholesale, retail) {
     const stockCell = row.querySelector('.stock-info');
     stockCell.innerText = free;
     stockCell.className = free <= 0 ? 'text-center align-middle stock-info text-danger fw-bold small' : 'text-center align-middle stock-info text-success fw-bold small';
-    row.querySelector('.price-info').innerText = price + ' ₽';
+    row.dataset.wholesale = wholesale != null ? wholesale : '';
+    row.dataset.retail = retail != null ? retail : '';
+    const price = pricedFromList(wholesale, retail);
+    row.querySelector('.price-info').innerText = (price || price === 0) ? (price + ' ₽') : '-';
 }
+function refreshAllCreatePrices() {
+    document.querySelectorAll('#rowsContainer .item-row').forEach((row) => {
+        if (row.dataset.wholesale !== undefined && row.dataset.wholesale !== '') {
+            updateRowStatsImpl(row, row.querySelector('.stock-info')?.innerText || '-', row.dataset.wholesale, row.dataset.retail);
+        }
+    });
+}
+document.addEventListener('change', (e) => {
+    if (e.target && (e.target.name === 'price_mode' || e.target.id === 'createDiscountPct')) refreshAllCreatePrices();
+});
+document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'createDiscountPct') refreshAllCreatePrices();
+});
+document.querySelectorAll('.create-disc-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        const pct = btn.dataset.pct;
+        const inp = document.getElementById('createDiscountPct');
+        if (inp) inp.value = pct;
+        document.querySelectorAll('.create-disc-chip').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        refreshAllCreatePrices();
+    });
+});
 
 // === 4. ЛОГИКА ВСПЛЫВАЮЩЕЙ ПАНЕЛИ ===
 

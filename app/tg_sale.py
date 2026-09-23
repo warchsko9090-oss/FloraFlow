@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import unicodedata
 from datetime import datetime, timedelta
 from html import escape as html_escape
 from decimal import Decimal, InvalidOperation
@@ -18,22 +19,18 @@ from pathlib import Path
 from flask import (
     Blueprint, current_app, jsonify, request, render_template, make_response,
 )
-from sqlalchemy import func, or_
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy import event, func, inspect, or_
+from sqlalchemy.orm import Session, joinedload, selectinload
 from werkzeug.utils import secure_filename
 
 from app.models import (
     db, User, Client, Plant, Size, StockBalance, Order, OrderItem, OrderItemHistory,
-    SaleCompany, SaleInvoice, SaleInvoiceLine, ShopPlantCard,
+    SaleCompany, SaleInvoice, SaleInvoiceLine, ShopPlantCard, Document, DocumentRow,
 )
-from app.tg_pay import (
-    resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail,
-    current_telegram_id, require_session_telegram,
-    _telegram_id_from_init_data, _telegram_id_from_mini_cookie, _bind_telegram_id_force,
-)
+from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail, current_telegram_id
 from app.tg_sale_parse import parse_buyer_file
 from app.utils import msk_now, build_pdf_bytes, size_natural_key
-from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
+from app.telegram import send_chat_document, send_document, send_message as tg_send_message, default_miniapp_url
 from app.stock_helpers import get_reserved_map
 from app.shop_catalog import _price_history_map
 from app.seedlings import is_seedling_size_name, is_excluded_from_product_stock
@@ -107,6 +104,24 @@ def _can_firms(user: User) -> bool:
     return (user.role or '') in ('admin', 'executive')
 
 
+def _is_accountant(user: User | None) -> bool:
+    return bool(user) and (user.role or '') == 'accountant'
+
+
+def _sale_me_payload(user: User, *, is_dev: bool = False) -> dict:
+    accountant = _is_accountant(user)
+    return {
+        'id': user.id,
+        'username': user.username,
+        'role': user.role,
+        'can_firms': _can_firms(user),
+        'can_edit_firms': _can_firms(user),
+        'can_delete_approved': (user.role or '') == 'admin',
+        'accountant_only': accountant,
+        'dev': is_dev,
+    }
+
+
 def require_sale(fn):
     @wraps(fn)
     def wrapped(*args, **kwargs):
@@ -121,6 +136,25 @@ def require_sale(fn):
             return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
         if not _can_sale(user):
             return jsonify({'error': 'forbidden', 'hint': 'Только admin, руководитель или менеджер продаж'}), 403
+        return fn(user, *args, **kwargs)
+    return wrapped
+
+
+def require_buh(fn):
+    """Вкладка УПД: бухгалтер. Админ — чтобы проверить локально."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        user, _dev, pending = resolve_user()
+        if not user:
+            if pending:
+                return jsonify({
+                    'error': 'not_linked',
+                    'telegram_id': pending.get('id'),
+                    'username': (pending.get('username') or ''),
+                }), 403
+            return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+        if not _is_accountant(user) and (user.role or '') != 'admin':
+            return jsonify({'error': 'forbidden', 'hint': 'Только бухгалтер'}), 403
         return fn(user, *args, **kwargs)
     return wrapped
 
@@ -170,6 +204,216 @@ def _find_client_by_inn(inn: str | None) -> Client | None:
         if _inn_digits(client.inn) == digits:
             return client
     return None
+
+
+_LEGAL_FORM = re.compile(
+    r'\b(ооо|оао|пао|зао|ао|ип|нко|общество\s+с\s+ограниченной\s+ответственностью|'
+    r'индивидуальный\s+предприниматель)\b',
+    re.I,
+)
+
+# Латиница, которую часто ставят вместо русских букв (ООО с английской раскладки → ООО).
+_HOMOGLYPHS = str.maketrans({
+    'a': 'а', 'e': 'е', 'o': 'о', 'p': 'р', 'c': 'с', 'x': 'х',
+    'y': 'у', 'k': 'к', 'h': 'н', 'b': 'в', 'm': 'м', 't': 'т',
+    'A': 'а', 'E': 'е', 'O': 'о', 'P': 'р', 'C': 'с', 'X': 'х',
+    'Y': 'у', 'K': 'к', 'H': 'н', 'B': 'в', 'M': 'м', 'T': 'т',
+})
+
+
+def _fold_yo(s: str) -> str:
+    return (s or '').replace('ё', 'е').replace('Ё', 'Е')
+
+
+def _fold_client_query(s: str) -> str:
+    """Поиск без сюрпризов SQL lower(): регистр, ё/е, латиница-двойники."""
+    t = unicodedata.normalize('NFKC', s or '')
+    t = t.translate(_HOMOGLYPHS)
+    t = _fold_yo(t).casefold()
+    return re.sub(r'\s+', ' ', t).strip()
+
+
+def _client_name_key(name: str | None) -> str:
+    s = _fold_yo(name or '').lower()
+    s = _LEGAL_FORM.sub(' ', s)
+    return re.sub(r'[^a-zа-я0-9]+', '', s)
+
+
+def _find_client_by_name(name: str | None) -> Client | None:
+    key = _client_name_key(name)
+    if len(key) < 4:
+        return None
+    cands = [c for c in Client.query.all() if _client_name_key(c.name) == key]
+    if not cands:
+        return None
+    cands.sort(key=lambda c: (
+        0 if _inn_digits(c.inn) else 1,
+        0 if (c.bank_name or c.rs) else 1,
+        -len(c.name or ''),
+        c.id,
+    ))
+    return cands[0]
+
+
+def _resolve_client(name: str | None, inn: str | None) -> Client | None:
+    found = _find_client_by_inn(inn) if inn else None
+    if found:
+        return found
+    return _find_client_by_name(name)
+
+
+def apply_client_to_invoice(inv: SaleInvoice, client: Client | None) -> None:
+    """Реквизиты Mini App-счёта = карточка клиента в ERP."""
+    if not client:
+        return
+    inv.client_id = client.id
+    inv.buyer_name = (client.name or inv.buyer_name or '')[:300]
+    inn = _inn_digits(client.inn)
+    if inn:
+        inv.buyer_inn = inn
+    if client.kpp:
+        inv.buyer_kpp = _digits(client.kpp, 9)
+    if client.ogrn:
+        inv.buyer_ogrn = _digits(client.ogrn, 15)
+    if client.address:
+        inv.buyer_address = (client.address or '')[:500]
+    if client.phone:
+        inv.buyer_phone = str(client.phone)[:40]
+    if client.bank_name:
+        inv.buyer_bank = (client.bank_name or '')[:200]
+    if client.rs:
+        inv.buyer_rs = _digits(client.rs, 20)
+    if client.bik:
+        inv.buyer_bik = _digits(client.bik, 9)
+    if client.ks:
+        inv.buyer_ks = _digits(client.ks, 20)
+
+
+def _fill_empty_client_fields(client: Client, inv: SaleInvoice) -> None:
+    """Новые данные из Mini App только в пустые поля карточки, имя ERP не трогаем."""
+    if not (client.name or '').strip() and (inv.buyer_name or '').strip():
+        client.name = inv.buyer_name.strip()[:200]
+    if not _inn_digits(client.inn) and _inn_digits(inv.buyer_inn):
+        client.inn = _inn_digits(inv.buyer_inn)[:20]
+    if not _digits(client.kpp) and inv.buyer_kpp:
+        client.kpp = _digits(inv.buyer_kpp, 9)[:20]
+    if not _digits(client.ogrn) and getattr(inv, 'buyer_ogrn', None):
+        client.ogrn = _digits(inv.buyer_ogrn, 15)[:20]
+    if not (client.address or '').strip() and inv.buyer_address:
+        client.address = inv.buyer_address[:500]
+    if not (client.phone or '').strip() and getattr(inv, 'buyer_phone', None):
+        client.phone = str(inv.buyer_phone)[:40]
+    if not (client.bank_name or '').strip() and inv.buyer_bank:
+        client.bank_name = inv.buyer_bank[:200]
+    if not _digits(client.rs) and inv.buyer_rs:
+        client.rs = _digits(inv.buyer_rs, 20)[:40]
+    if not _digits(client.bik) and inv.buyer_bik:
+        client.bik = _digits(inv.buyer_bik, 9)[:20]
+    if not _digits(client.ks) and inv.buyer_ks:
+        client.ks = _digits(inv.buyer_ks, 20)[:40]
+
+
+def _fill_invoice_gaps_from_client(inv: SaleInvoice, client: Client) -> None:
+    if not (inv.buyer_name or '').strip() and client.name:
+        inv.buyer_name = client.name[:300]
+    if not _inn_digits(inv.buyer_inn) and _inn_digits(client.inn):
+        inv.buyer_inn = _inn_digits(client.inn)
+    if not _digits(inv.buyer_kpp) and client.kpp:
+        inv.buyer_kpp = _digits(client.kpp, 9)
+    if not _digits(inv.buyer_ogrn) and client.ogrn:
+        inv.buyer_ogrn = _digits(client.ogrn, 15)
+    if not (inv.buyer_address or '').strip() and client.address:
+        inv.buyer_address = client.address[:500]
+    if not (inv.buyer_phone or '').strip() and client.phone:
+        inv.buyer_phone = str(client.phone)[:40]
+    if not (inv.buyer_bank or '').strip() and client.bank_name:
+        inv.buyer_bank = client.bank_name[:200]
+    if not _digits(inv.buyer_rs) and client.rs:
+        inv.buyer_rs = _digits(client.rs, 20)
+    if not _digits(inv.buyer_bik) and client.bik:
+        inv.buyer_bik = _digits(client.bik, 9)
+    if not _digits(inv.buyer_ks) and client.ks:
+        inv.buyer_ks = _digits(client.ks, 20)
+
+
+def sync_sale_invoices_from_order(order: Order | None) -> int:
+    """Если в ERP сменили клиента у заказа — те же реквизиты у связанного счёта Mini App."""
+    if not order or not order.id or not order.client_id:
+        return 0
+    client = Client.query.get(order.client_id)
+    if not client:
+        return 0
+    n = 0
+    rows = SaleInvoice.query.filter(
+        SaleInvoice.order_id == order.id,
+        SaleInvoice.status != 'discarded',
+    ).all()
+    for inv in rows:
+        before = (inv.client_id, inv.buyer_name, inv.buyer_inn)
+        apply_client_to_invoice(inv, client)
+        if before != (inv.client_id, inv.buyer_name, inv.buyer_inn):
+            n += 1
+    return n
+
+
+def align_sale_invoices_with_orders(*, commit: bool = False) -> int:
+    ids = {
+        inv.order_id
+        for inv in SaleInvoice.query.filter(
+            SaleInvoice.order_id.isnot(None),
+            SaleInvoice.status != 'discarded',
+        ).all()
+    }
+    n = 0
+    for oid in ids:
+        n += sync_sale_invoices_from_order(Order.query.get(oid))
+    if n and commit:
+        db.session.commit()
+    return n
+
+
+def _client_buyer(c: Client) -> dict:
+    inn = _inn_digits(c.inn)
+    rs = _digits(c.rs, 20)
+    bik = _digits(c.bik, 9)
+    bank = (c.bank_name or '').strip()
+    return {
+        'id': c.id,
+        'name': (c.name or '').strip(),
+        'inn': inn,
+        'kpp': _digits(c.kpp, 9),
+        'ogrn': _digits(c.ogrn, 15),
+        'address': (c.address or '').strip(),
+        'phone': (c.phone or '').strip(),
+        'bank': bank,
+        'rs': rs,
+        'bik': bik,
+        'ks': _digits(c.ks, 20),
+        'has_bank': bool(bank or len(rs) == 20),
+    }
+
+
+def _search_clients(q: str, limit: int = 15) -> list[Client]:
+    raw = re.sub(r'[%_]+', ' ', (q or '')).strip()
+    if len(raw) < 2:
+        return []
+    needle = _fold_client_query(raw)
+    digits = _inn_digits(raw)
+    hits = []
+    for c in Client.query.order_by(Client.name).all():
+        name_f = _fold_client_query(c.name)
+        inn_ok = bool(digits and len(digits) >= 4 and digits in _inn_digits(c.inn))
+        if needle in name_f or inn_ok:
+            hits.append(c)
+
+    def rank(c: Client) -> tuple:
+        name = _fold_client_query(c.name)
+        pos = name.find(needle)
+        starts = 0 if name.startswith(needle) else 1
+        return (starts, pos if pos >= 0 else 999, name)
+
+    hits.sort(key=rank)
+    return hits[:limit]
 
 
 def _company_ready(c: SaleCompany) -> bool:
@@ -347,17 +591,11 @@ def _fmt_money_ru(value) -> str:
 
 
 def sale_public_number(inv: SaleInvoice) -> int:
-    """Публичный № счёта для PDF/чата: doc_number (с 100), иначе id."""
-    try:
-        if inv.doc_number:
-            return int(inv.doc_number)
-    except (TypeError, ValueError):
-        pass
-    return int(inv.id)
+    return int(inv.doc_number or inv.id)
 
 
 def allocate_sale_doc_number(inv: SaleInvoice) -> int:
-    """Счёт №100, 101… в пределах календарного года (MSK). С 1 января снова 100."""
+    """Счёт №100, 101… в пределах календарного года. С 1 января снова 100."""
     if inv.doc_number:
         return int(inv.doc_number)
     year = msk_now().year
@@ -372,33 +610,8 @@ def allocate_sale_doc_number(inv: SaleInvoice) -> int:
     return n
 
 
-def apply_client_to_invoice(inv: SaleInvoice, client: Client | None) -> None:
-    if not client:
-        return
-    inv.client_id = client.id
-    inv.buyer_name = (client.name or inv.buyer_name or '')[:300]
-    inn = _inn_digits(client.inn)
-    if inn:
-        inv.buyer_inn = inn
-    if client.kpp:
-        inv.buyer_kpp = _digits(client.kpp, 9)
-    if getattr(client, 'ogrn', None):
-        inv.buyer_ogrn = _digits(client.ogrn, 15)
-    if client.address:
-        inv.buyer_address = (client.address or '')[:500]
-    if client.phone:
-        inv.buyer_phone = str(client.phone)[:40]
-    if getattr(client, 'bank_name', None):
-        inv.buyer_bank = (client.bank_name or '')[:200]
-    if getattr(client, 'rs', None):
-        inv.buyer_rs = _digits(client.rs, 20)
-    if getattr(client, 'bik', None):
-        inv.buyer_bik = _digits(client.bik, 9)
-    if getattr(client, 'ks', None):
-        inv.buyer_ks = _digits(client.ks, 20)
-
-
 def _copy_order_items_to_sale_invoice(inv: SaleInvoice, order: Order) -> None:
+    """Позиции заказа ERP → строки счёта Mini App. Без обрезки по свободному остатку."""
     inv.lines.clear()
     db.session.flush()
     grouped: dict[tuple, dict] = {}
@@ -436,8 +649,15 @@ def create_sale_invoice_from_order(
     order: Order,
     company_id: int,
     user_id: int | None,
+    *,
+    kind: str = 'goods',
+    always_new: bool = True,
 ) -> SaleInvoice:
-    """Выгрузка счёта из ERP-заказа с публичным № с 100."""
+    """Создать счёт в БД из заказа ERP и сохранить PDF (без перезаписи старых счетов).
+
+    always_new=True (по умолчанию): каждый вызов — новый SaleInvoice с новым doc_number.
+    always_new=False: устаревший режим «обновить последний» — не использовать в ERP.
+    """
     if not order or not order.client_id:
         raise ValueError('no_client')
     if order.is_deleted or (order.status or '') in ('canceled', 'ghost'):
@@ -448,13 +668,22 @@ def create_sale_invoice_from_order(
     if not any(int(it.quantity or 0) > 0 for it in (order.items or [])):
         raise ValueError('no_lines')
 
-    inv = (
-        SaleInvoice.query
-        .filter(SaleInvoice.order_id == order.id, SaleInvoice.status != 'discarded')
-        .order_by(SaleInvoice.id.desc())
-        .first()
-    )
+    kind = (kind or 'goods').strip().lower()
+    if kind not in ('goods', 'advance', 'balance'):
+        kind = 'goods'
+
     now = msk_now()
+    inv = None
+    if not always_new:
+        inv = (
+            SaleInvoice.query
+            .filter(
+                SaleInvoice.order_id == order.id,
+                SaleInvoice.status != 'discarded',
+            )
+            .order_by(SaleInvoice.id.desc())
+            .first()
+        )
     if inv is None:
         inv = SaleInvoice(
             company_id=company.id,
@@ -463,15 +692,16 @@ def create_sale_invoice_from_order(
             approved_at=now,
             order_id=order.id,
             origin='erp',
-            comment=f'Заказ №{order.id}',
+            kind=kind,
             from_existing_order=True,
+            comment=f'Заказ №{order.id}',
         )
         db.session.add(inv)
         db.session.flush()
     else:
         inv.company_id = company.id
         inv.origin = inv.origin or 'erp'
-        inv.from_existing_order = True
+        inv.kind = kind or inv.kind or 'goods'
         if inv.status != 'approved':
             inv.status = 'approved'
             inv.approved_at = inv.approved_at or now
@@ -479,6 +709,8 @@ def create_sale_invoice_from_order(
     apply_client_to_invoice(inv, order.client)
     _copy_order_items_to_sale_invoice(inv, order)
     allocate_sale_doc_number(inv)
+    # Order.invoice_number — старый «общий счёт» для группировки дерева; не трогаем,
+    # если уже заполнен (иначе каждый новый Mini App № перезапишет группировку).
     if not (order.invoice_number or '').strip():
         order.invoice_number = str(sale_public_number(inv))
         order.invoice_date = (inv.approved_at or now).date()
@@ -486,6 +718,184 @@ def create_sale_invoice_from_order(
     if not blob:
         raise ValueError('pdf_failed')
     return inv
+
+
+def _parse_custom_invoice_lines(lines: list[dict] | None) -> list[tuple[str, int, str, Decimal]]:
+    """Свободные строки счёта → (name, qty, unit, price). Без справочника/остатков."""
+    parsed: list[tuple[str, int, str, Decimal]] = []
+    for raw in lines or []:
+        name = (raw.get('name') or '').strip()
+        if not name:
+            continue
+        try:
+            qty_dec = _money(raw.get('qty') or 1)
+        except Exception:
+            qty_dec = Decimal('1')
+        qty_i = max(1, int(qty_dec))
+        try:
+            price = _money(raw.get('price') or 0)
+        except Exception:
+            price = Decimal('0')
+        unit = (raw.get('unit') or 'усл. ед.').strip() or 'усл. ед.'
+        parsed.append((name[:200], qty_i, unit[:40], price))
+    return parsed
+
+
+def create_custom_sale_invoice(
+    company_id: int,
+    user_id: int | None,
+    *,
+    lines: list[dict],
+    comment: str | None = None,
+    anonymous: bool = False,
+    buyer_name: str | None = None,
+    buyer_line: str | None = None,
+    order: Order | None = None,
+    pdf_overrides: dict | None = None,
+) -> SaleInvoice:
+    """Произвольный счёт в реестре ERP: номер 100+, без остатков и без суммы заказа.
+
+    order=None — счёт только в реестре; order задан — привязка к заказу без изменения позиций/total_sum.
+    """
+    if order is not None:
+        if not order.client_id:
+            raise ValueError('no_client')
+        if order.is_deleted or (order.status or '') in ('canceled', 'ghost'):
+            raise ValueError('bad_order')
+    company = SaleCompany.query.get(int(company_id))
+    if not company or not _company_ready(company):
+        raise ValueError('no_company')
+
+    parsed = _parse_custom_invoice_lines(lines)
+    if not parsed:
+        raise ValueError('no_lines')
+
+    now = msk_now()
+    if order is not None:
+        basis = (comment or '').strip() or f'Заказ №{order.id}'
+    else:
+        basis = (comment or '').strip() or 'Произвольный счёт'
+    inv = SaleInvoice(
+        company_id=company.id,
+        user_id=user_id,
+        status='approved',
+        approved_at=now,
+        order_id=order.id if order is not None else None,
+        origin='erp',
+        kind='advance',
+        from_existing_order=bool(order is not None),
+        anonymous=bool(anonymous),
+        comment=basis[:500],
+        buyer_name='',
+    )
+    db.session.add(inv)
+    db.session.flush()
+    if order is not None:
+        apply_client_to_invoice(inv, order.client)
+    else:
+        name = (buyer_name or '').strip()
+        if not name and buyer_line:
+            name = (buyer_line or '').strip().split('\n', 1)[0].strip()
+            # «ООО Ромашка, ИНН …» → имя до первой запятой с ИНН
+            for sep in (', ИНН', ',Инн', ', инн'):
+                if sep.lower() in name.lower():
+                    idx = name.lower().find(sep.lower())
+                    name = name[:idx].strip()
+                    break
+        inv.buyer_name = (name or ('Без покупателя' if anonymous else 'Покупатель'))[:300]
+    for name, qty, unit, price in parsed:
+        db.session.add(SaleInvoiceLine(
+            invoice=inv,
+            plant_id=None,
+            size_id=None,
+            plant_name=name,
+            size_name=unit,
+            qty=qty,
+            price=price,
+        ))
+    db.session.flush()
+    inv.amount = _line_sum(inv.lines)
+    allocate_sale_doc_number(inv)
+    # Группировка «общий счёт» — только если ещё пусто; сумму заказа не меняем.
+    if order is not None and not (order.invoice_number or '').strip():
+        order.invoice_number = str(sale_public_number(inv))
+        order.invoice_date = (inv.approved_at or now).date()
+
+    ov = dict(pdf_overrides or {})
+    ov.setdefault('lines', [
+        {
+            'name': name,
+            'qty': str(qty),
+            'unit': unit,
+            'price': str(price),
+        }
+        for name, qty, unit, price in parsed
+    ])
+    if 'basis' not in ov:
+        ov['basis'] = basis
+    blob = render_sale_pdf(inv, ov)
+    if not blob:
+        raise ValueError('pdf_failed')
+    inv.file_blob = blob
+    inv.file_name = f'schet_{sale_public_number(inv)}.pdf'
+    return inv
+
+
+def create_custom_sale_invoice_from_order(
+    order: Order,
+    company_id: int,
+    user_id: int | None,
+    *,
+    lines: list[dict],
+    comment: str | None = None,
+    anonymous: bool = False,
+    pdf_overrides: dict | None = None,
+) -> SaleInvoice:
+    """Произвольный счёт по заказу → create_custom_sale_invoice."""
+    return create_custom_sale_invoice(
+        company_id,
+        user_id,
+        lines=lines,
+        comment=comment,
+        anonymous=anonymous,
+        order=order,
+        pdf_overrides=pdf_overrides,
+    )
+
+
+def create_advance_sale_invoice_from_order(
+    order: Order,
+    company_id: int,
+    user_id: int | None,
+    *,
+    amount,
+    title: str | None = None,
+    qty: int = 1,
+) -> SaleInvoice:
+    """Совместимость: однострочный аванс → create_custom_sale_invoice_from_order."""
+    try:
+        amt = _money(amount)
+    except Exception:
+        amt = Decimal('0')
+    if amt <= 0:
+        raise ValueError('bad_amount')
+    qty = max(1, int(qty or 1))
+    unit_price = (amt / Decimal(qty)).quantize(Decimal('0.01'))
+    line_name = (title or '').strip() or (
+        f'Предварительная оплата (аванс) за посадочный материал по заказу №{order.id}'
+    )
+    return create_custom_sale_invoice_from_order(
+        order,
+        company_id,
+        user_id,
+        lines=[{
+            'name': line_name,
+            'qty': qty,
+            'unit': 'усл. ед.',
+            'price': unit_price,
+        }],
+        comment=f'Аванс · заказ №{order.id}',
+    )
 
 
 def _sale_chat_ref(inv: SaleInvoice, order: Order | None = None) -> str:
@@ -505,25 +915,51 @@ def _discard_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
 
 
 def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
-    """Короткое уведомление в чат заказов — в стиле остальных TG-сообщений ERP."""
+    lines = list(inv.lines or [])
+    npos = len(lines)
+    pos_word = 'позиция' if npos == 1 else 'поз.'
     buyer = html_escape((inv.buyer_name or 'Без клиента').strip())
     if inv.anonymous:
         buyer = 'обезличенный (без плательщика)'
-    oid = order.id if order is not None else inv.order_id
-    num = sale_public_number(inv)
-    if oid:
-        head = f'✅ <b>Создан новый заказ №{oid} / счёт на оплату №{num}.</b>'
-    else:
-        head = f'✅ <b>Создан новый счёт на оплату №{num}.</b>'
-    return f'{head}\n👤 Клиент: {buyer}'
+    shown = lines[:25]
+    cards = _shop_cards(ln.plant_id for ln in shown)
+    items = []
+    for ln in shown:
+        plant = html_escape(ln.plant_name or 'Растение')
+        size = html_escape(ln.size_name or '')
+        attrs = html_escape(_shop_attrs(cards.get(ln.plant_id), ln.size_name or ''))
+        qty = int(ln.qty or 0)
+        price = _fmt_money_ru(ln.price)
+        total = _fmt_money_ru(Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0)))
+        head = f'{plant} · {size}' if size else plant
+        if attrs:
+            head = f'{head} {attrs}'
+        items.append(
+            f'• {head}\n'
+            f'<b>{qty} шт</b> по цене <b>{price}</b>\n'
+            f'{total}'
+        )
+    extra = npos - len(shown)
+    if extra > 0:
+        items.append(f'• … и ещё {extra} {pos_word}')
+    body = '\n'.join(items) if items else '• нет позиций'
+    text = '\n'.join([
+        f'✅ <b>Согласован на выкопку</b> {_sale_chat_ref(inv, order)}',
+        '',
+        f'👤 {buyer}',
+        f'💰 ИТОГО: {_fmt_money_ru(inv.amount)} · {npos} {pos_word}',
+        '',
+        f'📦 Позиции:',
+        body,
+    ])
+    return text[:3500]
 
 
 def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
     data = {
         'id': inv.id,
-        'doc_number': inv.doc_number,
-        'doc_year': inv.doc_year,
         'number': sale_public_number(inv),
+        'doc_year': inv.doc_year,
         'status': inv.status,
         'amount': float(inv.amount or 0),
         'created_at': inv.created_at.isoformat() if inv.created_at else None,
@@ -538,6 +974,7 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
         'author': inv.user.username if inv.user else '',
         'lines_count': len(inv.lines or []),
         'order_id': inv.order_id,
+        'origin': inv.origin or 'miniapp',
         'from_existing_order': bool(inv.from_existing_order),
         'anonymous': bool(inv.anonymous),
     }
@@ -599,11 +1036,40 @@ def _apply_buyer(inv: SaleInvoice, body: dict):
     inn = _inn_digits(inv.buyer_inn)
     if inn:
         inv.buyer_inn = inn
-        found = _find_client_by_inn(inn)
-        if found:
-            inv.client_id = found.id
-            if not (inv.buyer_name or '').strip():
-                inv.buyer_name = found.name
+
+    # Явный выбор клиента из подсказки Mini App — главный источник истины.
+    # Иначе при сохранении счёта, привязанного к заказу, клиент «откатывался»
+    # к старому order.client_id через _link_existing_order.
+    explicit_id = body.get('client_id')
+    if explicit_id not in (None, '', 0, '0'):
+        try:
+            cid = int(explicit_id)
+        except (TypeError, ValueError):
+            cid = None
+        if cid:
+            found = Client.query.get(cid)
+            if found:
+                inv.client_id = found.id
+                _fill_invoice_gaps_from_client(inv, found)
+                return
+
+    found = _resolve_client(inv.buyer_name, inn)
+    if found:
+        inv.client_id = found.id
+        _fill_invoice_gaps_from_client(inv, found)
+
+
+def sync_order_client_from_sale_invoice(inv: SaleInvoice | None) -> bool:
+    """Смена клиента в Mini App-счёте → тот же клиент у связанного заказа ERP."""
+    if not inv or not inv.order_id or not inv.client_id:
+        return False
+    order = inv.order or Order.query.get(inv.order_id)
+    if not order:
+        return False
+    if int(order.client_id or 0) == int(inv.client_id):
+        return False
+    order.client_id = inv.client_id
+    return True
 
 
 def _apply_anonymous(inv: SaleInvoice, body: dict):
@@ -612,39 +1078,20 @@ def _apply_anonymous(inv: SaleInvoice, body: dict):
 
 
 def _sync_client(inv: SaleInvoice):
-    """При согласовании: найти клиента по ИНН или создать карточку и заполнить реквизиты."""
+    """Привязать счёт к существующему клиенту ERP. Карточку не переименовываем."""
     name = (inv.buyer_name or '').strip()
     inn = _inn_digits(inv.buyer_inn)
     if inn:
         inv.buyer_inn = inn
     if not name and not inn:
         return
-    client = _find_client_by_inn(inn) if inn else None
+    client = _resolve_client(name, inn)
     if not client:
         client = Client(name=(name or inn)[:200])
         db.session.add(client)
         db.session.flush()
-    if name:
-        client.name = name[:200]
-    if inn:
-        client.inn = inn[:20]
-    if inv.buyer_kpp:
-        client.kpp = _digits(inv.buyer_kpp, 9)[:20]
-    if getattr(inv, 'buyer_ogrn', None):
-        client.ogrn = _digits(inv.buyer_ogrn, 15)[:20]
-    if inv.buyer_address:
-        client.address = inv.buyer_address[:500]
-    if getattr(inv, 'buyer_phone', None):
-        client.phone = str(inv.buyer_phone)[:40]
-    if inv.buyer_bank:
-        client.bank_name = inv.buyer_bank[:200]
-    if inv.buyer_rs:
-        client.rs = _digits(inv.buyer_rs, 20)[:40]
-    if inv.buyer_bik:
-        client.bik = _digits(inv.buyer_bik, 9)[:20]
-    if inv.buyer_ks:
-        client.ks = _digits(inv.buyer_ks, 20)[:40]
-    inv.client_id = client.id
+    _fill_empty_client_fields(client, inv)
+    apply_client_to_invoice(inv, client)
 
 
 def _buyer_from_client(client: Client | None) -> dict:
@@ -740,25 +1187,34 @@ def _link_existing_order(inv: SaleInvoice, order_id) -> tuple[Order | None, str 
         return None, 'order_missing'
     if (order.status or '') in ('canceled', 'ghost'):
         return None, 'order_closed'
+    prev_oid = inv.order_id
+    first_link = prev_oid != order.id
     inv.order_id = order.id
     inv.from_existing_order = True
-    inv.client_id = order.client_id
     if not (inv.comment or '').strip():
         inv.comment = f'Заказ №{order.id}'
-    buyer = _buyer_from_client(order.client)
-    if buyer.get('name'):
-        _apply_buyer(inv, {
-            'buyer_name': buyer.get('name'),
-            'buyer_inn': buyer.get('inn'),
-            'buyer_kpp': buyer.get('kpp'),
-            'buyer_ogrn': buyer.get('ogrn'),
-            'buyer_address': buyer.get('address'),
-            'buyer_phone': buyer.get('phone'),
-            'buyer_bank': buyer.get('bank'),
-            'buyer_rs': buyer.get('rs'),
-            'buyer_bik': buyer.get('bik'),
-            'buyer_ks': buyer.get('ks'),
-        })
+    # Реквизиты заказа подставляем только при первой привязке / смене заказа.
+    # При обычном «Сохранить» клиент, выбранный в Mini App, не должен
+    # затираться старым order.client_id.
+    if first_link:
+        inv.client_id = order.client_id
+        buyer = _buyer_from_client(order.client)
+        if buyer.get('name'):
+            _apply_buyer(inv, {
+                'client_id': order.client_id,
+                'buyer_name': buyer.get('name'),
+                'buyer_inn': buyer.get('inn'),
+                'buyer_kpp': buyer.get('kpp'),
+                'buyer_ogrn': buyer.get('ogrn'),
+                'buyer_address': buyer.get('address'),
+                'buyer_phone': buyer.get('phone'),
+                'buyer_bank': buyer.get('bank'),
+                'buyer_rs': buyer.get('rs'),
+                'buyer_bik': buyer.get('bik'),
+                'buyer_ks': buyer.get('ks'),
+            })
+    elif not inv.client_id and order.client_id:
+        inv.client_id = order.client_id
     return order, None
 
 
@@ -884,7 +1340,6 @@ def create_order_from_sale_invoice(
     return order
 
 
-
 def backfill_approved_sale_orders() -> int:
     rows = (
         SaleInvoice.query
@@ -906,41 +1361,6 @@ def backfill_approved_sale_orders() -> int:
             current_app.logger.exception('sale invoice %s -> order backfill failed', inv.id)
     return n
 
-
-def _replace_lines(inv: SaleInvoice, rows: list):
-    inv.lines.clear()
-    db.session.flush()
-    free_map = _free_pairs(exclude_invoice_id=inv.id)
-    clamp_free = not bool(inv.from_existing_order)
-    for row in rows or []:
-        try:
-            pid = int(row.get('plant_id')) if row.get('plant_id') else None
-            sid = int(row.get('size_id')) if row.get('size_id') else None
-            qty = int(row.get('qty') or 0)
-            price = _money(row.get('price'))
-        except (TypeError, ValueError, InvalidOperation):
-            continue
-        if qty <= 0:
-            continue
-        if pid and sid and clamp_free:
-            free = int(free_map.get((pid, sid), 0))
-            if qty > free:
-                qty = free
-            if qty <= 0:
-                continue
-        plant = Plant.query.get(pid) if pid else None
-        size = Size.query.get(sid) if sid else None
-        db.session.add(SaleInvoiceLine(
-            invoice=inv,
-            plant_id=pid,
-            size_id=sid,
-            plant_name=(row.get('plant_name') or (plant.name if plant else ''))[:200],
-            size_name=(row.get('size_name') or (size.name if size else ''))[:120],
-            qty=qty,
-            price=price,
-        ))
-    db.session.flush()
-    inv.amount = _line_sum(inv.lines)
 
 def _free_pairs(exclude_invoice_id: int | None = None) -> dict[tuple[int, int], int]:
     """Свободно по (plant, size): склад − резерв с полем − резерв без поля − чужие открытые счета."""
@@ -1006,14 +1426,16 @@ def _free_pairs(exclude_invoice_id: int | None = None) -> dict[tuple[int, int], 
 
 
 def stock_catalog_for_sale(q: str = '', *, exclude_invoice_id: int | None = None, limit: int = 40) -> list[dict]:
-    """Поиск позиций для UI ERP: название, размер, свободно, цена."""
+    """Поиск позиций для UI ERP: название, размер, свободно, опт/розница."""
     from app.shop_catalog import _price_history_map
     from app.seedlings import is_excluded_from_product_stock
+    from app.shop_prices import get_shop_price_map, resolve_shop_price
 
     free_map = _free_pairs(exclude_invoice_id=exclude_invoice_id)
     if not free_map:
         return []
     prices = _price_history_map()
+    overrides = get_shop_price_map()
     plant_ids = {pid for pid, _ in free_map}
     size_ids = {sid for _, sid in free_map}
     plants = {p.id: p for p in Plant.query.filter(Plant.id.in_(plant_ids)).all()}
@@ -1031,19 +1453,59 @@ def stock_catalog_for_sale(q: str = '', *, exclude_invoice_id: int | None = None
         sname = size.name or ''
         if needle and needle not in pname.lower() and needle not in sname.lower():
             continue
-        price = float(prices.get((pid, sid)) or 0)
+        wholesale = float(prices.get((pid, sid)) or 0)
+        retail = float(resolve_shop_price(pid, sid, wholesale, overrides))
         rows.append({
             'plant_id': pid,
             'size_id': sid,
             'plant_name': pname,
             'size_name': sname,
             'free': int(free),
-            'price': price,
+            'wholesale': wholesale,
+            'retail': retail,
+            'wholesale_price': wholesale,
+            'retail_price': retail,
+            'price': retail,
             'label': f'{pname} · {sname} · свободно {int(free)}',
         })
     rows.sort(key=lambda r: (r['plant_name'].lower(), size_natural_key(r['size_name'])))
     return rows[: max(1, int(limit or 40))]
 
+
+def _replace_lines(inv: SaleInvoice, rows: list):
+    inv.lines.clear()
+    db.session.flush()
+    free_map = _free_pairs(exclude_invoice_id=inv.id)
+    clamp_free = not bool(inv.from_existing_order)
+    for row in rows or []:
+        try:
+            pid = int(row.get('plant_id')) if row.get('plant_id') else None
+            sid = int(row.get('size_id')) if row.get('size_id') else None
+            qty = int(row.get('qty') or 0)
+            price = _money(row.get('price'))
+        except (TypeError, ValueError, InvalidOperation):
+            continue
+        if qty <= 0:
+            continue
+        if pid and sid and clamp_free:
+            free = int(free_map.get((pid, sid), 0))
+            if qty > free:
+                qty = free
+            if qty <= 0:
+                continue
+        plant = Plant.query.get(pid) if pid else None
+        size = Size.query.get(sid) if sid else None
+        db.session.add(SaleInvoiceLine(
+            invoice=inv,
+            plant_id=pid,
+            size_id=sid,
+            plant_name=(row.get('plant_name') or (plant.name if plant else ''))[:200],
+            size_name=(row.get('size_name') or (size.name if size else ''))[:120],
+            qty=qty,
+            price=price,
+        ))
+    db.session.flush()
+    inv.amount = _line_sum(inv.lines)
 
 
 def _logo_uri() -> str:
@@ -1466,7 +1928,7 @@ def index():
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'
     as_role = request.args.get('as')
-    if as_role in ('admin', 'shop_manager'):
+    if as_role in ('admin', 'shop_manager', 'accountant'):
         from app.tg_pay import _dev_mode
         if _dev_mode():
             resp.set_cookie(_DEV_COOKIE, as_role, samesite='Lax')
@@ -1482,89 +1944,210 @@ def api_auth():
                 'error': 'not_linked',
                 'telegram_id': pending.get('id'),
                 'username': (pending.get('username') or ''),
-                'hint': 'Этот Telegram не привязан к пользователю ERP. Войдите логином и паролем один раз.',
-                'need_login': True,
             }), 403
         log_mini_auth_fail()
-        return jsonify({
-            'error': 'unauthorized',
-            'hint': _auth_fail_hint(),
-            'need_login': True,
-        }), 401
-    if not _can_sale(user):
-        return jsonify({
-            'error': 'forbidden',
-            'hint': 'Только admin, руководитель или менеджер сайта',
-            'need_login': False,
-        }), 403
+        return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+    if not _can_sale(user) and not _is_accountant(user):
+        return jsonify({'error': 'forbidden', 'hint': 'Нет доступа к счетам'}), 403
     session_tg = current_telegram_id()
-    resp = jsonify({
-        'id': user.id,
-        'username': user.username,
-        'role': user.role,
-        'can_firms': _can_firms(user),
-        'can_edit_firms': _can_firms(user),
-        'can_delete_approved': (user.role or '') == 'admin',
-        'dev': is_dev,
-        'telegram_id': session_tg,
-        'has_telegram': bool(session_tg),
-        'apps': {'pay': (user.role or '') in ('admin', 'executive', 'user', 'user2'), 'sale': True},
-    })
-    return set_mini_cookie(resp, user, session_tg)
-
-
-@bp.route('/api/login', methods=['POST'])
-def api_login():
-    """Логин ERP в Mini App счетов: один раз → привязка Telegram навсегда."""
-    body = request.get_json(silent=True) if request.is_json else None
-    if not isinstance(body, dict):
-        body = {}
-    username = (body.get('username') or '').strip()
-    password = body.get('password') or ''
-    if not username or not password:
-        return jsonify({'error': 'need_credentials', 'hint': 'Введите логин и пароль ERP'}), 400
-    user = User.query.filter(db.func.lower(User.username) == username.lower()).first()
-    if not user or not user.check_password(password):
-        return jsonify({'error': 'bad_credentials', 'hint': 'Неверный логин или пароль'}), 401
-    if not _can_sale(user):
-        return jsonify({
-            'error': 'forbidden',
-            'hint': 'Счета клиентам — admin, руководитель или менеджер сайта',
-        }), 403
-    session_tg = _telegram_id_from_init_data() or _telegram_id_from_mini_cookie()
-    if session_tg:
-        _bind_telegram_id_force(user, session_tg)
-    resp = jsonify({
-        'id': user.id,
-        'username': user.username,
-        'role': user.role,
-        'can_firms': _can_firms(user),
-        'can_edit_firms': _can_firms(user),
-        'can_delete_approved': (user.role or '') == 'admin',
-        'dev': False,
-        'telegram_id': session_tg,
-        'has_telegram': bool(session_tg),
-        'bound': bool(session_tg),
-        'apps': {'pay': (user.role or '') in ('admin', 'executive', 'user', 'user2'), 'sale': True},
-    })
+    resp = jsonify(_sale_me_payload(user, is_dev=is_dev))
     return set_mini_cookie(resp, user, session_tg)
 
 
 @bp.route('/api/me')
-@require_sale
-def api_me(user: User):
-    session_tg = current_telegram_id()
-    return jsonify({
-        'id': user.id,
-        'username': user.username,
-        'role': user.role,
-        'can_firms': _can_firms(user),
-        'can_edit_firms': _can_firms(user),
-        'can_delete_approved': (user.role or '') == 'admin',
-        'telegram_id': session_tg,
-        'has_telegram': bool(session_tg),
-        'apps': {'pay': (user.role or '') in ('admin', 'executive', 'user', 'user2'), 'sale': True},
-    })
+def api_me():
+    user, is_dev, pending = resolve_user()
+    if not user:
+        if pending:
+            return jsonify({
+                'error': 'not_linked',
+                'telegram_id': pending.get('id'),
+                'username': (pending.get('username') or ''),
+            }), 403
+        return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+    if not _can_sale(user) and not _is_accountant(user):
+        return jsonify({'error': 'forbidden'}), 403
+    return jsonify(_sale_me_payload(user, is_dev=is_dev))
+
+
+def _buh_shipped_order_ids():
+    return (
+        db.session.query(Document.order_id)
+        .filter(Document.doc_type == 'shipment', Document.order_id.isnot(None))
+        .distinct()
+    )
+
+
+def _fmt_doc_date(value) -> str:
+    if not value:
+        return ''
+    try:
+        return value.strftime('%d.%m.%Y')
+    except Exception:
+        return str(value)[:10]
+
+
+def _shipment_map(order_id: int) -> dict[tuple, list[dict]]:
+    """(plant_id, size_id) → [{date, qty}] по документам отгрузки заказа."""
+    docs = (
+        Document.query.options(joinedload(Document.rows))
+        .filter(Document.doc_type == 'shipment', Document.order_id == order_id)
+        .order_by(Document.date, Document.id)
+        .all()
+    )
+    grouped: dict[tuple, list[dict]] = {}
+    for doc in docs:
+        label = _fmt_doc_date(doc.date)
+        for row in doc.rows or []:
+            key = (row.plant_id, row.size_id)
+            grouped.setdefault(key, []).append({
+                'date': label,
+                'qty': int(row.quantity or 0),
+            })
+    return grouped
+
+
+def _order_line_payload(it: OrderItem, ships: list[dict]) -> dict:
+    qty = int(it.quantity or 0)
+    price = float(it.price or 0)
+    return {
+        'plant_name': it.plant.name if it.plant else '',
+        'size_name': it.size.name if it.size else '',
+        'qty': qty,
+        'price': price,
+        'sum': round(price * qty, 2),
+        'shipped_qty': int(it.shipped_quantity or 0),
+        'shipments': ships,
+    }
+
+
+def _buh_invoice_card(inv: SaleInvoice, *, with_lines: bool = True) -> dict:
+    order = inv.order
+    items = list(order.items or []) if order else []
+    preview = []
+    if with_lines:
+        for it in items[:6]:
+            preview.append({
+                'plant_name': it.plant.name if it.plant else '',
+                'size_name': it.size.name if it.size else '',
+                'qty': int(it.quantity or 0),
+                'shipped_qty': int(it.shipped_quantity or 0),
+            })
+    return {
+        'id': inv.id,
+        'number': sale_public_number(inv),
+        'kind': inv.kind or 'goods',
+        'buyer_name': inv.buyer_name or (order.client.name if order and order.client else ''),
+        'company_name': inv.company.short_name if inv.company else '',
+        'amount': float(inv.amount or 0),
+        'created_at': inv.created_at.isoformat() if inv.created_at else None,
+        'order_id': order.id if order else None,
+        'order_sum': float(order.total_sum or 0) if order else 0,
+        'order_status': order.status if order else '',
+        'lines': preview,
+        'more_count': max(0, len(items) - len(preview)),
+    }
+
+
+@bp.route('/api/buh/invoices')
+@require_buh
+def api_buh_invoices(user: User):
+    """Счета, привязанные к заказам, по которым уже была отгрузка."""
+    rows = (
+        SaleInvoice.query
+        .options(
+            joinedload(SaleInvoice.company),
+            joinedload(SaleInvoice.order).joinedload(Order.client),
+            joinedload(SaleInvoice.order).selectinload(Order.items).joinedload(OrderItem.plant),
+            joinedload(SaleInvoice.order).selectinload(Order.items).joinedload(OrderItem.size),
+        )
+        .filter(
+            SaleInvoice.status != 'discarded',
+            SaleInvoice.order_id.isnot(None),
+            SaleInvoice.order_id.in_(_buh_shipped_order_ids()),
+        )
+        .order_by(SaleInvoice.id.desc())
+        .limit(300)
+        .all()
+    )
+    # joinedload + limit может дублировать строки
+    seen = set()
+    items = []
+    for inv in rows:
+        if inv.id in seen or not inv.order or inv.order.is_deleted:
+            continue
+        seen.add(inv.id)
+        items.append(_buh_invoice_card(inv))
+    return jsonify({'invoices': items})
+
+
+@bp.route('/api/buh/invoices/<int:inv_id>')
+@require_buh
+def api_buh_invoice(user: User, inv_id: int):
+    inv = (
+        SaleInvoice.query
+        .options(
+            joinedload(SaleInvoice.company),
+            joinedload(SaleInvoice.lines),
+            joinedload(SaleInvoice.order).joinedload(Order.client),
+            joinedload(SaleInvoice.order).selectinload(Order.items).joinedload(OrderItem.plant),
+            joinedload(SaleInvoice.order).selectinload(Order.items).joinedload(OrderItem.size),
+        )
+        .filter(SaleInvoice.id == inv_id, SaleInvoice.status != 'discarded')
+        .first_or_404()
+    )
+    order = inv.order
+    if not order or order.is_deleted:
+        return jsonify({'error': 'no_order'}), 404
+    shipped = (
+        Document.query.filter(Document.doc_type == 'shipment', Document.order_id == order.id).first()
+    )
+    if not shipped and not any(int(it.shipped_quantity or 0) > 0 for it in (order.items or [])):
+        return jsonify({'error': 'not_shipped'}), 404
+    ships = _shipment_map(order.id)
+    order_lines = []
+    for it in order.items or []:
+        order_lines.append(_order_line_payload(it, ships.get((it.plant_id, it.size_id), [])))
+    invoice_lines = []
+    for ln in inv.lines or []:
+        qty = float(ln.qty or 0)
+        price = float(ln.price or 0)
+        invoice_lines.append({
+            'name': ln.plant_name or '',
+            'unit': ln.size_name or 'шт',
+            'qty': qty,
+            'price': price,
+            'sum': round(qty * price, 2),
+        })
+    # Журнал отгрузок целиком — даты для УПД, даже если строка счёта без plant_id.
+    docs = (
+        Document.query.options(
+            joinedload(Document.rows).joinedload(DocumentRow.plant),
+            joinedload(Document.rows).joinedload(DocumentRow.size),
+        )
+        .filter(Document.doc_type == 'shipment', Document.order_id == order.id)
+        .order_by(Document.date, Document.id)
+        .all()
+    )
+    journal = []
+    for doc in docs:
+        rows = []
+        for row in doc.rows or []:
+            rows.append({
+                'plant_name': row.plant.name if row.plant else '',
+                'size_name': row.size.name if row.size else '',
+                'qty': int(row.quantity or 0),
+            })
+        journal.append({
+            'date': _fmt_doc_date(doc.date),
+            'qty': sum(r['qty'] for r in rows),
+            'rows': rows,
+        })
+    card = _buh_invoice_card(inv, with_lines=False)
+    card['invoice_lines'] = invoice_lines
+    card['order_lines'] = order_lines
+    card['shipments'] = journal
+    return jsonify(card)
 
 
 @bp.route('/api/companies')
@@ -1656,6 +2239,8 @@ def _plant_photo_url(plant_id: int, plant_name: str, *, prefer_container: bool =
 def api_stock(_user: User):
     q = (request.args.get('q') or '').strip().lower()
     prices = _price_history_map()
+    from app.shop_prices import get_shop_price_map, resolve_shop_price
+    overrides = get_shop_price_map()
     pairs = _free_pairs()
     cards = {c.plant_id: c for c in ShopPlantCard.query.all()}
     items = []
@@ -1671,6 +2256,8 @@ def api_stock(_user: User):
         if tokens and not all(t in hay for t in tokens):
             continue
         is_seedling = _is_container_size(sname)
+        wholesale = float(prices.get((pid, sid)) or 0)
+        retail = float(resolve_shop_price(pid, sid, wholesale, overrides))
         items.append({
             'plant_id': pid,
             'size_id': sid,
@@ -1679,7 +2266,11 @@ def api_stock(_user: User):
             'shop_attrs': _shop_attrs(cards.get(pid), sname),
             'free': free,
             'free_qty': free,
-            'price': float(prices.get((pid, sid)) or 0),
+            'wholesale': wholesale,
+            'retail': retail,
+            'wholesale_price': wholesale,
+            'retail_price': retail,
+            'price': retail,
             'is_seedling': is_seedling,
         })
     grouped: dict[int, list] = {}
@@ -1708,6 +2299,18 @@ def api_stock(_user: User):
 def api_lookup_inn(_user: User):
     data = lookup_requisites(request.args.get('inn') or '')
     return jsonify(data)
+
+
+@bp.route('/api/clients', methods=['GET', 'POST'])
+@require_sale
+def api_clients(_user: User):
+    if request.method == 'POST':
+        payload = request.get_json(silent=True) or {}
+        q = (payload.get('q') or request.form.get('q') or '').strip()
+    else:
+        q = (request.args.get('q') or '').strip()
+    rows = _search_clients(q)
+    return jsonify({'clients': [_client_buyer(c) for c in rows]})
 
 
 @bp.route('/api/parse-buyer', methods=['POST'])
@@ -1754,6 +2357,11 @@ def api_parse_buyer(_user: User):
 @bp.route('/api/invoices')
 @require_sale
 def api_invoices(_user: User):
+    try:
+        align_sale_invoices_with_orders(commit=True)
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('align sale invoices with orders')
     rows = (
         SaleInvoice.query
         .filter(SaleInvoice.status != 'discarded')
@@ -1777,6 +2385,7 @@ def api_create(user: User):
         user_id=user.id,
         status='draft',
         buyer_name='',
+        origin='miniapp',
     )
     _apply_buyer(inv, body)
     _apply_anonymous(inv, body)
@@ -1788,6 +2397,10 @@ def api_create(user: User):
         if err:
             db.session.rollback()
             return jsonify({'error': err, 'hint': _order_link_hint(err)}), 400
+        # После привязки заказа снова применяем buyer из запроса —
+        # иначе клиент из формы теряется при create+link в одном запросе.
+        if body.get('client_id') or body.get('buyer_name') or body.get('name'):
+            _apply_buyer(inv, body)
     else:
         order = None
     rows = body.get('lines')
@@ -1797,6 +2410,7 @@ def api_create(user: User):
         _replace_lines(inv, _order_composition(order))
     else:
         _replace_lines(inv, [])
+    sync_order_client_from_sale_invoice(inv)
     db.session.commit()
     return jsonify(_serialize_invoice(inv, detail=True))
 
@@ -1829,6 +2443,11 @@ def api_save(_user: User, inv_id: int):
         _order, err = _link_existing_order(inv, body.get('order_id'))
         if err:
             return jsonify({'error': err, 'hint': _order_link_hint(err)}), 400
+        # Повторно применяем клиента из формы: при уже привязанном заказе
+        # _link_existing_order больше не трогает buyer, но на смене order_id
+        # он мог подставить клиента заказа — явный выбор из формы важнее.
+        if body.get('client_id') or body.get('buyer_name') or body.get('name'):
+            _apply_buyer(inv, body)
     if 'lines' in body:
         _replace_lines(inv, body.get('lines') or [])
     elif inv.order_id and (inv.order or Order.query.get(inv.order_id)):
@@ -1836,21 +2455,17 @@ def api_save(_user: User, inv_id: int):
         _replace_lines(inv, _order_composition(order))
     else:
         inv.amount = _line_sum(inv.lines)
+    sync_order_client_from_sale_invoice(inv)
     db.session.commit()
     return jsonify(_serialize_invoice(inv, detail=True))
 
 
 def void_sale_invoice(inv: SaleInvoice) -> Order | None:
-    """Убирает счёт из Mini App. Заказ ERP снимается, только если его создал этот счёт."""
-    order = None
-    if inv.order_id:
-        order = Order.query.get(inv.order_id)
-    owns_order = bool(
-        order
-        and not inv.from_existing_order
-        and (order.invoice_number or '') == f'ТГ-{inv.id}'
-    )
-    if owns_order and order:
+    """Убирает счёт. Заказ ERP снимаем, только если этот счёт его создал в боте."""
+    order = Order.query.get(inv.order_id) if inv.order_id else None
+    from_erp = (inv.origin or '') == 'erp'
+    owns_order = bool(order and not from_erp and not inv.from_existing_order)
+    if owns_order:
         if (order.status or '') == 'shipped':
             raise ValueError('shipped')
         if (order.status or '') not in ('canceled', 'ghost'):
@@ -1936,7 +2551,7 @@ def api_pdf(_user: User, inv_id: int):
         return jsonify({'error': 'pdf_failed'}), 500
     resp = make_response(bytes(blob))
     resp.headers['Content-Type'] = 'application/pdf'
-    resp.headers['Content-Disposition'] = f'inline; filename=schet_{inv.id}.pdf'
+    resp.headers['Content-Disposition'] = f'inline; filename=schet_{sale_public_number(inv)}.pdf'
     return resp
 
 
@@ -1948,27 +2563,24 @@ def api_send_pdf(user: User, inv_id: int):
     db.session.commit()
     if not blob:
         return jsonify({'ok': False, 'error': 'pdf_failed'}), 500
-    chat_id, fail = require_session_telegram()
-    if fail is not None:
-        return fail
+    chat_id = current_telegram_id()
+    if not chat_id:
+        current_app.logger.warning('sale send-pdf no telegram_id inv=%s user=%s', inv.id, user.username)
+        return jsonify({'ok': False, 'error': 'no_telegram_id'})
     caption = (
-        f'Счёт №{inv.id} · без плательщика · {inv.amount} ₽'
+        f'Счёт №{sale_public_number(inv)} · без плательщика · {inv.amount} ₽'
         if inv.anonymous else
-        f'Счёт №{inv.id} · {inv.buyer_name or "клиент"} · {inv.amount} ₽'
+        f'Счёт №{sale_public_number(inv)} · {inv.buyer_name or "клиент"} · {inv.amount} ₽'
     )
     ok, err = send_chat_document(
         chat_id,
-        filename=inv.file_name or f'schet_{inv.id}.pdf',
+        filename=inv.file_name or f'schet_{sale_public_number(inv)}.pdf',
         caption=caption,
         file_bytes=bytes(blob),
     )
     if not ok:
-        current_app.logger.warning(
-            'tg_sale send-pdf fail inv=%s chat=%s err=%s',
-            inv_id, chat_id, err,
-        )
-        return jsonify({'ok': False, 'error': err or 'send_failed'}), 502
-    return jsonify({'ok': True})
+        current_app.logger.warning('sale send-pdf failed inv=%s chat=%s err=%s', inv.id, chat_id, err)
+    return jsonify({'ok': bool(ok), 'error': err if not ok else None})
 
 
 @bp.route('/api/invoices/<int:inv_id>/approve', methods=['POST'])
@@ -1983,17 +2595,39 @@ def api_approve(user: User, inv_id: int):
         return jsonify({'error': 'need_buyer'}), 400
     inv.amount = _line_sum(inv.lines)
     _sync_client(inv)
-    allocate_sale_doc_number(inv)
     blob = _store_pdf(inv)
     if not blob:
         return jsonify({'error': 'pdf_failed'}), 500
     inv.status = 'approved'
     inv.approved_at = msk_now()
     order = create_order_from_sale_invoice(inv, user.id)
+    sync_order_client_from_sale_invoice(inv)
     db.session.commit()
     text = _approved_orders_text(inv, order)
     try:
-        tg_send_message(text, chat_type='orders')
+        ok_msg, err_msg = tg_send_message(text, chat_type='orders')
+        if not ok_msg:
+            current_app.logger.warning('sale invoice orders chat inv=%s err=%s', inv.id, err_msg)
+        ok_doc, err_doc = send_document(
+            filename=inv.file_name or f'schet_{sale_public_number(inv)}.pdf',
+            caption=f'Счёт №{sale_public_number(inv)} · {inv.buyer_name or "клиент"} · {inv.amount} ₽',
+            file_bytes=bytes(blob),
+            chat_type='orders',
+        )
+        if not ok_doc:
+            current_app.logger.warning('sale invoice orders pdf inv=%s err=%s', inv.id, err_doc)
     except Exception:
         current_app.logger.exception('sale invoice orders chat')
     return jsonify(_serialize_invoice(inv, detail=True))
+
+
+@event.listens_for(Session, 'before_flush')
+def _sale_invoices_follow_order_client(session, flush_context, instances):
+    for obj in session.dirty:
+        if not isinstance(obj, Order):
+            continue
+        try:
+            if inspect(obj).attrs.client_id.history.has_changes():
+                sync_sale_invoices_from_order(obj)
+        except Exception:
+            current_app.logger.exception('sale invoice follow order client')

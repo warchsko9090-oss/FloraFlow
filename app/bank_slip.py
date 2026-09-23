@@ -454,8 +454,10 @@ def _chat_summary(result: dict) -> str:
 
 
 def ingest_expenses_chat_media(msg: dict, media: dict) -> dict:
-    """Обрабатывает фото/PDF из чата расходов. handled=True — не парсить как текст."""
-    from app.telegram import download_bot_file, send_chat_message
+    """Обрабатывает фото/PDF из чата расходов. handled=True — не парсить как текст.
+    В чат не пишет: неразобранный чек уходит задачей в дашборд с файлом.
+    """
+    from app.telegram import download_bot_file
 
     chat = msg.get('chat') or {}
     tg_chat_id = str(chat.get('id') or '')
@@ -485,6 +487,54 @@ def ingest_expenses_chat_media(msg: dict, media: dict) -> dict:
     if not found and caption and not looks_bank:
         return {'ok': True, 'handled': False, 'status': 'not_bank'}
 
+    slip_id = result.get('slip_id')
+
+    if not found:
+        from app.expense_chat import parse_expense_text, _create_task_for_chat_expense
+        parsed = parse_expense_text(caption) if caption else None
+        row = ChatExpenseMessage(
+            tg_chat_id=tg_chat_id,
+            tg_message_id=tg_message_id,
+            tg_date=msk_now(),
+            raw_text=(caption or '[фото чека]')[:4000],
+            sender_name=sender_name or None,
+            status='pending',
+            parsed_amount=parsed['amount'] if parsed else None,
+            parsed_description=(
+                parsed['description'] if parsed else (caption or 'Чек из ТГ, не разобран')
+            )[:500],
+            parsed_payment_type=(parsed['payment_type'] if parsed else None) or 'cash',
+        )
+        db.session.add(row)
+        db.session.flush()
+        task = _create_task_for_chat_expense(row, source='receipt')
+        if task is not None:
+            db.session.add(task)
+            db.session.flush()
+            task.action_payload = json.dumps({
+                'chat_expense_id': row.id,
+                'slip_id': slip_id,
+                'url': f'/expenses/chat/{row.id}',
+                'amount': str(row.parsed_amount) if row.parsed_amount is not None else '',
+                'description': row.parsed_description,
+                'payment_type': row.parsed_payment_type,
+                'suggested_budget_item_id': row.suggested_budget_item_id,
+                'classifier_source': 'receipt',
+                'tg_chat_id': tg_chat_id,
+                'tg_message_id': tg_message_id,
+                'sender': sender_name,
+                'file_url': f'/api/bank-slips/{slip_id}/file' if slip_id else '',
+            }, ensure_ascii=False)
+            row.task_id = task.id
+        db.session.commit()
+        return {
+            'ok': True,
+            'handled': True,
+            'status': 'pending',
+            'slip_id': slip_id,
+            'chat_expense_id': row.id,
+        }
+
     row = ChatExpenseMessage(
         tg_chat_id=tg_chat_id,
         tg_message_id=tg_message_id,
@@ -506,16 +556,11 @@ def ingest_expenses_chat_media(msg: dict, media: dict) -> dict:
             pass
     db.session.add(row)
     db.session.commit()
-
-    try:
-        send_chat_message(tg_chat_id, _chat_summary(result))
-    except Exception:
-        log.exception('bank slip chat reply failed')
     return {
         'ok': True,
         'handled': True,
         'status': 'imported',
-        'slip_id': result.get('slip_id'),
+        'slip_id': slip_id,
         'counts': result.get('counts'),
         'chat_expense_id': row.id,
     }

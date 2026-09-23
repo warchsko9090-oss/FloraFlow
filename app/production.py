@@ -29,7 +29,6 @@ bp = Blueprint('production', __name__, url_prefix='/production')
 
 PRODUCTION_ROLES = frozenset({'user', 'admin', 'executive', 'shop_manager'})
 PRODUCTION_EDIT_ROLES = frozenset({'user', 'admin', 'executive'})
-PRODUCTION_EDIT_ROLES = frozenset({'user', 'admin', 'executive'})
 
 
 def _check_production_access():

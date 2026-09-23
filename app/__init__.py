@@ -125,8 +125,6 @@ def create_app():
     app.register_blueprint(orders.bp)
     app.register_blueprint(stock.bp)
     app.register_blueprint(finance.bp)
-    from . import tg_hub
-    app.register_blueprint(tg_hub.bp)
     from . import tg_pay
     app.register_blueprint(tg_pay.bp)
     from . import tg_sale
@@ -186,6 +184,7 @@ def create_app():
             return None
         if (getattr(current_user, 'role', None) or '') != 'shop_manager':
             return None
+        # Просмотр всех страниц разрешён; режем только изменения.
         if request.method in ('GET', 'HEAD', 'OPTIONS'):
             return None
         if ep in SHOP_MANAGER_WRITE_EXACT:
@@ -206,14 +205,13 @@ def create_app():
         flash('Режим просмотра: на этой странице изменения недоступны.', 'warning')
         return redirect(request.referrer or url_for('orders.orders_list'))
 
-
     @app.after_request
     def _cache_miniapp_static(response):
         from flask import request
         path = request.path or ''
         if path.endswith('/telegram-web-app.js'):
             response.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
-        elif path.startswith('/static/tg_pay/') or path.startswith('/static/tg_sale/') or path.startswith('/static/tg_hub/'):
+        elif path.startswith('/static/tg_pay/') or path.startswith('/static/tg_sale/'):
             response.headers['Cache-Control'] = 'no-store, max-age=0'
         elif path.startswith('/static/tg_'):
             response.headers['Cache-Control'] = 'public, max-age=600'

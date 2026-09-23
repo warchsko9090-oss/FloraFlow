@@ -261,7 +261,19 @@ def pdf_resource_callback(uri, rel):
 
 
 def build_pdf_bytes(html_content, *, page_bg=None, page_margin='1cm'):
-    """Собирает PDF в bytes через xhtml2pdf."""
+    """Собирает PDF в bytes через xhtml2pdf.
+
+    На Windows без системного Cairo reportlab тянет rlPyCairo и падает.
+    Принудительно используем PIL-бэкенд `_renderPM` (пакет rl_renderPM).
+    """
+    try:
+        from reportlab import rl_config
+        # До импорта xhtml2pdf/renderPM — иначе подтянется cairocffi.
+        if getattr(rl_config, 'renderPMBackend', None) != '_renderPM':
+            rl_config.renderPMBackend = '_renderPM'
+    except Exception:
+        pass
+
     from reportlab.lib.colors import HexColor
     from reportlab.platypus.frames import Frame
     from xhtml2pdf.context import pisaContext
@@ -362,10 +374,12 @@ def merge_pdf_bytes(chunks):
 
 def stamp_pdf_page_numbers(data: bytes) -> bytes:
     """Накладывает «1 / N» внизу каждой страницы. Без кириллицы — шрифт Helvetica."""
-    from pypdf import PdfReader, PdfWriter
-    from reportlab.pdfgen import canvas as rl_canvas
-
     if not data:
+        return data
+    try:
+        from pypdf import PdfReader, PdfWriter
+        from reportlab.pdfgen import canvas as rl_canvas
+    except ImportError:
         return data
     reader = PdfReader(io.BytesIO(data))
     n = len(reader.pages)

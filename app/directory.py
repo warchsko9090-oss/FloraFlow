@@ -6,7 +6,7 @@ from werkzeug.utils import secure_filename
 from flask import Blueprint, render_template, request, redirect, url_for, flash, send_file, current_app, send_from_directory, jsonify
 from flask_login import login_required, current_user
 from openpyxl import Workbook, load_workbook
-from app.models import db, Plant, Size, Field, Client, Supplier, Document, DocumentRow, StockBalance, AppSetting, FileArchive
+from app.models import db, Plant, Size, Field, Client, Supplier, Document, DocumentRow, StockBalance, AppSetting, FileArchive, Order, SaleInvoice
 from app.utils import log_action, get_or_create_stock, msk_now, natural_key
 
 bp = Blueprint('directory', __name__)
@@ -57,6 +57,28 @@ def _apply_client_req(client: Client, data: dict, *, overwrite: bool = True):
             setattr(client, key, val)
         elif overwrite:
             setattr(client, key, None)
+
+
+def _client_blockers(client_id: int) -> list[str]:
+    """Почему карточку клиента нельзя удалить: любые FK, не только активные заказы."""
+    reasons = []
+    orders = Order.query.filter_by(client_id=client_id).order_by(Order.id.desc()).limit(20).all()
+    for o in orders:
+        bits = [f'заказ №{o.id}']
+        if o.is_deleted:
+            bits.append('скрытый')
+        if o.status == 'ghost':
+            bits.append('история склада')
+        elif o.status == 'canceled':
+            bits.append('отменён')
+        if o.invoice_number:
+            bits.append(f'счёт {o.invoice_number}')
+        reasons.append(' · '.join(bits))
+    for f in Field.query.filter_by(investor_id=client_id).order_by(Field.name).limit(10).all():
+        reasons.append(f'поле «{f.name}» (инвестор)')
+    for inv in SaleInvoice.query.filter_by(client_id=client_id).order_by(SaleInvoice.id.desc()).limit(10).all():
+        reasons.append(f'исходящий счёт Mini App №{inv.id} ({inv.status})')
+    return reasons
 
 
 @bp.route('/directory', methods=['GET', 'POST'])
@@ -129,22 +151,32 @@ def directory():
                 ids = request.form.getlist('ids[]')
                 success_count = 0
                 error_count = 0
+                blocked_notes = []
                 for item_id in ids:
                     obj = model.query.get(item_id)
-                    if obj:
-                        try:
-                            db.session.delete(obj)
-                            db.session.flush()
-                            success_count += 1
-                        except Exception:
-                            db.session.rollback()
+                    if not obj:
+                        continue
+                    if type_ == 'client':
+                        why = _client_blockers(obj.id)
+                        if why:
                             error_count += 1
+                            blocked_notes.append(f'«{obj.name}»: {"; ".join(why[:6])}')
+                            continue
+                    try:
+                        db.session.delete(obj)
+                        db.session.flush()
+                        success_count += 1
+                    except Exception:
+                        db.session.rollback()
+                        error_count += 1
                 if success_count:
                     db.session.commit()
                 
                 msg = f'Удалено: {success_count}.'
                 if error_count > 0:
                     msg += f' Не удалено (заняты): {error_count}.'
+                    if blocked_notes:
+                        msg += ' ' + ' | '.join(blocked_notes[:3])
                 flash(msg)
                 log_action(f"Массовое удаление из {type_}: {success_count} шт.")
         except Exception as e: 

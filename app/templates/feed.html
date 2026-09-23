@@ -294,6 +294,12 @@
                                             {% if ce.sender %}<small class="text-muted">{{ ce.sender }}</small>{% endif %}
                                         </div>
                                         <div class="text-dark mb-2">{{ ce.description or '—' }}</div>
+                                        {% if ce.file_url %}
+                                        <a href="{{ ce.file_url }}" target="_blank" rel="noopener" class="d-block mb-2">
+                                            <img src="{{ ce.file_url }}" alt="Чек" class="img-fluid rounded border" style="max-height:280px;object-fit:contain;">
+                                        </a>
+                                        {% endif %}
+                                        {% if ce.amount %}
                                         <form hx-post="/api/expenses/chat/{{ ce.id }}/import" hx-target="#card-{{ card.id }}" hx-swap="outerHTML swap:0.3s" class="m-0">
                                             <div class="d-flex gap-2 align-items-center mb-2">
                                                 <label class="small fw-bold text-muted mb-0" for="ce-item-{{ ce.id }}">Статья:</label>
@@ -317,6 +323,13 @@
                                                 <i class="fas fa-check me-1"></i> Подтвердить и провести
                                             </button>
                                         </form>
+                                        {% else %}
+                                        <div class="small text-muted mb-2">Сумму с фото не разобрали. Файл в базе — занесите расход вручную или закройте карточку.</div>
+                                        <form hx-post="{{ url_for('main.complete_tg_task') }}" hx-target="#card-{{ card.id }}" hx-swap="outerHTML swap:0.3s" class="m-0 mb-2">
+                                            <input type="hidden" name="task_id" value="{{ card.task_id }}">
+                                            <button type="submit" class="btn btn-sm btn-outline-success fw-bold w-100">Готово</button>
+                                        </form>
+                                        {% endif %}
                                         <form hx-post="/api/expenses/chat/{{ ce.id }}/reject" hx-target="#card-{{ card.id }}" hx-swap="outerHTML swap:0.3s" hx-confirm="Скрыть сообщение как не-расход?" class="m-0">
                                             <button type="submit" class="btn btn-sm btn-outline-secondary w-100" title="Это не расход или дубль — скрыть">
                                                 <i class="fas fa-eye-slash me-1"></i> Не расход / дубль

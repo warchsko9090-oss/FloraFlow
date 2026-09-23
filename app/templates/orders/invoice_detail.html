@@ -2,9 +2,13 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h4 class="mb-0 fw-bold text-dark"><i class="fas fa-file-invoice me-2 text-secondary"></i>Счет № {{ invoice_number }}</h4>
+        <h4 class="mb-0 fw-bold text-dark"><i class="fas fa-file-invoice me-2 text-secondary"></i>Общий счёт № {{ invoice_number }}</h4>
         <div class="text-muted small">
             от {{ invoice_date|dateru }} <span class="mx-2">|</span> Клиент: <b>{{ client.name }}</b>
+            <span class="mx-2">|</span> Группа заказов ERP
+            {% if sale_invoices|default([]) %}
+            <span class="mx-2">|</span> PDF-счетов: <b>{{ sale_invoices|length }}</b>
+            {% endif %}
         </div>
     </div>
     <a href="{{ return_to or url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm">Назад</a>
@@ -58,6 +62,13 @@
 <ul class="nav nav-tabs mb-3" id="invTabs" role="tablist">
     <li class="nav-item"><button class="nav-link active fw-bold" data-bs-toggle="tab" data-bs-target="#tab-orders">📦 Заказы (Состав)</button></li>
     <li class="nav-item"><button class="nav-link fw-bold text-dark" data-bs-toggle="tab" data-bs-target="#tab-matrix"><i class="fas fa-th me-1 text-warning"></i> Сводная матрица</button></li>
+    <li class="nav-item">
+        <button class="nav-link fw-bold text-dark" data-bs-toggle="tab" data-bs-target="#tab-sale-invoices">
+            <i class="fas fa-file-invoice-dollar me-1 text-secondary"></i> Реестр счетов
+            {% set _si = sale_invoices|default([]) %}
+            <span class="badge bg-secondary ms-1">{{ _si|length }}</span>
+        </button>
+    </li>
     <li class="nav-item"><button class="nav-link fw-bold text-dark" data-bs-toggle="tab" data-bs-target="#tab-docs"><i class="fas fa-history me-1 text-info"></i> История (Оплаты/Отгрузки)</button></li>
 </ul>
 
@@ -183,6 +194,83 @@
                 </table>
             </div>
         </div>
+    </div>
+
+    <!-- 2b. РЕЕСТР ИСХОДЯЩИХ СЧЕТОВ (PDF / БД) -->
+    <div class="tab-pane fade" id="tab-sale-invoices">
+        <div class="card shadow-sm border-0 mb-3">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <span class="fw-bold"><i class="fas fa-file-invoice-dollar me-1"></i> Исходящие счета клиенту</span>
+                    <span class="text-muted small ms-2">произвольный / позиции / остаток — отдельные документы с уникальным №</span>
+                </div>
+                <div class="small">
+                    Сумма по реестру:
+                    <b>{{ (sale_invoices_sum|default(0))|money }}</b>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-0" style="font-size: 13px;">
+                    <thead class="table-light">
+                        <tr>
+                            <th>№</th>
+                            <th>Дата</th>
+                            <th>Тип</th>
+                            <th>Фирма</th>
+                            <th>Заказ</th>
+                            <th class="text-end">Сумма</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for inv in sale_invoices|default([]) %}
+                        <tr>
+                            <td class="fw-bold">№{{ inv.number }}</td>
+                            <td class="text-muted">{% if inv.created_at %}{{ inv.created_at|dateru }}{% else %}—{% endif %}</td>
+                            <td>
+                                {% if inv.kind == 'advance' %}
+                                <span class="badge bg-warning text-dark">произвольный</span>
+                                {% elif inv.kind == 'balance' %}
+                                <span class="badge bg-info text-dark">остаток</span>
+                                {% else %}
+                                <span class="badge bg-secondary">позиции</span>
+                                {% endif %}
+                                {% if inv.origin %}<span class="text-muted small ms-1">{{ inv.origin }}</span>{% endif %}
+                            </td>
+                            <td>{{ inv.company or '—' }}</td>
+                            <td>
+                                {% if inv.order_id %}
+                                <a href="{{ url_for('orders.order_detail', order_id=inv.order_id) }}">#{{ inv.order_id }}</a>
+                                {% else %}
+                                <span class="text-muted">не привязан</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end fw-bold">{{ inv.amount|money }}</td>
+                            <td class="text-nowrap text-end">
+                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('orders.sale_invoice_pdf', inv_id=inv.id) }}" target="_blank" rel="noopener">PDF</a>
+                                {% if current_user.role == 'admin' %}
+                                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('orders.sale_invoice_edit', inv_id=inv.id) }}">Открыть</a>
+                                <a class="btn btn-sm btn-outline-dark" href="{{ url_for('orders.sale_invoice_print_edit', inv_id=inv.id) }}">Правка</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="7" class="text-center text-muted py-4">
+                                Пока нет исходящих счетов по заказам этой группы.<br>
+                                <span class="small">Создайте счёт из карточки заказа («+ Счёт по позициям» / «+ Произвольный счёт»).</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% if current_user.role == 'admin' %}
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('orders.sale_invoices_list') }}">
+            <i class="fas fa-list me-1"></i> Все счета клиентам
+        </a>
+        {% endif %}
     </div>
 
     <!-- 3. ДОКУМЕНТЫ (ИСТОРИЯ) -->

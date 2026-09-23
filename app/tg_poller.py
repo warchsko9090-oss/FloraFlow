@@ -1,8 +1,9 @@
 """Long-polling Telegram updates.
 
-Amvera's inbound webhook from Telegram times out (Connection timed out),
-while outbound api.telegram.org works. So on Amvera we deleteWebhook and
-pull getUpdates from one worker.
+Amvera: входящий webhook от Telegram часто не доходит, поэтому один
+worker снимает getUpdates. Исходящий api.telegram.org с датацентра
+тоже может быть недоступен — тогда нужен SOCKS/HTTP-прокси
+(переменные TG_PROXY / HTTPS_PROXY или AppSetting tg_proxy).
 """
 from __future__ import annotations
 
@@ -66,17 +67,21 @@ def start_telegram_poller(app):
                     pass
             return
 
-        from app.telegram import delete_webhook, get_updates
+        from app.telegram import delete_webhook, describe_proxy, get_updates, redact_secrets
 
         with app.app_context():
             ok, msg = delete_webhook(drop_pending=False)
-            app.logger.info('Telegram polling: deleteWebhook %s %s', ok, msg)
+            app.logger.info(
+                'Telegram polling: deleteWebhook %s %s proxy=%s',
+                ok, redact_secrets(msg), describe_proxy(),
+            )
 
-        app.logger.info('Telegram polling started (getUpdates)')
+        app.logger.info('Telegram polling started (getUpdates) proxy=%s', describe_proxy())
         offset = _read_offset(offset_path)
         while True:
             try:
-                updates = get_updates(offset or None, timeout=25)
+                with app.app_context():
+                    updates = get_updates(offset or None, timeout=25)
                 if not updates:
                     continue
                 from app.main import process_telegram_update
@@ -86,7 +91,7 @@ def start_telegram_poller(app):
                         _write_offset(offset_path, offset)
                         process_telegram_update(upd)
             except Exception as exc:
-                app.logger.warning('Telegram poller: %s', exc)
+                app.logger.warning('Telegram poller: %s', redact_secrets(exc))
                 time.sleep(3)
 
     threading.Thread(target=run, daemon=True, name='tg-poller').start()

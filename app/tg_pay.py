@@ -15,7 +15,6 @@ import hmac
 import json
 import os
 import re
-import time
 from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -98,6 +97,10 @@ def _can_sale_role(user: User | None) -> bool:
     return _role(user) in ('admin', 'executive', 'shop_manager')
 
 
+def _is_accountant(user: User | None) -> bool:
+    return _role(user) == 'accountant'
+
+
 def _is_admin(user: User | None) -> bool:
     return _role(user) == 'admin'
 
@@ -118,6 +121,8 @@ def _start_greeting(sender, tg_id) -> str:
             lines.append('Оплата — счета поставщикам. Выставить счёт — клиенту.')
         elif _can_sale_role(user):
             lines.append('Выставить счёт клиенту.')
+        elif _is_accountant(user):
+            lines.append('Отгрузки: счета и состав для УПД.')
         elif _can_edit(user):
             lines.append('Черновики и планы по счетам поставщиков.')
         elif _can_pay_app(user):
@@ -130,22 +135,38 @@ def _start_greeting(sender, tg_id) -> str:
         lines.append(f'TG_USER_ID_MAP={tg_id}:admin')
         lines.append('Примеры: 111:admin,222:executive,333:shop_manager')
     lines.append('')
-    if _can_pay_app(user) or _can_sale_role(user):
-        lines.append('Откройте FloraFlow синей кнопкой меню бота (внизу справа).')
-        if _can_pay_app(user) and _can_sale_role(user):
-            lines.append('Внутри: вкладки «Оплата» и «Клиентам».')
+    if _can_pay_app(user) and _can_sale_role(user):
+        lines.append('Кнопки внизу чата: Оплата и Выставить счёт.')
+    elif _can_sale_role(user):
+        lines.append('Кнопка внизу чата: Выставить счёт.')
+    elif _can_pay_app(user):
+        lines.append('Кнопка внизу чата: Счета на оплату.')
     else:
         lines.append('Пришлите PDF — попадёт в черновики администратора.')
     return '\n'.join(lines)
 
 
 def _apps_reply_keyboard(user: User | None) -> dict | None:
-    """Серые reply web_app-кнопки убраны: на iOS часто без initData.
-
-    Вход — только синяя menu button → /tg (вкладки по ролям).
-    Снимаем старую постоянную клавиатуру, если она ещё висит у пользователя.
-    """
-    return {'remove_keyboard': True}
+    """Постоянные кнопки Mini App внизу чата — чтобы переключаться без /start."""
+    row = []
+    from app.telegram import miniapp_web_url
+    pay_url = miniapp_web_url(_public_miniapp_url())
+    if _can_pay_app(user) and pay_url.startswith('https://'):
+        pay_label = 'Оплата' if _role(user) in ('admin', 'executive') else 'Счета на оплату'
+        row.append({'text': pay_label, 'web_app': {'url': pay_url}})
+    if _can_sale_role(user) or _is_accountant(user):
+        from app.tg_sale import public_sale_url
+        sale_url = miniapp_web_url(public_sale_url())
+        if sale_url.startswith('https://'):
+            label = 'Отгрузки' if _is_accountant(user) else 'Выставить счёт'
+            row.append({'text': label, 'web_app': {'url': sale_url}})
+    if not row:
+        return None
+    return {
+        'keyboard': [row],
+        'resize_keyboard': True,
+        'is_persistent': True,
+    }
 
 
 def _dev_mode() -> bool:
@@ -211,53 +232,19 @@ def _user_dict_from_fields(fields: dict[str, str]) -> dict | None:
     return user if user.get('id') else None
 
 
-# initData старше суток считаем протухшим (sessionStorage / долгий WebView).
-_INIT_DATA_MAX_AGE_SEC = 24 * 3600
-
-
-def _auth_date_ok(fields: dict[str, str]) -> bool:
-    try:
-        auth_date = int(fields.get('auth_date') or 0)
-    except (TypeError, ValueError):
-        return False
-    if auth_date <= 0:
-        return False
-    now = int(time.time())
-    if auth_date > now + 300:
-        return False
-    return (now - auth_date) <= _INIT_DATA_MAX_AGE_SEC
-
-
-def _init_field_variants(init_data: str) -> tuple[dict[str, str], ...]:
-    return (
-        _parse_init_fields(init_data),
-        dict(parse_qsl(init_data, keep_blank_values=True)),
-    )
-
-
 def _validate_init_data(init_data: str, bot_token: str) -> dict | None:
     if not init_data or not bot_token:
         return None
+    variants = (
+        _parse_init_fields(init_data),
+        dict(parse_qsl(init_data, keep_blank_values=True)),
+    )
     skip_sets = (('hash',), ('hash', 'signature'))
-    for fields in _init_field_variants(init_data):
-        if not _auth_date_ok(fields):
-            continue
+    for fields in variants:
         for skip in skip_sets:
             if _init_hmac_ok(fields, bot_token, skip):
                 return _user_dict_from_fields(fields)
     return None
-
-
-def _init_data_stale(init_data: str, bot_token: str) -> bool:
-    """HMAC ок, но auth_date слишком старый."""
-    if not init_data or not bot_token:
-        return False
-    skip_sets = (('hash',), ('hash', 'signature'))
-    for fields in _init_field_variants(init_data):
-        for skip in skip_sets:
-            if _init_hmac_ok(fields, bot_token, skip) and not _auth_date_ok(fields):
-                return True
-    return False
 
 
 def _tg_user_id_map() -> dict[str, str]:
@@ -285,7 +272,54 @@ _ROLE_ALIASES = {
     'sales': 'shop_manager',
     'sales_manager': 'shop_manager',
     'менеджер': 'shop_manager',
+    'accountant': 'accountant',
+    'buh': 'accountant',
+    'бух': 'accountant',
+    'бухгалтер': 'accountant',
 }
+
+
+def accountant_telegram_ids() -> set[int]:
+    """Личные chat id бухгалтера. Env: TG_ACCOUNTANT_IDS=123,456."""
+    raw = os.environ.get('TG_ACCOUNTANT_IDS', '') or ''
+    out: set[int] = set()
+    for part in re.split(r'[,;\s]+', raw):
+        part = (part or '').strip()
+        if part.lstrip('-').isdigit():
+            try:
+                out.add(int(part))
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def ensure_accountant_user(tg_id: int) -> User | None:
+    """Пользователь ERP с ролью accountant для входа в мини-приложение."""
+    try:
+        tg_id = int(tg_id)
+    except (TypeError, ValueError):
+        return None
+    found = User.query.filter_by(telegram_id=tg_id).first()
+    if found:
+        return found
+    user = User.query.filter_by(role='accountant').order_by(User.id).first()
+    if user and _login_free_for_tg(user, tg_id):
+        _bind_telegram_id(user, tg_id)
+        return user
+    import secrets
+    username = f'buh{tg_id}'
+    taken_name = User.query.filter(db.func.lower(User.username) == username.lower()).first()
+    if taken_name:
+        username = f'buh{tg_id}_{taken_name.id}'
+    user = User(username=username[:100], role='accountant', telegram_id=tg_id)
+    user.set_password(secrets.token_hex(16))
+    db.session.add(user)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return User.query.filter_by(telegram_id=tg_id).first()
+    return user
 
 
 def _login_free_for_tg(user: User, tg_id: int) -> bool:
@@ -309,6 +343,8 @@ def _user_by_role_alias(canonical: str, tg_id: int) -> User | None:
         if _login_free_for_tg(found, tg_id):
             _bind_telegram_id(found, tg_id)
             return found
+    if role == 'accountant':
+        return ensure_accountant_user(tg_id)
     return None
 
 
@@ -327,25 +363,6 @@ def _bind_telegram_id(user: User, tg_id: int) -> None:
         db.session.commit()
     except Exception:
         db.session.rollback()
-
-
-def _bind_telegram_id_force(user: User, tg_id: int) -> None:
-    """После проверки пароля: привязать этот Telegram к логину навсегда.
-
-    Снимаем id с другого пользователя, если он был занят — вход по паролю
-    важнее старой привязки.
-    """
-    if not tg_id:
-        return
-    taken = User.query.filter_by(telegram_id=tg_id).first()
-    if taken and taken.id != user.id:
-        taken.telegram_id = None
-    user.telegram_id = int(tg_id)
-    try:
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        current_app.logger.exception('bind telegram force failed user=%s tg=%s', user.id, tg_id)
 
 
 def _user_from_telegram(tg_user: dict) -> User | None:
@@ -377,6 +394,8 @@ def _user_from_telegram(tg_user: dict) -> User | None:
     found = User.query.filter_by(telegram_id=tg_id).first()
     if found:
         return found
+    if tg_id in accountant_telegram_ids():
+        return ensure_accountant_user(tg_id)
     username = (tg_user.get('username') or '').lstrip('@').lower()
     if username:
         found = User.query.filter(db.func.lower(User.username) == username).first()
@@ -399,6 +418,20 @@ def _dev_user(as_role: str) -> User | None:
             or User.query.filter_by(role='admin').first()
             or User.query.first()
         )
+    if as_role == 'accountant':
+        found = User.query.filter_by(role='accountant').first()
+        if found:
+            return found
+        import secrets
+        user = User(username='buh', role='accountant')
+        user.set_password(secrets.token_hex(16))
+        db.session.add(user)
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return User.query.filter_by(role='accountant').first()
+        return user
     return User.query.filter_by(role='admin').first() or User.query.first()
 
 
@@ -411,19 +444,11 @@ def _mini_cookie_secure() -> bool:
 
 
 def set_mini_cookie(resp, user: User, tg_id: int | None = None):
-    """Всегда стараемся сохранить Telegram id сеанса вместе с uid.
-
-    Без `tg` PDF в чат отправить нельзя — клиент должен переоткрыть Mini App
-    из кнопки бота и пройти handshake заново.
-    """
     if tg_id is None:
-        tg_id = _telegram_id_from_init_data() or _telegram_id_from_mini_cookie()
+        tg_id = _telegram_id_from_init_data()
     payload = {'uid': int(user.id)}
     if tg_id:
-        try:
-            payload['tg'] = int(tg_id)
-        except (TypeError, ValueError):
-            pass
+        payload['tg'] = int(tg_id)
     token = _mini_signer().dumps(payload)
     resp.set_cookie(
         _MINI_COOKIE,
@@ -495,34 +520,11 @@ def _init_data_candidates() -> list[str]:
 
 
 def _auth_fail_hint() -> str:
-    token = _get_bot_token()
-    if not token:
+    if not _get_bot_token():
         return 'no_bot_token'
-    candidates = _init_data_candidates()
-    if not candidates:
-        return 'no_init_data'
-    if any(_init_data_stale(c, token) for c in candidates):
-        return 'stale_init_data'
-    return 'bad_signature'
-
-
-def session_has_telegram() -> bool:
-    return current_telegram_id() is not None
-
-
-def require_session_telegram():
-    """Для send-pdf: нужен Telegram id текущего сеанса (initData или cookie.tg)."""
-    chat_id = current_telegram_id()
-    if chat_id:
-        return chat_id, None
-    return None, (
-        jsonify({
-            'ok': False,
-            'error': 'no_telegram_id',
-            'hint': 'reopen_from_bot',
-        }),
-        401,
-    )
+    if _init_data_candidates():
+        return 'bad_signature'
+    return 'no_init_data'
 
 
 def log_mini_auth_fail():
@@ -556,7 +558,7 @@ def _telegram_id_from_init_data() -> int | None:
     return None
 
 
-def current_telegram_id() -> int | None:
+def current_telegram_id(user: User | None = None) -> int | None:
     """Telegram id текущего Mini App-сеанса. Не колонка user.telegram_id чужого логина."""
     return _telegram_id_from_init_data() or _telegram_id_from_mini_cookie()
 
@@ -595,7 +597,7 @@ def resolve_user() -> tuple[User | None, bool, dict | None]:
         or request.args.get('as')
         or 'admin'
     )
-    if as_role not in ('admin', 'payer', 'shop_manager'):
+    if as_role not in ('admin', 'payer', 'shop_manager', 'accountant'):
         as_role = 'admin'
     return _dev_user(as_role), True, None
 
@@ -864,21 +866,12 @@ def api_auth():
                 'error': 'not_linked',
                 'telegram_id': pending.get('id'),
                 'username': (pending.get('username') or ''),
-                'hint': 'Этот Telegram не привязан к пользователю ERP. Войдите логином и паролем один раз.',
-                'need_login': True,
+                'hint': 'Этот Telegram не привязан к пользователю ERP. Добавьте id в TG_USER_ID_MAP.',
             }), 403
         log_mini_auth_fail()
-        return jsonify({
-            'error': 'unauthorized',
-            'hint': _auth_fail_hint(),
-            'need_login': True,
-        }), 401
+        return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
     if not _can_pay_app(user):
-        return jsonify({
-            'error': 'forbidden',
-            'hint': 'Оплата — только админ и руководитель',
-            'need_login': False,
-        }), 403
+        return jsonify({'error': 'forbidden', 'hint': 'Оплата — только админ и руководитель'}), 403
     session_tg = current_telegram_id()
     resp = jsonify({
         'id': user.id,
@@ -887,45 +880,7 @@ def api_auth():
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
         'dev': is_dev,
-        'telegram_id': session_tg,
-        'has_telegram': bool(session_tg),
-        'apps': {'pay': True, 'sale': _can_sale_role(user)},
-    })
-    return set_mini_cookie(resp, user, session_tg)
-
-
-@bp.route('/api/login', methods=['POST'])
-def api_login():
-    """Логин ERP в Mini App: один раз → привязка Telegram навсегда."""
-    body = request.get_json(silent=True) if request.is_json else None
-    if not isinstance(body, dict):
-        body = {}
-    username = (body.get('username') or request.form.get('username') or '').strip()
-    password = body.get('password') or request.form.get('password') or ''
-    if not username or not password:
-        return jsonify({'error': 'need_credentials', 'hint': 'Введите логин и пароль ERP'}), 400
-    user = User.query.filter(db.func.lower(User.username) == username.lower()).first()
-    if not user or not user.check_password(password):
-        return jsonify({'error': 'bad_credentials', 'hint': 'Неверный логин или пароль'}), 401
-    if not _can_pay_app(user):
-        return jsonify({
-            'error': 'forbidden',
-            'hint': 'Оплата — только админ и руководитель (роль «' + (user.role or '') + '»)',
-        }), 403
-    session_tg = _telegram_id_from_init_data() or _telegram_id_from_mini_cookie()
-    if session_tg:
-        _bind_telegram_id_force(user, session_tg)
-    resp = jsonify({
-        'id': user.id,
-        'username': user.username,
-        'role': user.role,
-        'can_edit': _can_edit(user),
-        'can_inbox': _can_inbox(user),
-        'dev': False,
-        'telegram_id': session_tg,
-        'has_telegram': bool(session_tg),
-        'bound': bool(session_tg),
-        'apps': {'pay': True, 'sale': _can_sale_role(user)},
+        'telegram_id': session_tg or user.telegram_id,
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -933,7 +888,6 @@ def api_login():
 @bp.route('/api/me')
 @require_user
 def api_me(user: User):
-    session_tg = current_telegram_id()
     return jsonify({
         'id': user.id,
         'username': user.username,
@@ -941,9 +895,7 @@ def api_me(user: User):
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
         'dev': _dev_mode() and not _init_data_candidates(),
-        'telegram_id': session_tg,
-        'has_telegram': bool(session_tg),
-        'apps': {'pay': True, 'sale': _can_sale_role(user)},
+        'telegram_id': user.telegram_id,
     })
 
 
@@ -1057,10 +1009,10 @@ def api_send_pdf(user: User, inv_id: int):
         filename = src.original_name or src.filename or 'invoice.pdf'
         caption = f"{_purpose(inv)} · {inv.amount} ₽"
     if not data:
-        return jsonify({'ok': False, 'error': 'file_missing'}), 404
-    chat_id, fail = require_session_telegram()
-    if fail is not None:
-        return fail
+        return jsonify({'ok': False, 'error': 'file_missing'})
+    chat_id = current_telegram_id()
+    if not chat_id:
+        return jsonify({'ok': False, 'error': 'no_telegram_id'})
     ok, err = send_chat_document(
         chat_id,
         filename=filename,
@@ -1068,11 +1020,7 @@ def api_send_pdf(user: User, inv_id: int):
         file_bytes=data,
     )
     if not ok:
-        current_app.logger.warning(
-            'tg_pay send-pdf fail inv=%s chat=%s err=%s',
-            inv_id, chat_id, err,
-        )
-        return jsonify({'ok': False, 'error': err or 'send_failed'}), 502
+        return jsonify({'ok': False, 'error': err or 'send_failed'})
     return jsonify({'ok': True})
 
 
@@ -1478,16 +1426,42 @@ def handle_private_update(msg: dict) -> bool:
     if text.startswith('/start') or text in ('счета', 'Счета', '/pay'):
         note_telegram_update('start', tg_id)
         user = _user_from_telegram(sender) if sender else None
-        try:
-            from app.telegram import set_pay_menu_button
-            from app.tg_hub import public_hub_url
-            hub = public_hub_url()
-            if hub.startswith('https://'):
-                set_pay_menu_button(url=hub, chat_id=chat_id, text='FloraFlow')
-        except Exception:
-            current_app.logger.exception('hub menu button')
+        if _can_sale_role(user) or _is_accountant(user):
+            from app.tg_sale import public_sale_url
+            sale_url = public_sale_url()
+            if sale_url.startswith('https://'):
+                try:
+                    from app.telegram import set_pay_menu_button
+                    label = 'Отгрузки' if _is_accountant(user) else 'Счёт'
+                    set_pay_menu_button(url=sale_url, chat_id=chat_id, text=label)
+                except Exception:
+                    current_app.logger.exception('sale menu button')
         markup = _apps_reply_keyboard(user)
         _tg_reply(chat_id, _start_greeting(sender, tg_id), reply_markup=markup)
+        return True
+
+    from app.bank_slip import extract_telegram_media, ingest_bytes, _chat_summary
+
+    media = extract_telegram_media(msg)
+    if media and (msg.get('photo') or not _is_invoice_document(msg.get('document') or {})):
+        note_telegram_update('media', tg_id)
+        blob, err = download_bot_file(media.get('file_id'))
+        if not blob:
+            _tg_reply(chat_id, f'Не смог скачать файл: {err}')
+            return True
+        user = _user_from_telegram(sender)
+        result = ingest_bytes(
+            blob,
+            media.get('filename') or 'photo.jpg',
+            source='tg',
+            user=user,
+            tg_chat_id=str(chat_id),
+            tg_message_id=int(msg.get('message_id') or 0),
+        )
+        if not result.get('ok'):
+            _tg_reply(chat_id, 'Не разобрал чек. Пришлите фото ещё раз или PDF.')
+            return True
+        _tg_reply(chat_id, _chat_summary(result))
         return True
 
     doc = msg.get('document')
@@ -1495,7 +1469,7 @@ def handle_private_update(msg: dict) -> bool:
         return False
     note_telegram_update('document', tg_id)
     if not _is_invoice_document(doc):
-        _tg_reply(chat_id, 'Нужен файл PDF (счёт на оплату).')
+        _tg_reply(chat_id, 'Нужен файл PDF (счёт на оплату) или фото чека.')
         return True
 
     try:

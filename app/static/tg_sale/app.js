@@ -10,14 +10,18 @@
     }
     const view = document.getElementById("view");
     const titleEl = document.getElementById("screenTitle");
-    const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "", orderHits: [], orderQ: "" };
+    const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "", orderHits: [], orderQ: "", priceMode: "retail", discountPct: 0 };
 
     function haptic(kind) {
         try { const tg = tgApp(); tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (_) {}
     }
 
+    function invNo(inv) {
+        return (inv && (inv.number || inv.id)) || "";
+    }
+
     function notifySaved(inv) {
-        const msg = inv && inv.id ? `Счёт №${inv.id} сохранён` : "Счёт сохранён";
+        const msg = invNo(inv) ? `Счёт №${invNo(inv)} сохранён` : "Счёт сохранён";
         const tg = tgApp();
         try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success"); } catch (_) {}
         const toast = document.getElementById("toast");
@@ -33,7 +37,7 @@
     }
 
     (function bindPress() {
-        const sel = "button, .btn, .list-item[data-open], .firm, .size-row, .order-hit";
+        const sel = "button, .btn, .list-item[data-open], .list-item[data-buh], .firm, .size-row, .order-hit";
         let cur = null;
         let downAt = 0;
         function clear() {
@@ -68,6 +72,7 @@
     function emptyDraft() {
         return {
             company_id: null,
+            client_id: null,
             buyer: { name: "", inn: "", kpp: "", ogrn: "", address: "", phone: "", bank: "", rs: "", bik: "", ks: "" },
             lines: [],
             order_id: null,
@@ -104,6 +109,11 @@
     function setTitle(t) { titleEl.textContent = t; }
 
     function render() {
+        if (state.me && state.me.accountant_only) {
+            if (state.screen === "buh-view") renderBuhView();
+            else renderBuhList();
+            return;
+        }
         if (state.screen === "list") renderList();
         else if (state.screen === "edit") renderEdit();
         else if (state.screen === "firms") renderFirms();
@@ -121,7 +131,7 @@
             <div class="list-item" data-open="${inv.id}">
                 <div class="row">
                     <div>
-                        <div><b>№${inv.id}</b> · ${esc(inv.anonymous ? "Без плательщика" : (inv.buyer_name || "Без клиента"))}</div>
+                        <div><b>№${invNo(inv)}</b> · ${esc(inv.anonymous ? "Без плательщика" : (inv.buyer_name || "Без клиента"))}</div>
                         <div class="muted">${esc(companyName(inv))} · ${fmtDate(inv.created_at)}${inv.order_id ? ` · заказ №${inv.order_id}` : ""}</div>
                     </div>
                     <div>
@@ -215,6 +225,7 @@
         const d = state.draft;
         d.order_id = ord.id;
         d.order = ord;
+        d.client_id = ord.client_id || null;
         const src = ord.buyer || {};
         d.buyer = {
             name: src.name || ord.client_name || "",
@@ -317,8 +328,13 @@
 
     function buyerFields(b) {
         const f = (k, l) => `<div class="label">${l}</div><input class="input" data-b="${k}" value="${esc(b[k] || "")}">`;
-        return f("name", "Название")
-            + `<div class="label">ИНН</div>
+        return `<div class="label">Название</div>
+               <div class="buyer-wrap">
+                 <input class="input" id="buyerName" data-b="name" value="${esc(b.name || "")}" placeholder="Начните вводить — найдём в базе" autocomplete="off">
+                 <div id="buyerSuggest" class="buyer-suggest hide"></div>
+               </div>
+               <div class="muted">Если компания уже есть в ERP, выберите её из списка — подставим реквизиты</div>
+               <div class="label">ИНН</div>
                <div class="inn-row">
                  <input class="input" data-b="inn" inputmode="numeric" value="${esc(b.inn || "")}" placeholder="10 или 12 цифр">
                  <button type="button" class="btn sm ghost" id="innLookup">По ИНН</button>
@@ -329,7 +345,7 @@
     }
 
     function renderEdit() {
-        setTitle(state.current ? `Счёт №${state.current.id}` : "Новый счёт");
+        setTitle(state.current ? `Счёт №${invNo(state.current)}` : "Новый счёт");
         const d = state.draft;
         const firms = state.companies.map((c) => `
             <button type="button" class="card firm ${Number(d.company_id) === Number(c.id) ? "on" : ""}" data-co="${c.id}">
@@ -354,6 +370,21 @@
             ${firms}
             <div class="label">Позиции</div>
             <div class="card">
+                <div class="price-bar">
+                    <div class="grid2">
+                        <button type="button" class="btn sm ${state.priceMode === "wholesale" ? "" : "ghost"}" id="modeWholesale">Опт</button>
+                        <button type="button" class="btn sm ${state.priceMode === "retail" ? "" : "ghost"}" id="modeRetail">Розница</button>
+                    </div>
+                    <div class="label" style="margin-top:10px">Скидка</div>
+                    <div class="disc-chips" id="discChips">
+                        ${[0,5,10,15,20,25].map((d) => `<button type="button" class="btn sm ghost disc-chip${Number(state.discountPct)===d?" on":""}" data-pct="${d}">${d}%</button>`).join("")}
+                    </div>
+                    <div class="inn-row" style="margin-top:8px">
+                        <input class="input" id="discCustom" type="number" min="0" max="100" step="0.1" inputmode="decimal" value="${esc(String(state.discountPct || 0))}" placeholder="своя %">
+                        <button type="button" class="btn sm" id="applyDisc">Ко всем</button>
+                    </div>
+                    <p class="muted" style="margin-top:6px">Скидка к прайсу (опт/розница). У позиции можно задать свою %.</p>
+                </div>
                 <input class="input" id="q" placeholder="Название или размер, например туя 160" value="${esc(state.lastQ || "")}">
                 <div id="suggest" class="suggest"></div>
                 <div id="linesBox"></div>
@@ -374,9 +405,18 @@
             el.onclick = () => { d.company_id = Number(el.dataset.co); render(); };
         });
         view.querySelectorAll("[data-b]").forEach((el) => {
-            el.oninput = () => { d.buyer[el.dataset.b] = el.value; };
+            el.oninput = () => {
+                d.buyer[el.dataset.b] = el.value;
+                // Ручной ввод имени/ИНН сбрасывает явный client_id —
+                // дальше сервер ищет клиента по реквизитам.
+                if (el.dataset.b === "name" || el.dataset.b === "inn") {
+                    d.client_id = null;
+                }
+            };
         });
         bindInnLookup();
+        bindBuyerSuggest();
+        bindPriceBar();
         refreshLines();
         const q = document.getElementById("q");
         let t = null;
@@ -397,7 +437,7 @@
 
     function renderView() {
         const inv = state.current;
-        setTitle(`Счёт №${inv.id}`);
+        setTitle(`Счёт №${invNo(inv)}`);
         view.innerHTML = `
             <button class="btn ghost" id="back">← К списку</button>
             <div class="card">
@@ -521,6 +561,76 @@
         }
     }
 
+    function applyBuyerClient(c) {
+        const b = state.draft.buyer;
+        state.draft.client_id = c.id || null;
+        ["name", "inn", "kpp", "ogrn", "address", "phone", "bank", "rs", "bik", "ks"].forEach((k) => {
+            if (c[k] != null) b[k] = String(c[k] || "");
+        });
+        const bits = [];
+        if (c.inn) bits.push("ИНН " + c.inn);
+        if (c.has_bank) bits.push("банк из карточки");
+        b._hint = bits.length ? ("Из базы: " + bits.join(" · ")) : "Компания из базы, банковских реквизитов в карточке нет";
+        if (c.inn) state.lastInnLookup = String(c.inn).replace(/\D/g, "");
+        render();
+    }
+
+    function bindBuyerSuggest() {
+        const input = document.getElementById("buyerName");
+        const box = document.getElementById("buyerSuggest");
+        if (!input || !box) return;
+        let t = null;
+        let seq = 0;
+        async function search(q) {
+            const my = ++seq;
+            const query = String(q || "").trim();
+            if (query.length < 2) {
+                box.innerHTML = "";
+                box.classList.add("hide");
+                return;
+            }
+            try {
+                const data = await api("/tg/sale/api/clients", {
+                    method: "POST",
+                    body: JSON.stringify({ q: query }),
+                });
+                if (my !== seq) return;
+                const rows = data.clients || [];
+                if (!rows.length) {
+                    box.innerHTML = `<div class="muted" style="padding:10px 12px">В базе нет совпадений — введите реквизиты вручную</div>`;
+                    box.classList.remove("hide");
+                    return;
+                }
+                box.innerHTML = rows.map((c, i) => {
+                    const sub = [c.inn ? `ИНН ${esc(c.inn)}` : "", c.has_bank ? "есть р/с" : ""].filter(Boolean).join(" · ");
+                    return `<button type="button" data-cli="${i}">
+                        <b>${esc(c.name)}</b>
+                        ${sub ? `<span class="muted">${sub}</span>` : ""}
+                    </button>`;
+                }).join("");
+                box.classList.remove("hide");
+                box.querySelectorAll("[data-cli]").forEach((btn) => {
+                    btn.onmousedown = (e) => e.preventDefault();
+                    btn.onclick = () => applyBuyerClient(rows[Number(btn.dataset.cli)]);
+                });
+            } catch (_) {
+                if (my !== seq) return;
+                box.innerHTML = `<div class="muted" style="padding:10px 12px">Не удалось искать. Попробуйте ещё раз</div>`;
+                box.classList.remove("hide");
+            }
+        }
+        input.addEventListener("input", () => {
+            clearTimeout(t);
+            t = setTimeout(() => search(input.value), 220);
+        });
+        input.addEventListener("focus", () => {
+            if (String(input.value || "").trim().length >= 2) search(input.value);
+        });
+        input.addEventListener("blur", () => {
+            setTimeout(() => box.classList.add("hide"), 180);
+        });
+    }
+
     function bindInnLookup() {
         const btn = document.getElementById("innLookup");
         const innEl = view.querySelector("[data-b=inn]");
@@ -582,6 +692,53 @@
         });
     }
 
+    function clampDisc(v) {
+        let n = Number(v);
+        if (!isFinite(n) || n < 0) n = 0;
+        if (n > 100) n = 100;
+        return n;
+    }
+    function calcLinePrice(ln, discOverride) {
+        const wholesale = Number(ln.wholesale != null ? ln.wholesale : ln.price) || 0;
+        const retail = Number(ln.retail != null ? ln.retail : ln.price) || 0;
+        const base = state.priceMode === "wholesale" ? wholesale : retail;
+        const disc = clampDisc(discOverride != null ? discOverride : (ln.discount_pct != null ? ln.discount_pct : state.discountPct));
+        return Math.round(Math.max(0, base * (1 - disc / 100)) * 100) / 100;
+    }
+    function applyPricesToAllLines(setGlobalDisc) {
+        const global = clampDisc(state.discountPct);
+        state.draft.lines.forEach((ln) => {
+            if (setGlobalDisc) ln.discount_pct = global;
+            else if (ln.discount_pct == null) ln.discount_pct = global;
+            ln.price = calcLinePrice(ln);
+        });
+        refreshLines();
+    }
+    function bindPriceBar() {
+        const w = document.getElementById("modeWholesale");
+        const r = document.getElementById("modeRetail");
+        if (w) w.onclick = () => { state.priceMode = "wholesale"; applyPricesToAllLines(false); render(); };
+        if (r) r.onclick = () => { state.priceMode = "retail"; applyPricesToAllLines(false); render(); };
+        document.querySelectorAll(".disc-chip").forEach((btn) => {
+            btn.onclick = () => {
+                state.discountPct = clampDisc(btn.dataset.pct);
+                const inp = document.getElementById("discCustom");
+                if (inp) inp.value = String(state.discountPct);
+                applyPricesToAllLines(true);
+                render();
+            };
+        });
+        const apply = document.getElementById("applyDisc");
+        const custom = document.getElementById("discCustom");
+        if (apply && custom) {
+            apply.onclick = () => {
+                state.discountPct = clampDisc(custom.value);
+                applyPricesToAllLines(true);
+                render();
+            };
+        }
+    }
+
     function refreshLines() {
         const box = document.getElementById("linesBox");
         const tot = document.getElementById("totVal");
@@ -599,6 +756,15 @@
                     <div>
                         <div class="label">Цена, ₽</div>
                         <input class="input" data-price="${i}" type="number" min="0" step="1" inputmode="numeric" value="${ln.price}">
+                    </div>
+                </div>
+                <div class="grid2" style="margin-top:8px">
+                    <div>
+                        <div class="label">Скидка %</div>
+                        <input class="input" data-disc="${i}" type="number" min="0" max="100" step="0.1" inputmode="decimal" value="${ln.discount_pct != null ? ln.discount_pct : state.discountPct}">
+                    </div>
+                    <div class="muted" style="align-self:end;padding-bottom:8px">
+                        прайс: опт ${money(ln.wholesale || 0)} / розн. ${money(ln.retail || 0)}
                     </div>
                 </div>
                 <div class="row" style="margin-top:8px">
@@ -630,6 +796,19 @@
                 }
             };
         });
+        box.querySelectorAll("[data-disc]").forEach((el) => {
+            el.oninput = () => {
+                const ln = d.lines[Number(el.dataset.disc)];
+                ln.discount_pct = clampDisc(el.value);
+                ln.price = calcLinePrice(ln);
+                const priceEl = box.querySelector(`[data-price="${el.dataset.disc}"]`);
+                if (priceEl) priceEl.value = ln.price;
+                if (tot) {
+                    const sum = d.lines.reduce((s, x) => s + Number(x.qty) * Number(x.price), 0);
+                    tot.textContent = money(sum);
+                }
+            };
+        });
         box.querySelectorAll("[data-del]").forEach((el) => {
             el.onclick = () => {
                 d.lines.splice(Number(el.dataset.del), 1);
@@ -643,12 +822,23 @@
         const existing = state.draft.lines.find((ln) =>
             Number(ln.plant_id) === Number(it.plant_id) && Number(ln.size_id) === Number(it.size_id)
         );
-        if (existing) existing.qty = Number(existing.qty || 0) + 1;
-        else {
-            state.draft.lines.push({
-                plant_id: it.plant_id, size_id: it.size_id, plant_name: it.plant_name,
-                size_name: it.size_name, shop_attrs: it.shop_attrs || "", qty: 1, price: it.price, free_qty: it.free_qty || it.free || 0,
-            });
+        const wholesale = Number(it.wholesale != null ? it.wholesale : (it.wholesale_price != null ? it.wholesale_price : it.price)) || 0;
+        const retail = Number(it.retail != null ? it.retail : (it.retail_price != null ? it.retail_price : it.price)) || 0;
+        if (existing) {
+            existing.qty = Number(existing.qty || 0) + 1;
+            existing.wholesale = wholesale;
+            existing.retail = retail;
+            if (existing.discount_pct == null) existing.discount_pct = clampDisc(state.discountPct);
+            existing.price = calcLinePrice(existing);
+        } else {
+            const ln = {
+                plant_id: it.plant_id, plant_name: it.plant_name,
+                size_id: it.size_id, size_name: it.size_name, shop_attrs: it.shop_attrs || "",
+                qty: 1, wholesale, retail, discount_pct: clampDisc(state.discountPct),
+                free_qty: it.free_qty || it.free || 0,
+            };
+            ln.price = calcLinePrice(ln);
+            state.draft.lines.push(ln);
         }
         refreshLines();
         paintSizeRows();
@@ -716,6 +906,7 @@
         return {
             company_id: state.draft.company_id,
             order_id: state.draft.order_id || null,
+            client_id: state.draft.client_id || null,
             anonymous: !!state.draft.anonymous,
             buyer_name: b.name,
             buyer_inn: b.inn,
@@ -765,12 +956,12 @@
         if (!state.current) return;
         const done = armBusy(document.getElementById("pdf"));
         try {
-            const data = await api(
-                `/tg/sale/api/invoices/${state.current.id}/send-pdf`,
-                { method: "POST", body: "{}", ensureAuth: "/tg/sale/api/auth" }
-            );
+            const data = await api(`/tg/sale/api/invoices/${state.current.id}/send-pdf`, { method: "POST", body: "{}" });
             if (!data.ok) {
-                alert(window.FFTg.authErrorMessage(data, 0));
+                const err = data.error || "";
+                alert(err === "no_telegram_id"
+                    ? "Не вижу ваш Telegram. Закройте мини-приложение и откройте его кнопкой в чате с ботом."
+                    : "Не удалось отправить счёт в чат.");
                 return;
             }
             haptic("medium");
@@ -835,13 +1026,19 @@
         if (full.status === "approved") { state.screen = "view"; render(); return; }
         state.draft = {
             company_id: full.company_id,
+            client_id: full.client_id || (full.order && full.order.client_id) || null,
             buyer: {
                 name: full.buyer_name || "", inn: full.buyer_inn || "", kpp: full.buyer_kpp || "",
                 ogrn: full.buyer_ogrn || "", address: full.buyer_address || "", phone: full.buyer_phone || "",
                 bank: full.buyer_bank || "", rs: full.buyer_rs || "",
                 bik: full.buyer_bik || "", ks: full.buyer_ks || "",
             },
-            lines: (full.lines || []).map((ln) => Object.assign({ free_qty: ln.free_qty || 0 }, ln)),
+            lines: (full.lines || []).map((ln) => Object.assign({
+                free_qty: ln.free_qty || 0,
+                wholesale: ln.wholesale != null ? ln.wholesale : ln.price,
+                retail: ln.retail != null ? ln.retail : ln.price,
+                discount_pct: ln.discount_pct != null ? ln.discount_pct : 0,
+            }, ln)),
             order_id: full.order_id || null,
             order: full.order || null,
             anonymous: !!full.anonymous,
@@ -852,6 +1049,112 @@
 
     function esc(s) {
         return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    async function loadBuh() {
+        const data = await api("/tg/sale/api/buh/invoices");
+        state.buhInvoices = data.invoices || [];
+    }
+
+    function kindLabel(kind) {
+        if (kind === "advance") return "произвольный";
+        if (kind === "balance") return "остаток";
+        return "позиции";
+    }
+
+    function renderBuhList() {
+        setTitle("Отгрузки");
+        const rows = (state.buhInvoices || []).map((inv) => {
+            const lines = (inv.lines || []).map((ln) =>
+                `<li>${esc(ln.plant_name || "—")}${ln.size_name ? ` · ${esc(ln.size_name)}` : ""} ×${ln.qty}`
+                + (ln.shipped_qty ? ` · отгр. ${ln.shipped_qty}` : "") + `</li>`
+            ).join("");
+            return `
+            <div class="list-item" data-buh="${inv.id}">
+                <div class="row">
+                    <div>
+                        <div><b>Счёт №${esc(inv.number)}</b> · ${esc(inv.buyer_name || "—")}</div>
+                        <div class="muted">${esc(inv.company_name || "")} · заказ №${inv.order_id || "—"} · ${esc(kindLabel(inv.kind))}</div>
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-weight:700">${money(inv.amount)}</div>
+                        <div class="muted">заказ ${money(inv.order_sum)}</div>
+                    </div>
+                </div>
+                ${lines ? `<ul class="order-lines">${lines}</ul>` : ""}
+                ${inv.more_count ? `<p class="muted">ещё ${inv.more_count} поз.</p>` : ""}
+            </div>`;
+        }).join("") || `<p class="muted">Пока нет отгруженных заказов со счетами</p>`;
+        view.innerHTML = `<p class="muted" style="margin-top:0">Только счета, привязанные к заказам с отгрузкой. Сумма счёта не меняет сумму заказа.</p><div class="card">${rows}</div>`;
+        view.querySelectorAll("[data-buh]").forEach((el) => {
+            el.onclick = () => openBuh(Number(el.dataset.buh));
+        });
+    }
+
+    function shipDates(list) {
+        const rows = list || [];
+        if (!rows.length) return "—";
+        return rows.map((s) => `${esc(s.date)} · ${s.qty} шт`).join("<br>");
+    }
+
+    function renderBuhView() {
+        const d = state.buhCurrent;
+        if (!d) { state.screen = "buh"; render(); return; }
+        setTitle(`Счёт №${d.number}`);
+        const invRows = (d.invoice_lines || []).map((ln) => `
+            <tr>
+                <td>${esc(ln.name)}</td>
+                <td>${esc(ln.qty)} ${esc(ln.unit || "")}</td>
+                <td>${money(ln.price)}</td>
+                <td>${money(ln.sum)}</td>
+            </tr>`).join("") || `<tr><td colspan="4" class="muted">В счёте нет строк</td></tr>`;
+        const orderRows = (d.order_lines || []).map((ln) => `
+            <tr>
+                <td>${esc(ln.plant_name || "—")}${ln.size_name ? `<div class="muted">${esc(ln.size_name)}</div>` : ""}</td>
+                <td>${ln.qty}</td>
+                <td>${money(ln.price)}</td>
+                <td>${money(ln.sum)}</td>
+                <td>${ln.shipped_qty || 0}</td>
+                <td>${shipDates(ln.shipments)}</td>
+            </tr>`).join("") || `<tr><td colspan="6" class="muted">Нет позиций заказа</td></tr>`;
+        const journal = (d.shipments || []).map((doc) => `
+            <div class="buh-ship">
+                <b>${esc(doc.date)}</b> · ${doc.qty} шт
+                <ul class="order-lines">${(doc.rows || []).map((r) =>
+                    `<li>${esc(r.plant_name || "—")}${r.size_name ? ` · ${esc(r.size_name)}` : ""} ×${r.qty}</li>`
+                ).join("")}</ul>
+            </div>`).join("") || `<p class="muted">Документов отгрузки нет</p>`;
+        view.innerHTML = `
+            <button class="btn ghost" id="back" style="margin-bottom:10px">← К списку</button>
+            <div class="card">
+                <div><b>${esc(d.buyer_name || "—")}</b></div>
+                <div class="muted">${esc(d.company_name || "")} · заказ №${d.order_id || "—"} · ${esc(kindLabel(d.kind))}</div>
+                <div style="margin-top:8px">Счёт: <b>${money(d.amount)}</b> · заказ: <b>${money(d.order_sum)}</b></div>
+            </div>
+            <h3 class="buh-h">Позиции счёта</h3>
+            <div class="card" style="overflow:auto">
+                <table class="buh-table">
+                    <thead><tr><th>Наименование</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
+                    <tbody>${invRows}</tbody>
+                </table>
+            </div>
+            <h3 class="buh-h">Заказ и даты отгрузки</h3>
+            <div class="card" style="overflow:auto">
+                <table class="buh-table">
+                    <thead><tr><th>Позиция</th><th>Заказ</th><th>Цена</th><th>Сумма</th><th>Отгр.</th><th>Даты</th></tr></thead>
+                    <tbody>${orderRows}</tbody>
+                </table>
+            </div>
+            <h3 class="buh-h">Журнал отгрузок</h3>
+            <div class="card">${journal}</div>`;
+        document.getElementById("back").onclick = () => { state.screen = "buh"; render(); };
+    }
+
+    async function openBuh(id) {
+        const data = await api(`/tg/sale/api/buh/invoices/${id}`);
+        state.buhCurrent = data;
+        state.screen = "buh-view";
+        render();
     }
 
     async function reload() {
@@ -866,41 +1169,26 @@
     }
 
     async function boot() {
-        const startApp = async (user) => {
-            state.me = user;
-            if (window.FFTg && window.FFTg.mountAppTabs) window.FFTg.mountAppTabs(state.me, "sale");
-            await reload();
-            render();
-        };
-        const showLogin = (hint) => {
-            const title = document.getElementById("screenTitle");
-            if (title) title.textContent = "Вход";
-            window.FFTg.promptLogin(view, {
-                loginUrl: "/tg/sale/api/login",
-                title: "Вход — выставить счёт",
-                hint: hint || "Один раз логин и пароль ERP. Telegram привяжется навсегда; дальше открывайте кнопкой бота.",
-                onSuccess: (data) => startApp(data),
-            });
-        };
         try {
             if (window.FFTg && window.FFTg.bootAuth) {
-                await startApp(await window.FFTg.bootAuth("/tg/sale/api/auth"));
+                state.me = await window.FFTg.bootAuth("/tg/sale/api/auth");
             } else {
                 await waitTelegram();
-                await startApp(await api("/tg/sale/api/me"));
+                state.me = await api("/tg/sale/api/me");
             }
         } catch (e) {
-            try {
-                if (!/unauthorized|not_linked|Нет входа|не передал|Подпись|не привязан/i.test(String(e.message || ""))) {
-                    throw e;
-                }
-                await waitTelegram();
-                if (window.FFTg) await startApp(await window.FFTg.handshake("/tg/sale/api/auth"));
-                else throw e;
-            } catch (e2) {
-                showLogin(e2.message || e.message);
-            }
+            if (!/unauthorized|Нет входа|не передал|Подпись/i.test(String(e.message || ""))) throw e;
+            await waitTelegram();
+            if (window.FFTg) state.me = await window.FFTg.handshake("/tg/sale/api/auth");
         }
+        if (state.me && state.me.accountant_only) {
+            state.screen = "buh";
+            await loadBuh();
+            render();
+            return;
+        }
+        await reload();
+        render();
     }
     boot().catch((e) => {
         view.innerHTML = `<div class="card err">${esc(e.message)}</div>`;

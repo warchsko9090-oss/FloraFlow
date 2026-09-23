@@ -108,38 +108,26 @@
   }
 
   async function boot() {
-    const startApp = async (user) => {
-      me = user;
-      if (window.FFTg && window.FFTg.mountAppTabs) window.FFTg.mountAppTabs(me, 'pay');
-      try { const w = tgApp(); if (w) { w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } } catch (_) {}
-      window.addEventListener('hashchange', route);
-      route();
-    };
-    const showLogin = (hint) => {
-      setTitle('Вход');
-      window.FFTg.promptLogin(view, {
-        loginUrl: '/tg/pay/api/login',
-        title: 'Вход — счета на оплату',
-        hint: hint || 'Один раз логин и пароль ERP. Telegram привяжется навсегда; дальше открывайте кнопкой бота.',
-        onSuccess: (data) => startApp(data),
-      });
-    };
     try {
       if (window.FFTg && window.FFTg.bootAuth) {
-        await startApp(await window.FFTg.bootAuth('/tg/pay/api/auth'));
+        me = await window.FFTg.bootAuth('/tg/pay/api/auth');
       } else {
         await waitTelegram();
-        await startApp(await api('/tg/pay/api/me'));
+        me = await api('/tg/pay/api/me');
       }
+      try { const w = tgApp(); if (w) { w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } } catch (_) {}
     } catch (e) {
       try {
         await waitTelegram();
-        if (window.FFTg) await startApp(await window.FFTg.handshake('/tg/pay/api/auth'));
+        if (window.FFTg) me = await window.FFTg.handshake('/tg/pay/api/auth');
         else throw e;
       } catch (e2) {
-        showLogin(e2.message || e.message);
+        view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e2.message || e.message}</p></div>`;
+        return;
       }
     }
+    window.addEventListener('hashchange', route);
+    route();
   }
 
   function rowFill(inv) {
@@ -435,15 +423,11 @@
   }
 
   function sendErrorText(sent, fallback) {
-    if (window.FFTg && window.FFTg.authErrorMessage && sent) {
-      return window.FFTg.authErrorMessage(sent, 0);
-    }
     const err = (sent && sent.error) || '';
     if (err === 'no_telegram_id') {
-      return 'Не вижу ваш Telegram [no_telegram_id]. Закройте мини-приложение и откройте его кнопкой в чате с ботом.';
+      return 'Не вижу ваш Telegram. Закройте мини-приложение и откройте его кнопкой в чате с ботом.';
     }
-    if (err === 'file_missing') return fallback || 'Файла нет [file_missing].';
-    if (err === 'send_failed') return 'Бот не смог отправить файл [send_failed].';
+    if (err === 'file_missing') return fallback || 'Файла нет.';
     return fallback || 'Не удалось отправить файл в чат.';
   }
 
@@ -465,7 +449,6 @@
     const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', {
       method: 'POST',
       body: JSON.stringify({ kind: isReceipt ? 'receipt' : 'file' }),
-      ensureAuth: '/tg/pay/api/auth',
     });
     if (sent && sent.ok) {
       afterSentToChat(isReceipt ? 'Квитанцию отправил в чат с ботом.' : 'Счёт отправил в чат с ботом.');

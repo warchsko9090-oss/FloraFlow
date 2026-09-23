@@ -1924,6 +1924,8 @@ class SaleInvoice(db.Model):
     doc_year = db.Column(db.Integer, nullable=True, index=True)
     # miniapp — создан в Telegram; erp — выгружен из заказа ERP (заказ не трогаем при удалении счёта).
     origin = db.Column(db.String(20), nullable=False, default='miniapp')
+    # goods — позиции заказа; advance — предоплата; balance — остаток/доплата.
+    kind = db.Column(db.String(20), nullable=False, default='goods')
 
     company = db.relationship('SaleCompany')
     client = db.relationship('Client')

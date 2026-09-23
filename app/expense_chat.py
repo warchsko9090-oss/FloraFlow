@@ -74,12 +74,13 @@ from datetime import datetime, timedelta, date
 from decimal import Decimal, InvalidOperation
 
 from flask import current_app
+from sqlalchemy import and_, extract, func, or_
 
 from app.models import (
     db, Expense, BudgetItem, TgTask, User, PaymentInvoice,
     ChatExpenseMessage, ChatExpenseAlias,
 )
-from app.utils import msk_now, msk_today
+from app.utils import msk_now, msk_today, MONTH_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +113,26 @@ _PAYMENT_TRIM_RE = re.compile(
     r"[\s\.,:;—–\-]*\b(безнал\w*|нал\w*)\b[\s\.]*$",
     re.IGNORECASE,
 )
+
+_PAYROLL_RE = re.compile(
+    r"(?i)(?<![а-яa-z])(з/?п|зарплат\w*|аванс\w*)(?![а-яa-z])",
+)
+
+_MONTH_STEMS = (
+    (re.compile(r'(?i)январ'), 1),
+    (re.compile(r'(?i)феврал'), 2),
+    (re.compile(r'(?i)март'), 3),
+    (re.compile(r'(?i)апрел'), 4),
+    (re.compile(r'(?i)\bма[йяе]\b'), 5),
+    (re.compile(r'(?i)июн'), 6),
+    (re.compile(r'(?i)июл'), 7),
+    (re.compile(r'(?i)август'), 8),
+    (re.compile(r'(?i)сентябр'), 9),
+    (re.compile(r'(?i)октябр'), 10),
+    (re.compile(r'(?i)ноябр'), 11),
+    (re.compile(r'(?i)декабр'), 12),
+)
+_YEAR_RE = re.compile(r'\b(20\d{2})\b')
 
 
 def _clean_amount(raw: str) -> Decimal | None:
@@ -425,6 +446,84 @@ def find_matching_invoice(amount: Decimal, description: str, fuzzy_threshold: in
         return close[0]
 
 
+def is_payroll_chat_text(text: str | None) -> bool:
+    return bool(_PAYROLL_RE.search(text or ''))
+
+
+def parse_payroll_month_year(text: str | None, ref_date: date | None = None) -> tuple[int, int]:
+    ref = ref_date or msk_today()
+    blob = text or ''
+    month = None
+    for rx, num in _MONTH_STEMS:
+        if rx.search(blob):
+            month = num
+            break
+    year = ref.year
+    ym = _YEAR_RE.search(blob)
+    if ym:
+        year = int(ym.group(1))
+    elif month and month > ref.month + 1:
+        year = ref.year - 1
+    return (month or ref.month), year
+
+
+def _amounts_close(a, b) -> bool:
+    try:
+        aa = Decimal(str(a or 0))
+        bb = Decimal(str(b or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    if aa == bb:
+        return True
+    return abs(aa - bb) <= max(Decimal('100'), aa * Decimal('0.015'))
+
+
+def _payroll_expenses(month: int, year: int, payment_type: str | None = None) -> list[Expense]:
+    q = Expense.query.filter(Expense.employee_id.isnot(None))
+    q = q.filter(or_(
+        and_(Expense.target_month == month, Expense.target_year == year),
+        and_(
+            Expense.target_month.is_(None),
+            extract('month', Expense.date) == month,
+            extract('year', Expense.date) == year,
+        ),
+    ))
+    if payment_type in ('cash', 'cashless'):
+        q = q.filter(Expense.payment_type == payment_type)
+    return q.all()
+
+
+def find_payroll_cover(
+    amount: Decimal,
+    description: str,
+    ref_date: date,
+    payment_type: str | None = None,
+) -> dict | None:
+    """ЗП в чате одной суммой, в ERP — по сотрудникам из табеля."""
+    if amount is None or not is_payroll_chat_text(description):
+        return None
+    month, year = parse_payroll_month_year(description, ref_date)
+    rows = _payroll_expenses(month, year, payment_type)
+    if not rows:
+        rows = _payroll_expenses(month, year, None)
+    if not rows:
+        return None
+    for exp in rows:
+        if _amounts_close(exp.amount, amount):
+            return {'kind': 'line', 'expense': exp, 'month': month, 'year': year}
+    total = sum((Decimal(str(x.amount or 0)) for x in rows), Decimal(0))
+    if _amounts_close(total, amount):
+        return {
+            'kind': 'batch',
+            'expense': rows[0],
+            'month': month,
+            'year': year,
+            'total': total,
+            'count': len(rows),
+        }
+    return None
+
+
 # ---------------------------------------------------------------------------
 # ТОЧКА ВХОДА ИЗ WEBHOOK
 # ---------------------------------------------------------------------------
@@ -509,6 +608,30 @@ def ingest_message(msg: dict) -> dict:
         row.parsed_description = parsed["description"]
         row.parsed_payment_type = parsed["payment_type"]
 
+        payroll = find_payroll_cover(
+            parsed["amount"],
+            parsed["description"] or text,
+            msg_dt.date(),
+            parsed["payment_type"],
+        )
+        if is_payroll_chat_text(parsed["description"] or text):
+            if payroll:
+                row.status = "matched"
+                row.expense_id = payroll["expense"].id if payroll.get("expense") else None
+                db.session.add(row)
+                db.session.commit()
+                _safe_react(tg_chat_id, tg_message_id, None)
+                return {
+                    "ok": True,
+                    "status": "payroll_matched",
+                    "chat_expense_id": row.id,
+                }
+            row.status = "payroll"
+            db.session.add(row)
+            db.session.commit()
+            _safe_react(tg_chat_id, tg_message_id, None)
+            return {"ok": True, "status": "payroll", "chat_expense_id": row.id}
+
         # 1) Уже есть такой расход в БД — ставим реакцию и закрываем.
         dup = find_duplicate_expense(
             parsed["amount"], parsed["description"], msg_dt.date()
@@ -518,7 +641,7 @@ def ingest_message(msg: dict) -> dict:
             row.expense_id = dup.id
             db.session.add(row)
             db.session.commit()
-            _safe_react(tg_chat_id, tg_message_id, "✅")
+            _safe_react(tg_chat_id, tg_message_id, None)
             return {"ok": True, "status": "matched", "expense_id": dup.id}
 
         # 1.5) Похоже на неоплаченный счёт — не создаём обычный расход сразу.
@@ -602,10 +725,16 @@ def _create_task_for_chat_expense(row: ChatExpenseMessage, source: str) -> TgTas
     но стратегически страхуемся).
     """
     now = msk_now()
-    title = f"Расход из ТГ: {row.parsed_amount:.0f} ₽"
-    details_parts = [
-        f"<b>{row.parsed_amount:.0f} ₽</b> — {row.parsed_description}",
-    ]
+    if row.parsed_amount is not None:
+        title = f"Расход из ТГ: {row.parsed_amount:.0f} ₽"
+        details_parts = [
+            f"<b>{row.parsed_amount:.0f} ₽</b> — {row.parsed_description}",
+        ]
+    else:
+        title = "Чек из ТГ: разобрать вручную"
+        details_parts = [
+            row.parsed_description or "Фото чека, сумму не разобрали.",
+        ]
     if row.parsed_payment_type:
         details_parts.append(
             "наличные" if row.parsed_payment_type == "cash" else "безнал"
@@ -615,6 +744,8 @@ def _create_task_for_chat_expense(row: ChatExpenseMessage, source: str) -> TgTas
     details_parts.append(f"Источник: ТГ-чат «Расходы Жемчужниково»")
     if source == "invoice":
         details_parts.append("Похоже на неоплаченный счёт — подтвердите в Mini App «Счета».")
+    elif source == "receipt":
+        details_parts.append("Фото чека сохранено в базе — откройте вложение на карточке.")
     elif source == "alias":
         details_parts.append("Подсказка статьи — из обучения по прошлым подтверждениям.")
     elif source == "llm":
@@ -642,10 +773,10 @@ def _create_task_for_chat_expense(row: ChatExpenseMessage, source: str) -> TgTas
 
 
 def _safe_react(chat_id, message_id, emoji="✅"):
-    """Ставит реакцию, ничего не роняя если бот/TG недоступны."""
+    """Ставит реакцию или снимает её (emoji=None / ''). Не роняет ingest."""
     try:
         from app import telegram as tg
-        tg.set_reaction(chat_id, message_id, emoji)
+        tg.set_reaction(chat_id, message_id, emoji or '')
     except Exception:
         try:
             current_app.logger.warning("set_reaction failed", exc_info=True)
@@ -733,7 +864,7 @@ def confirm_chat_expense(
             pass
         return False, str(exc)
 
-    _safe_react(row.tg_chat_id, row.tg_message_id, "✅")
+    _safe_react(row.tg_chat_id, row.tg_message_id, None)
     return True, "ok"
 
 
@@ -748,7 +879,11 @@ def reject_chat_expense(msg_id: int, user: User) -> tuple[bool, str]:
         return False, f"already_{row.status}"
 
     try:
-        row.status = "rejected"
+        desc = row.parsed_description or row.raw_text or ''
+        if is_payroll_chat_text(desc):
+            row.status = "payroll"
+        else:
+            row.status = "rejected"
         if row.task_id:
             task = TgTask.query.get(row.task_id)
             if task is not None and task.status != "done":
@@ -764,7 +899,10 @@ def reject_chat_expense(msg_id: int, user: User) -> tuple[bool, str]:
             pass
         return False, str(exc)
 
-    _safe_react(row.tg_chat_id, row.tg_message_id, "👀")
+    if row.status == "payroll":
+        _safe_react(row.tg_chat_id, row.tg_message_id, None)
+    else:
+        _safe_react(row.tg_chat_id, row.tg_message_id, "👀")
     return True, "ok"
 
 
@@ -792,3 +930,211 @@ def reclassify_chat_expense(
         db.session.rollback()
         return False, str(exc)
     return True, "ok"
+
+
+def telegram_message_url(chat_id, message_id) -> str | None:
+    if not chat_id or not message_id:
+        return None
+    s = str(chat_id).strip()
+    if s.startswith('-100'):
+        return f'https://t.me/c/{s[4:]}/{int(message_id)}'
+    if s.startswith('-'):
+        return f'https://t.me/c/{s.lstrip("-")}/{int(message_id)}'
+    return None
+
+
+def _row_day(row: ChatExpenseMessage) -> date | None:
+    if row.tg_date:
+        return row.tg_date.date() if hasattr(row.tg_date, 'date') else row.tg_date
+    if row.created_at:
+        return row.created_at.date() if hasattr(row.created_at, 'date') else row.created_at
+    return None
+
+
+def _expense_still_there(row: ChatExpenseMessage) -> Expense | None:
+    if not row.expense_id:
+        return None
+    return Expense.query.get(row.expense_id)
+
+
+def classify_chat_row_vs_db(row: ChatExpenseMessage) -> dict:
+    """Есть ли уже расход в ERP по этому сообщению чата."""
+    day = _row_day(row) or msk_today()
+    desc = row.parsed_description or row.raw_text or ''
+    linked = _expense_still_there(row)
+    if linked is not None:
+        return {
+            'in_db': True,
+            'reason': 'linked',
+            'expense': linked,
+            'invoice': None,
+        }
+    if row.parsed_amount is not None:
+        dup = find_duplicate_expense(
+            Decimal(str(row.parsed_amount)),
+            desc,
+            day,
+        )
+        if dup is not None:
+            return {'in_db': True, 'reason': 'matched_now', 'expense': dup, 'invoice': None}
+        pay = find_payroll_cover(
+            Decimal(str(row.parsed_amount)),
+            desc,
+            day,
+            row.parsed_payment_type,
+        )
+        if pay is not None:
+            return {
+                'in_db': True,
+                'reason': 'payroll_split',
+                'expense': pay.get('expense'),
+                'invoice': None,
+            }
+        if is_payroll_chat_text(desc):
+            return {'in_db': False, 'reason': 'payroll_wait', 'expense': None, 'invoice': None}
+    inv = None
+    if row.matched_invoice_id:
+        inv = PaymentInvoice.query.get(row.matched_invoice_id)
+        if inv and (inv.expenses or []):
+            return {
+                'in_db': True,
+                'reason': 'invoice_expenses',
+                'expense': inv.expenses[0],
+                'invoice': inv,
+            }
+    if row.status == 'rejected':
+        return {'in_db': False, 'reason': 'rejected', 'expense': None, 'invoice': inv}
+    if row.parsed_amount is None:
+        return {'in_db': False, 'reason': 'unparseable', 'expense': None, 'invoice': inv}
+    if row.status == 'invoice_match':
+        return {'in_db': False, 'reason': 'invoice_match', 'expense': None, 'invoice': inv}
+    return {'in_db': False, 'reason': row.status or 'pending', 'expense': None, 'invoice': inv}
+
+
+def _close_chat_task(row: ChatExpenseMessage) -> None:
+    if not row.task_id:
+        return
+    task = TgTask.query.get(row.task_id)
+    if task is not None and task.status != 'done':
+        task.status = 'done'
+        task.completed_at = msk_now()
+
+
+def reconcile_chat_expense_row(row: ChatExpenseMessage) -> dict:
+    """Сверить с базой: ЗП по табелю, обычные расходы. Снять стикер, если уже учтено."""
+    hit = classify_chat_row_vs_db(row)
+    if hit['in_db']:
+        _close_chat_task(row)
+        if row.status not in ('imported', 'matched'):
+            row.status = 'matched'
+        if hit.get('expense') is not None and not row.expense_id:
+            row.expense_id = hit['expense'].id
+        _safe_react(row.tg_chat_id, row.tg_message_id, None)
+    elif hit['reason'] == 'payroll_wait':
+        _close_chat_task(row)
+        if row.status not in ('imported', 'matched'):
+            row.status = 'payroll'
+        _safe_react(row.tg_chat_id, row.tg_message_id, None)
+    return hit
+
+
+def reconcile_chat_expenses_period(start: date, end: date) -> int:
+    extra = timedelta(days=20)
+    lo = start - extra
+    hi = end + extra
+    day_col = func.coalesce(
+        func.date(ChatExpenseMessage.tg_date),
+        func.date(ChatExpenseMessage.created_at),
+    )
+    rows = ChatExpenseMessage.query.filter(day_col >= lo, day_col <= hi).all()
+    n = 0
+    for row in rows:
+        before = (row.status, row.expense_id)
+        reconcile_chat_expense_row(row)
+        if (row.status, row.expense_id) != before:
+            n += 1
+    if n:
+        db.session.commit()
+    return n
+
+
+def reconcile_payroll_for_month(month: int, year: int) -> int:
+    start = date(year, month, 1)
+    if month == 12:
+        end = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        end = date(year, month + 1, 1) - timedelta(days=1)
+    return reconcile_chat_expenses_period(start, end)
+
+
+def analyze_unrecorded_chat_expenses(start: date, end: date) -> dict:
+    """Сообщения чата расходов за период, которых нет в регистре Expense."""
+    if end < start:
+        start, end = end, start
+    try:
+        reconcile_chat_expenses_period(start, end)
+    except Exception:
+        db.session.rollback()
+        try:
+            current_app.logger.exception('reconcile chat expenses failed')
+        except Exception:
+            pass
+    day_col = func.coalesce(
+        func.date(ChatExpenseMessage.tg_date),
+        func.date(ChatExpenseMessage.created_at),
+    )
+    rows = (
+        ChatExpenseMessage.query
+        .filter(day_col >= start, day_col <= end)
+        .order_by(ChatExpenseMessage.id.asc())
+        .all()
+    )
+    missing = []
+    unparsed = []
+    rejected = []
+    in_db = []
+    payroll_wait = []
+    for row in rows:
+        hit = classify_chat_row_vs_db(row)
+        payload = {
+            'row': row,
+            'day': _row_day(row),
+            'reason': hit['reason'],
+            'expense': hit['expense'],
+            'invoice': hit['invoice'],
+            'tg_url': telegram_message_url(row.tg_chat_id, row.tg_message_id),
+        }
+        if hit['in_db']:
+            in_db.append(payload)
+        elif hit['reason'] == 'unparseable':
+            unparsed.append(payload)
+        elif hit['reason'] == 'rejected':
+            rejected.append(payload)
+        elif hit['reason'] == 'payroll_wait':
+            payroll_wait.append(payload)
+        else:
+            missing.append(payload)
+    missing_sum = sum(
+        (Decimal(str(x['row'].parsed_amount or 0)) for x in missing),
+        Decimal(0),
+    )
+    return {
+        'start': start,
+        'end': end,
+        'total': len(rows),
+        'missing': missing,
+        'unparsed': unparsed,
+        'rejected': rejected,
+        'in_db': in_db,
+        'payroll_wait': payroll_wait,
+        'missing_sum': missing_sum,
+        'in_db_sum': sum(
+            (Decimal(str(x['row'].parsed_amount or 0)) for x in in_db),
+            Decimal(0),
+        ),
+        'payroll_wait_sum': sum(
+            (Decimal(str(x['row'].parsed_amount or 0)) for x in payroll_wait),
+            Decimal(0),
+        ),
+    }
+

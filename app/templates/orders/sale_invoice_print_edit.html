@@ -2,18 +2,30 @@
 {% block content %}
 <div class="page-header">
     <div>
-        <div class="page-title"><i class="fas fa-file-alt"></i> Печать счёта — правка текстов</div>
+        <div class="page-title"><i class="fas fa-file-alt"></i>
+            {% if persist %}Произвольный счёт{% else %}Печать счёта — правка текстов{% endif %}
+        </div>
         <div class="page-subtitle">
+            {% if page_subtitle %}
+            {{ page_subtitle }}
+            {% elif persist %}
+            Сохранится в базе ERP. Остатки и сумма заказа не меняются.
+            {% else %}
             Только PDF. Справочник растений, заказ и счёт в БД <b>не меняются</b>.
             {% if inv %}Исходный счёт №{{ inv.id }}{% else %}Произвольный счёт{% endif %}
+            {% endif %}
         </div>
     </div>
     <div class="d-flex gap-2">
+        {% if back_url %}
+        <a class="btn btn-outline-secondary" href="{{ back_url }}">{{ back_label or '← Назад' }}</a>
+        {% else %}
         <a class="btn btn-outline-secondary" href="{{ url_for('orders.sale_invoices_list') }}">← К списку</a>
+        {% endif %}
     </div>
 </div>
 
-<form method="POST" action="{{ form_action }}" class="card section-card p-3" id="printEditForm" hx-boost="false" target="_blank">
+<form method="POST" action="{{ form_action }}" class="card section-card p-3" id="printEditForm" hx-boost="false"{% if not persist %} target="_blank"{% endif %}>
     <div class="row g-3">
         <div class="col-md-4">
             <label class="form-label">Фирма (поставщик)</label>
@@ -32,7 +44,8 @@
         </div>
         <div class="col-md-2">
             <label class="form-label">№ в PDF</label>
-            <input type="text" name="doc_number" class="form-control" value="{{ form.doc_number }}">
+            <input type="text" name="doc_number" class="form-control" value="{{ form.doc_number }}"
+                   placeholder="{% if persist %}авто{% endif %}">
         </div>
         <div class="col-md-3">
             <label class="form-label">Дата счёта</label>
@@ -112,9 +125,16 @@
         </div>
     </div>
 
-    <div class="mt-4 d-flex gap-2 flex-wrap">
+    <div class="mt-4 d-flex gap-2 flex-wrap align-items-center">
+        {% if persist %}
+        <button type="submit" class="btn btn-success" id="saveInvoiceBtn">
+            <i class="fas fa-save"></i> Сохранить в реестр и открыть PDF
+        </button>
+        <span class="text-muted small" id="draftHint">Черновик формы сохраняется в браузере (после F5 восстановится).</span>
+        {% else %}
         <button type="submit" class="btn btn-success"><i class="fas fa-file-pdf"></i> Открыть PDF</button>
-        <span class="align-self-center text-muted small">В базу ничего не пишется.</span>
+        <span class="text-muted small">В базу ничего не пишется · PDF в новой вкладке.</span>
+        {% endif %}
     </div>
 </form>
 
@@ -122,7 +142,7 @@
     <tr class="line-row">
         <td><textarea name="line_name" class="form-control form-control-sm" rows="2"></textarea></td>
         <td><input type="text" name="line_qty" class="form-control form-control-sm" value="1"></td>
-        <td><input type="text" name="line_unit" class="form-control form-control-sm" value="шт"></td>
+        <td><input type="text" name="line_unit" class="form-control form-control-sm" value="усл. ед."></td>
         <td><input type="text" name="line_price" class="form-control form-control-sm" value="0"></td>
         <td><button type="button" class="btn btn-sm btn-outline-danger rm-line">×</button></td>
     </tr>
@@ -130,10 +150,16 @@
 
 <script>
 (function () {
+  const form = document.getElementById('printEditForm');
   const tbody = document.querySelector('#linesTable tbody');
   const tpl = document.getElementById('lineRowTpl');
+  const draftKey = {{ (draft_key or '')|tojson }};
+  const openPdfUrl = {{ (open_pdf_url or '')|tojson }};
+  let skipDraftRestore = Boolean(openPdfUrl);
+
   document.getElementById('addLine').addEventListener('click', () => {
     tbody.appendChild(tpl.content.cloneNode(true));
+    saveDraft();
   });
   tbody.addEventListener('click', (e) => {
     const btn = e.target.closest('.rm-line');
@@ -141,9 +167,11 @@
     const rows = tbody.querySelectorAll('.line-row');
     if (rows.length <= 1) {
       rows[0].querySelector('[name=line_name]').value = '';
+      saveDraft();
       return;
     }
     btn.closest('tr').remove();
+    saveDraft();
   });
   const payDate = document.getElementById('payUntilDate');
   const payLine = document.getElementById('payUntilLine');
@@ -155,7 +183,132 @@
       if (!payLine.value || /^Оплатить не позднее /.test(payLine.value)) {
         payLine.value = 'Оплатить не позднее ' + pretty + ' г.';
       }
+      saveDraft();
     });
+  }
+
+  function collectDraft() {
+    if (!form) return null;
+    const lines = [];
+    tbody.querySelectorAll('.line-row').forEach((tr) => {
+      lines.push({
+        name: (tr.querySelector('[name=line_name]') || {}).value || '',
+        qty: (tr.querySelector('[name=line_qty]') || {}).value || '1',
+        unit: (tr.querySelector('[name=line_unit]') || {}).value || 'усл. ед.',
+        price: (tr.querySelector('[name=line_price]') || {}).value || '0',
+      });
+    });
+    const fd = new FormData(form);
+    return {
+      company_id: fd.get('company_id') || '',
+      doc_number: fd.get('doc_number') || '',
+      doc_date: fd.get('doc_date') || '',
+      pay_until: fd.get('pay_until') || '',
+      basis: fd.get('basis') || '',
+      anonymous: fd.get('anonymous') ? '1' : '',
+      buyer_line: fd.get('buyer_line') || '',
+      pay_until_line: fd.get('pay_until_line') || '',
+      vat_note: fd.get('vat_note') || '',
+      amount_words: fd.get('amount_words') || '',
+      footer_text: fd.get('footer_text') || '',
+      lines: lines,
+    };
+  }
+
+  function saveDraft() {
+    if (!draftKey) return;
+    try {
+      localStorage.setItem('ff_invoice_draft_' + draftKey, JSON.stringify(collectDraft()));
+    } catch (e) {}
+  }
+
+  function applyDraft(data) {
+    if (!data || !form) return;
+    const setVal = (name, val) => {
+      const el = form.querySelector('[name="' + name + '"]');
+      if (!el || val == null) return;
+      if (el.type === 'checkbox') el.checked = Boolean(val);
+      else el.value = val;
+    };
+    setVal('company_id', data.company_id);
+    setVal('doc_number', data.doc_number);
+    setVal('doc_date', data.doc_date);
+    setVal('pay_until', data.pay_until);
+    setVal('basis', data.basis);
+    setVal('anonymous', data.anonymous);
+    if (form.querySelector('#anonChk')) form.querySelector('#anonChk').checked = data.anonymous === '1';
+    setVal('buyer_line', data.buyer_line);
+    setVal('pay_until_line', data.pay_until_line);
+    setVal('vat_note', data.vat_note);
+    setVal('amount_words', data.amount_words);
+    setVal('footer_text', data.footer_text);
+    const lines = Array.isArray(data.lines) ? data.lines : [];
+    if (lines.length) {
+      tbody.innerHTML = '';
+      lines.forEach((ln) => {
+        const node = tpl.content.cloneNode(true);
+        const tr = node.querySelector('tr');
+        tr.querySelector('[name=line_name]').value = ln.name || '';
+        tr.querySelector('[name=line_qty]').value = ln.qty || '1';
+        tr.querySelector('[name=line_unit]').value = ln.unit || 'усл. ед.';
+        tr.querySelector('[name=line_price]').value = ln.price || '0';
+        tbody.appendChild(node);
+      });
+    }
+  }
+
+  function restoreDraft() {
+    if (!draftKey || skipDraftRestore) return;
+    try {
+      const raw = localStorage.getItem('ff_invoice_draft_' + draftKey);
+      if (!raw) return;
+      applyDraft(JSON.parse(raw));
+      const hint = document.getElementById('draftHint');
+      if (hint) hint.textContent = 'Восстановлен черновик из браузера (после F5).';
+    } catch (e) {}
+  }
+
+  if (form) {
+    form.addEventListener('input', saveDraft);
+    form.addEventListener('change', saveDraft);
+    form.addEventListener('submit', () => {
+      const btn = document.getElementById('saveInvoiceBtn');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Сохраняю…';
+      }
+      if (draftKey) {
+        try { localStorage.removeItem('ff_invoice_draft_' + draftKey); } catch (e) {}
+      }
+    });
+  }
+
+  restoreDraft();
+
+  // PDF в новой вкладке — форма остаётся, без зависания на send_file.
+  if (openPdfUrl) {
+    try {
+      const w = window.open(openPdfUrl, '_blank');
+      if (!w) {
+        const a = document.createElement('a');
+        a.href = openPdfUrl;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = 'Открыть PDF счёта';
+        a.className = 'btn btn-outline-primary btn-sm';
+        const wrap = document.querySelector('.mt-4.d-flex');
+        if (wrap) wrap.appendChild(a);
+      }
+    } catch (e) {}
+    // Сохраняем текущую (только что загруженную из БД) форму как черновик — F5 не сотрёт.
+    saveDraft();
+    try {
+      const u = new URL(window.location.href);
+      if (u.searchParams.has('saved')) {
+        u.searchParams.delete('saved');
+        window.history.replaceState({}, '', u.pathname + (u.search ? u.search : '') + u.hash);
+      }
+    } catch (e) {}
   }
 })();
 </script>

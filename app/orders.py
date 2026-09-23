@@ -33,6 +33,59 @@ def send_tg_photo_album_orders(photo_paths):
 # ---------------------------------
 
 
+def _notify_accountant_shipment(order, sales_msg: str) -> None:
+    """То же сообщение, что в чат продаж, плюс номер счёта — в личку бухгалтеру."""
+    try:
+        from app.telegram import send_chat_message, set_pay_menu_button
+        from app.tg_pay import accountant_telegram_ids
+        from app.tg_sale import public_sale_url, sale_public_number
+        from app.models import SaleInvoice
+    except Exception:
+        current_app.logger.exception('accountant notify imports')
+        return
+    ids = set(accountant_telegram_ids())
+    for u in User.query.filter_by(role='accountant').filter(User.telegram_id.isnot(None)).all():
+        try:
+            ids.add(int(u.telegram_id))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return
+    invs = (
+        SaleInvoice.query
+        .filter(SaleInvoice.order_id == order.id, SaleInvoice.status != 'discarded')
+        .order_by(SaleInvoice.doc_number, SaleInvoice.id)
+        .all()
+    )
+    nums = []
+    for inv in invs:
+        try:
+            nums.append(str(sale_public_number(inv)))
+        except Exception:
+            nums.append(str(inv.id))
+    if not nums and (order.invoice_number or '').strip():
+        nums = [(order.invoice_number or '').strip()]
+    if nums:
+        extra = "\n\n📄 <b>Счёт:</b> " + ", ".join(f"№{n}" for n in nums)
+    else:
+        extra = "\n\n📄 <b>Счёт:</b> не указан"
+    text = (sales_msg or '') + extra
+    sale_url = ''
+    try:
+        sale_url = public_sale_url()
+    except Exception:
+        sale_url = ''
+    for chat_id in ids:
+        if sale_url.startswith('https://'):
+            try:
+                set_pay_menu_button(url=sale_url, chat_id=chat_id, text='Отгрузки')
+            except Exception:
+                current_app.logger.exception('accountant menu button')
+        ok, err = send_chat_message(chat_id, text)
+        if not ok:
+            current_app.logger.warning('accountant shipment notify failed chat=%s err=%s', chat_id, err)
+
+
 def _build_order_item_snapshot(item):
     return {
         'plant_id': item.plant_id,
@@ -112,7 +165,7 @@ def _is_order_locked_for_manager(order, user):
 
 
 def _shop_manager_locks_meta(user):
-    """Активный менеджер продаж: нельзя field/year/split; цену и кол-во можно."""
+    """Активный менеджер продаж: можно qty/add/delete, нельзя price/field/year."""
     return _is_shop_sales_manager(user)
 
 
@@ -736,12 +789,6 @@ def sale_invoices_list():
     if status in ('draft', 'approved'):
         q = q.filter(SaleInvoice.status == status)
     invoices = q.order_by(SaleInvoice.id.desc()).limit(200).all()
-    try:
-        from app.tg_sale import align_sale_invoices_with_orders
-        align_sale_invoices_with_orders(commit=True)
-        invoices = q.order_by(SaleInvoice.id.desc()).limit(200).all()
-    except Exception:
-        db.session.rollback()
     return render_template('orders/sale_invoices.html', invoices=invoices, status=status)
 
 
@@ -860,6 +907,7 @@ def sale_invoice_new():
         companies=companies,
         clients=clients,
         free_hint=True,
+        line_prices={},
         form_action=url_for('orders.sale_invoice_new'),
     )
 
@@ -909,13 +957,22 @@ def sale_invoice_edit(inv_id):
         return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
 
     # free left for current lines (including this invoice's hold released for display)
-    free_now = {f"{r['plant_id']}:{r['size_id']}": r['free'] for r in stock_catalog_for_sale('', exclude_invoice_id=inv.id, limit=5000)}
+    catalog = stock_catalog_for_sale('', exclude_invoice_id=inv.id, limit=5000)
+    free_now = {f"{r['plant_id']}:{r['size_id']}": r['free'] for r in catalog}
+    line_prices = {
+        f"{r['plant_id']}:{r['size_id']}": {
+            'wholesale': r.get('wholesale') or r.get('wholesale_price') or 0,
+            'retail': r.get('retail') or r.get('retail_price') or r.get('price') or 0,
+        }
+        for r in catalog
+    }
     return render_template(
         'orders/sale_invoice_edit.html',
         inv=inv,
         companies=companies,
         clients=clients,
         free_now=free_now,
+        line_prices=line_prices,
         free_hint=True,
         form_action=url_for('orders.sale_invoice_edit', inv_id=inv.id),
     )
@@ -1000,6 +1057,88 @@ def sale_invoice_link_order(inv_id):
     return redirect(url_for('orders.order_detail', order_id=order.id))
 
 
+@bp.route('/orders/sale_invoices/api/search-orders')
+@login_required
+def sale_invoice_search_orders_api():
+    """Умный поиск заказов для привязки счёта: №, клиент, номер общего счёта."""
+    if current_user.role not in ('admin', 'executive', 'shop_manager'):
+        return jsonify({'error': 'forbidden'}), 403
+    q = (request.args.get('q') or '').strip()
+    if len(q) < 1:
+        return jsonify({'items': []})
+    try:
+        client_id = int(request.args.get('client_id') or 0) or None
+    except (TypeError, ValueError):
+        client_id = None
+    limit = 25
+    base = Order.query.filter(
+        Order.is_deleted == False,
+        ~Order.status.in_(('canceled', 'ghost')),
+    )
+    if client_id:
+        # сначала того же клиента, но не ограничиваем только им
+        pass
+    items = []
+    seen = set()
+
+    # Точное совпадение по ID
+    if q.isdigit():
+        oid = int(q)
+        exact = base.filter(Order.id == oid).first()
+        if exact:
+            seen.add(exact.id)
+            items.append(exact)
+
+    # По клиенту и invoice_number
+    needle = f'%{q}%'
+    rows = (
+        base
+        .join(Client, Order.client_id == Client.id)
+        .filter(or_(
+            Client.name.ilike(needle),
+            Order.invoice_number.ilike(needle),
+        ))
+        .order_by(Order.id.desc())
+        .limit(limit)
+        .all()
+    )
+    for o in rows:
+        if o.id not in seen:
+            seen.add(o.id)
+            items.append(o)
+
+    # Подтянуть заказы того же клиента вверх, если client_id передан
+    if client_id:
+        items.sort(key=lambda o: (0 if o.client_id == client_id else 1, -o.id))
+    else:
+        items.sort(key=lambda o: -o.id)
+
+    out = []
+    for o in items[:limit]:
+        try:
+            total = float(o.total_sum or 0)
+        except Exception:
+            total = 0.0
+        try:
+            paid = float(o.paid_sum or 0)
+        except Exception:
+            paid = 0.0
+        out.append({
+            'id': o.id,
+            'client_id': o.client_id,
+            'client_name': o.client.name if o.client else '',
+            'status': o.status,
+            'date': o.date.strftime('%d.%m.%Y') if o.date else '',
+            'invoice_number': o.invoice_number or '',
+            'total': total,
+            'paid': paid,
+            'label': (
+                f"#{o.id} · {(o.client.name if o.client else '—')}"
+                + (f" · счёт {o.invoice_number}" if o.invoice_number else "")
+                + f" · {total:,.0f} ₽".replace(',', ' ')
+            ),
+        })
+    return jsonify({'items': out})
 
 
 @bp.route('/orders/sale_invoices/<int:inv_id>/discard', methods=['POST'])
@@ -1022,7 +1161,7 @@ def sale_invoice_discard(inv_id):
             return redirect(url_for('orders.sale_invoices_list'))
         raise
     db.session.commit()
-    log_action(f"Удалил счёт №{inv.doc_number or inv.id}" + (f" и заказ #{order.id}" if order else ""))
+    log_action(f"Удалил счёт ТГ-{inv.id}" + (f" и заказ #{order.id}" if order else ""))
     try:
         send_tg_message_orders(_discard_orders_text(inv, order))
     except Exception:
@@ -1056,7 +1195,6 @@ def sale_invoice_pdf(inv_id):
         download_name=inv.file_name or f'schet_{sale_public_number(inv)}.pdf',
     )
 
-
 def _sale_print_lines_from_form():
     names = request.form.getlist('line_name')
     qtys = request.form.getlist('line_qty')
@@ -1071,6 +1209,40 @@ def _sale_print_lines_from_form():
             'price': prices[i] if i < len(prices) else '0',
         })
     return lines
+
+
+def _sale_print_pdf_overrides_from_form():
+    """Общие overrides для печати/сохранения произвольного счёта."""
+    pay_until_raw = (request.form.get('pay_until') or '').strip()
+    pay_until_fmt = ''
+    doc_date = None
+    doc_date_raw = (request.form.get('doc_date') or '').strip()
+    if doc_date_raw:
+        try:
+            doc_date = datetime.strptime(doc_date_raw, '%Y-%m-%d')
+        except ValueError:
+            doc_date = None
+    if pay_until_raw:
+        try:
+            pay_until_fmt = datetime.strptime(pay_until_raw, '%Y-%m-%d').strftime('%d.%m.%Y')
+        except ValueError:
+            pay_until_fmt = pay_until_raw
+    ov = {
+        'basis': request.form.get('basis') or '',
+        'buyer_line': request.form.get('buyer_line') or '',
+        'anonymous': bool(request.form.get('anonymous')),
+        'pay_until': pay_until_fmt,
+        'pay_until_line': request.form.get('pay_until_line') or '',
+        'footer_text': request.form.get('footer_text'),
+        'amount_words': request.form.get('amount_words') or '',
+        'vat_note': request.form.get('vat_note') or '',
+        'doc_date': doc_date,
+        'lines': _sale_print_lines_from_form(),
+    }
+    manual_no = (request.form.get('doc_number') or '').strip()
+    if manual_no:
+        ov['doc_number'] = manual_no
+    return ov
 
 
 def _sale_print_form_defaults(inv=None, company=None):
@@ -1169,85 +1341,113 @@ def sale_invoice_print_edit(inv_id):
 @bp.route('/orders/sale_invoices/custom-print', methods=['GET', 'POST'])
 @login_required
 def sale_invoice_custom_print():
-    """Админ: произвольный счёт PDF без записи в БД и без позиций справочника."""
+    """Произвольный счёт: сохранение в реестр (номер 100+) + PDF. Без остатков/заказа."""
     if current_user.role != 'admin':
         flash('Только для администратора')
         return redirect(url_for('orders.sale_invoices_list'))
-    from app.models import SaleCompany
-    from app.tg_sale import render_sale_pdf_custom, _company_ready
+    from sqlalchemy.orm import joinedload
+    from app.models import SaleCompany, SaleInvoice
+    from app.tg_sale import create_custom_sale_invoice, sale_public_number, _company_ready
     companies = (
         SaleCompany.query.filter_by(is_active=True)
         .order_by(SaleCompany.sort_order, SaleCompany.id)
         .all()
     )
     companies = [c for c in companies if _company_ready(c)]
+    if not companies:
+        flash('Сначала заполните фирму (ИНН, банк, р/с, БИК)')
+        return redirect(url_for('orders.sale_invoices_list'))
+
     if request.method == 'POST':
         try:
             company_id = int(request.form.get('company_id') or 0)
         except (TypeError, ValueError):
             company_id = 0
-        company = SaleCompany.query.get(company_id)
-        if not company:
-            flash('Выберите фирму')
+        pdf_overrides = _sale_print_pdf_overrides_from_form()
+        try:
+            inv = create_custom_sale_invoice(
+                company_id,
+                current_user.id,
+                lines=_sale_print_lines_from_form(),
+                comment=request.form.get('basis') or 'Произвольный счёт',
+                anonymous=bool(request.form.get('anonymous')),
+                buyer_line=request.form.get('buyer_line') or '',
+                order=None,
+                pdf_overrides=pdf_overrides,
+            )
+            db.session.commit()
+        except ValueError as err:
+            db.session.rollback()
+            hints = {
+                'no_company': 'Выберите фирму с заполненными реквизитами',
+                'no_lines': 'Добавьте хотя бы одну строку с наименованием',
+                'pdf_failed': 'Не удалось собрать PDF счёта',
+            }
+            flash(hints.get(str(err), f'Не удалось создать счёт: {err}'))
             return redirect(url_for('orders.sale_invoice_custom_print'))
-        pay_until_raw = (request.form.get('pay_until') or '').strip()
-        pay_until_fmt = ''
-        doc_date = None
-        doc_date_raw = (request.form.get('doc_date') or '').strip()
-        if doc_date_raw:
-            try:
-                doc_date = datetime.strptime(doc_date_raw, '%Y-%m-%d')
-            except ValueError:
-                doc_date = None
-        if pay_until_raw:
-            try:
-                pay_until_fmt = datetime.strptime(pay_until_raw, '%Y-%m-%d').strftime('%d.%m.%Y')
-            except ValueError:
-                pay_until_fmt = pay_until_raw
-        blob = render_sale_pdf_custom(
-            company,
-            lines=_sale_print_lines_from_form(),
-            basis=request.form.get('basis') or '',
-            buyer_line=request.form.get('buyer_line') or '',
-            anonymous=bool(request.form.get('anonymous')),
-            pay_until=pay_until_fmt,
-            pay_until_line=request.form.get('pay_until_line') or '',
-            footer_text=request.form.get('footer_text'),
-            amount_words=request.form.get('amount_words') or '',
-            vat_note=request.form.get('vat_note') or '',
-            doc_number=request.form.get('doc_number') or 'б/н',
-            doc_date=doc_date,
-        )
-        if not blob:
-            flash('Не удалось собрать PDF')
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('custom sale invoice standalone')
+            flash('Не удалось создать произвольный счёт')
             return redirect(url_for('orders.sale_invoice_custom_print'))
-        return send_file(
-            io.BytesIO(bytes(blob)),
-            mimetype='application/pdf',
-            as_attachment=False,
-            download_name='schet_custom.pdf',
+        log_action(f'Создал произвольный счёт №{sale_public_number(inv)} (реестр)')
+        flash(f'Счёт №{sale_public_number(inv)} сохранён в реестре. PDF откроется в новой вкладке.')
+        return redirect(url_for('orders.sale_invoice_custom_print', saved=inv.id))
+
+    open_pdf_url = None
+    saved_id = request.args.get('saved', type=int)
+    form = None
+    inv = None
+    selected_company_id = companies[0].id if companies else None
+    if saved_id:
+        inv = (
+            SaleInvoice.query.options(joinedload(SaleInvoice.lines), joinedload(SaleInvoice.company))
+            .filter_by(id=saved_id)
+            .first()
         )
-    form = _sale_print_form_defaults(None)
-    form['basis'] = 'Договор поставки № '
-    form['lines'] = [{
-        'name': 'Предварительная оплата (аванс) 20% за посадочный материал по Договору поставки № … согласно Спецификации',
-        'qty': '1',
-        'unit': 'усл. ед.',
-        'price': '0',
-    }]
+        if inv:
+            form = _sale_print_form_defaults(inv)
+            # size_name хранит ед. изм. произвольных строк
+            form['lines'] = [{
+                'name': ln.plant_name or '',
+                'qty': str(ln.qty or 1),
+                'unit': ln.size_name or 'усл. ед.',
+                'price': str(ln.price or 0),
+            } for ln in (inv.lines or [])] or form['lines']
+            selected_company_id = inv.company_id
+            open_pdf_url = url_for('orders.sale_invoice_pdf', inv_id=inv.id)
+    if form is None:
+        form = _sale_print_form_defaults(None, companies[0])
+        form['basis'] = 'Договор поставки № '
+        form['lines'] = [{
+            'name': 'Предварительная оплата (аванс) 20% за посадочный материал по Договору поставки № … согласно Спецификации',
+            'qty': '1',
+            'unit': 'усл. ед.',
+            'price': '0',
+        }]
     return render_template(
         'orders/sale_invoice_print_edit.html',
         inv=None,
         form=form,
         form_action=url_for('orders.sale_invoice_custom_print'),
         companies=companies,
-        selected_company_id=companies[0].id if companies else None,
+        selected_company_id=selected_company_id,
+        persist=True,
+        draft_key='sale-custom-standalone',
+        open_pdf_url=open_pdf_url,
+        back_url=url_for('orders.sale_invoices_list'),
+        back_label='← К реестру счетов',
+        page_subtitle=(
+            'Произвольный счёт сохранится в реестре с порядковым №. '
+            'Без остатков и без привязки к сумме заказа.'
+        ),
     )
 
 
 @bp.route('/orders/<int:order_id>/export-sale-invoice', methods=['POST'])
 @login_required
 def order_export_sale_invoice(order_id):
+    """Сформировать НОВЫЙ счёт в БД (позиции заказа) + PDF. Старые счета не трогаем."""
     if current_user.role not in ('admin', 'executive', 'shop_manager'):
         flash('Доступ запрещен')
         return redirect(url_for('orders.order_detail', order_id=order_id))
@@ -1257,120 +1457,239 @@ def order_export_sale_invoice(order_id):
         company_id = int(request.form.get('company_id') or 0)
     except (TypeError, ValueError):
         company_id = 0
+    kind = (request.form.get('kind') or 'goods').strip().lower()
+    if kind not in ('goods', 'balance'):
+        kind = 'goods'
     try:
-        inv = create_sale_invoice_from_order(o, company_id, current_user.id)
+        inv = create_sale_invoice_from_order(
+            o, company_id, current_user.id, kind=kind, always_new=True,
+        )
         db.session.commit()
     except ValueError as err:
         db.session.rollback()
         hints = {
             'no_client': 'У заказа нет клиента',
-            'bad_order': 'Отменённый или скрытый заказ выгрузить нельзя',
-            'no_company': 'Сначала заполните фирму в Mini App (ИНН, банк, р/с, БИК)',
+            'bad_order': 'Отменённый или скрытый заказ нельзя',
+            'no_company': 'Сначала заполните фирму (ИНН, банк, р/с, БИК)',
             'no_lines': 'В заказе нет позиций',
             'pdf_failed': 'Не удалось собрать PDF счёта',
         }
-        flash(hints.get(str(err), f'Не удалось выгрузить счёт: {err}'))
+        flash(hints.get(str(err), f'Не удалось создать счёт: {err}'))
         return redirect(url_for('orders.order_detail', order_id=order_id))
     except Exception:
         db.session.rollback()
-        current_app.logger.exception('export sale invoice from order %s', order_id)
-        flash('Не удалось выгрузить счёт')
+        current_app.logger.exception('create sale invoice from order %s', order_id)
+        flash('Не удалось создать счёт')
         return redirect(url_for('orders.order_detail', order_id=order_id))
-    log_action(f"Выгрузил счёт Mini App №{sale_public_number(inv)} из заказа #{o.id}")
-    flash(f'Счёт №{sale_public_number(inv)} в Mini App. PDF как в боте.')
+    log_action(f"Создал счёт №{sale_public_number(inv)} по заказу #{o.id} (позиции)")
+    flash(f'Счёт №{sale_public_number(inv)} сохранён в базе. Открываю PDF.')
     return redirect(url_for('orders.sale_invoice_pdf', inv_id=inv.id))
 
 
-@bp.route('/order/<int:order_id>/apply-prices', methods=['POST'])
+@bp.route('/orders/<int:order_id>/custom-sale-invoice', methods=['GET', 'POST'])
 @login_required
-def order_apply_prices(order_id):
-    """Пересчитать цены позиций: опт/розница из прайса + скидка % (общая или по строкам)."""
-    o = Order.query.get_or_404(order_id)
-    if not _can_use_price_editor(current_user, o):
-        flash('Редактор цен недоступен')
+def order_custom_sale_invoice(order_id):
+    """Произвольный счёт: редактор текстов → запись в БД (без остатков и без суммы заказа)."""
+    if current_user.role not in ('admin', 'executive', 'shop_manager'):
+        flash('Доступ запрещен')
         return redirect(url_for('orders.order_detail', order_id=order_id))
-    if o.status in ('canceled', 'ghost') or o.is_deleted:
-        flash('Нельзя менять цены в этом заказе')
+    o = Order.query.get_or_404(order_id)
+    if o.is_deleted or (o.status or '') in ('canceled', 'ghost'):
+        flash('Отменённый или скрытый заказ нельзя')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+    from sqlalchemy.orm import joinedload
+    from app.models import SaleCompany, SaleInvoice
+    from app.tg_sale import (
+        create_custom_sale_invoice_from_order,
+        sale_public_number,
+        _company_ready,
+        _buyer_line,
+    )
+    companies = [
+        c for c in SaleCompany.query.filter_by(is_active=True)
+        .order_by(SaleCompany.sort_order, SaleCompany.id).all()
+        if _company_ready(c)
+    ]
+    if not companies:
+        flash('Сначала заполните фирму (ИНН, банк, р/с, БИК)')
         return redirect(url_for('orders.order_detail', order_id=order_id))
 
-    from app.shop_prices import (
-        get_shop_price_map,
-        list_prices_for_order_item,
-        price_with_discount,
+    if request.method == 'POST':
+        try:
+            company_id = int(request.form.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        pdf_overrides = _sale_print_pdf_overrides_from_form()
+        try:
+            inv = create_custom_sale_invoice_from_order(
+                o,
+                company_id,
+                current_user.id,
+                lines=_sale_print_lines_from_form(),
+                comment=request.form.get('basis') or f'Заказ №{o.id}',
+                anonymous=bool(request.form.get('anonymous')),
+                pdf_overrides=pdf_overrides,
+            )
+            db.session.commit()
+        except ValueError as err:
+            db.session.rollback()
+            hints = {
+                'no_client': 'У заказа нет клиента',
+                'bad_order': 'Отменённый или скрытый заказ нельзя',
+                'no_company': 'Сначала заполните фирму (ИНН, банк, р/с, БИК)',
+                'no_lines': 'Добавьте хотя бы одну строку с наименованием',
+                'pdf_failed': 'Не удалось собрать PDF счёта',
+            }
+            flash(hints.get(str(err), f'Не удалось создать счёт: {err}'))
+            return redirect(url_for('orders.order_custom_sale_invoice', order_id=order_id))
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('custom sale invoice order %s', order_id)
+            flash('Не удалось создать произвольный счёт')
+            return redirect(url_for('orders.order_custom_sale_invoice', order_id=order_id))
+        log_action(f"Создал произвольный счёт №{sale_public_number(inv)} по заказу #{o.id}")
+        flash(
+            f'Произвольный счёт №{sale_public_number(inv)} сохранён в реестре. '
+            'PDF откроется в новой вкладке — форма останется для правок.'
+        )
+        return redirect(url_for('orders.order_custom_sale_invoice', order_id=order_id, saved=inv.id))
+
+    # GET — форма редактора (после сохранения подставляем счёт из БД)
+    open_pdf_url = None
+    saved_id = request.args.get('saved', type=int)
+    form = None
+    selected_company_id = companies[0].id
+    if saved_id:
+        inv = (
+            SaleInvoice.query.options(joinedload(SaleInvoice.lines), joinedload(SaleInvoice.company))
+            .filter_by(id=saved_id, order_id=order_id)
+            .first()
+        )
+        if inv:
+            form = _sale_print_form_defaults(inv)
+            form['lines'] = [{
+                'name': ln.plant_name or '',
+                'qty': str(ln.qty or 1),
+                'unit': ln.size_name or 'усл. ед.',
+                'price': str(ln.price or 0),
+            } for ln in (inv.lines or [])] or form['lines']
+            selected_company_id = inv.company_id or selected_company_id
+            open_pdf_url = url_for('orders.sale_invoice_pdf', inv_id=inv.id)
+
+    if form is None:
+        buyer = ''
+        if o.client:
+            from types import SimpleNamespace
+            tmp = SimpleNamespace(
+                buyer_name=o.client.name or '',
+                buyer_inn=getattr(o.client, 'inn', None),
+                buyer_kpp=getattr(o.client, 'kpp', None),
+                buyer_ogrn=getattr(o.client, 'ogrn', None),
+                buyer_address=getattr(o.client, 'address', None),
+                buyer_phone=getattr(o.client, 'phone', None),
+                buyer_bank=getattr(o.client, 'bank_name', None),
+                buyer_rs=getattr(o.client, 'rs', None),
+                buyer_bik=getattr(o.client, 'bik', None),
+                buyer_ks=getattr(o.client, 'ks', None),
+                anonymous=False,
+            )
+            buyer = _buyer_line(tmp)
+        form = _sale_print_form_defaults(None, companies[0])
+        form['basis'] = f'Заказ №{o.id}'
+        form['buyer_line'] = buyer
+        form['doc_number'] = ''
+        form['lines'] = [{
+            'name': f'Предварительная оплата (аванс) за посадочный материал по заказу №{o.id}',
+            'qty': '1',
+            'unit': 'усл. ед.',
+            'price': '0',
+        }]
+
+    return render_template(
+        'orders/sale_invoice_print_edit.html',
+        inv=None,
+        form=form,
+        form_action=url_for('orders.order_custom_sale_invoice', order_id=order_id),
+        companies=companies,
+        selected_company_id=selected_company_id,
+        persist=True,
+        draft_key=f'sale-custom-order-{order_id}',
+        open_pdf_url=open_pdf_url,
+        back_url=url_for('orders.order_detail', order_id=order_id),
+        back_label=f'← К заказу #{o.id}',
+        page_subtitle=(
+            f'Произвольный счёт по заказу #{o.id}. Сохранится в реестре с №, '
+            'без списания остатков и без изменения суммы заказа.'
+        ),
     )
 
-    mode = (request.form.get('price_mode') or 'retail').strip().lower()
-    if mode not in ('wholesale', 'retail'):
-        mode = 'retail'
 
-    try:
-        default_discount = float((request.form.get('discount_pct') or '0').replace(',', '.'))
-    except (TypeError, ValueError):
-        default_discount = 0.0
-    default_discount = max(0.0, min(100.0, default_discount))
+@bp.route('/orders/<int:order_id>/advance-sale-invoice', methods=['POST'])
+@login_required
+def order_advance_sale_invoice(order_id):
+    """Устаревший POST аванса → перенаправляем на произвольный счёт."""
+    return redirect(url_for('orders.order_custom_sale_invoice', order_id=order_id))
 
-    selected = request.form.getlist('item_id')
-    if not selected:
-        # Быстрый переключатель опт/розница без модалки — все позиции
-        selected = [str(it.id) for it in (o.items or [])]
 
-    item_ids = []
-    for raw in selected:
-        try:
-            item_ids.append(int(raw))
-        except (TypeError, ValueError):
-            continue
-    item_ids = list(dict.fromkeys(item_ids))
-    if not item_ids:
-        flash('Не выбраны позиции')
+@bp.route('/orders/<int:order_id>/link-sale-invoices', methods=['POST'])
+@login_required
+def order_link_sale_invoices(order_id):
+    """Привязать один или несколько существующих счетов к заказу."""
+    if current_user.role not in ('admin', 'executive', 'shop_manager'):
+        flash('Доступ запрещен')
         return redirect(url_for('orders.order_detail', order_id=order_id))
-
-    items_by_id = {it.id: it for it in (o.items or [])}
-    overrides = get_shop_price_map()
-    changed = 0
-    skipped_no_list = 0
-
-    for iid in item_ids:
-        it = items_by_id.get(iid)
-        if not it:
-            continue
-        wholesale, retail = list_prices_for_order_item(it, overrides=overrides)
-        base = wholesale if mode == 'wholesale' else retail
-        if base <= 0:
-            skipped_no_list += 1
-            continue
-        raw_d = request.form.get(f'discount_{iid}')
-        if raw_d is None or str(raw_d).strip() == '':
-            disc = default_discount
-        else:
-            try:
-                disc = float(str(raw_d).replace(',', '.'))
-            except (TypeError, ValueError):
-                disc = default_discount
-        disc = max(0.0, min(100.0, disc))
-        new_price = price_with_discount(base, disc)
+    o = Order.query.get_or_404(order_id)
+    if o.is_deleted or (o.status or '') in ('canceled', 'ghost'):
+        flash('К этому заказу счета привязать нельзя')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+    from app.models import SaleInvoice
+    from app.tg_sale import sale_public_number
+    raw_ids = request.form.getlist('invoice_id')
+    ids = []
+    for raw in raw_ids:
         try:
-            old = float(it.price or 0)
+            ids.append(int(raw))
         except (TypeError, ValueError):
-            old = 0.0
-        if abs(old - new_price) < 0.005:
             continue
-        it.price = new_price
-        changed += 1
-
-    if changed:
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        flash('Выберите хотя бы один счёт')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+    linked = 0
+    skipped = 0
+    for iid in ids:
+        inv = SaleInvoice.query.get(iid)
+        if not inv or inv.status == 'discarded':
+            skipped += 1
+            continue
+        if inv.order_id and int(inv.order_id) != int(o.id):
+            skipped += 1
+            continue
+        if inv.order_id == o.id:
+            skipped += 1
+            continue
+        inv.order_id = o.id
+        inv.from_existing_order = True
+        if inv.status == 'draft':
+            inv.status = 'approved'
+            inv.approved_at = inv.approved_at or msk_now()
+        linked += 1
+        log_action(f"Привязал счёт №{sale_public_number(inv)} к заказу #{o.id}")
+    if linked:
+        if not (o.invoice_number or '').strip():
+            first = (
+                SaleInvoice.query
+                .filter(SaleInvoice.order_id == o.id, SaleInvoice.status != 'discarded')
+                .order_by(SaleInvoice.id.asc())
+                .first()
+            )
+            if first:
+                o.invoice_number = str(sale_public_number(first))
+                o.invoice_date = (first.approved_at or first.created_at or msk_now()).date()
         db.session.commit()
-        mode_label = 'опт' if mode == 'wholesale' else 'розница'
-        log_action(
-            f'Редактор цен заказа #{o.id}: {mode_label}, скидка {default_discount:g}%, '
-            f'изменено позиций {changed}'
-        )
-        flash(f'Цены обновлены ({mode_label}'
-              + (f', скидка {default_discount:g}%' if default_discount else '')
-              + f'): {changed} поз.')
+        flash(f'Привязано счетов: {linked}' + (f', пропущено: {skipped}' if skipped else ''))
     else:
-        flash('Цены не изменились' + (f' (нет прайса у {skipped_no_list} поз.)' if skipped_no_list else ''))
-
+        flash('Нечего привязывать' + (f' (пропущено: {skipped})' if skipped else ''))
     return redirect(url_for('orders.order_detail', order_id=order_id))
 
 
@@ -1607,6 +1926,100 @@ def shop_on_request_detail(req_id):
     return render_template('orders/shop_on_request_detail.html', req=row)
 
 
+
+@bp.route('/order/<int:order_id>/apply-prices', methods=['POST'])
+@login_required
+def order_apply_prices(order_id):
+    """Пересчитать цены позиций: опт/розница из прайса + скидка % (общая или по строкам)."""
+    o = Order.query.get_or_404(order_id)
+    if not _can_use_price_editor(current_user, o):
+        flash('Редактор цен недоступен')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+    if o.status in ('canceled', 'ghost') or o.is_deleted:
+        flash('Нельзя менять цены в этом заказе')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+
+    from app.shop_prices import (
+        get_shop_price_map,
+        list_prices_for_order_item,
+        price_with_discount,
+    )
+
+    mode = (request.form.get('price_mode') or 'retail').strip().lower()
+    if mode not in ('wholesale', 'retail'):
+        mode = 'retail'
+
+    try:
+        default_discount = float((request.form.get('discount_pct') or '0').replace(',', '.'))
+    except (TypeError, ValueError):
+        default_discount = 0.0
+    default_discount = max(0.0, min(100.0, default_discount))
+
+    selected = request.form.getlist('item_id')
+    if not selected:
+        selected = [str(it.id) for it in (o.items or [])]
+
+    item_ids = []
+    for raw in selected:
+        try:
+            item_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    item_ids = list(dict.fromkeys(item_ids))
+    if not item_ids:
+        flash('Не выбраны позиции')
+        return redirect(url_for('orders.order_detail', order_id=order_id))
+
+    items_by_id = {it.id: it for it in (o.items or [])}
+    overrides = get_shop_price_map()
+    changed = 0
+    skipped_no_list = 0
+
+    for iid in item_ids:
+        it = items_by_id.get(iid)
+        if not it:
+            continue
+        wholesale, retail = list_prices_for_order_item(it, overrides=overrides)
+        base = wholesale if mode == 'wholesale' else retail
+        if base <= 0:
+            skipped_no_list += 1
+            continue
+        raw_d = request.form.get(f'discount_{iid}')
+        if raw_d is None or str(raw_d).strip() == '':
+            disc = default_discount
+        else:
+            try:
+                disc = float(str(raw_d).replace(',', '.'))
+            except (TypeError, ValueError):
+                disc = default_discount
+        disc = max(0.0, min(100.0, disc))
+        new_price = price_with_discount(base, disc)
+        try:
+            old = float(it.price or 0)
+        except (TypeError, ValueError):
+            old = 0.0
+        if abs(old - new_price) < 0.005:
+            continue
+        it.price = new_price
+        changed += 1
+
+    if changed:
+        db.session.commit()
+        mode_label = 'опт' if mode == 'wholesale' else 'розница'
+        log_action(
+            f'Редактор цен заказа #{o.id}: {mode_label}, скидка {default_discount:g}%, '
+            f'изменено позиций {changed}'
+        )
+        flash(f'Цены обновлены ({mode_label}'
+              + (f', скидка {default_discount:g}%' if default_discount else '')
+              + f'): {changed} поз.')
+    else:
+        flash('Цены не изменились' + (f' (нет прайса у {skipped_no_list} поз.)' if skipped_no_list else ''))
+
+    return redirect(url_for('orders.order_detail', order_id=order_id))
+
+
+
 @bp.route('/order/create', methods=['GET', 'POST'])
 @login_required
 def order_create():
@@ -1630,6 +2043,14 @@ def order_create():
         
         created_items = []
         deficit_notes = []
+        create_price_mode = (request.form.get('price_mode') or 'retail').strip().lower()
+        if create_price_mode not in ('wholesale', 'retail'):
+            create_price_mode = 'retail'
+        try:
+            create_discount_pct = float((request.form.get('discount_pct') or '0').replace(',', '.'))
+        except (TypeError, ValueError):
+            create_discount_pct = 0.0
+        create_discount_pct = max(0.0, min(100.0, create_discount_pct))
         for i in range(len(p_ids)):
             if int(q_ids[i]) > 0:
                 ok, free = check_stock_availability(p_ids[i], s_ids[i], f_ids[i], int(y_ids[i]), int(q_ids[i]))
@@ -1659,8 +2080,11 @@ def order_create():
                             f"в минус на {short} шт. Откуда взять: {hint}"
                         )
                 
-                wholesale = get_actual_price(int(p_ids[i]), int(s_ids[i]), int(f_ids[i]))
-                p = order_default_price(int(p_ids[i]), int(s_ids[i]), wholesale)
+                wholesale = float(get_actual_price(int(p_ids[i]), int(s_ids[i]), int(f_ids[i])) or 0)
+                retail = order_default_price(int(p_ids[i]), int(s_ids[i]), wholesale)
+                base = wholesale if create_price_mode == 'wholesale' else retail
+                from app.shop_prices import price_with_discount
+                p = price_with_discount(base, create_discount_pct)
                 new_item = OrderItem(
                     order_id=o.id,
                     plant_id=int(p_ids[i]),
@@ -2007,12 +2431,6 @@ def order_detail(order_id):
             
             if current_user.role in ['admin', 'executive']:
                 o.is_barter = request.form.get('is_barter') == 'on'
-
-            try:
-                from app.tg_sale import sync_sale_invoices_from_order
-                sync_sale_invoices_from_order(o)
-            except Exception:
-                current_app.logger.exception('sync sale invoice client from order')
                 
             db.session.commit()
             flash('Обновлено')
@@ -2170,17 +2588,14 @@ def order_detail(order_id):
                     continue
 
                 new_qty = int(qtys[i])
-                # Активный менеджер продаж: поле и партия — как было; цену можно менять.
+                # Активный менеджер продаж: только кол-во; цена/поле/партия — как было.
                 if shop_locks:
                     new_field_id = it.field_id
                     new_year = it.year
                     try:
-                        new_price_forced = float(prices[i] or it.price or 0)
+                        new_price_forced = float(it.price or 0)
                     except Exception:
-                        try:
-                            new_price_forced = float(it.price or 0)
-                        except Exception:
-                            new_price_forced = 0.0
+                        new_price_forced = 0.0
                 else:
                     new_field_id = int(flds[i])
                     new_year = int(yrs[i])
@@ -2385,11 +2800,6 @@ def order_detail(order_id):
                     wholesale = float(wholesale or 0)
                 except Exception:
                     wholesale = 0
-                try:
-                    form_price = float(request.form.get('price') or 0)
-                except (TypeError, ValueError):
-                    form_price = 0
-                item_price = form_price if form_price > 0 else order_default_price(p, s, wholesale)
                 new_item = OrderItem(
                     order_id=o.id,
                     plant_id=p,
@@ -2397,7 +2807,7 @@ def order_detail(order_id):
                     field_id=None,
                     year=None,
                     quantity=q,
-                    price=item_price,
+                    price=order_default_price(p, s, wholesale),
                 )
                 db.session.add(new_item)
                 db.session.flush()
@@ -2758,11 +3168,32 @@ def order_detail(order_id):
                 val['comment'] = ", ".join(val['comment'])
                 ship_groups.append(val)
             ship_groups.sort(key=lambda x: x['date'])
-            
+
+        try:
+            from app.models import SaleInvoice as _SaleInv
+            from app.tg_sale import sale_public_number as _sale_no
+            inv_rows = (
+                _SaleInv.query
+                .filter(_SaleInv.order_id == ord_obj.id, _SaleInv.status != 'discarded')
+                .order_by(_SaleInv.id.asc())
+                .all()
+            )
+            sale_invoices = [{
+                'id': inv.id,
+                'number': _sale_no(inv),
+                'amount': inv.amount,
+                'kind': getattr(inv, 'kind', None) or 'goods',
+                'created_at': inv.created_at or inv.approved_at,
+                'status': inv.status,
+            } for inv in inv_rows]
+        except Exception:
+            sale_invoices = []
+
         orders_data.append({
             'order': ord_obj,
             'is_current': (ord_obj.id == o.id),
-            'shipments': ship_groups
+            'shipments': ship_groups,
+            'sale_invoices': sale_invoices,
         })
 
        # ... в конце функции ...
@@ -2787,22 +3218,35 @@ def order_detail(order_id):
     order_paid_total = _order_paid_total(o.id)
     order_locked_for_manager = _is_order_locked_for_manager(o, current_user)
     shop_manager_locks = _shop_manager_locks_meta(current_user)
-    # Поле/партия: lock для оплаченного менеджера питомника и для shop_manager.
-    # Цену shop_manager может менять; nursery user — нет, если заказ оплачен.
+    # UI: блокируем поле/цену/партию и для оплаченного user, и для shop_manager всегда
     meta_locked = order_locked_for_manager or shop_manager_locks
     price_locked = order_locked_for_manager
 
     sale_mini_invoice = None
+    sale_invoices = []
+    linkable_sale_invoices = []
     sale_companies = []
     try:
         from app.models import SaleInvoice, SaleCompany
-        from app.tg_sale import _company_ready
-        sale_mini_invoice = (
+        from app.tg_sale import _company_ready, sale_public_number
+        sale_invoices = (
             SaleInvoice.query
             .filter(SaleInvoice.order_id == o.id, SaleInvoice.status != 'discarded')
-            .order_by(SaleInvoice.id.desc())
-            .first()
+            .order_by(SaleInvoice.id.asc())
+            .all()
         )
+        sale_mini_invoice = sale_invoices[-1] if sale_invoices else None
+        # Свободные счета: без заказа; предпочитаем того же клиента
+        q_free = (
+            SaleInvoice.query
+            .filter(SaleInvoice.order_id.is_(None), SaleInvoice.status != 'discarded')
+            .order_by(SaleInvoice.id.desc())
+            .limit(80)
+        )
+        free_rows = q_free.all()
+        same_client = [inv for inv in free_rows if o.client_id and inv.client_id == o.client_id]
+        others = [inv for inv in free_rows if inv not in same_client]
+        linkable_sale_invoices = (same_client + others)[:40]
         sale_companies = [
             c for c in SaleCompany.query.order_by(SaleCompany.sort_order, SaleCompany.id).all()
             if c.is_active and _company_ready(c)
@@ -2856,6 +3300,31 @@ def order_detail(order_id):
                               or (_h.item.field.name if _h.item and _h.item.field else None),
                 'year': _payload.get('year'),
             })
+        # Счета как документы заказа — в ту же ленту истории (для админа).
+        try:
+            from app.tg_sale import sale_public_number as _spn
+            for inv in sale_invoices:
+                kind = getattr(inv, 'kind', None) or 'goods'
+                kind_label = {'goods': 'Счёт (позиции)', 'advance': 'Счёт (произвольный)', 'balance': 'Счёт (остаток)'}.get(kind, 'Счёт')
+                order_history_rows.append({
+                    'created_at': inv.approved_at or inv.created_at,
+                    'username': (inv.user.username if inv.user else None),
+                    'action_type': 'sale_invoice',
+                    'before_qty': None,
+                    'after_qty': None,
+                    'delta_qty': 0,
+                    'plant_name': f'{kind_label} №{_spn(inv)}',
+                    'size_name': f'{(inv.amount or 0)} ₽',
+                    'field_name': None,
+                    'year': None,
+                    'invoice_id': inv.id,
+                })
+            order_history_rows.sort(
+                key=lambda r: r.get('created_at') or msk_now(),
+                reverse=True,
+            )
+        except Exception:
+            current_app.logger.exception('order history invoices')
 
     return render_template('orders/order_detail.html', 
                            order=o, 
@@ -2871,12 +3340,14 @@ def order_detail(order_id):
                            shop_manager_locks=shop_manager_locks,
                            meta_locked=meta_locked,
                            price_locked=price_locked,
-                           order_history_rows=order_history_rows,
-                           return_to=return_to,
-                           sale_mini_invoice=sale_mini_invoice,
-                           sale_companies=sale_companies,
                            can_use_price_editor=can_use_price_editor,
-                           price_editor_rows=price_editor_rows)
+                           price_editor_rows=price_editor_rows,
+                           sale_mini_invoice=sale_mini_invoice,
+                           sale_invoices=sale_invoices,
+                           linkable_sale_invoices=linkable_sale_invoices,
+                           sale_companies=sale_companies,
+                           order_history_rows=order_history_rows,
+                           return_to=return_to)
 
 @bp.route('/order/download_payment_file/<int:payment_id>')
 @login_required
@@ -3393,6 +3864,7 @@ def send_shipment_report(order_id):
         
     # Затем отправляем текстовый отчет
     send_tg_message_orders(msg)
+    _notify_accountant_shipment(o, msg)
     
     flash('Отчет об отгрузке успешно отправлен в Telegram!', 'success')
     log_action(f"Отправил отчет об отгрузке в ТГ по заказу #{o.id}")
@@ -3498,6 +3970,58 @@ def invoice_detail(client_id, invoice_number):
     all_payments.sort(key=lambda x: x['date'])
     all_shipments.sort(key=lambda x: x['date'])
 
+    # Реестр исходящих счетов (SaleInvoice), привязанных к заказам этой группы
+    sale_invoices = []
+    sale_invoices_sum = Decimal(0)
+    try:
+        from app.models import SaleInvoice
+        from app.tg_sale import sale_public_number
+        from sqlalchemy import or_, and_
+        order_ids = [o.id for o in orders]
+        doc_num = None
+        try:
+            doc_num = int(str(invoice_number).strip())
+        except (TypeError, ValueError):
+            doc_num = None
+        filters = [SaleInvoice.order_id.in_(order_ids)]
+        if doc_num is not None:
+            filters.append(and_(
+                SaleInvoice.client_id == client_id,
+                SaleInvoice.doc_number == doc_num,
+            ))
+        rows = (
+            SaleInvoice.query
+            .filter(SaleInvoice.status != 'discarded', or_(*filters))
+            .order_by(SaleInvoice.id.desc())
+            .all()
+        )
+        seen = set()
+        for inv in rows:
+            if inv.id in seen:
+                continue
+            seen.add(inv.id)
+            try:
+                sale_invoices_sum += Decimal(str(inv.amount or 0))
+            except Exception:
+                pass
+            sale_invoices.append({
+                'id': inv.id,
+                'number': sale_public_number(inv),
+                'kind': getattr(inv, 'kind', None) or 'goods',
+                'amount': inv.amount,
+                'status': inv.status,
+                'order_id': inv.order_id,
+                'buyer_name': inv.buyer_name,
+                'created_at': inv.created_at or inv.approved_at,
+                'company': inv.company.short_name if inv.company else '',
+                'origin': inv.origin or '',
+            })
+        sale_invoices.sort(key=lambda r: (r.get('number') or 0, r.get('id') or 0), reverse=True)
+    except Exception:
+        current_app.logger.exception('invoice_detail sale invoices')
+        sale_invoices = []
+        sale_invoices_sum = Decimal(0)
+
     return render_template('orders/invoice_detail.html', 
                            invoice_number=invoice_number,
                            invoice_date=invoice_date,
@@ -3507,249 +4031,94 @@ def invoice_detail(client_id, invoice_number):
                            matrix=sorted_matrix,
                            payments=all_payments,
                            shipments=all_shipments,
+                           sale_invoices=sale_invoices,
+                           sale_invoices_sum=sale_invoices_sum,
                            return_to=return_to)
 
-def _commercial_proposal_styles():
-    """Общие стили листа «Коммерческое предложение» (список заказов / печать)."""
-    return {
-        'style_order_header': PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid"),
-        'style_sub_header': PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid"),
-        'style_table_header': PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid"),
-        'style_total': PatternFill(start_color="F1F8E9", end_color="F1F8E9", fill_type="solid"),
-        'style_grand_total': PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid"),
-        'style_date_row': PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid"),
-        'font_order_header': Font(bold=True, color="FFFFFF", size=13),
-        'font_sub_header': Font(bold=True, color="1B5E20", size=11),
-        'font_table_header': Font(bold=True, color="000000"),
-        'font_total': Font(bold=True),
-        'border_total': Border(top=Side(style='thick')),
-        'thin_border': Border(
-            left=Side(style='thin'), right=Side(style='thin'),
-            top=Side(style='thin'), bottom=Side(style='thin'),
-        ),
-        'align_center': Alignment(horizontal="center", vertical="center"),
-        'align_right': Alignment(horizontal="right", vertical="center"),
-        'align_left': Alignment(horizontal="left", vertical="center"),
-        # Колонка «Размер» шире 14: длинные значения вида «140-160 * 100-120»
-        # иначе обрезаются в Excel (отображается «...»).
-        'columns': ["Растение", "Размер", "Поле", "Год", "Цена", "Кол-во", "Сумма"],
-        'col_widths': [33, 28, 12, 8, 14, 10, 18],
-    }
+@bp.route('/orders/export')
+@login_required
+def export_orders():
+    """Excel-выгрузка списка заказов.
 
+    Учитывает все фильтры со страницы /orders (клиент, статус, даты, режим
+    активные/скрытые) плюс multi-select «По номеру заказа» (`filter_ids`).
+    Если пользователь отметил конкретные номера в фильтре — Excel выгрузит
+    только их. Иначе — все заказы по текущим фильтрам.
 
-def _fit_commercial_size_column(ws, size_names, col_idx=2, min_width=28, max_width=48):
-    """Подгоняет ширину столбца «Размер» под самый длинный размер в выгрузке."""
-    longest = max((len(str(n or '')) for n in size_names), default=0)
-    width = max(min_width, min(max_width, longest + 2))
-    ws.column_dimensions[get_column_letter(col_idx)].width = width
+    Дизайн копирует «красивый» отчёт `export_order_history`: для каждого
+    заказа собственная зелёная шапка, светло-зелёная подшапка с клиентом,
+    таблица позиций (без столбцов «Первоначально / Изменения» — мы хотим
+    видеть только фактические числа на момент выгрузки) и блок ИТОГО /
+    Оплачено / Остаток. Между заказами — пустая строка-разделитель.
 
-
-def _append_order_commercial_block(ws, o, row_idx, styles, *, with_print_dates=False):
-    """Рисует один заказ в формате «Коммерческое предложение».
-
-    Возвращает (next_row_idx, order_total_qty, order_total_sum, paid_sum, size_names).
-    При with_print_dates=True под блоком оплаты добавляются пустые строки
-    «Дата биркования / Дата начала копки / Дата отгрузки» — для печати.
+    В конце листа — общий итог по выгруженной выборке (кол-во заказов,
+    суммарная сумма, оплачено и остаток), чтобы при многозаказной выгрузке
+    сразу был виден сводный показатель.
     """
-    style_order_header = styles['style_order_header']
-    style_sub_header = styles['style_sub_header']
-    style_table_header = styles['style_table_header']
-    style_total = styles['style_total']
-    style_date_row = styles['style_date_row']
-    font_order_header = styles['font_order_header']
-    font_sub_header = styles['font_sub_header']
-    font_table_header = styles['font_table_header']
-    font_total = styles['font_total']
-    border_total = styles['border_total']
-    thin_border = styles['thin_border']
-    align_center = styles['align_center']
-    align_right = styles['align_right']
-    align_left = styles['align_left']
-    columns = styles['columns']
+    f_client = request.args.get('filter_client')
+    f_status = request.args.get('filter_status')
+    f_date_start = request.args.get('start_date')
+    f_date_end = request.args.get('end_date')
+    mode = request.args.get('mode', 'active')
 
-    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
-    cell = ws.cell(
-        row=row_idx, column=1,
-        value=f"Заказ №{o.id} от {o.date.strftime('%d.%m.%Y')}"
-    )
-    cell.fill = style_order_header
-    cell.font = font_order_header
-    cell.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[row_idx].height = 26
-    row_idx += 1
+    # Multi-select по номерам заказов из фильтра на /orders. Приходит как
+    # ?filter_ids=1&filter_ids=5&filter_ids=12. Дополнительно поддерживаем
+    # старый формат ?ids=1,5,12 на случай прямых ссылок.
+    f_ids_raw = request.args.getlist('filter_ids')
+    if not f_ids_raw and request.args.get('ids'):
+        f_ids_raw = (request.args.get('ids') or '').split(',')
+    selected_ids = []
+    for v in f_ids_raw:
+        v = (v or '').strip()
+        if v.isdigit():
+            selected_ids.append(int(v))
 
-    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
-    client_name = o.client.name if o.client else '—'
-    sub_parts = [f"Клиент: {client_name}", f"Статус: {o.status}"]
-    if o.invoice_number:
-        inv_part = f"Счёт: {o.invoice_number}"
-        if o.invoice_date:
-            inv_part += f" от {o.invoice_date.strftime('%d.%m.%Y')}"
-        sub_parts.append(inv_part)
-    c_client = ws.cell(row=row_idx, column=1, value="    |    ".join(sub_parts))
-    c_client.fill = style_sub_header
-    c_client.font = font_sub_header
-    c_client.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[row_idx].height = 22
-    row_idx += 2
+    # Применяем тот же набор фильтров, что и на странице /orders, плюс
+    # фильтр по выбранным номерам. Это гарантирует, что Excel содержит
+    # ровно то, что сейчас видно в списке.
+    q = Order.query.filter_by(is_deleted=(mode == 'trash'))
+    if f_client:
+        q = q.filter(Order.client_id == int(f_client))
+    if f_status:
+        q = q.filter(Order.status == f_status)
+    if not f_status:
+        q = q.filter(Order.status != 'ghost')
+    if f_date_start:
+        q = q.filter(func.date(Order.date) >= f_date_start)
+    if f_date_end:
+        q = q.filter(func.date(Order.date) <= f_date_end)
+    if selected_ids:
+        q = q.filter(Order.id.in_(selected_ids))
+    orders = q.order_by(Order.date.desc()).all()
 
-    for col_num, col_name in enumerate(columns, 1):
-        c = ws.cell(row=row_idx, column=col_num, value=col_name)
-        c.fill = style_table_header
-        c.font = font_table_header
-        c.border = thin_border
-        c.alignment = align_center
-    row_idx += 1
-
-    items_sorted = sorted(
-        o.items,
-        key=lambda it: (
-            (it.plant.name if it.plant else '').lower(),
-            natural_key(it.size.name if it.size else ''),
-            (it.field.name if it.field else '').lower(),
-            it.year or 0,
-        ),
-    )
-
-    order_total_qty = 0
-    order_total_sum = Decimal('0')
-    size_names = []
-
-    for item in items_sorted:
-        plant_name = item.plant.name if item.plant else '—'
-        size_name = item.size.name if item.size else '—'
-        field_name = item.field.name if item.field else '—'
-        size_names.append(size_name)
-        qty = int(item.quantity or 0)
-        price = Decimal(str(item.price or 0))
-        line_sum = price * Decimal(qty)
-
-        c_plant = ws.cell(row=row_idx, column=1, value=plant_name)
-        c_plant.border = thin_border
-        c_size = ws.cell(row=row_idx, column=2, value=size_name)
-        c_size.border = thin_border
-        c_size.alignment = align_left
-        c_field = ws.cell(row=row_idx, column=3, value=field_name)
-        c_field.border = thin_border
-        c_field.alignment = align_center
-
-        c_year = ws.cell(row=row_idx, column=4, value=item.year)
-        c_year.border = thin_border
-        c_year.alignment = align_center
-
-        c_price = ws.cell(row=row_idx, column=5, value=float(price))
-        c_price.border = thin_border
-        c_price.number_format = '#,##0.00 "₽"'
-
-        c_qty = ws.cell(row=row_idx, column=6, value=qty)
-        c_qty.border = thin_border
-        c_qty.alignment = align_center
-
-        c_sum = ws.cell(row=row_idx, column=7, value=float(line_sum))
-        c_sum.border = thin_border
-        c_sum.number_format = '#,##0.00 "₽"'
-        c_sum.font = Font(bold=True)
-
-        order_total_qty += qty
-        order_total_sum += line_sum
-        row_idx += 1
-
-    c_label = ws.cell(row=row_idx, column=5, value="ИТОГО:")
-    c_label.font = font_total
-    c_label.alignment = align_right
-    c_label.border = border_total
-    c_label.fill = style_total
-    c_t_qty = ws.cell(row=row_idx, column=6, value=order_total_qty)
-    c_t_qty.font = font_total
-    c_t_qty.alignment = align_center
-    c_t_qty.border = border_total
-    c_t_qty.fill = style_total
-    c_t_sum = ws.cell(row=row_idx, column=7, value=float(order_total_sum))
-    c_t_sum.font = font_total
-    c_t_sum.number_format = '#,##0.00 "₽"'
-    c_t_sum.border = border_total
-    c_t_sum.fill = style_total
-    for col_idx in range(1, 5):
-        cc = ws.cell(row=row_idx, column=col_idx)
-        cc.fill = style_total
-        cc.border = border_total
-    row_idx += 2
-
-    total_sum = Decimal(str(o.total_sum or 0))
-    paid_sum = Decimal(str(o.paid_sum or 0))
-    debt = total_sum - paid_sum
-    summary_titles = ["Сумма заказа", "Оплачено", "Остаток"]
-    summary_values = [float(total_sum), float(paid_sum), float(debt)]
-    summary_cols = [(1, 2), (3, 4), (5, 7)]
-
-    for idx, title in enumerate(summary_titles):
-        start_col, end_col = summary_cols[idx]
-        ws.merge_cells(start_row=row_idx, start_column=start_col,
-                       end_row=row_idx, end_column=end_col)
-        t_cell = ws.cell(row=row_idx, column=start_col, value=title)
-        t_cell.fill = style_sub_header
-        t_cell.font = font_sub_header
-        t_cell.alignment = align_center
-        t_cell.border = thin_border
-        for c in range(start_col + 1, end_col + 1):
-            ws.cell(row=row_idx, column=c).border = thin_border
-    row_idx += 1
-
-    for idx, value in enumerate(summary_values):
-        start_col, end_col = summary_cols[idx]
-        ws.merge_cells(start_row=row_idx, start_column=start_col,
-                       end_row=row_idx, end_column=end_col)
-        v_cell = ws.cell(row=row_idx, column=start_col, value=value)
-        v_cell.font = Font(bold=True, size=12, color="1B5E20")
-        v_cell.alignment = align_center
-        v_cell.number_format = '#,##0.00 "₽"'
-        v_cell.border = thin_border
-        for c in range(start_col + 1, end_col + 1):
-            ws.cell(row=row_idx, column=c).border = thin_border
-    row_idx += 2
-
-    if with_print_dates:
-        for label in ("Дата биркования", "Дата начала копки", "Дата отгрузки"):
-            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=4)
-            lbl = ws.cell(row=row_idx, column=1, value=label)
-            lbl.fill = style_date_row
-            lbl.font = Font(bold=True, size=11)
-            lbl.alignment = align_left
-            lbl.border = thin_border
-            for c in range(2, 5):
-                cell_mid = ws.cell(row=row_idx, column=c)
-                cell_mid.fill = style_date_row
-                cell_mid.border = thin_border
-            ws.merge_cells(start_row=row_idx, start_column=5, end_row=row_idx, end_column=7)
-            blank = ws.cell(row=row_idx, column=5, value="")
-            blank.fill = style_date_row
-            blank.border = thin_border
-            for c in range(6, 8):
-                cell_r = ws.cell(row=row_idx, column=c)
-                cell_r.fill = style_date_row
-                cell_r.border = thin_border
-            ws.row_dimensions[row_idx].height = 22
-            row_idx += 1
-        row_idx += 1
-
-    # Пустая строка-разделитель между заказами.
-    row_idx += 1
-    return row_idx, order_total_qty, order_total_sum, paid_sum, size_names
-
-
-def _build_commercial_workbook(orders, *, with_print_dates=False):
-    """Собирает xlsx «Коммерческое предложение» по списку заказов."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Заказы"
-    styles = _commercial_proposal_styles()
-    style_grand_total = styles['style_grand_total']
-    font_sub_header = styles['font_sub_header']
-    thin_border = styles['thin_border']
-    align_center = styles['align_center']
-    align_right = styles['align_right']
 
-    for i, w in enumerate(styles['col_widths'], 1):
+    # --- Палитра/стили (как в export_order_history) -----------------------
+    style_order_header = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
+    style_sub_header = PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid")
+    style_table_header = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
+    style_total = PatternFill(start_color="F1F8E9", end_color="F1F8E9", fill_type="solid")
+    style_grand_total = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
+    font_order_header = Font(bold=True, color="FFFFFF", size=13)
+    font_sub_header = Font(bold=True, color="1B5E20", size=11)
+    font_table_header = Font(bold=True, color="000000")
+    font_total = Font(bold=True)
+    border_total = Border(top=Side(style='thick'))
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin'),
+    )
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_right = Alignment(horizontal="right", vertical="center")
+
+    # 7 колонок (как в истории заказа), но без «Первоначально / Изменения».
+    # «Поле» и «Год» нужны при многозаказной выгрузке: один и тот же размер
+    # может встречаться у разных партий и без поля/года их не отличить.
+    columns = ["Растение", "Размер", "Поле", "Год", "Цена", "Кол-во", "Сумма"]
+    col_widths = [33, 14, 16, 8, 14, 10, 18]
+    for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     row_idx = 1
@@ -3757,22 +4126,162 @@ def _build_commercial_workbook(orders, *, with_print_dates=False):
     grand_total_sum = Decimal('0')
     grand_total_paid = Decimal('0')
     exported_count = 0
-    all_size_names = []
 
     for o in orders:
         if not o.items:
             continue
-        row_idx, order_total_qty, order_total_sum, paid_sum, size_names = _append_order_commercial_block(
-            ws, o, row_idx, styles, with_print_dates=with_print_dates,
+
+        # Шапка заказа (зелёная) — №, дата, статус
+        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
+        cell = ws.cell(
+            row=row_idx, column=1,
+            value=f"Заказ №{o.id} от {o.date.strftime('%d.%m.%Y')}"
         )
-        all_size_names.extend(size_names)
+        cell.fill = style_order_header
+        cell.font = font_order_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[row_idx].height = 26
+        row_idx += 1
+
+        # Подшапка — клиент + счёт + статус
+        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
+        client_name = o.client.name if o.client else '—'
+        sub_parts = [f"Клиент: {client_name}", f"Статус: {o.status}"]
+        if o.invoice_number:
+            inv_part = f"Счёт: {o.invoice_number}"
+            if o.invoice_date:
+                inv_part += f" от {o.invoice_date.strftime('%d.%m.%Y')}"
+            sub_parts.append(inv_part)
+        c_client = ws.cell(row=row_idx, column=1, value="    |    ".join(sub_parts))
+        c_client.fill = style_sub_header
+        c_client.font = font_sub_header
+        c_client.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[row_idx].height = 22
+        row_idx += 2
+
+        # Заголовки таблицы позиций
+        for col_num, col_name in enumerate(columns, 1):
+            c = ws.cell(row=row_idx, column=col_num, value=col_name)
+            c.fill = style_table_header
+            c.font = font_table_header
+            c.border = thin_border
+            c.alignment = align_center
+        row_idx += 1
+
+        # Позиции — фактические числа на момент выгрузки.
+        # Сортируем для удобочитаемости: растение → размер → поле → год.
+        items_sorted = sorted(
+            o.items,
+            key=lambda it: (
+                (it.plant.name if it.plant else '').lower(),
+                natural_key(it.size.name if it.size else ''),
+                (it.field.name if it.field else '').lower(),
+                it.year or 0,
+            ),
+        )
+
+        order_total_qty = 0
+        order_total_sum = Decimal('0')
+
+        for item in items_sorted:
+            plant_name = item.plant.name if item.plant else '—'
+            size_name = item.size.name if item.size else '—'
+            field_name = item.field.name if item.field else '—'
+            qty = int(item.quantity or 0)
+            price = Decimal(str(item.price or 0))
+            line_sum = price * Decimal(qty)
+
+            ws.cell(row=row_idx, column=1, value=plant_name).border = thin_border
+            ws.cell(row=row_idx, column=2, value=size_name).border = thin_border
+            c_field = ws.cell(row=row_idx, column=3, value=field_name)
+            c_field.border = thin_border
+            c_field.alignment = align_center
+
+            c_year = ws.cell(row=row_idx, column=4, value=item.year)
+            c_year.border = thin_border
+            c_year.alignment = align_center
+
+            c_price = ws.cell(row=row_idx, column=5, value=float(price))
+            c_price.border = thin_border
+            c_price.number_format = '#,##0.00 "₽"'
+
+            c_qty = ws.cell(row=row_idx, column=6, value=qty)
+            c_qty.border = thin_border
+            c_qty.alignment = align_center
+
+            c_sum = ws.cell(row=row_idx, column=7, value=float(line_sum))
+            c_sum.border = thin_border
+            c_sum.number_format = '#,##0.00 "₽"'
+            c_sum.font = Font(bold=True)
+
+            order_total_qty += qty
+            order_total_sum += line_sum
+            row_idx += 1
+
+        # ИТОГО по заказу
+        c_label = ws.cell(row=row_idx, column=5, value="ИТОГО:")
+        c_label.font = font_total
+        c_label.alignment = align_right
+        c_label.border = border_total
+        c_label.fill = style_total
+        c_t_qty = ws.cell(row=row_idx, column=6, value=order_total_qty)
+        c_t_qty.font = font_total
+        c_t_qty.alignment = align_center
+        c_t_qty.border = border_total
+        c_t_qty.fill = style_total
+        c_t_sum = ws.cell(row=row_idx, column=7, value=float(order_total_sum))
+        c_t_sum.font = font_total
+        c_t_sum.number_format = '#,##0.00 "₽"'
+        c_t_sum.border = border_total
+        c_t_sum.fill = style_total
+        # Закрасим пустые ячейки слева, чтобы тоновая полоса была сплошной
+        for col_idx in range(1, 5):
+            cc = ws.cell(row=row_idx, column=col_idx)
+            cc.fill = style_total
+            cc.border = border_total
+        row_idx += 2
+
+        # Блок «Сумма заказа / Оплачено / Остаток»
+        total_sum = Decimal(str(o.total_sum or 0))
+        paid_sum = Decimal(str(o.paid_sum or 0))
+        debt = total_sum - paid_sum
+        summary_titles = ["Сумма заказа", "Оплачено", "Остаток"]
+        summary_values = [float(total_sum), float(paid_sum), float(debt)]
+        summary_cols = [(1, 2), (3, 4), (5, 7)]
+
+        for idx, title in enumerate(summary_titles):
+            start_col, end_col = summary_cols[idx]
+            ws.merge_cells(start_row=row_idx, start_column=start_col,
+                           end_row=row_idx, end_column=end_col)
+            t_cell = ws.cell(row=row_idx, column=start_col, value=title)
+            t_cell.fill = style_sub_header
+            t_cell.font = font_sub_header
+            t_cell.alignment = align_center
+            t_cell.border = thin_border
+            for c in range(start_col + 1, end_col + 1):
+                ws.cell(row=row_idx, column=c).border = thin_border
+        row_idx += 1
+
+        for idx, value in enumerate(summary_values):
+            start_col, end_col = summary_cols[idx]
+            ws.merge_cells(start_row=row_idx, start_column=start_col,
+                           end_row=row_idx, end_column=end_col)
+            v_cell = ws.cell(row=row_idx, column=start_col, value=value)
+            v_cell.font = Font(bold=True, size=12, color="1B5E20")
+            v_cell.alignment = align_center
+            v_cell.number_format = '#,##0.00 "₽"'
+            v_cell.border = thin_border
+            for c in range(start_col + 1, end_col + 1):
+                ws.cell(row=row_idx, column=c).border = thin_border
+        # Пустая строка-разделитель между заказами.
+        row_idx += 3
+
         grand_total_qty += order_total_qty
         grand_total_sum += order_total_sum
         grand_total_paid += paid_sum
         exported_count += 1
 
-    _fit_commercial_size_column(ws, all_size_names)
-
+    # --- Общий итог по выборке (только если выгружено больше 1 заказа) ----
     if exported_count > 1:
         ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
         gh = ws.cell(
@@ -3834,66 +4343,6 @@ def _build_commercial_workbook(orders, *, with_print_dates=False):
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    return buf, exported_count
-
-
-@bp.route('/orders/export')
-@login_required
-def export_orders():
-    """Excel-выгрузка списка заказов.
-
-    Учитывает все фильтры со страницы /orders (клиент, статус, даты, режим
-    активные/скрытые) плюс multi-select «По номеру заказа» (`filter_ids`).
-    Если пользователь отметил конкретные номера в фильтре — Excel выгрузит
-    только их. Иначе — все заказы по текущим фильтрам.
-
-    Дизайн копирует «красивый» отчёт `export_order_history`: для каждого
-    заказа собственная зелёная шапка, светло-зелёная подшапка с клиентом,
-    таблица позиций (без столбцов «Первоначально / Изменения» — мы хотим
-    видеть только фактические числа на момент выгрузки) и блок ИТОГО /
-    Оплачено / Остаток. Между заказами — пустая строка-разделитель.
-
-    В конце листа — общий итог по выгруженной выборке (кол-во заказов,
-    суммарная сумма, оплачено и остаток), чтобы при многозаказной выгрузке
-    сразу был виден сводный показатель.
-    """
-    f_client = request.args.get('filter_client')
-    f_status = request.args.get('filter_status')
-    f_date_start = request.args.get('start_date')
-    f_date_end = request.args.get('end_date')
-    mode = request.args.get('mode', 'active')
-
-    # Multi-select по номерам заказов из фильтра на /orders. Приходит как
-    # ?filter_ids=1&filter_ids=5&filter_ids=12. Дополнительно поддерживаем
-    # старый формат ?ids=1,5,12 на случай прямых ссылок.
-    f_ids_raw = request.args.getlist('filter_ids')
-    if not f_ids_raw and request.args.get('ids'):
-        f_ids_raw = (request.args.get('ids') or '').split(',')
-    selected_ids = []
-    for v in f_ids_raw:
-        v = (v or '').strip()
-        if v.isdigit():
-            selected_ids.append(int(v))
-
-    # Применяем тот же набор фильтров, что и на странице /orders, плюс
-    # фильтр по выбранным номерам. Это гарантирует, что Excel содержит
-    # ровно то, что сейчас видно в списке.
-    q = Order.query.filter_by(is_deleted=(mode == 'trash'))
-    if f_client:
-        q = q.filter(Order.client_id == int(f_client))
-    if f_status:
-        q = q.filter(Order.status == f_status)
-    if not f_status:
-        q = q.filter(Order.status != 'ghost')
-    if f_date_start:
-        q = q.filter(func.date(Order.date) >= f_date_start)
-    if f_date_end:
-        q = q.filter(func.date(Order.date) <= f_date_end)
-    if selected_ids:
-        q = q.filter(Order.id.in_(selected_ids))
-    orders = q.order_by(Order.date.desc()).all()
-
-    buf, _exported_count = _build_commercial_workbook(orders, with_print_dates=False)
     filename = f'Коммерческое предложение {msk_now().strftime("%d.%m.%Y")}.xlsx'
 
     return send_file(
@@ -3901,74 +4350,6 @@ def export_orders():
         download_name=filename,
         as_attachment=True,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
-
-
-@bp.route('/order/<int:order_id>/print.xlsx')
-@login_required
-def export_order_print(order_id):
-    """Excel одного заказа для печати: тот же формат, что у /orders/export,
-    плюс поля «Дата биркования / Дата начала копки / Дата отгрузки».
-    """
-    o = Order.query.get_or_404(order_id)
-    buf, _n = _build_commercial_workbook([o], with_print_dates=True)
-    filename = f'Заказ №{o.id} от {o.date.strftime("%d.%m.%Y")}.xlsx'
-    return send_file(
-        buf,
-        download_name=filename,
-        as_attachment=True,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
-
-
-@bp.route('/order/<int:order_id>/print')
-@login_required
-def order_print_page(order_id):
-    """Страница печати заказа: скачивает xlsx и сразу открывает диалог печати.
-
-    Браузер не умеет корректно «напечатать» xlsx сам, поэтому файл
-    скачивается в формате Excel, а на принтер уходит HTML-копия того же
-    макета (включая пустые поля дат под заказом).
-    """
-    o = Order.query.get_or_404(order_id)
-    items_sorted = sorted(
-        o.items or [],
-        key=lambda it: (
-            (it.plant.name if it.plant else '').lower(),
-            natural_key(it.size.name if it.size else ''),
-            (it.field.name if it.field else '').lower(),
-            it.year or 0,
-        ),
-    )
-    lines = []
-    total_qty = 0
-    total_sum = Decimal('0')
-    for item in items_sorted:
-        qty = int(item.quantity or 0)
-        price = Decimal(str(item.price or 0))
-        line_sum = price * Decimal(qty)
-        total_qty += qty
-        total_sum += line_sum
-        lines.append({
-            'plant': item.plant.name if item.plant else '—',
-            'size': item.size.name if item.size else '—',
-            'field': item.field.name if item.field else '—',
-            'year': item.year,
-            'price': price,
-            'qty': qty,
-            'sum': line_sum,
-        })
-    paid = Decimal(str(o.paid_sum or 0))
-    order_sum = Decimal(str(o.total_sum or 0))
-    return render_template(
-        'orders/order_print.html',
-        order=o,
-        lines=lines,
-        total_qty=total_qty,
-        total_sum=total_sum,
-        paid_sum=paid,
-        debt=order_sum - paid,
-        xlsx_url=url_for('orders.export_order_print', order_id=o.id),
     )
 
 

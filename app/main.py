@@ -12,9 +12,10 @@ from sqlalchemy.orm import undefer
 from app.models import (
     db, Order, OrderItem, Payment, PaymentInvoice, Document,
     DiggingTask, DiggingLog, ActionLog, TgTask, Client, Plant, Size, Field,
-    Expense, TimeLog, Employee, User, MapSettings, DocumentRow, BankSlip
+    Expense, TimeLog, Employee, User, MapSettings, DocumentRow, BankSlip,
+    BudgetPlan, CashflowPlan,
 )
-from app.utils import msk_today, msk_now, natural_key
+from app.utils import msk_today, msk_now, natural_key, MONTH_NAMES
 
 bp = Blueprint('main', __name__)
 
@@ -550,58 +551,213 @@ def _collect_kpis(user, today):
     return tiles
 
 
-def _analytics_data(user, today):
+def _analytics_period(args, today):
+    """Период аналитики.
+
+    period=year|month|months|quarter|half|season (по умолчанию year).
+    Весна: 1 янв–31 июл. Осень: 1 июл–31 дек.
+    """
+    try:
+        year = int(args.get('year') or today.year)
+    except (TypeError, ValueError):
+        year = today.year
+    if year < 2000 or year > 2100:
+        year = today.year
+    mode = (args.get('period') or 'year').strip().lower()
+    if mode not in ('year', 'month', 'months', 'quarter', 'half', 'season'):
+        mode = 'year'
+
+    cur_q = (today.month - 1) // 3 + 1
+    cur_half = 1 if today.month <= 6 else 2
+    cur_season = 'autumn' if today.month >= 7 else 'spring'
+
+    def _one_month(raw, fallback):
+        try:
+            m = int(raw)
+        except (TypeError, ValueError):
+            m = fallback
+        return m if 1 <= m <= 12 else fallback
+
+    months = list(range(1, 13))
+    month = today.month if year == today.year else 1
+    quarter = cur_q if year == today.year else 1
+    half = cur_half if year == today.year else 1
+    season = cur_season if year == today.year else 'spring'
+    picked = []
+
+    if mode == 'month':
+        month = _one_month(args.get('month'), month)
+        months = [month]
+    elif mode == 'months':
+        seen = set()
+        for raw in args.getlist('months'):
+            if str(raw).isdigit():
+                m = int(raw)
+                if 1 <= m <= 12 and m not in seen:
+                    seen.add(m)
+                    picked.append(m)
+        picked.sort()
+        months = picked or [month]
+    elif mode == 'quarter':
+        quarter = _one_month(args.get('quarter'), quarter)
+        if quarter not in (1, 2, 3, 4):
+            quarter = 1
+        months = list(range((quarter - 1) * 3 + 1, quarter * 3 + 1))
+    elif mode == 'half':
+        half = 2 if str(args.get('half') or half) == '2' else 1
+        months = list(range(1, 7)) if half == 1 else list(range(7, 13))
+    elif mode == 'season':
+        season = 'autumn' if (args.get('season') or season) == 'autumn' else 'spring'
+        months = list(range(1, 8)) if season == 'spring' else list(range(7, 13))
+
+    short = {
+        1: 'янв', 2: 'фев', 3: 'мар', 4: 'апр', 5: 'май', 6: 'июн',
+        7: 'июл', 8: 'авг', 9: 'сен', 10: 'окт', 11: 'ноя', 12: 'дек',
+    }
+    if mode == 'year':
+        label = f'{year} · год'
+    elif mode == 'month':
+        label = f'{MONTH_NAMES.get(months[0], months[0])} {year}'
+    elif mode == 'months':
+        label = f'{year} · ' + ', '.join(short[m] for m in months)
+    elif mode == 'quarter':
+        label = f'{year} · {quarter} квартал'
+    elif mode == 'half':
+        label = f'{year} · {half} полугодие'
+    else:
+        label = f'{year} · ' + ('весна (1 янв – 31 июл)' if season == 'spring' else 'осень (1 июл – 31 дек)')
+
+    spans = []
+    for m in months:
+        spans.append((date(year, m, 1), date(year, m, monthrange(year, m)[1])))
+    years = list(range(today.year - 2, today.year + 2))
+    if year not in years:
+        years.append(year)
+        years.sort()
+    return {
+        'mode': mode,
+        'year': year,
+        'label': label,
+        'months': months,
+        'month': month if mode != 'month' else months[0],
+        'picked': months if mode == 'months' else picked,
+        'quarter': quarter,
+        'half': half,
+        'season': season,
+        'spans': spans,
+        'years': years,
+    }
+
+
+def _grouped_month_sums(rows):
+    out = {m: 0.0 for m in range(1, 13)}
+    for month, amount in rows:
+        try:
+            m = int(month)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= m <= 12:
+            out[m] += _safe_float(amount)
+    return out
+
+
+def _plan_fact_for_period(period):
+    """План бюджета и план поступлений против факта по выбранным месяцам."""
+    year = period['year']
+    months = period['months']
+    plan_out = _grouped_month_sums(
+        db.session.query(BudgetPlan.month, func.sum(BudgetPlan.amount))
+        .filter(BudgetPlan.year == year, BudgetPlan.month.in_(months))
+        .group_by(BudgetPlan.month)
+        .all()
+    )
+    plan_in = _grouped_month_sums(
+        db.session.query(CashflowPlan.month, func.sum(CashflowPlan.amount))
+        .filter(CashflowPlan.year == year, CashflowPlan.month.in_(months))
+        .group_by(CashflowPlan.month)
+        .all()
+    )
+    actual_month = func.coalesce(Expense.target_month, func.extract('month', Expense.date))
+    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
+    fact_out = _grouped_month_sums(
+        db.session.query(actual_month, func.sum(Expense.amount))
+        .filter(actual_year == year, actual_month.in_(months))
+        .group_by(actual_month)
+        .all()
+    )
+    fact_in = _grouped_month_sums(
+        db.session.query(func.extract('month', Payment.date), func.sum(Payment.amount))
+        .filter(
+            func.extract('year', Payment.date) == year,
+            func.extract('month', Payment.date).in_(months),
+            Payment.cash_inflow_filter(),
+        )
+        .group_by(func.extract('month', Payment.date))
+        .all()
+    )
+    series = []
+    for m in months:
+        series.append({
+            'label': MONTH_NAMES.get(m, str(m))[:3],
+            'inc_plan': plan_in[m],
+            'inc': fact_in[m],
+            'out_plan': plan_out[m],
+            'out': fact_out[m],
+        })
+
+    def _pack(plan, fact):
+        delta = fact - plan
+        pct = round(delta * 100.0 / plan, 1) if plan else None
+        return plan, fact, delta, pct
+
+    inc_plan = sum(r['inc_plan'] for r in series)
+    inc_fact = sum(r['inc'] for r in series)
+    out_plan = sum(r['out_plan'] for r in series)
+    out_fact = sum(r['out'] for r in series)
+    ip, iff, idelta, ipct = _pack(inc_plan, inc_fact)
+    op, off, odelta, opct = _pack(out_plan, out_fact)
+    return {
+        'months': series,
+        'inc_plan': ip,
+        'inc_fact': iff,
+        'inc_delta': idelta,
+        'inc_pct': ipct,
+        'out_plan': op,
+        'out_fact': off,
+        'out_delta': odelta,
+        'out_pct': opct,
+    }
+
+
+def _analytics_data(user, today, period):
     """Данные для страницы /analytics — графики и таблицы."""
     role = user.role or ''
     is_boss = role in ('admin', 'executive', 'shop_manager')
 
     data = {
-        'revenue_months': [],   # [{label, value}] за последние 12 календарных месяцев
-        'cashflow_months': [],  # [{label, inc, out}]
-        'order_funnel': [],     # [{status, count, sum}]
-        'top_clients': [],      # [{name, revenue, share}]
-        'top_plants': [],       # [{name, qty, revenue}]
-        'tg_summary': {},       # {active, overdue, done_7d, by_assignee:[{name,count}]}
-        'debtors': [],          # top 10
-        'show_revenue_chart': is_boss,   # менеджеру (user) не показываем график выручки по месяцам
+        'period': period,
+        'revenue_months': [],
+        'cashflow_months': [],
+        'plan_fact': None,
+        'order_funnel': [],
+        'top_clients': [],
+        'top_plants': [],
+        'tg_summary': {},
+        'debtors': [],
+        'show_revenue_chart': is_boss,
     }
-
-    # --- 12 месяцев (считаем назад от текущего) ---
-    months = []
-    anchor = today.replace(day=1)
-    for i in range(11, -1, -1):
-        # i месяцев назад
-        y = anchor.year
-        m = anchor.month - i
-        while m <= 0:
-            m += 12
-            y -= 1
-        first = date(y, m, 1)
-        last = date(y, m, monthrange(y, m)[1])
-        months.append((first, last))
-
-    try:
-        for first, last in months:
-            rev = _cash_in_for(first, last)
-            data['revenue_months'].append({
-                'label': first.strftime('%m.%y'),
-                'value': rev,
-            })
-    except Exception:
-        current_app.logger.exception('analytics: revenue_months failed')
 
     if is_boss:
         try:
-            for first, last in months:
-                inc = _payments_for(first, last)
-                out = _expenses_for(first, last)
-                data['cashflow_months'].append({
-                    'label': first.strftime('%m.%y'),
-                    'inc': inc,
-                    'out': out,
-                })
+            pf = _plan_fact_for_period(period)
+            data['plan_fact'] = pf
+            data['revenue_months'] = [
+                {'label': row['label'], 'value': row['inc'], 'plan': row['inc_plan']}
+                for row in pf['months']
+            ]
+            data['cashflow_months'] = pf['months']
         except Exception:
-            current_app.logger.exception('analytics: cashflow_months failed')
+            current_app.logger.exception('analytics: plan/fact failed')
 
     # --- Воронка заказов по статусу (без призрачных заказов) ---
     try:
@@ -625,10 +781,8 @@ def _analytics_data(user, today):
     except Exception:
         current_app.logger.exception('analytics: order_funnel failed')
 
-    # --- Топ клиентов за текущий календарный год (по выручке) ---
+    # --- Топ клиентов за выбранный период (по выручке) ---
     try:
-        year_first = date(today.year, 1, 1)
-        year_last = date(today.year, 12, 31)
         rows = db.session.query(
             Client.id, Client.name,
             func.coalesce(func.sum(OrderItem.price * OrderItem.quantity), 0).label('rev')
@@ -637,8 +791,8 @@ def _analytics_data(user, today):
         ).filter(
             Order.is_deleted.is_(False),
             Order.status != 'canceled',
-            func.date(Order.date) >= year_first,
-            func.date(Order.date) <= year_last,
+            func.extract('year', Order.date) == period['year'],
+            func.extract('month', Order.date).in_(period['months']),
         ).group_by(Client.id, Client.name).order_by(func.sum(OrderItem.price * OrderItem.quantity).desc()).limit(10).all()
         total = sum(_safe_float(r.rev) for r in rows) or 1.0
         data['top_clients'] = [
@@ -648,10 +802,8 @@ def _analytics_data(user, today):
     except Exception:
         current_app.logger.exception('analytics: top_clients failed')
 
-    # --- Топ растений за календарный год (по объёму продаж в шт. и выручке) ---
+    # --- Топ растений за выбранный период ---
     try:
-        year_first = date(today.year, 1, 1)
-        year_last = date(today.year, 12, 31)
         rows = db.session.query(
             Plant.id, Plant.name,
             func.coalesce(func.sum(OrderItem.quantity), 0).label('qty'),
@@ -661,8 +813,8 @@ def _analytics_data(user, today):
         ).filter(
             Order.is_deleted.is_(False),
             Order.status != 'canceled',
-            func.date(Order.date) >= year_first,
-            func.date(Order.date) <= year_last,
+            func.extract('year', Order.date) == period['year'],
+            func.extract('month', Order.date).in_(period['months']),
         ).group_by(Plant.id, Plant.name
         ).order_by(func.sum(OrderItem.quantity).desc()).limit(10).all()
         data['top_plants'] = [
@@ -1390,8 +1542,9 @@ def analytics():
     if (current_user.role or '') in ('user2', 'brigadier'):
         return redirect(url_for('main.index'))
     today = msk_today()
+    period = _analytics_period(request.args, today)
     try:
-        data = _analytics_data(current_user, today)
+        data = _analytics_data(current_user, today, period)
     except Exception:
         current_app.logger.exception('analytics page: _analytics_data failed')
         data = {}
@@ -2271,8 +2424,8 @@ def telegram_set_webhook():
         menu_ok, menu_msg = False, ''
         try:
             from app.telegram import set_pay_menu_button
-            mini = url.rsplit('/api/telegram/webhook', 1)[0] + '/tg'
-            menu_ok, menu_msg = set_pay_menu_button(mini, text='FloraFlow')
+            mini = url.rsplit('/api/telegram/webhook', 1)[0] + '/tg/pay'
+            menu_ok, menu_msg = set_pay_menu_button(mini)
         except Exception as menu_exc:
             menu_msg = str(menu_exc)
         return jsonify({

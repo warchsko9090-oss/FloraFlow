@@ -91,6 +91,27 @@
     .empty-state {
         padding: 30px; text-align: center; color: #94a3b8; font-size: .9rem;
     }
+
+    .period-bar {
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+        padding: 12px 14px; margin-bottom: 16px;
+        display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    }
+    .period-bar select, .period-bar .btn-period {
+        border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 999px;
+        padding: 6px 12px; font-size: .82rem; font-weight: 650; color: #0f172a;
+        text-decoration: none !important; cursor: pointer;
+    }
+    .period-bar .btn-period.active {
+        background: #0f172a; color: #fff !important; border-color: #0f172a;
+    }
+    .period-sub { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+    .month-checks { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+    .month-checks label { font-size: .8rem; color: #334155; margin: 0; }
+    .pf-delta.up { color: #059669; }
+    .pf-delta.down { color: #dc2626; }
+    .cmp-table td.num { white-space: nowrap; }
+
 </style>
 
 <div class="ana-wrapper">
@@ -98,7 +119,7 @@
     <div class="ana-header">
         <div>
             <h4><i class="fas fa-chart-line me-2 text-success"></i>Аналитика</h4>
-            <span class="text-muted small">Состояние бизнеса на {{ today.strftime('%d.%m.%Y') }}</span>
+            <span class="text-muted small">{{ analytics.period.label if analytics.period else today.strftime('%Y') }}</span>
         </div>
         <div class="d-flex gap-2">
             <a href="{{ url_for('main.analytics_tasks') }}" class="btn-back" style="background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); color: #fff !important; border: 0;">
@@ -110,6 +131,68 @@
             </a>
         </div>
     </div>
+
+    {% set p = analytics.period %}
+    {% if p %}
+    <div class="period-bar">
+        <form method="get" class="d-flex align-items-center gap-2 m-0">
+            <input type="hidden" name="period" value="{{ p.mode }}">
+            {% if p.mode == 'month' %}<input type="hidden" name="month" value="{{ p.month }}">{% endif %}
+            {% if p.mode == 'quarter' %}<input type="hidden" name="quarter" value="{{ p.quarter }}">{% endif %}
+            {% if p.mode == 'half' %}<input type="hidden" name="half" value="{{ p.half }}">{% endif %}
+            {% if p.mode == 'season' %}<input type="hidden" name="season" value="{{ p.season }}">{% endif %}
+            {% if p.mode == 'months' %}
+                {% for m in p.months %}<input type="hidden" name="months" value="{{ m }}">{% endfor %}
+            {% endif %}
+            <select name="year" onchange="this.form.submit()" aria-label="Год">
+                {% for y in p.years %}
+                <option value="{{ y }}" {% if y == p.year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        <a class="btn-period {% if p.mode == 'year' %}active{% endif %}" href="{{ url_for('main.analytics', period='year', year=p.year) }}">Год</a>
+        <a class="btn-period {% if p.mode == 'month' %}active{% endif %}" href="{{ url_for('main.analytics', period='month', year=p.year, month=p.month) }}">Месяц</a>
+        <a class="btn-period {% if p.mode == 'months' %}active{% endif %}" href="{{ url_for('main.analytics', period='months', year=p.year) }}">Несколько месяцев</a>
+        <a class="btn-period {% if p.mode == 'quarter' %}active{% endif %}" href="{{ url_for('main.analytics', period='quarter', year=p.year, quarter=p.quarter) }}">Квартал</a>
+        <a class="btn-period {% if p.mode == 'half' %}active{% endif %}" href="{{ url_for('main.analytics', period='half', year=p.year, half=p.half) }}">Полугодие</a>
+        <a class="btn-period {% if p.mode == 'season' %}active{% endif %}" href="{{ url_for('main.analytics', period='season', year=p.year, season=p.season) }}">Сезон</a>
+
+        {% if p.mode == 'month' %}
+        <div class="period-sub">
+            {% for m in range(1, 13) %}
+            <a class="btn-period {% if m == p.months[0] %}active{% endif %}" href="{{ url_for('main.analytics', period='month', year=p.year, month=m) }}">{{ ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'][m-1] }}</a>
+            {% endfor %}
+        </div>
+        {% elif p.mode == 'quarter' %}
+        <div class="period-sub">
+            {% for q in [1,2,3,4] %}
+            <a class="btn-period {% if q == p.quarter %}active{% endif %}" href="{{ url_for('main.analytics', period='quarter', year=p.year, quarter=q) }}">{{ q }} кв.</a>
+            {% endfor %}
+        </div>
+        {% elif p.mode == 'half' %}
+        <div class="period-sub">
+            <a class="btn-period {% if p.half == 1 %}active{% endif %}" href="{{ url_for('main.analytics', period='half', year=p.year, half=1) }}">1 полугодие (янв–июн)</a>
+            <a class="btn-period {% if p.half == 2 %}active{% endif %}" href="{{ url_for('main.analytics', period='half', year=p.year, half=2) }}">2 полугодие (июл–дек)</a>
+        </div>
+        {% elif p.mode == 'season' %}
+        <div class="period-sub">
+            <a class="btn-period {% if p.season == 'spring' %}active{% endif %}" href="{{ url_for('main.analytics', period='season', year=p.year, season='spring') }}">Весна · 1 янв – 31 июл</a>
+            <a class="btn-period {% if p.season == 'autumn' %}active{% endif %}" href="{{ url_for('main.analytics', period='season', year=p.year, season='autumn') }}">Осень · 1 июл – 31 дек</a>
+        </div>
+        {% elif p.mode == 'months' %}
+        <form method="get" class="period-sub">
+            <input type="hidden" name="period" value="months">
+            <input type="hidden" name="year" value="{{ p.year }}">
+            <div class="month-checks">
+                {% for m in range(1, 13) %}
+                <label><input type="checkbox" name="months" value="{{ m }}" {% if m in p.months %}checked{% endif %}> {{ ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'][m-1] }}</label>
+                {% endfor %}
+                <button class="btn-period" type="submit">Показать</button>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <!-- KPI TILES -->
     {% if kpi_tiles %}
@@ -125,12 +208,45 @@
     </div>
     {% endif %}
 
+    <!-- ПЛАН / ФАКТ -->
+    {% if analytics.plan_fact %}
+    {% set pf = analytics.plan_fact %}
+    <div class="kpi-grid">
+        <div class="kpi-tile color-success" style="cursor:default">
+            <div class="kpi-title">Поступления · план</div>
+            <div class="kpi-value">{{ '%s ₽'|format('{:,.0f}'.format(pf.inc_plan).replace(',', ' ')) }}</div>
+            <div class="kpi-sub">CashflowPlan · {{ analytics.period.label }}</div>
+        </div>
+        <div class="kpi-tile color-primary" style="cursor:default">
+            <div class="kpi-title">Поступления · факт</div>
+            <div class="kpi-value">{{ '%s ₽'|format('{:,.0f}'.format(pf.inc_fact).replace(',', ' ')) }}</div>
+            <div class="kpi-sub pf-delta {% if pf.inc_delta >= 0 %}up{% else %}down{% endif %}">
+                факт − план: {{ '%s ₽'|format('{:,.0f}'.format(pf.inc_delta).replace(',', ' ')) }}
+                {% if pf.inc_pct is not none %} · {{ pf.inc_pct }}%{% endif %}
+            </div>
+        </div>
+        <div class="kpi-tile color-warning" style="cursor:default">
+            <div class="kpi-title">Расходы · план</div>
+            <div class="kpi-value">{{ '%s ₽'|format('{:,.0f}'.format(pf.out_plan).replace(',', ' ')) }}</div>
+            <div class="kpi-sub">Бюджет статей · {{ analytics.period.label }}</div>
+        </div>
+        <div class="kpi-tile color-danger" style="cursor:default">
+            <div class="kpi-title">Расходы · факт</div>
+            <div class="kpi-value">{{ '%s ₽'|format('{:,.0f}'.format(pf.out_fact).replace(',', ' ')) }}</div>
+            <div class="kpi-sub pf-delta {% if pf.out_delta <= 0 %}up{% else %}down{% endif %}">
+                факт − план: {{ '%s ₽'|format('{:,.0f}'.format(pf.out_delta).replace(',', ' ')) }}
+                {% if pf.out_pct is not none %} · {{ pf.out_pct }}%{% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- ВЫРУЧКА ПО МЕСЯЦАМ + ВОРОНКА ЗАКАЗОВ -->
     <div class="chart-grid">
         {% if analytics.show_revenue_chart %}
         <div class="chart-card">
-            <h6>Поступления денег по месяцам</h6>
-            <div class="chart-sub">Сумма всех платежей клиентов · последние 12 календарных месяцев</div>
+            <h6>Поступления: план и факт</h6>
+            <div class="chart-sub">План — CashflowPlan, факт — платежи клиентов · {{ analytics.period.label }}</div>
             <div class="chart-box">
                 <canvas id="chartRevenue"></canvas>
             </div>
@@ -154,20 +270,47 @@
     </div>
 
     {% if analytics.cashflow_months %}
-    <!-- КЭШ-ФЛО -->
     <div class="chart-card mb-3">
-        <h6>Кэш-флоу по месяцам</h6>
-        <div class="chart-sub">Приход (платежи клиентов) vs Расход (все затраты)</div>
+        <h6>Расходы: план бюджета и факт</h6>
+        <div class="chart-sub">План — статьи бюджета, факт — затраты с учётом целевого месяца · {{ analytics.period.label }}</div>
         <div class="chart-box">
             <canvas id="chartCashflow"></canvas>
         </div>
     </div>
+    {% if analytics.plan_fact %}
+    <div class="chart-card mb-3">
+        <h6>Сравнение по месяцам</h6>
+        <div class="chart-sub">{{ analytics.period.label }}</div>
+        <table class="ana-table cmp-table">
+            <thead>
+                <tr>
+                    <th>Месяц</th>
+                    <th class="num">Поступл. план</th>
+                    <th class="num">Поступл. факт</th>
+                    <th class="num">Расходы план</th>
+                    <th class="num">Расходы факт</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in analytics.plan_fact.months %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td class="num">{{ '%s'|format('{:,.0f}'.format(row.inc_plan).replace(',', ' ')) }}</td>
+                    <td class="num">{{ '%s'|format('{:,.0f}'.format(row.inc).replace(',', ' ')) }}</td>
+                    <td class="num">{{ '%s'|format('{:,.0f}'.format(row.out_plan).replace(',', ' ')) }}</td>
+                    <td class="num">{{ '%s'|format('{:,.0f}'.format(row.out).replace(',', ' ')) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
     {% endif %}
 
     <!-- ТОП КЛИЕНТЫ + ТОП РАСТЕНИЯ -->
     <div class="chart-grid">
         <div class="chart-card">
-            <h6>Топ клиентов за {{ today.year }}</h6>
+            <h6>Топ клиентов · {{ analytics.period.label if analytics.period else today.year }}</h6>
             <div class="chart-sub">По выручке, с долей в общих продажах</div>
             {% if analytics.top_clients %}
             <table class="ana-table">
@@ -199,7 +342,7 @@
         </div>
 
         <div class="chart-card">
-            <h6>Топ растений за {{ today.year }}</h6>
+            <h6>Топ растений · {{ analytics.period.label if analytics.period else today.year }}</h6>
             <div class="chart-sub">По количеству штук в проданных заказах</div>
             {% if analytics.top_plants %}
             <div class="chart-box">
@@ -290,20 +433,30 @@
             type: 'bar',
             data: {
                 labels: revData.map(r => r.label),
-                datasets: [{
-                    label: 'Поступления',
-                    data: revData.map(r => r.value),
-                    backgroundColor: palette.greenSoft,
-                    borderColor: palette.green,
-                    borderWidth: 1.5,
-                    borderRadius: 6,
-                }]
+                datasets: [
+                    {
+                        label: 'Факт',
+                        data: revData.map(r => r.value),
+                        backgroundColor: palette.greenSoft,
+                        borderColor: palette.green,
+                        borderWidth: 1.5,
+                        borderRadius: 6,
+                    },
+                    {
+                        label: 'План',
+                        data: revData.map(r => r.plan || 0),
+                        backgroundColor: palette.blueSoft,
+                        borderColor: palette.blue,
+                        borderWidth: 1.5,
+                        borderRadius: 6,
+                    }
+                ]
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: {
-                    legend: { display: false },
-                    tooltip: { callbacks: { label: (c) => fmtMoney(c.parsed.y) } },
+                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } },
+                    tooltip: { callbacks: { label: (c) => c.dataset.label + ': ' + fmtMoney(c.parsed.y) } },
                 },
                 scales: {
                     y: { ticks: { callback: (v) => fmtMoney(v) }, grid: { color: '#f1f5f9' } },
@@ -346,16 +499,16 @@
                 labels: cfData.map(r => r.label),
                 datasets: [
                     {
-                        label: 'Приход',
-                        data: cfData.map(r => r.inc),
-                        borderColor: palette.green, backgroundColor: palette.greenSoft,
-                        tension: .35, fill: true, pointRadius: 3,
-                    },
-                    {
-                        label: 'Расход',
+                        label: 'Факт расходов',
                         data: cfData.map(r => r.out),
                         borderColor: palette.red, backgroundColor: palette.redSoft,
-                        tension: .35, fill: true, pointRadius: 3,
+                        tension: .35, fill: false, pointRadius: 3,
+                    },
+                    {
+                        label: 'План расходов',
+                        data: cfData.map(r => r.out_plan || 0),
+                        borderColor: palette.amber, backgroundColor: palette.amberSoft,
+                        tension: .35, fill: false, pointRadius: 3, borderDash: [5, 4],
                     }
                 ]
             },

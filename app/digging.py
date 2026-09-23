@@ -15,8 +15,8 @@ from app.telegram import send_message as _tg_send
 
 # План выкопки: кто видит календарь.
 _PLANNING_ROLES = ('admin', 'user', 'executive', 'shop_manager')
-# Отгрузки и выходные: админ и руководитель (менеджер сайта — только просмотр).
-_CALENDAR_EDIT_ROLES = ('admin', 'executive')
+# Отгрузки и выходные бригады/бригадира: админ, руководитель и user (менеджер).
+_CALENDAR_EDIT_ROLES = ('admin', 'executive', 'user')
 
 _MARK_KIND_LABELS = {
     DiggingCalendarMark.KIND_CREW_OFF: 'Выходной рабочей бригады',
@@ -995,7 +995,7 @@ def digging_planning():
 
         elif action == 'create_shipment':
             if not can_ship:
-                flash('Добавлять дату отгрузки могут админ и руководитель.', 'danger')
+                flash('Добавлять дату отгрузки могут админ, руководитель и user.', 'danger')
                 return redirect(url_for('digging.digging_planning'))
             try:
                 order_id = int(request.form.get('order_id') or 0)
@@ -1032,7 +1032,7 @@ def digging_planning():
 
         elif action == 'toggle_day_mark':
             if not _can_edit_calendar_marks(current_user):
-                flash('Менять выходные могут админ и руководитель.', 'danger')
+                flash('Менять выходные могут админ, руководитель и user.', 'danger')
                 return redirect(url_for('digging.digging_planning'))
             kind = (request.form.get('kind') or '').strip()
             date_str = (request.form.get('planned_date') or '').strip()
