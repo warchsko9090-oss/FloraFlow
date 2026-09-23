@@ -15,6 +15,7 @@ import hmac
 import json
 import os
 import re
+import time
 from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -225,19 +226,53 @@ def _user_dict_from_fields(fields: dict[str, str]) -> dict | None:
     return user if user.get('id') else None
 
 
-def _validate_init_data(init_data: str, bot_token: str) -> dict | None:
-    if not init_data or not bot_token:
-        return None
-    variants = (
+# initData старше суток считаем протухшим (sessionStorage / долгий WebView).
+_INIT_DATA_MAX_AGE_SEC = 24 * 3600
+
+
+def _auth_date_ok(fields: dict[str, str]) -> bool:
+    try:
+        auth_date = int(fields.get('auth_date') or 0)
+    except (TypeError, ValueError):
+        return False
+    if auth_date <= 0:
+        return False
+    now = int(time.time())
+    if auth_date > now + 300:
+        return False
+    return (now - auth_date) <= _INIT_DATA_MAX_AGE_SEC
+
+
+def _init_field_variants(init_data: str) -> tuple[dict[str, str], ...]:
+    return (
         _parse_init_fields(init_data),
         dict(parse_qsl(init_data, keep_blank_values=True)),
     )
+
+
+def _validate_init_data(init_data: str, bot_token: str) -> dict | None:
+    if not init_data or not bot_token:
+        return None
     skip_sets = (('hash',), ('hash', 'signature'))
-    for fields in variants:
+    for fields in _init_field_variants(init_data):
+        if not _auth_date_ok(fields):
+            continue
         for skip in skip_sets:
             if _init_hmac_ok(fields, bot_token, skip):
                 return _user_dict_from_fields(fields)
     return None
+
+
+def _init_data_stale(init_data: str, bot_token: str) -> bool:
+    """HMAC ок, но auth_date слишком старый."""
+    if not init_data or not bot_token:
+        return False
+    skip_sets = (('hash',), ('hash', 'signature'))
+    for fields in _init_field_variants(init_data):
+        for skip in skip_sets:
+            if _init_hmac_ok(fields, bot_token, skip) and not _auth_date_ok(fields):
+                return True
+    return False
 
 
 def _tg_user_id_map() -> dict[str, str]:
@@ -372,11 +407,19 @@ def _mini_cookie_secure() -> bool:
 
 
 def set_mini_cookie(resp, user: User, tg_id: int | None = None):
+    """Всегда стараемся сохранить Telegram id сеанса вместе с uid.
+
+    Без `tg` PDF в чат отправить нельзя — клиент должен переоткрыть Mini App
+    из кнопки бота и пройти handshake заново.
+    """
     if tg_id is None:
-        tg_id = _telegram_id_from_init_data()
+        tg_id = _telegram_id_from_init_data() or _telegram_id_from_mini_cookie()
     payload = {'uid': int(user.id)}
     if tg_id:
-        payload['tg'] = int(tg_id)
+        try:
+            payload['tg'] = int(tg_id)
+        except (TypeError, ValueError):
+            pass
     token = _mini_signer().dumps(payload)
     resp.set_cookie(
         _MINI_COOKIE,
@@ -448,11 +491,34 @@ def _init_data_candidates() -> list[str]:
 
 
 def _auth_fail_hint() -> str:
-    if not _get_bot_token():
+    token = _get_bot_token()
+    if not token:
         return 'no_bot_token'
-    if _init_data_candidates():
-        return 'bad_signature'
-    return 'no_init_data'
+    candidates = _init_data_candidates()
+    if not candidates:
+        return 'no_init_data'
+    if any(_init_data_stale(c, token) for c in candidates):
+        return 'stale_init_data'
+    return 'bad_signature'
+
+
+def session_has_telegram() -> bool:
+    return current_telegram_id() is not None
+
+
+def require_session_telegram():
+    """Для send-pdf: нужен Telegram id текущего сеанса (initData или cookie.tg)."""
+    chat_id = current_telegram_id()
+    if chat_id:
+        return chat_id, None
+    return None, (
+        jsonify({
+            'ok': False,
+            'error': 'no_telegram_id',
+            'hint': 'reopen_from_bot',
+        }),
+        401,
+    )
 
 
 def log_mini_auth_fail():
@@ -808,7 +874,8 @@ def api_auth():
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
         'dev': is_dev,
-        'telegram_id': session_tg or user.telegram_id,
+        'telegram_id': session_tg,
+        'has_telegram': bool(session_tg),
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -816,6 +883,7 @@ def api_auth():
 @bp.route('/api/me')
 @require_user
 def api_me(user: User):
+    session_tg = current_telegram_id()
     return jsonify({
         'id': user.id,
         'username': user.username,
@@ -823,7 +891,8 @@ def api_me(user: User):
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
         'dev': _dev_mode() and not _init_data_candidates(),
-        'telegram_id': user.telegram_id,
+        'telegram_id': session_tg,
+        'has_telegram': bool(session_tg),
     })
 
 
@@ -937,10 +1006,10 @@ def api_send_pdf(user: User, inv_id: int):
         filename = src.original_name or src.filename or 'invoice.pdf'
         caption = f"{_purpose(inv)} · {inv.amount} ₽"
     if not data:
-        return jsonify({'ok': False, 'error': 'file_missing'})
-    chat_id = current_telegram_id()
-    if not chat_id:
-        return jsonify({'ok': False, 'error': 'no_telegram_id'})
+        return jsonify({'ok': False, 'error': 'file_missing'}), 404
+    chat_id, fail = require_session_telegram()
+    if fail is not None:
+        return fail
     ok, err = send_chat_document(
         chat_id,
         filename=filename,
@@ -948,7 +1017,11 @@ def api_send_pdf(user: User, inv_id: int):
         file_bytes=data,
     )
     if not ok:
-        return jsonify({'ok': False, 'error': err or 'send_failed'})
+        current_app.logger.warning(
+            'tg_pay send-pdf fail inv=%s chat=%s err=%s',
+            inv_id, chat_id, err,
+        )
+        return jsonify({'ok': False, 'error': err or 'send_failed'}), 502
     return jsonify({'ok': True})
 
 

@@ -765,12 +765,12 @@
         if (!state.current) return;
         const done = armBusy(document.getElementById("pdf"));
         try {
-            const data = await api(`/tg/sale/api/invoices/${state.current.id}/send-pdf`, { method: "POST", body: "{}" });
+            const data = await api(
+                `/tg/sale/api/invoices/${state.current.id}/send-pdf`,
+                { method: "POST", body: "{}", ensureAuth: "/tg/sale/api/auth" }
+            );
             if (!data.ok) {
-                const err = data.error || "";
-                alert(err === "no_telegram_id"
-                    ? "Не вижу ваш Telegram. Закройте мини-приложение и откройте его кнопкой в чате с ботом."
-                    : "Не удалось отправить счёт в чат.");
+                alert(window.FFTg.authErrorMessage(data, 0));
                 return;
             }
             haptic("medium");

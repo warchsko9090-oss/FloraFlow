@@ -26,7 +26,7 @@ from app.models import (
     db, User, Client, Plant, Size, StockBalance, Order, OrderItem, OrderItemHistory,
     SaleCompany, SaleInvoice, SaleInvoiceLine, ShopPlantCard,
 )
-from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail, current_telegram_id
+from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail, current_telegram_id, require_session_telegram
 from app.tg_sale_parse import parse_buyer_file
 from app.utils import msk_now, build_pdf_bytes, size_natural_key
 from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
@@ -1104,6 +1104,8 @@ def api_auth():
         'can_edit_firms': _can_firms(user),
         'can_delete_approved': (user.role or '') == 'admin',
         'dev': is_dev,
+        'telegram_id': session_tg,
+        'has_telegram': bool(session_tg),
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -1111,6 +1113,7 @@ def api_auth():
 @bp.route('/api/me')
 @require_sale
 def api_me(user: User):
+    session_tg = current_telegram_id()
     return jsonify({
         'id': user.id,
         'username': user.username,
@@ -1118,6 +1121,8 @@ def api_me(user: User):
         'can_firms': _can_firms(user),
         'can_edit_firms': _can_firms(user),
         'can_delete_approved': (user.role or '') == 'admin',
+        'telegram_id': session_tg,
+        'has_telegram': bool(session_tg),
     })
 
 
@@ -1501,9 +1506,9 @@ def api_send_pdf(user: User, inv_id: int):
     db.session.commit()
     if not blob:
         return jsonify({'ok': False, 'error': 'pdf_failed'}), 500
-    chat_id = current_telegram_id()
-    if not chat_id:
-        return jsonify({'ok': False, 'error': 'no_telegram_id'})
+    chat_id, fail = require_session_telegram()
+    if fail is not None:
+        return fail
     caption = (
         f'Счёт №{inv.id} · без плательщика · {inv.amount} ₽'
         if inv.anonymous else
@@ -1515,7 +1520,13 @@ def api_send_pdf(user: User, inv_id: int):
         caption=caption,
         file_bytes=bytes(blob),
     )
-    return jsonify({'ok': bool(ok), 'error': err if not ok else None})
+    if not ok:
+        current_app.logger.warning(
+            'tg_sale send-pdf fail inv=%s chat=%s err=%s',
+            inv_id, chat_id, err,
+        )
+        return jsonify({'ok': False, 'error': err or 'send_failed'}), 502
+    return jsonify({'ok': True})
 
 
 @bp.route('/api/invoices/<int:inv_id>/approve', methods=['POST'])

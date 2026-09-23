@@ -25,7 +25,7 @@ _PROXY_SETTING_KEYS = (
 
 
 # Telegram Web caches Mini App pages by exact URL. Bump after JS/HTML changes.
-MINIAPP_CACHE_V = '20260914a'
+MINIAPP_CACHE_V = '20260923a'
 
 
 def miniapp_web_url(url: str) -> str:
@@ -407,7 +407,8 @@ def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes
     """Отправляет файл в конкретный чат — на iPhone его удобнее открыть, чем качать из WebView."""
     bot_token = _get_bot_token()
     if not bot_token or not chat_id:
-        return False, "TG creds not configured"
+        log.warning('sendDocument skipped: bot_token=%s chat_id=%s', bool(bot_token), chat_id)
+        return False, "send_failed"
     url = f"{_tg_root()}/bot{bot_token}/sendDocument"
     name = filename or (os.path.basename(path) if path else 'invoice.pdf')
     try:
@@ -421,7 +422,7 @@ def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes
             )
         else:
             if not path:
-                return False, "no file"
+                return False, "file_missing"
             with open(path, 'rb') as f:
                 r = _http().post(
                     url,
@@ -430,9 +431,14 @@ def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes
                     timeout=30,
                 )
         if not r.ok:
-            return False, r.text
+            log.warning(
+                'sendDocument fail chat=%s status=%s body=%s',
+                chat_id, r.status_code, (r.text or '')[:500],
+            )
+            return False, "send_failed"
     except Exception as exc:
-        return False, str(exc)
+        log.exception('sendDocument exception chat=%s', chat_id)
+        return False, "send_failed"
     return True, "ok"
 
 

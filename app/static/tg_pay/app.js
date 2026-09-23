@@ -423,11 +423,15 @@
   }
 
   function sendErrorText(sent, fallback) {
+    if (window.FFTg && window.FFTg.authErrorMessage && sent) {
+      return window.FFTg.authErrorMessage(sent, 0);
+    }
     const err = (sent && sent.error) || '';
     if (err === 'no_telegram_id') {
-      return 'Не вижу ваш Telegram. Закройте мини-приложение и откройте его кнопкой в чате с ботом.';
+      return 'Не вижу ваш Telegram [no_telegram_id]. Закройте мини-приложение и откройте его кнопкой в чате с ботом.';
     }
-    if (err === 'file_missing') return fallback || 'Файла нет.';
+    if (err === 'file_missing') return fallback || 'Файла нет [file_missing].';
+    if (err === 'send_failed') return 'Бот не смог отправить файл [send_failed].';
     return fallback || 'Не удалось отправить файл в чат.';
   }
 
@@ -449,6 +453,7 @@
     const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', {
       method: 'POST',
       body: JSON.stringify({ kind: isReceipt ? 'receipt' : 'file' }),
+      ensureAuth: '/tg/pay/api/auth',
     });
     if (sent && sent.ok) {
       afterSentToChat(isReceipt ? 'Квитанцию отправил в чат с ботом.' : 'Счёт отправил в чат с ботом.');
