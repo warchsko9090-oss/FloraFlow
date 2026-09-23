@@ -13,7 +13,7 @@ from app.models import (
     db, Order, OrderItem, Payment, PaymentInvoice, Document,
     DiggingTask, DiggingLog, ActionLog, TgTask, Client, Plant, Size, Field,
     Expense, TimeLog, Employee, User, MapSettings, DocumentRow, BankSlip,
-    BudgetPlan, CashflowPlan,
+    BudgetPlan, CashflowPlan, BudgetItem,
 )
 from app.utils import msk_today, msk_now, natural_key, MONTH_NAMES
 
@@ -937,31 +937,67 @@ def index():
     # 1. Счета на оплату
     if current_user.role in ['admin', 'executive', 'shop_manager']:
         try:
+            from app.invoice_files import invoice_remaining_amount, invoice_base_amount, UNASSIGNED_BUDGET_CODE
             invoices = PaymentInvoice.query.filter(
                 PaymentInvoice.status != 'paid',
                 PaymentInvoice.status != 'draft',
+                PaymentInvoice.plan_id.is_(None),
             ).all()
             for inv in invoices:
                 try:
-                    remaining = (inv.amount or 0) - sum((e.amount or 0) for e in (inv.expenses or []))
+                    remaining = float(invoice_remaining_amount(inv))
                     if remaining > 0:
-                        d = inv.due_date or today
+                        d = inv.due_date or (inv.week_start if (inv.kind or '') == 'plan' else None) or today
                         is_urgent = (inv.priority == 'high') or ((d - today).days <= 3)
+                        kind_lbl = 'План' if (inv.kind or '') == 'plan' else 'Счет'
+                        no_item = not inv.item or (inv.item.code == UNASSIGNED_BUDGET_CODE)
                         card = {
                             'id': f'inv_{inv.id}',
                             'type': 'invoice',
-                            'title': 'Счет на оплату',
-                            'text': f'{inv.item.name if inv.item else "Без статьи"}: {inv.original_name or ""}',
+                            'title': f'{kind_lbl} на оплату' + (' · без статьи' if no_item else ''),
+                            'text': f'{inv.item.name if inv.item else "Без статьи"}: {inv.summary or inv.original_name or ""}',
                             'amount': remaining,
-                            'url': url_for('finance.expenses', invoice_id=inv.id),
+                            'url': url_for('finance.expenses', tab='invoices'),
                             'date_str': d.strftime('%d.%m.%Y'),
                             'raw_date': d,
                         }
-                        add_to_group(card, d, is_forced_urgent=is_urgent)
+                        add_to_group(card, d, is_forced_urgent=is_urgent or no_item)
                 except Exception:
                     current_app.logger.exception('feed: invoice card failed')
         except Exception:
             current_app.logger.exception('feed: invoices block failed')
+
+    # 1b. Оплаты без статьи бюджета — только админу
+    if current_user.role == 'admin':
+        try:
+            from app.invoice_files import UNASSIGNED_BUDGET_CODE, ensure_unassigned_budget_item
+            ensure_unassigned_budget_item()
+            orphans = (
+                Expense.query
+                .join(BudgetItem, Expense.budget_item_id == BudgetItem.id)
+                .filter(BudgetItem.code == UNASSIGNED_BUDGET_CODE)
+                .order_by(Expense.date.desc(), Expense.id.desc())
+                .limit(30)
+                .all()
+            )
+            for exp in orphans:
+                try:
+                    d = exp.date or today
+                    card = {
+                        'id': f'exp_unassigned_{exp.id}',
+                        'type': 'expense_unassigned',
+                        'title': 'Расход без статьи бюджета',
+                        'text': f'{(exp.description or "без описания")[:120]} · {float(exp.amount or 0):,.0f} ₽'.replace(',', ' '),
+                        'amount': float(exp.amount or 0),
+                        'url': url_for('finance.expenses', tab='expenses') + f'?edit={exp.id}',
+                        'date_str': d.strftime('%d.%m.%Y'),
+                        'raw_date': d,
+                    }
+                    add_to_group(card, today, is_forced_urgent=True)
+                except Exception:
+                    current_app.logger.exception('feed: unassigned expense card failed')
+        except Exception:
+            current_app.logger.exception('feed: unassigned expenses block failed')
 
     # 2. Черновики с сайта
     if current_user.role in ['admin', 'user']:

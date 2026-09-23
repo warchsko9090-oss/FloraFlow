@@ -144,21 +144,83 @@
     const plan = Number(inv.planned_amount);
     const fact = Number(inv.fact_amount || 0);
     const { cls, fill } = rowFill(inv);
+    const noBudget = !inv.has_budget;
     let sub = esc((inv.budget && inv.budget.name) || 'без статьи');
+    if (noBudget) sub = '⚠ нет статьи бюджета';
     if (Number.isFinite(plan) && plan > 0) {
-      sub = 'план ' + money(plan) + (fact > 0 ? ' · факт ' + money(fact) : ' · ждём счёт');
+      sub = (noBudget ? '⚠ нет статьи · ' : '') + 'план ' + money(plan) + (fact > 0 ? ' · факт ' + money(fact) : ' · ждём счёт');
       if (fact > 0 && fact < plan) sub += ' · −' + money(plan - fact);
       if (fact > plan) sub += ' · +' + money(fact - plan);
     }
     const ptype = inv.payment_type === 'cash' ? 'нал' : 'безнал';
-    const shownAmt = fact > 0 ? fact : (inv.amount || plan || 0);
-    return `<a class="row${inv.priority === 'high' ? ' row-high' : ''}${inv.status === 'draft' ? ' row-draft' : ''} ${cls}" style="--fill:${fill}%" href="#/inv/${inv.id}">
+    const shownAmt = (inv.kind === 'plan')
+      ? (plan || 0)
+      : (fact > 0 ? fact : (inv.amount || plan || 0));
+    return `<a class="row${inv.priority === 'high' ? ' row-high' : ''}${inv.status === 'draft' ? ' row-draft' : ''}${noBudget ? ' row-nobudget' : ''} ${cls}" style="--fill:${fill}%" href="#/inv/${inv.id}">
       <div>
-        <div class="name">${inv.status === 'draft' ? '<span class="badge">черновик</span>' : ''}${prioBadge(inv.priority)}${esc(inv.summary)} <span class="ptype">${ptype}</span></div>
+        <div class="name">${inv.status === 'draft' ? '<span class="badge">черновик</span>' : ''}${noBudget ? '<span class="badge badge-warn">нет статьи</span>' : ''}${prioBadge(inv.priority)}${esc(inv.summary)} <span class="ptype">${ptype}</span></div>
         <div class="sub">${sub}</div>
       </div>
       <div class="amt">${money(shownAmt)}</div>
     </a>`;
+  }
+
+  function budgetLabel(b) {
+    return ((b.code || '') + ' ' + (b.name || '')).trim();
+  }
+
+  function filterBudgetItems(q) {
+    const n = String(q || '').trim().toLowerCase();
+    if (!n) return budgetItems.slice(0, 40);
+    return budgetItems.filter((b) => {
+      const name = String(b.name || '').toLowerCase();
+      const code = String(b.code || '').toLowerCase();
+      return name.includes(n) || code.includes(n);
+    }).slice(0, 40);
+  }
+
+  function budgetPickerHtml(fieldId, selectedId) {
+    const selected = budgetItems.find((b) => String(b.id) === String(selectedId || ''));
+    const label = selected ? budgetLabel(selected) : '';
+    return `<div class="budget-pick" data-budget-pick="${fieldId}">
+      <input type="hidden" id="${fieldId}" class="wp-budget-id" value="${selected ? selected.id : ''}">
+      <input type="search" class="budget-q" placeholder="поиск статьи…" value="${esc(label)}" autocomplete="off">
+      <div class="budget-drop" hidden></div>
+    </div>`;
+  }
+
+  function bindBudgetPickers(root) {
+    (root || view).querySelectorAll('[data-budget-pick]').forEach((wrap) => {
+      const hid = wrap.querySelector('input[type="hidden"]');
+      const q = wrap.querySelector('.budget-q');
+      const drop = wrap.querySelector('.budget-drop');
+      if (!hid || !q || !drop) return;
+      function renderDrop(list) {
+        if (!list.length) {
+          drop.innerHTML = '<div class="budget-empty">Ничего не найдено</div>';
+          drop.hidden = false;
+          return;
+        }
+        drop.innerHTML = list.map((b) =>
+          `<button type="button" class="budget-opt" data-id="${b.id}">${esc(budgetLabel(b))}</button>`
+        ).join('');
+        drop.hidden = false;
+        drop.querySelectorAll('.budget-opt').forEach((btn) => {
+          btn.onclick = () => {
+            const b = budgetItems.find((x) => String(x.id) === btn.dataset.id);
+            hid.value = b ? b.id : '';
+            q.value = b ? budgetLabel(b) : '';
+            drop.hidden = true;
+          };
+        });
+      }
+      q.onfocus = () => renderDrop(filterBudgetItems(q.value));
+      q.oninput = () => {
+        hid.value = '';
+        renderDrop(filterBudgetItems(q.value));
+      };
+      q.onblur = () => setTimeout(() => { drop.hidden = true; }, 180);
+    });
   }
 
   async function renderList() {
@@ -242,7 +304,8 @@
       : ((Number(inv.fact_amount) || 0) > 0 ? inv.fact_amount : (inv.amount || inv.planned_amount || 0));
     const payHint = `<p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
       <p class="ptype" style="margin-top:8px">${inv.payment_type === 'cash' ? 'Нал' : 'Безнал'}${isDraft ? ' · черновик' : ''}${isPlan ? ' · план' : ''}</p>
-      ${isPlan ? `<p class="hint">План ${money(planned)} · оплачено ${money(factPaid)} · остаток ${money(remaining)}</p>` : ''}`;
+      ${isPlan ? `<p class="hint">План ${money(planned)} · оплачено ${money(factPaid)} · остаток ${money(remaining)}</p>` : ''}
+      ${!inv.has_budget ? '<div class="warn-box">⚠ Статья бюджета не выбрана — укажите её ниже, иначе расход уйдёт «к разнесению».</div>' : ''}`;
 
     let assignPanel = '';
     if (can && isDraft) {
@@ -271,10 +334,7 @@
             : `<div class="field"><label>Сумма</label>
             <input id="fAmount" inputmode="decimal" value="${inv.amount || ''}"></div>`}
           <div class="field"><label>Статья</label>
-            <select id="fBudget">
-              <option value="">— не выбрана —</option>
-              ${budgetItems.map((b) => `<option value="${b.id}" ${inv.budget_item_id === b.id ? 'selected' : ''}>${esc(b.code || '')} ${esc(b.name)}</option>`).join('')}
-            </select>
+            ${budgetPickerHtml('fBudget', inv.budget_item_id)}
           </div>
           <div class="field"><label>Срочность</label>
             <select id="fPrio">
@@ -336,6 +396,7 @@
       </div>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+    if (can) bindBudgetPickers(view);
     const openBtn = document.getElementById('btnOpen');
     if (openBtn) openBtn.onclick = () => openInvoice(inv);
     const recBtn = document.getElementById('btnReceipt');
@@ -349,6 +410,10 @@
         else panel.setAttribute('hidden', '');
         more.textContent = open ? 'Скрыть' : 'Ещё';
       };
+      if (!inv.has_budget) {
+        panel.removeAttribute('hidden');
+        more.textContent = 'Скрыть';
+      }
     }
     const save = document.getElementById('btnSave');
     if (save) save.onclick = () => saveInv(inv.id, false);
@@ -543,7 +608,7 @@
     if (!canEdit) {
       return `<div class="week-row">
         <div class="week-row-main"><b>${esc(_fmtPreviewAmt(item.planned_amount))}</b> — ${esc(item.summary || '')}</div>
-        <div class="muted">${ptype === 'cash' ? 'нал' : 'безнал'}${item.has_fact ? ' · есть факт' : ''}</div>
+        <div class="muted">${ptype === 'cash' ? 'нал' : 'безнал'}${item.budget_name ? ' · ' + esc(item.budget_name) : ' · ⚠ нет статьи'}${item.has_fact ? ' · есть факт' : ''}</div>
       </div>`;
     }
     return `<div class="week-row" data-idx="${idx}"${locked}>
@@ -556,6 +621,9 @@
         </select>
       </div>
       <textarea class="wp-sum" rows="2" placeholder="назначение">${String(item.summary || '').replace(/<\/textarea/gi, '')}</textarea>
+      <div class="field" style="margin-top:8px"><label>Статья бюджета</label>
+        ${budgetPickerHtml('wpBudget' + idx, item.budget_item_id)}
+      </div>
       <button type="button" class="btn btn-ghost week-del" ${item.has_fact ? 'disabled title="Есть исполнение — нельзя удалить"' : ''}>Удалить</button>
     </div>`;
   }
@@ -574,9 +642,11 @@
       const planned_amount = ((row.querySelector('.wp-amt') || {}).value || '').trim();
       const payment_type = ((row.querySelector('.wp-type') || {}).value || 'cashless');
       const idRaw = ((row.querySelector('.wp-id') || {}).value || '').trim();
+      const bidRaw = ((row.querySelector('.wp-budget-id') || {}).value || '').trim();
       if (!summary && !planned_amount) return;
       const item = { summary, planned_amount, payment_type };
       if (idRaw) item.id = Number(idRaw);
+      if (bidRaw) item.budget_item_id = Number(bidRaw);
       items.push(item);
     });
     return items;
@@ -584,13 +654,14 @@
 
   async function renderWeekPlan() {
     setTitle('План недели');
+    if (me && me.can_edit) await ensureBudgetItems();
     const data = await api('/tg/pay/api/week-plan');
     const canEdit = !!(me && me.can_edit);
     const items = data.items || [];
     let body;
     if (canEdit) {
       body = items.map((it, i) => weekPlanRowHtml(it, i, true)).join('')
-        || '<p class="hint">Пока пусто — добавьте строки нал и безнал.</p>';
+        || '<p class="hint">Пока пусто — добавьте строки нал и безнал, сразу укажите статью.</p>';
       body = `<div id="weekRows">${body}</div>
         <button class="btn btn-quiet" type="button" id="btnAddRow">+ строка</button>
         <button class="btn btn-ink" type="button" id="btnSavePin">Сохранить и закрепить</button>
@@ -610,6 +681,7 @@
       ${body}
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+    if (canEdit) bindBudgetPickers(view);
     const addBtn = document.getElementById('btnAddRow');
     if (addBtn) {
       addBtn.onclick = () => {
@@ -619,6 +691,7 @@
           summary: '', planned_amount: '', payment_type: 'cashless',
         }, idx, true));
         bindWeekRowDeletes();
+        bindBudgetPickers(wrap);
       };
     }
     const saveBtn = document.getElementById('btnSavePin');
@@ -674,7 +747,7 @@
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← назад</button>
       <div class="card">
-        <p class="hint">Пятничный план: назначение и сумма. Файл прикрепите в течение недели.</p>
+        <p class="hint">Пятничный план: сумма, назначение и статья. Файл прикрепите в течение недели.</p>
         <div class="field"><label>Назначение</label>
           <textarea id="pSummary" placeholder="ЧОП, ГСМ, сетка…"></textarea></div>
         <div class="field"><label>План, ₽</label>
@@ -685,17 +758,15 @@
             <option value="cash">Нал</option>
           </select>
         </div>
-        <div class="field"><label>Статья</label>
-          <select id="pBudget">
-            <option value="">— не выбрана —</option>
-            ${budgetItems.map((b) => `<option value="${b.id}">${esc(b.code || '')} ${esc(b.name)}</option>`).join('')}
-          </select>
+        <div class="field"><label>Статья бюджета</label>
+          ${budgetPickerHtml('pBudget', null)}
         </div>
         <button class="btn btn-ink" type="button" id="btnPlan">Создать план</button>
         <p class="hint" id="pStatus"></p>
       </div>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
+    bindBudgetPickers(view);
     document.getElementById('btnPlan').onclick = createPlan;
   }
 
@@ -863,11 +934,8 @@
     }
   }
 
-  function budgetSelect(selectedId) {
-    return `<select class="inbox-budget">
-      <option value="">— статья —</option>
-      ${budgetItems.map((b) => `<option value="${b.id}" ${selectedId === b.id ? 'selected' : ''}>${esc(b.code || '')} ${esc(b.name)}</option>`).join('')}
-    </select>`;
+  function budgetSelect(selectedId, fieldId) {
+    return budgetPickerHtml(fieldId || ('ibBudget' + Math.random().toString(36).slice(2, 8)), selectedId);
   }
 
   async function renderInbox() {
@@ -889,7 +957,7 @@
           <p class="hint" style="margin-top:8px">${esc(it.description)}</p>
           <div class="sub">${esc(it.sender)}${it.payment_type === 'cash' ? ' · нал' : it.payment_type === 'cashless' ? ' · безнал' : ''}</div>
           ${match}
-          <div class="field"><label>Статья</label>${budgetSelect(it.suggested_budget_item_id)}</div>
+          <div class="field"><label>Статья</label>${budgetSelect(it.suggested_budget_item_id, 'ib' + it.id)}</div>
           ${it.invoice ? '<button class="btn btn-ink" type="button" data-act="invoice">Это оплата счёта</button>' : ''}
           <button class="btn btn-brass" type="button" data-act="expense">В расходы</button>
           <button class="btn btn-ghost" type="button" data-act="reject">Не расход</button>
@@ -899,6 +967,7 @@
     }
     view.innerHTML = html;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+    bindBudgetPickers(view);
     view.querySelectorAll('.inbox-card').forEach((card) => {
       const id = card.dataset.id;
       card.querySelectorAll('[data-act]').forEach((btn) => {
@@ -908,8 +977,8 @@
   }
 
   async function inboxAct(id, act, card) {
-    const sel = card.querySelector('.inbox-budget');
-    const bid = sel && sel.value ? sel.value : null;
+    const hid = card.querySelector('.wp-budget-id');
+    const bid = hid && hid.value ? hid.value : null;
     view.classList.add('busy');
     try {
       if (act === 'reject') {

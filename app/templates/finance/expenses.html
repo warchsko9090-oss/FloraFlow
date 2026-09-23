@@ -527,41 +527,38 @@
 </div>
 {% endif %}
 
-<!-- Сводка по счетам -->
+<!-- Сводка: остаток к оплате на этой неделе -->
+{% set ws = invoice_summary.week_start %}
+{% set we = invoice_summary.week_end %}
 <div class="row g-2 mb-3">
-    <div class="col-6 col-md-3">
-        <div class="p-2 border rounded bg-white shadow-sm border-start border-4 border-danger h-100">
-            <div class="small text-muted fw-bold text-uppercase">🔥 Срочно</div>
-            <div class="d-flex justify-content-between align-items-end">
-                <span class="fw-bold text-dark">{{ invoice_summary.high | default(0) | money_int }}</span>
-                <span class="badge bg-danger rounded-pill">{{ invoice_summary.count_high | default(0) }}</span>
+    <div class="col-12">
+        <div class="p-3 border rounded bg-dark text-white shadow-sm">
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+                <div>
+                    <div class="small text-white-50 fw-bold text-uppercase">Осталось заплатить на неделе</div>
+                    <div class="small text-white-50">
+                        {% if ws and we %}{{ ws.strftime('%d.%m') }} — {{ we.strftime('%d.%m.%Y') }}{% endif %}
+                        · {{ invoice_summary.week_count | default(0) }} поз.
+                    </div>
+                </div>
+                <div class="text-end">
+                    <div class="small text-white-50 text-uppercase">Всего</div>
+                    <div class="fw-bold fs-4">{{ invoice_summary.week_total | default(0) | money_int }}</div>
+                </div>
             </div>
-        </div>
-    </div>
-    <div class="col-6 col-md-3">
-        <div class="p-2 border rounded bg-white shadow-sm border-start border-4 border-primary h-100">
-            <div class="small text-muted fw-bold text-uppercase">Обычные</div>
-            <div class="d-flex justify-content-between align-items-end">
-                <span class="fw-bold text-dark">{{ invoice_summary.normal | default(0) | money_int }}</span>
-                <span class="badge bg-primary rounded-pill">{{ invoice_summary.count_normal | default(0) }}</span>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-md-3">
-        <div class="p-2 border rounded bg-white shadow-sm border-start border-4 border-secondary h-100">
-            <div class="small text-muted fw-bold text-uppercase">Низкий приор.</div>
-            <div class="d-flex justify-content-between align-items-end">
-                <span class="fw-bold text-dark">{{ invoice_summary.low | default(0) | money_int }}</span>
-                <span class="badge bg-secondary rounded-pill">{{ invoice_summary.count_low | default(0) }}</span>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-md-3">
-        <div class="p-2 border rounded bg-dark text-white shadow-sm h-100">
-            <div class="small text-white-50 fw-bold text-uppercase">ИТОГО К ОПЛАТЕ</div>
-            <div class="d-flex justify-content-between align-items-end">
-                <span class="fw-bold fs-5">{{ invoice_summary.total | default(0) | money_int }}</span>
-                <span class="badge bg-light text-dark rounded-pill">{{ invoice_summary.count_total | default(0) }}</span>
+            <div class="row g-2">
+                <div class="col-6">
+                    <div class="rounded bg-white bg-opacity-10 p-2 h-100">
+                        <div class="small text-white-50 text-uppercase">Нал</div>
+                        <div class="fw-bold fs-5">{{ invoice_summary.week_cash | default(0) | money_int }}</div>
+                    </div>
+                </div>
+                <div class="col-6">
+                    <div class="rounded bg-white bg-opacity-10 p-2 h-100">
+                        <div class="small text-white-50 text-uppercase">Безнал</div>
+                        <div class="fw-bold fs-5">{{ invoice_summary.week_cashless | default(0) | money_int }}</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -574,7 +571,7 @@
             <tr>
                 <th>Приоритет</th>
                 <th>Статья бюджета</th>
-                <th>Сумма</th>
+                <th>План / Сумма</th>
                 <th>Осталось</th>
                 <th>Оплатить до</th>
                 <th>Файл / Комментарий</th>
@@ -597,13 +594,24 @@
                     {% if inv.item %}
                         <span class="fw-bold text-dark">{{ inv.item.name }}</span><br>
                         <small class="text-muted">{{ inv.item.code }}</small>
-                    {% else %}-{% endif %}
+                        {% if inv.item.code == 'UNASSIGNED' %}
+                        <span class="badge bg-warning text-dark mt-1">нужна статья</span>
+                        {% endif %}
+                    {% else %}
+                        <span class="badge bg-warning text-dark">без статьи</span>
+                    {% endif %}
                 </td>
                 <td>
-                    <span class="fs-6 fw-bold text-danger">{{ inv.amount|money }}</span>
+                    {% if inv.is_plan %}
+                        <span class="badge bg-info text-dark mb-1">план</span>
+                        {% if inv.payment_type == 'cash' %}<span class="badge bg-secondary">нал</span>{% else %}<span class="badge bg-secondary">безнал</span>{% endif %}
+                        <div class="fs-6 fw-bold text-danger">{{ inv.display_amount|money }}</div>
+                    {% else %}
+                        <span class="fs-6 fw-bold text-danger">{{ inv.display_amount|money }}</span>
+                    {% endif %}
                 </td>
                 <td>
-                    <span class="fs-6 fw-bold {% if inv.remaining == 0 %}text-success{% elif inv.remaining < inv.amount %}text-warning{% else %}text-dark{% endif %}">
+                    <span class="fs-6 fw-bold {% if inv.remaining == 0 %}text-success{% elif inv.remaining < inv.display_amount %}text-warning{% else %}text-dark{% endif %}">
                         {{ inv.remaining|money }}
                     </span>
                 </td>

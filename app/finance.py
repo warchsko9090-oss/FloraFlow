@@ -58,22 +58,41 @@ def expenses():
     invoices = []
     invoice_summary = None
     if tab == 'invoices':
-        invoices = PaymentInvoice.query.filter(
-            PaymentInvoice.status != 'paid',
-            PaymentInvoice.status != 'draft',
-        ).order_by(
-            PaymentInvoice.due_date.asc(),
-            PaymentInvoice.priority.desc()
-        ).all()
+        from app.invoice_files import (
+            invoice_base_amount, invoice_remaining_amount, invoice_paid_amount,
+            UNASSIGNED_BUDGET_CODE,
+        )
+        from app.utils import msk_today as _msk_today
+        today_d = _msk_today()
+        week_start = today_d - timedelta(days=today_d.weekday())
+        week_end = week_start + timedelta(days=6)
+
+        from sqlalchemy.orm import joinedload as _jl
+        invoices = (
+            PaymentInvoice.query
+            .options(_jl(PaymentInvoice.item), _jl(PaymentInvoice.fact_invoices))
+            .filter(
+                PaymentInvoice.status != 'paid',
+                PaymentInvoice.status != 'draft',
+                # Дочерние факты плана не дублируем — показываем сам план
+                PaymentInvoice.plan_id.is_(None),
+            )
+            .order_by(
+                PaymentInvoice.due_date.asc(),
+                PaymentInvoice.priority.desc()
+            )
+            .all()
+        )
         invoice_summary = {
             'high': 0, 'normal': 0, 'low': 0, 'total': 0,
-            'count_high': 0, 'count_normal': 0, 'count_low': 0, 'count_total': len(invoices)
+            'count_high': 0, 'count_normal': 0, 'count_low': 0, 'count_total': 0,
+            'week_start': week_start,
+            'week_end': week_end,
+            'week_cash': Decimal(0),
+            'week_cashless': Decimal(0),
+            'week_total': Decimal(0),
+            'week_count': 0,
         }
-        # Pre-aggregate paid sums for all invoices in one query
-        inv_paid_agg = db.session.query(
-            Expense.invoice_id, func.sum(Expense.amount)
-        ).filter(Expense.invoice_id.isnot(None)).group_by(Expense.invoice_id).all()
-        inv_paid_map = {r[0]: r[1] or Decimal(0) for r in inv_paid_agg}
 
         for inv in invoices:
             if isinstance(inv.due_date, str):
@@ -84,16 +103,40 @@ def expenses():
             elif isinstance(inv.due_date, datetime):
                 inv.due_date = inv.due_date.date()
 
-            paid_sum = inv_paid_map.get(inv.id, Decimal(0))
-            inv.paid_sum = float(paid_sum)
-            inv.remaining = float(inv.amount - paid_sum)
+            base = invoice_base_amount(inv)
+            paid = invoice_paid_amount(inv)
+            rem = invoice_remaining_amount(inv)
+            inv.display_amount = float(base)
+            inv.paid_sum = float(paid)
+            inv.remaining = float(rem)
+            inv.is_plan = (inv.kind or '') == 'plan'
 
-            # Сводная статистика: считаем остаток к оплачиваению (не всю сумму счета)
-            val = inv.remaining
-            p = inv.priority
-            invoice_summary[p] += val
+            p = inv.priority if inv.priority in ('high', 'normal', 'low') else 'normal'
+            invoice_summary[p] += float(rem)
             invoice_summary[f'count_{p}'] += 1
-            invoice_summary['total'] += val
+            invoice_summary['total'] += float(rem)
+            invoice_summary['count_total'] += 1
+
+            # Остаток «на этой неделе»: планы текущей недели + счета с due на этой неделе
+            on_week = False
+            if inv.is_plan and inv.week_start == week_start:
+                on_week = True
+            elif inv.due_date and week_start <= inv.due_date <= week_end:
+                on_week = True
+            elif inv.is_plan and inv.week_start is None:
+                # план без недели — считаем текущей
+                on_week = True
+            if on_week and rem > 0:
+                if (inv.payment_type or '') == 'cash':
+                    invoice_summary['week_cash'] += rem
+                else:
+                    invoice_summary['week_cashless'] += rem
+                invoice_summary['week_total'] += rem
+                invoice_summary['week_count'] += 1
+
+        invoice_summary['week_cash'] = float(invoice_summary['week_cash'])
+        invoice_summary['week_cashless'] = float(invoice_summary['week_cashless'])
+        invoice_summary['week_total'] = float(invoice_summary['week_total'])
 
     # Если открыта вкладка "Расходы" — подготавливаем журнал расходов
     expenses_list = []

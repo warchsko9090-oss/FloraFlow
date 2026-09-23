@@ -181,16 +181,21 @@ def delete_unpaid_invoice(inv: PaymentInvoice) -> str | None:
 
 
 def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
-    """Пишет расход по оплаченному счёту, если его ещё нет. Не коммитит."""
+    """Пишет расход по оплаченному счёту, если его ещё нет. Не коммитит.
+
+    Без статьи бюджета расход всё равно создаётся на служебную статью
+    «К разнесению» — чтобы оплата не пропадала и попадала админу на дашборд.
+    """
     from decimal import Decimal
 
-    from app.models import Expense
+    from app.models import Expense, BudgetItem
     from app.utils import msk_today
 
     existing = Expense.query.filter_by(invoice_id=inv.id).first()
     if existing:
         return existing
     budget_id = inv.budget_item_id
+    unassigned = False
     if not budget_id:
         try:
             from app.expense_chat import classify_budget_item
@@ -199,8 +204,12 @@ def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
         except Exception:
             budget_id = None
     if not budget_id:
-        return None
+        budget_id = ensure_unassigned_budget_item().id
+        unassigned = True
+        inv.budget_item_id = inv.budget_item_id or budget_id
     desc = (inv.summary or inv.comment or inv.original_name or 'Счёт на оплату').strip()[:500]
+    if unassigned and not desc.lower().startswith('без статьи'):
+        desc = f'Без статьи · {desc}'[:500]
     amt = inv.amount or Decimal('0')
     if amt <= 0 and inv.planned_amount:
         amt = inv.planned_amount
@@ -216,6 +225,66 @@ def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
     db.session.add(exp)
     db.session.flush()
     return exp
+
+
+UNASSIGNED_BUDGET_CODE = 'UNASSIGNED'
+
+
+def ensure_unassigned_budget_item():
+    """Служебная статья для оплат без выбранной статьи бюджета."""
+    from app.models import BudgetItem, db
+    item = BudgetItem.query.filter_by(code=UNASSIGNED_BUDGET_CODE).first()
+    if item:
+        return item
+    item = BudgetItem(
+        code=UNASSIGNED_BUDGET_CODE,
+        name='К разнесению (без статьи)',
+        is_amortization=False,
+        is_vium_source=False,
+    )
+    db.session.add(item)
+    db.session.flush()
+    return item
+
+
+def invoice_base_amount(inv: PaymentInvoice) -> Decimal:
+    """Сумма к отображению: у плана — planned_amount, иначе amount."""
+    from decimal import Decimal
+    if (getattr(inv, 'kind', None) or '') == 'plan':
+        return Decimal(str(inv.planned_amount or 0))
+    return Decimal(str(inv.amount or 0))
+
+
+def invoice_paid_amount(inv: PaymentInvoice) -> Decimal:
+    """Уже оплачено по счёту/плану (факты + расходы)."""
+    from decimal import Decimal
+    from sqlalchemy import func
+    from app.models import Expense, PaymentInvoice as PI, db
+    total = Decimal('0')
+    if (getattr(inv, 'kind', None) or '') == 'plan':
+        kids = list(getattr(inv, 'fact_invoices', None) or [])
+        if not kids:
+            kids = PI.query.filter_by(plan_id=inv.id).all()
+        for kid in kids:
+            total += Decimal(str(kid.amount or 0))
+        if invoice_has_file(inv):
+            total += Decimal(str(inv.amount or 0))
+        return total
+    for e in (getattr(inv, 'expenses', None) or []):
+        total += Decimal(str(e.amount or 0))
+    if total <= 0:
+        exp_sum = db.session.query(func.coalesce(func.sum(Expense.amount), 0)).filter(
+            Expense.invoice_id == inv.id
+        ).scalar()
+        total = Decimal(str(exp_sum or 0))
+    return total
+
+
+def invoice_remaining_amount(inv: PaymentInvoice) -> Decimal:
+    base = invoice_base_amount(inv)
+    paid = invoice_paid_amount(inv)
+    left = base - paid
+    return left if left > 0 else Decimal('0')
 
 
 def _paid_chat_text(inv: PaymentInvoice) -> str:

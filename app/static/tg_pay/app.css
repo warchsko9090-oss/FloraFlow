@@ -265,6 +265,50 @@ h1 {
 }
 .week-row-main { font-size: 15px; margin-bottom: 4px; }
 .week-del { margin-top: 8px; width: 100%; }
+.badge-warn { color: #9B3A2F; background: #f5e4e1; padding: 2px 6px; border-radius: 6px; margin-right: 6px; }
+.row-nobudget { background: #fff6f4; }
+.warn-box {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: #f5e4e1;
+    color: #9B3A2F;
+    font-size: 13px;
+    font-weight: 600;
+}
+.budget-pick { position: relative; }
+.budget-q {
+    width: 100%;
+    border: 1px solid #e4dcc8;
+    border-radius: 12px;
+    padding: 10px;
+    font: inherit;
+    background: var(--paper);
+}
+.budget-drop {
+    position: absolute;
+    z-index: 20;
+    left: 0; right: 0;
+    top: calc(100% + 4px);
+    max-height: 220px;
+    overflow: auto;
+    background: var(--white);
+    border: 1px solid #e4dcc8;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.08);
+}
+.budget-opt {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    padding: 10px 12px;
+    font: inherit;
+    cursor: pointer;
+}
+.budget-opt:active, .budget-opt:hover { background: var(--paper-2); }
+.budget-empty { padding: 10px 12px; color: var(--mute); font-size: 13px; }
 .pay-box {
     margin-top: 12px;
     padding-top: 12px;

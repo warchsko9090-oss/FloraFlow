@@ -809,8 +809,10 @@ def _save_week_pin_map(week_start: date, mapping: dict) -> None:
 
 
 def _week_plan_rows(week_start: date) -> list[PaymentInvoice]:
+    from sqlalchemy.orm import joinedload
     return (
         PaymentInvoice.query
+        .options(joinedload(PaymentInvoice.item))
         .filter(
             PaymentInvoice.kind == 'plan',
             PaymentInvoice.week_start == week_start,
@@ -827,6 +829,11 @@ def _serialize_week_plan_item(inv: PaymentInvoice) -> dict:
         'summary': _purpose(inv),
         'planned_amount': float(inv.planned_amount or 0),
         'payment_type': 'cash' if (inv.payment_type or '') == 'cash' else 'cashless',
+        'budget_item_id': inv.budget_item_id,
+        'budget_name': inv.item.name if inv.item else '',
+        'has_budget': bool(
+            inv.budget_item_id and (not inv.item or inv.item.code != 'UNASSIGNED')
+        ),
         'has_fact': bool(list(getattr(inv, 'fact_invoices', None) or [])) or (
             invoice_has_file(inv) and float(inv.amount or 0) > 0
         ),
@@ -942,6 +949,8 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
             {'id': item.id, 'name': item.name, 'code': item.code}
             if item else None
         ),
+        'budget_item_id': inv.budget_item_id,
+        'has_budget': bool(inv.budget_item_id and (not item or item.code != 'UNASSIGNED')),
         'original_name': inv.original_name,
         'source': inv.source or 'web',
         'has_file': invoice_has_file(inv) or bool(linked and invoice_has_file(linked)),
@@ -1092,10 +1101,12 @@ def api_me(user: User):
 @bp.route('/api/budget-items')
 @require_user
 def api_budget_items(_user: User):
+    from app.invoice_files import UNASSIGNED_BUDGET_CODE
     items = BudgetItem.query.order_by(BudgetItem.code, BudgetItem.name).all()
     return jsonify([
         {'id': i.id, 'name': i.name, 'code': i.code}
         for i in items
+        if (i.code or '') != UNASSIGNED_BUDGET_CODE
     ])
 
 
@@ -1489,6 +1500,12 @@ def api_week_plan_save(user: User):
         if planned <= 0:
             return jsonify({'error': 'bad_amount', 'hint': summary}), 400
         ptype = 'cash' if raw.get('payment_type') == 'cash' else 'cashless'
+        bid = None
+        try:
+            if raw.get('budget_item_id') not in (None, '', 0, '0'):
+                bid = int(raw.get('budget_item_id'))
+        except (TypeError, ValueError):
+            bid = None
         inv = None
         try:
             rid = int(raw.get('id')) if raw.get('id') not in (None, '', 0, '0') else None
@@ -1501,6 +1518,7 @@ def api_week_plan_save(user: User):
             inv.original_name = summary[:255]
             inv.planned_amount = planned
             inv.payment_type = ptype
+            inv.budget_item_id = bid
             inv.week_start = week
             inv.kind = 'plan'
             if inv.status == 'draft':
@@ -1513,6 +1531,7 @@ def api_week_plan_save(user: User):
                 original_name=summary[:255],
                 summary=summary,
                 source='miniapp',
+                budget_item_id=bid,
                 amount=Decimal('0'),
                 planned_amount=planned,
                 status='new',
@@ -1530,6 +1549,7 @@ def api_week_plan_save(user: User):
             'summary': summary,
             'planned_amount': float(planned),
             'payment_type': ptype,
+            'budget_item_id': bid,
         })
 
     for oid, inv in existing.items():
