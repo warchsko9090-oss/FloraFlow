@@ -292,6 +292,33 @@ def send_photo(photo_path, caption="", chat_type="hr"):
         return False, str(exc)
     return True, "ok"
 
+
+def send_photo_bytes(file_bytes, filename='photo.jpg', caption='', chat_type='hr'):
+    """Фото из памяти в групповой чат (например подтверждение оплаты в расходы)."""
+    bot_token = _get_bot_token()
+    chat_id = _get_chat_id(chat_type)
+    if not bot_token or not chat_id or not file_bytes:
+        return False, "TG creds not configured"
+    payload_caption = (_maybe_test_prefix(chat_type) + caption) if caption or _is_test_mode() else caption
+    url = f"{_tg_root()}/bot{bot_token}/sendPhoto"
+    name = filename or 'photo.jpg'
+    try:
+        r = _http().post(
+            url,
+            data={
+                'chat_id': chat_id,
+                'caption': payload_caption,
+                'parse_mode': 'HTML',
+            },
+            files={'photo': (name, io.BytesIO(file_bytes))},
+            timeout=30,
+        )
+        if not r.ok:
+            return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+    return True, "ok"
+
 def set_reaction(chat_id, message_id, emoji='✅'):
     """Ставит реакцию бота на конкретное сообщение через Bot API
     `setMessageReaction` (добавлено в Bot API 7.0, февраль 2024).

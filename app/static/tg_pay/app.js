@@ -265,8 +265,11 @@
         <div id="editPanel" hidden>
           <div class="field"><label>Назначение</label>
             <textarea id="fSummary">${esc(inv.summary)}</textarea></div>
-          <div class="field"><label>Сумма</label>
-            <input id="fAmount" inputmode="decimal" value="${inv.amount || ''}"></div>
+          ${isPlan
+            ? `<p class="hint">Сумма плана: ${money(planned)}. Факт оплаты пишется кнопкой «Оплатить» сверху — поле «Сумма» счёта тут не нужно.</p>
+               <input type="hidden" id="fAmount" value="${inv.amount || ''}">`
+            : `<div class="field"><label>Сумма</label>
+            <input id="fAmount" inputmode="decimal" value="${inv.amount || ''}"></div>`}
           <div class="field"><label>Статья</label>
             <select id="fBudget">
               <option value="">— не выбрана —</option>
@@ -307,7 +310,9 @@
         <div class="pay-box">
           <div class="field"><label>Сумма оплаты</label>
             <input id="fPayAmt" inputmode="decimal" value="${defPay}"></div>
-          <p class="hint">Можно оплатить частично — остаток останется в плане.</p>
+          <div class="field"><label>Подтверждение (ПП, фото, скрин)</label>
+            <input id="fPayFile" type="file" accept="application/pdf,image/*,.jpg,.jpeg,.png,.webp,.bmp"></div>
+          <p class="hint">Файл уйдёт в чат расходов: «сумма р- назначение. Нал/Безнал».</p>
           <button class="btn btn-ink" type="button" id="btnPaid">Оплатить</button>
         </div>`;
     } else if (!isDraft && inv.status !== 'paid') {
@@ -390,24 +395,32 @@
   }
 
   async function markPaid(id, isPlan) {
-    let body = {};
-    if (isPlan) {
-      const raw = ((document.getElementById('fPayAmt') || {}).value || '').trim();
-      if (!raw) {
-        alert('Укажите сумму оплаты');
-        return;
-      }
-      body = { amount: raw };
-      if (!confirm('Провести оплату ' + raw + ' ₽?')) return;
-    } else if (!confirm('Счёт оплачен? Он исчезнет из списка.')) {
-      return;
-    }
     view.classList.add('busy');
     try {
-      const res = await api('/tg/pay/api/invoices/' + id + '/mark-paid', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
+      let res;
+      if (isPlan) {
+        const raw = ((document.getElementById('fPayAmt') || {}).value || '').trim();
+        if (!raw) {
+          alert('Укажите сумму оплаты');
+          return;
+        }
+        const fileInput = document.getElementById('fPayFile');
+        const file = fileInput && fileInput.files && fileInput.files[0];
+        if (!confirm('Провести оплату ' + raw + ' ₽' + (file ? ' с файлом' : '') + '?')) return;
+        const fd = new FormData();
+        fd.append('amount', raw);
+        if (file) fd.append('file', file);
+        res = await api('/tg/pay/api/invoices/' + id + '/mark-paid', {
+          method: 'POST',
+          body: fd,
+        });
+      } else {
+        if (!confirm('Счёт оплачен? Он исчезнет из списка.')) return;
+        res = await api('/tg/pay/api/invoices/' + id + '/mark-paid', {
+          method: 'POST',
+          body: '{}',
+        });
+      }
       haptic('medium');
       if (isPlan && res && res.closed === false) {
         location.hash = '#/inv/' + id;

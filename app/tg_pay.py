@@ -36,7 +36,7 @@ from app.telegram import (
 )
 from app.invoice_files import (
     invoice_bytes, receipt_bytes, has_file as invoice_has_file, has_receipt as invoice_has_receipt,
-    attach_file, flask_send, flask_send_receipt, delete_unpaid_invoice,
+    attach_file, attach_receipt, flask_send, flask_send_receipt, delete_unpaid_invoice,
 )
 
 bp = Blueprint('tg_pay', __name__, url_prefix='/tg/pay')
@@ -1627,7 +1627,15 @@ def api_mark_paid(user: User, inv_id: int):
     if inv.status != 'new':
         return jsonify({'error': 'not_open'}), 400
 
-    body = request.get_json(silent=True) or {}
+    is_multipart = bool(request.files) or (
+        request.content_type and 'multipart/form-data' in (request.content_type or '')
+    )
+    if is_multipart:
+        body = request.form.to_dict(flat=True)
+        proof = request.files.get('file') or request.files.get('proof')
+    else:
+        body = request.get_json(silent=True) or {}
+        proof = None
 
     # План: частичная оплата — создаём факт-строку, план закрываем когда факт >= плана.
     if (inv.kind or '') == 'plan':
@@ -1643,17 +1651,14 @@ def api_mark_paid(user: User, inv_id: int):
 
         planned = Decimal(str(inv.planned_amount or 0))
         already = Decimal(str(_fact_amount(inv)))
-        remaining = planned - already
-        if remaining < 0:
-            remaining = Decimal('0')
 
         stamp = f"pay_{inv.id}_{int(msk_now().timestamp())}"
         purpose = _purpose(inv)
         fact = PaymentInvoice(
             filename=stamp,
-            original_name=f'Оплата · {purpose}'[:255],
-            summary=f'Оплата · {purpose}'[:500],
-            comment=f'Оплата · {purpose}'[:500],
+            original_name=purpose[:255],
+            summary=purpose[:500],
+            comment=purpose[:500],
             source='miniapp',
             budget_item_id=inv.budget_item_id,
             amount=pay_amt,
@@ -1666,6 +1671,12 @@ def api_mark_paid(user: User, inv_id: int):
         )
         db.session.add(fact)
         db.session.flush()
+
+        if proof and proof.filename:
+            raw = proof.read()
+            if raw:
+                name = secure_filename(proof.filename) or 'payment.jpg'
+                attach_receipt(fact, raw, name)
 
         new_fact_total = already + pay_amt
         closed = False
@@ -1705,11 +1716,17 @@ def api_mark_paid(user: User, inv_id: int):
             'planned_amount': float(planned),
             'remaining': left,
             'closed': closed,
+            'expense_id': getattr(exp, 'id', None),
         })
 
     inv.status = 'paid'
     for kid in list(getattr(inv, 'fact_invoices', None) or []):
         kid.status = 'paid'
+    if proof and proof.filename:
+        raw = proof.read()
+        if raw:
+            name = secure_filename(proof.filename) or 'payment.jpg'
+            attach_receipt(inv, raw, name)
     exp = None
     try:
         from app.invoice_files import ensure_expense_for_paid_invoice
@@ -1727,7 +1744,7 @@ def api_mark_paid(user: User, inv_id: int):
         notify_invoice_paid_chat(inv)
     except Exception:
         current_app.logger.exception('notify invoice paid chat')
-    return jsonify({'ok': True, 'id': inv.id})
+    return jsonify({'ok': True, 'id': inv.id, 'expense_id': getattr(exp, 'id', None)})
 
 
 def _serialize_inbox(row: ChatExpenseMessage) -> dict:

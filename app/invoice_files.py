@@ -86,6 +86,14 @@ def attach_file(inv: PaymentInvoice, data: bytes, save_name: str | None = None) 
     return name
 
 
+def attach_receipt(inv: PaymentInvoice, data: bytes, name: str | None = None) -> str:
+    """Подтверждение оплаты (ПП, скрин, фото) → receipt_blob."""
+    safe = (name or 'receipt.jpg').replace('\\', '/').split('/')[-1][:255] or 'receipt.jpg'
+    inv.receipt_blob = data
+    inv.receipt_name = safe
+    return safe
+
+
 def materialize_path(inv: PaymentInvoice) -> str | None:
     """Путь к файлу для парсеров (pdfplumber). При необходимости выгружает blob."""
     existing = disk_path(inv)
@@ -210,13 +218,16 @@ def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
     return exp
 
 
-def notify_invoice_paid_chat(inv: PaymentInvoice) -> None:
-    """В чат «Расходы» — та же строка, что пишут люди: «25327р- стройбаза. Безнал»."""
-    from app.telegram import send_message
-
+def _paid_chat_text(inv: PaymentInvoice) -> str:
+    """Строка как в чате расходов: «10000р- гсм. Безнал»."""
     purpose = (inv.summary or inv.comment or inv.original_name or 'счёт').strip()
+    purpose = re.sub(r'(?i)^оплата\s*[·•\-–—]\s*', '', purpose).strip()
+    plan = getattr(inv, 'plan', None)
+    if plan is not None:
+        parent = (plan.summary or plan.comment or plan.original_name or '').strip()
+        if parent:
+            purpose = parent
     purpose = re.sub(r'\s+', ' ', purpose)
-    purpose = purpose.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     if purpose.endswith('.'):
         purpose = purpose[:-1].rstrip()
     try:
@@ -232,8 +243,40 @@ def notify_invoice_paid_chat(inv: PaymentInvoice) -> None:
         amount = str(int(round(val)))
     else:
         amount = f"{val:.2f}".replace('.', ',')
-    text = f'{amount}р- {purpose}. {"Нал" if getattr(inv, "payment_type", None) == "cash" else "Безнал"}'
-    ok, err = send_message(text, chat_type='expenses')
+    ptype = 'Нал' if getattr(inv, 'payment_type', None) == 'cash' else 'Безнал'
+    return f'{amount}р- {purpose}. {ptype}'
+
+
+def notify_invoice_paid_chat(inv: PaymentInvoice) -> None:
+    """В чат «Расходы»: подтверждение (фото/PDF) + подпись «10000р- гсм. Безнал»."""
+    from app.telegram import send_document, send_photo_bytes, send_message
+
+    text = _paid_chat_text(inv)
+    caption = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    data = receipt_bytes(inv) or invoice_bytes(inv)
+    name = (
+        getattr(inv, 'receipt_name', None)
+        or getattr(inv, 'original_name', None)
+        or getattr(inv, 'filename', None)
+        or 'payment.jpg'
+    )
+    lower = (name or '').lower()
+    ok, err = False, 'no media'
+    if data:
+        is_image = lower.endswith(('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'))
+        if is_image:
+            ok, err = send_photo_bytes(data, filename=name, caption=caption, chat_type='expenses')
+            if not ok:
+                ok, err = send_document(
+                    filename=name, caption=caption, file_bytes=data, chat_type='expenses',
+                )
+        else:
+            ok, err = send_document(
+                filename=name, caption=caption, file_bytes=data, chat_type='expenses',
+            )
+    if not ok:
+        ok, err = send_message(caption, chat_type='expenses')
     if not ok:
         try:
             current_app.logger.warning('notify invoice paid chat failed: %s', err)
