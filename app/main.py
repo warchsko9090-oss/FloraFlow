@@ -2271,8 +2271,8 @@ def telegram_set_webhook():
         menu_ok, menu_msg = False, ''
         try:
             from app.telegram import set_pay_menu_button
-            mini = url.rsplit('/api/telegram/webhook', 1)[0] + '/tg/pay'
-            menu_ok, menu_msg = set_pay_menu_button(mini)
+            mini = url.rsplit('/api/telegram/webhook', 1)[0] + '/tg'
+            menu_ok, menu_msg = set_pay_menu_button(mini, text='FloraFlow')
         except Exception as menu_exc:
             menu_msg = str(menu_exc)
         return jsonify({

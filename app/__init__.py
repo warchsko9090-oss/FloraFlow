@@ -125,6 +125,8 @@ def create_app():
     app.register_blueprint(orders.bp)
     app.register_blueprint(stock.bp)
     app.register_blueprint(finance.bp)
+    from . import tg_hub
+    app.register_blueprint(tg_hub.bp)
     from . import tg_pay
     app.register_blueprint(tg_pay.bp)
     from . import tg_sale
@@ -211,7 +213,7 @@ def create_app():
         path = request.path or ''
         if path.endswith('/telegram-web-app.js'):
             response.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
-        elif path.startswith('/static/tg_pay/') or path.startswith('/static/tg_sale/'):
+        elif path.startswith('/static/tg_pay/') or path.startswith('/static/tg_sale/') or path.startswith('/static/tg_hub/'):
             response.headers['Cache-Control'] = 'no-store, max-age=0'
         elif path.startswith('/static/tg_'):
             response.headers['Cache-Control'] = 'public, max-age=600'

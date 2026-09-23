@@ -110,6 +110,7 @@
   async function boot() {
     const startApp = async (user) => {
       me = user;
+      if (window.FFTg && window.FFTg.mountAppTabs) window.FFTg.mountAppTabs(me, 'pay');
       try { const w = tgApp(); if (w) { w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } } catch (_) {}
       window.addEventListener('hashchange', route);
       route();

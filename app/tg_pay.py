@@ -130,37 +130,22 @@ def _start_greeting(sender, tg_id) -> str:
         lines.append(f'TG_USER_ID_MAP={tg_id}:admin')
         lines.append('Примеры: 111:admin,222:executive,333:shop_manager')
     lines.append('')
-    if _can_pay_app(user) and _can_sale_role(user):
-        lines.append('Кнопки внизу чата: Оплата и Выставить счёт.')
-    elif _can_sale_role(user):
-        lines.append('Кнопка внизу чата: Выставить счёт.')
-    elif _can_pay_app(user):
-        lines.append('Кнопка внизу чата: Счета на оплату.')
+    if _can_pay_app(user) or _can_sale_role(user):
+        lines.append('Откройте FloraFlow синей кнопкой меню бота (внизу справа).')
+        if _can_pay_app(user) and _can_sale_role(user):
+            lines.append('Внутри: вкладки «Оплата» и «Клиентам».')
     else:
         lines.append('Пришлите PDF — попадёт в черновики администратора.')
     return '\n'.join(lines)
 
 
 def _apps_reply_keyboard(user: User | None) -> dict | None:
-    """Постоянные кнопки Mini App внизу чата — чтобы переключаться без /start."""
-    row = []
-    from app.telegram import miniapp_web_url
-    pay_url = miniapp_web_url(_public_miniapp_url())
-    if _can_pay_app(user) and pay_url.startswith('https://'):
-        pay_label = 'Оплата' if _role(user) in ('admin', 'executive') else 'Счета на оплату'
-        row.append({'text': pay_label, 'web_app': {'url': pay_url}})
-    if _can_sale_role(user):
-        from app.tg_sale import public_sale_url
-        sale_url = miniapp_web_url(public_sale_url())
-        if sale_url.startswith('https://'):
-            row.append({'text': 'Выставить счёт', 'web_app': {'url': sale_url}})
-    if not row:
-        return None
-    return {
-        'keyboard': [row],
-        'resize_keyboard': True,
-        'is_persistent': True,
-    }
+    """Серые reply web_app-кнопки убраны: на iOS часто без initData.
+
+    Вход — только синяя menu button → /tg (вкладки по ролям).
+    Снимаем старую постоянную клавиатуру, если она ещё висит у пользователя.
+    """
+    return {'remove_keyboard': True}
 
 
 def _dev_mode() -> bool:
@@ -904,6 +889,7 @@ def api_auth():
         'dev': is_dev,
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
+        'apps': {'pay': True, 'sale': _can_sale_role(user)},
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -939,6 +925,7 @@ def api_login():
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
         'bound': bool(session_tg),
+        'apps': {'pay': True, 'sale': _can_sale_role(user)},
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -956,6 +943,7 @@ def api_me(user: User):
         'dev': _dev_mode() and not _init_data_candidates(),
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
+        'apps': {'pay': True, 'sale': _can_sale_role(user)},
     })
 
 
@@ -1490,15 +1478,14 @@ def handle_private_update(msg: dict) -> bool:
     if text.startswith('/start') or text in ('счета', 'Счета', '/pay'):
         note_telegram_update('start', tg_id)
         user = _user_from_telegram(sender) if sender else None
-        if _can_sale_role(user):
-            from app.tg_sale import public_sale_url
-            sale_url = public_sale_url()
-            if sale_url.startswith('https://'):
-                try:
-                    from app.telegram import set_pay_menu_button
-                    set_pay_menu_button(url=sale_url, chat_id=chat_id, text='Счёт')
-                except Exception:
-                    current_app.logger.exception('sale menu button')
+        try:
+            from app.telegram import set_pay_menu_button
+            from app.tg_hub import public_hub_url
+            hub = public_hub_url()
+            if hub.startswith('https://'):
+                set_pay_menu_button(url=hub, chat_id=chat_id, text='FloraFlow')
+        except Exception:
+            current_app.logger.exception('hub menu button')
         markup = _apps_reply_keyboard(user)
         _tg_reply(chat_id, _start_greeting(sender, tg_id), reply_markup=markup)
         return True

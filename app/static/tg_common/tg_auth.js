@@ -339,8 +339,8 @@
   }
 
   /**
-   * Перед send-pdf / скачиванием: если initData пропал — ждём SDK и
-   * заново handshake, иначе явная ошибка «откройте из кнопки бота».
+   * Перед send-pdf / скачиванием: ждём initData, иначе пробуем cookie-сессию.
+   * Серая reply-кнопка на iOS часто без initData — cookie.tg достаточно.
    */
   async function ensureAuth(authUrl) {
     loadSdk();
@@ -350,10 +350,7 @@
       await waitTelegram(1500);
       initData = getInitData();
     }
-    if (!initData) {
-      throw new Error(authErrorMessage({ hint: "no_init_data", error: "no_init_data" }, 401));
-    }
-    remember(initData);
+    if (initData) remember(initData);
     if (authUrl) {
       const me = await handshake(authUrl);
       if (me && me.has_telegram === false) {
@@ -361,7 +358,41 @@
       }
       return me;
     }
+    if (!initData) {
+      throw new Error(authErrorMessage({ hint: "no_init_data", error: "no_init_data" }, 401));
+    }
     return { has_telegram: true };
+  }
+
+  /** Вкладки Оплата / Клиентам — одна синяя кнопка, разделы внутри. */
+  function mountAppTabs(me, active) {
+    const apps = (me && me.apps) || {};
+    const canPay = apps.pay === true || (apps.pay == null && active === "pay");
+    const canSale = apps.sale === true || (apps.sale == null && active === "sale");
+    if (!(canPay && canSale)) return;
+    if (document.getElementById("ff-app-tabs")) return;
+    const bar = document.createElement("nav");
+    bar.id = "ff-app-tabs";
+    bar.innerHTML = `
+      <a class="ff-tab${active === "pay" ? " is-on" : ""}" href="/tg/pay">Оплата</a>
+      <a class="ff-tab${active === "sale" ? " is-on" : ""}" href="/tg/sale">Клиентам</a>
+    `;
+    const app = document.getElementById("app");
+    if (app && app.firstChild) app.insertBefore(bar, app.firstChild);
+    else document.body.insertBefore(bar, document.body.firstChild);
+    if (!document.getElementById("ff-app-tabs-style")) {
+      const st = document.createElement("style");
+      st.id = "ff-app-tabs-style";
+      st.textContent = `
+        #ff-app-tabs{display:flex;gap:6px;padding:10px 12px 0;position:sticky;top:0;z-index:20;
+          background:inherit;backdrop-filter:blur(8px)}
+        #ff-app-tabs .ff-tab{flex:1;text-align:center;padding:10px 8px;border-radius:12px;
+          text-decoration:none;font-weight:700;font-size:13px;color:inherit;
+          border:1px solid rgba(0,0,0,.1);background:rgba(255,255,255,.55)}
+        #ff-app-tabs .ff-tab.is-on{background:#1B5E20;color:#fff;border-color:#1B5E20}
+      `;
+      document.head.appendChild(st);
+    }
   }
 
   async function api(path, opts) {
@@ -437,5 +468,6 @@
   w.FFTg = {
     tgApp, getInitData, waitTelegram, handshake, bootAuth, ensureAuth,
     api, fetchBlob, authErrorMessage, remember, debugInfo, applyWeb, promptLogin,
+    mountAppTabs,
   };
 })(window);

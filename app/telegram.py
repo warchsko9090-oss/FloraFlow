@@ -25,7 +25,7 @@ _PROXY_SETTING_KEYS = (
 
 
 # Telegram Web caches Mini App pages by exact URL. Bump after JS/HTML changes.
-MINIAPP_CACHE_V = '20260923b'
+MINIAPP_CACHE_V = '20260923c'
 
 
 def miniapp_web_url(url: str) -> str:
@@ -480,9 +480,13 @@ def download_bot_file(file_id):
 def default_miniapp_url():
     env = (os.environ.get('TG_MINIAPP_URL') or '').strip()
     if env:
-        return env.rstrip('/')
+        u = env.rstrip('/')
+        # Старые env указывали /tg/pay — единый вход теперь /tg
+        if u.endswith('/tg/pay') or u.endswith('/tg/sale'):
+            u = u.rsplit('/tg/', 1)[0] + '/tg'
+        return u
     if os.path.isdir('/data') or os.environ.get('AMVERA'):
-        return 'https://floraflowerp-warchesko.amvera.io/tg/pay'
+        return 'https://floraflowerp-warchesko.amvera.io/tg'
     return ''
 
 
@@ -492,7 +496,10 @@ def default_webhook_url():
         return env.rstrip('/')
     mini = default_miniapp_url()
     if mini.startswith('https://'):
-        return mini.rsplit('/tg/pay', 1)[0] + '/api/telegram/webhook'
+        for suffix in ('/tg/pay', '/tg/sale', '/tg'):
+            if mini.endswith(suffix):
+                return mini[: -len(suffix)] + '/api/telegram/webhook'
+        return mini.rstrip('/') + '/api/telegram/webhook'
     return ''
 
 
@@ -581,7 +588,7 @@ def get_webhook_info():
         return {'ok': False, 'error': str(exc)}
 
 
-def set_pay_menu_button(url=None, chat_id=None, text='Счета'):
+def set_pay_menu_button(url=None, chat_id=None, text='FloraFlow'):
     """Кнопка меню бота → Mini App. chat_id — только для этого пользователя."""
     bot_token = _get_bot_token()
     url = miniapp_web_url((url or default_miniapp_url() or '').rstrip('/'))
@@ -590,7 +597,7 @@ def set_pay_menu_button(url=None, chat_id=None, text='Счета'):
     payload = {
         'menu_button': {
             'type': 'web_app',
-            'text': text or 'Счета',
+            'text': text or 'FloraFlow',
             'web_app': {'url': url},
         }
     }

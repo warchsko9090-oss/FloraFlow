@@ -868,6 +868,7 @@
     async function boot() {
         const startApp = async (user) => {
             state.me = user;
+            if (window.FFTg && window.FFTg.mountAppTabs) window.FFTg.mountAppTabs(state.me, "sale");
             await reload();
             render();
         };

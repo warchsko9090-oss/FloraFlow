@@ -362,44 +362,16 @@ def _discard_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
 
 
 def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
-    lines = list(inv.lines or [])
-    npos = len(lines)
-    pos_word = 'позиция' if npos == 1 else 'поз.'
+    """Короткое уведомление в чат заказов — в стиле остальных TG-сообщений ERP."""
     buyer = html_escape((inv.buyer_name or 'Без клиента').strip())
     if inv.anonymous:
         buyer = 'обезличенный (без плательщика)'
-    shown = lines[:25]
-    cards = _shop_cards(ln.plant_id for ln in shown)
-    items = []
-    for ln in shown:
-        plant = html_escape(ln.plant_name or 'Растение')
-        size = html_escape(ln.size_name or '')
-        attrs = html_escape(_shop_attrs(cards.get(ln.plant_id), ln.size_name or ''))
-        qty = int(ln.qty or 0)
-        price = _fmt_money_ru(ln.price)
-        total = _fmt_money_ru(Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0)))
-        head = f'{plant} · {size}' if size else plant
-        if attrs:
-            head = f'{head} {attrs}'
-        items.append(
-            f'• {head}\n'
-            f'<b>{qty} шт</b> по цене <b>{price}</b>\n'
-            f'{total}'
-        )
-    extra = npos - len(shown)
-    if extra > 0:
-        items.append(f'• … и ещё {extra} {pos_word}')
-    body = '\n'.join(items) if items else '• нет позиций'
-    text = '\n'.join([
-        f'✅ <b>Согласован на выкопку</b> {_sale_chat_ref(inv, order)}',
-        '',
-        f'👤 {buyer}',
-        f'💰 ИТОГО: {_fmt_money_ru(inv.amount)} · {npos} {pos_word}',
-        '',
-        f'📦 Позиции:',
-        body,
-    ])
-    return text[:3500]
+    oid = order.id if order is not None else inv.order_id
+    if oid:
+        head = f'✅ <b>Создан новый заказ №{oid} / счёт на оплату №{inv.id}.</b>'
+    else:
+        head = f'✅ <b>Создан новый счёт на оплату №{inv.id}.</b>'
+    return f'{head}\n👤 Клиент: {buyer}'
 
 
 def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
@@ -1120,6 +1092,7 @@ def api_auth():
         'dev': is_dev,
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
+        'apps': {'pay': (user.role or '') in ('admin', 'executive', 'user', 'user2'), 'sale': True},
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -1156,6 +1129,7 @@ def api_login():
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
         'bound': bool(session_tg),
+        'apps': {'pay': (user.role or '') in ('admin', 'executive', 'user', 'user2'), 'sale': True},
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -1173,6 +1147,7 @@ def api_me(user: User):
         'can_delete_approved': (user.role or '') == 'admin',
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
+        'apps': {'pay': (user.role or '') in ('admin', 'executive', 'user', 'user2'), 'sale': True},
     })
 
 
