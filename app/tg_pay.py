@@ -365,6 +365,27 @@ def _bind_telegram_id(user: User, tg_id: int) -> None:
         db.session.rollback()
 
 
+
+
+def _bind_telegram_id_force(user: User, tg_id: int) -> None:
+    """После успешного логина: привязать текущий Telegram к логину навсегда.
+
+    Освобождает id у другого пользователя, если он уже занят — иначе один и тот же
+    аккаунт Telegram не сможет закрепиться.
+    """
+    if not tg_id:
+        return
+    taken = User.query.filter_by(telegram_id=tg_id).first()
+    if taken and taken.id != user.id:
+        taken.telegram_id = None
+    user.telegram_id = int(tg_id)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('bind telegram force failed user=%s tg=%s', user.id, tg_id)
+
+
 def _user_from_telegram(tg_user: dict) -> User | None:
     raw_id = tg_user.get('id')
     if not raw_id:
