@@ -798,8 +798,17 @@ def _allocate_sale_qty(plant_id: int, size_id: int, qty: int) -> list[tuple[int 
     return chunks
 
 
-def create_order_from_sale_invoice(inv: SaleInvoice, user_id: int | None) -> Order | None:
-    """Создаёт заказ ERP с резервом из согласованного счёта Mini App."""
+def create_order_from_sale_invoice(
+    inv: SaleInvoice,
+    user_id: int | None,
+    *,
+    allocate_fields: bool = True,
+) -> Order | None:
+    """Создаёт заказ ERP из согласованного счёта.
+
+    allocate_fields=True (Mini App): раскладывает по полям со свободным остатком.
+    allocate_fields=False (ERP): позиции без field_id/year — поле копки заполняет пользователь.
+    """
     if inv.order_id:
         order = Order.query.get(inv.order_id)
         if order and inv.from_existing_order and not (order.invoice_number or '').strip():
@@ -826,11 +835,17 @@ def create_order_from_sale_invoice(inv: SaleInvoice, user_id: int | None) -> Ord
     db.session.add(order)
     db.session.flush()
     inv.order_id = order.id
+    inv.from_existing_order = False
 
     created = []
     for ln in usable:
         price = _money(ln.price)
-        for field_id, year, qty in _allocate_sale_qty(int(ln.plant_id), int(ln.size_id), int(ln.qty)):
+        chunks = (
+            _allocate_sale_qty(int(ln.plant_id), int(ln.size_id), int(ln.qty))
+            if allocate_fields
+            else [(None, None, int(ln.qty))]
+        )
+        for field_id, year, qty in chunks:
             oi = OrderItem(
                 order_id=order.id,
                 plant_id=int(ln.plant_id),
@@ -860,13 +875,14 @@ def create_order_from_sale_invoice(inv: SaleInvoice, user_id: int | None) -> Ord
         db.session.flush()
         return None
 
-    if not order.project_id:
+    if allocate_fields and not order.project_id:
         from app.finance import resolve_project_id_for_yard_fields
         linked = resolve_project_id_for_yard_fields([it.field_id for it in created if it.field_id])
         if linked:
             order.project_id = linked
 
     return order
+
 
 
 def backfill_approved_sale_orders() -> int:
@@ -894,7 +910,7 @@ def backfill_approved_sale_orders() -> int:
 def _replace_lines(inv: SaleInvoice, rows: list):
     inv.lines.clear()
     db.session.flush()
-    free_map = _free_pairs()
+    free_map = _free_pairs(exclude_invoice_id=inv.id)
     clamp_free = not bool(inv.from_existing_order)
     for row in rows or []:
         try:
@@ -926,12 +942,52 @@ def _replace_lines(inv: SaleInvoice, rows: list):
     db.session.flush()
     inv.amount = _line_sum(inv.lines)
 
+def _free_pairs(exclude_invoice_id: int | None = None) -> dict[tuple[int, int], int]:
+    """Свободно по (plant, size): склад − резерв с полем − резерв без поля − чужие открытые счета."""
+    from app.stock_helpers import _active_order_filter
 
-def _free_pairs() -> dict[tuple[int, int], int]:
     rmap = get_reserved_map()
-    reserved = {}
+    reserved: dict[tuple[int, int], int] = {}
     for (pid, sid, _f, _y), qty in rmap.items():
         reserved[(pid, sid)] = reserved.get((pid, sid), 0) + int(qty or 0)
+
+    # Позиции заказов ещё без поля копки — тоже держат остаток.
+    bare = (
+        db.session.query(
+            OrderItem.plant_id,
+            OrderItem.size_id,
+            func.coalesce(func.sum(OrderItem.quantity - OrderItem.shipped_quantity), 0),
+        )
+        .join(Order)
+        .filter(*_active_order_filter(), OrderItem.field_id.is_(None))
+        .group_by(OrderItem.plant_id, OrderItem.size_id)
+        .all()
+    )
+    for pid, sid, qty in bare:
+        if not pid or not sid:
+            continue
+        reserved[(int(pid), int(sid))] = reserved.get((int(pid), int(sid)), 0) + int(qty or 0)
+
+    # Черновики/согласованные счета без заказа — оперативный холд при наборе позиций.
+    inv_q = (
+        db.session.query(
+            SaleInvoiceLine.plant_id,
+            SaleInvoiceLine.size_id,
+            func.coalesce(func.sum(SaleInvoiceLine.qty), 0),
+        )
+        .join(SaleInvoice)
+        .filter(
+            SaleInvoice.status.in_(('draft', 'approved')),
+            SaleInvoice.order_id.is_(None),
+            SaleInvoiceLine.plant_id.isnot(None),
+            SaleInvoiceLine.size_id.isnot(None),
+        )
+    )
+    if exclude_invoice_id:
+        inv_q = inv_q.filter(SaleInvoice.id != int(exclude_invoice_id))
+    for pid, sid, qty in inv_q.group_by(SaleInvoiceLine.plant_id, SaleInvoiceLine.size_id).all():
+        reserved[(int(pid), int(sid))] = reserved.get((int(pid), int(sid)), 0) + int(qty or 0)
+
     rows = (
         db.session.query(
             StockBalance.plant_id,
@@ -943,10 +999,51 @@ def _free_pairs() -> dict[tuple[int, int], int]:
     )
     out = {}
     for pid, sid, qty in rows:
-        free = int(qty or 0) - reserved.get((pid, sid), 0)
+        free = int(qty or 0) - reserved.get((int(pid), int(sid)), 0)
         if free > 0:
             out[(int(pid), int(sid))] = free
     return out
+
+
+def stock_catalog_for_sale(q: str = '', *, exclude_invoice_id: int | None = None, limit: int = 40) -> list[dict]:
+    """Поиск позиций для UI ERP: название, размер, свободно, цена."""
+    from app.shop_catalog import _price_history_map
+    from app.seedlings import is_excluded_from_product_stock
+
+    free_map = _free_pairs(exclude_invoice_id=exclude_invoice_id)
+    if not free_map:
+        return []
+    prices = _price_history_map()
+    plant_ids = {pid for pid, _ in free_map}
+    size_ids = {sid for _, sid in free_map}
+    plants = {p.id: p for p in Plant.query.filter(Plant.id.in_(plant_ids)).all()}
+    sizes = {s.id: s for s in Size.query.filter(Size.id.in_(size_ids)).all()}
+    needle = (q or '').strip().lower()
+    rows = []
+    for (pid, sid), free in free_map.items():
+        plant = plants.get(pid)
+        size = sizes.get(sid)
+        if not plant or not size:
+            continue
+        if is_excluded_from_product_stock(size.name or ''):
+            continue
+        pname = plant.name or ''
+        sname = size.name or ''
+        if needle and needle not in pname.lower() and needle not in sname.lower():
+            continue
+        price = float(prices.get((pid, sid)) or 0)
+        rows.append({
+            'plant_id': pid,
+            'size_id': sid,
+            'plant_name': pname,
+            'size_name': sname,
+            'free': int(free),
+            'price': price,
+            'label': f'{pname} · {sname} · свободно {int(free)}',
+        })
+    rows.sort(key=lambda r: (r['plant_name'].lower(), size_natural_key(r['size_name'])))
+    return rows[: max(1, int(limit or 40))]
+
 
 
 def _logo_uri() -> str:

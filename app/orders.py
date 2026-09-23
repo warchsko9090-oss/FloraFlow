@@ -733,6 +733,263 @@ def sale_invoices_list():
     return render_template('orders/sale_invoices.html', invoices=invoices, status=status)
 
 
+def _sale_invoice_lines_from_form():
+    plant_ids = request.form.getlist('line_plant_id')
+    size_ids = request.form.getlist('line_size_id')
+    plant_names = request.form.getlist('line_plant_name')
+    size_names = request.form.getlist('line_size_name')
+    qtys = request.form.getlist('line_qty')
+    prices = request.form.getlist('line_price')
+    rows = []
+    n = max(len(plant_ids), len(size_ids), len(qtys), len(prices), 0)
+    for i in range(n):
+        rows.append({
+            'plant_id': plant_ids[i] if i < len(plant_ids) else '',
+            'size_id': size_ids[i] if i < len(size_ids) else '',
+            'plant_name': plant_names[i] if i < len(plant_names) else '',
+            'size_name': size_names[i] if i < len(size_names) else '',
+            'qty': qtys[i] if i < len(qtys) else '0',
+            'price': prices[i] if i < len(prices) else '0',
+        })
+    return rows
+
+
+def _sale_invoice_apply_client(inv, form):
+    from app.models import Client
+    from app.tg_sale import apply_client_to_invoice, _inn_digits
+    from app.client_draft_approval import resolve_or_create_client
+    try:
+        client_id = int(form.get('client_id') or 0) or None
+    except (TypeError, ValueError):
+        client_id = None
+    new_name = (form.get('new_client_name') or '').strip()
+    new_inn = _inn_digits(form.get('new_client_inn') or '')
+    client = None
+    if client_id:
+        client = Client.query.get(client_id)
+    elif new_name:
+        client = resolve_or_create_client(None, new_name, {})
+        if client and new_inn and not _inn_digits(client.inn):
+            client.inn = new_inn[:20]
+    if client:
+        apply_client_to_invoice(inv, client)
+    else:
+        inv.client_id = None
+        inv.buyer_name = (form.get('buyer_name') or new_name or '')[:300]
+        if new_inn:
+            inv.buyer_inn = new_inn[:20]
+    return client
+
+
+@bp.route('/orders/sale_invoices/api/stock')
+@login_required
+def sale_invoice_stock_api():
+    if current_user.role != 'admin':
+        return jsonify({'error': 'forbidden'}), 403
+    from app.tg_sale import stock_catalog_for_sale
+    try:
+        exclude_id = int(request.args.get('exclude') or 0) or None
+    except (TypeError, ValueError):
+        exclude_id = None
+    q = (request.args.get('q') or '').strip()
+    return jsonify({'items': stock_catalog_for_sale(q, exclude_invoice_id=exclude_id)})
+
+
+@bp.route('/orders/sale_invoices/new', methods=['GET', 'POST'])
+@login_required
+def sale_invoice_new():
+    if current_user.role != 'admin':
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+    from app.models import SaleInvoice, SaleCompany, Client
+    from app.tg_sale import _company_ready, _replace_lines, allocate_sale_doc_number
+    companies = [
+        c for c in SaleCompany.query.filter_by(is_active=True).order_by(SaleCompany.sort_order, SaleCompany.id).all()
+        if _company_ready(c)
+    ]
+    clients = Client.query.order_by(Client.name).limit(2000).all()
+    if request.method == 'POST':
+        try:
+            company_id = int(request.form.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        company = SaleCompany.query.get(company_id)
+        if not company or not _company_ready(company):
+            flash('Выберите фирму с заполненными реквизитами (ИНН, банк, р/с, БИК)')
+            return redirect(url_for('orders.sale_invoice_new'))
+        inv = SaleInvoice(
+            company_id=company.id,
+            user_id=current_user.id,
+            status='draft',
+            origin='erp',
+            comment=(request.form.get('comment') or '')[:500],
+            anonymous=bool(request.form.get('anonymous')),
+        )
+        db.session.add(inv)
+        db.session.flush()
+        _sale_invoice_apply_client(inv, request.form)
+        if not inv.anonymous and not (inv.buyer_name or '').strip():
+            db.session.rollback()
+            flash('Укажите контрагента или имя покупателя')
+            return redirect(url_for('orders.sale_invoice_new'))
+        _replace_lines(inv, _sale_invoice_lines_from_form())
+        if not inv.lines:
+            db.session.rollback()
+            flash('Добавьте хотя бы одну позицию в пределах свободного остатка')
+            return redirect(url_for('orders.sale_invoice_new'))
+        allocate_sale_doc_number(inv)
+        db.session.commit()
+        log_action(f'Создал счёт клиенту №{inv.doc_number or inv.id} (ERP)')
+        flash(f'Счёт №{inv.doc_number or inv.id} сохранён как черновик')
+        return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+    return render_template(
+        'orders/sale_invoice_edit.html',
+        inv=None,
+        companies=companies,
+        clients=clients,
+        free_hint=True,
+        form_action=url_for('orders.sale_invoice_new'),
+    )
+
+
+@bp.route('/orders/sale_invoices/<int:inv_id>/edit', methods=['GET', 'POST'])
+@login_required
+def sale_invoice_edit(inv_id):
+    if current_user.role != 'admin':
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+    from sqlalchemy.orm import joinedload
+    from app.models import SaleInvoice, SaleCompany, Client
+    from app.tg_sale import _company_ready, _replace_lines, stock_catalog_for_sale
+    inv = (
+        SaleInvoice.query.options(joinedload(SaleInvoice.lines), joinedload(SaleInvoice.company), joinedload(SaleInvoice.client))
+        .filter(SaleInvoice.id == inv_id, SaleInvoice.status != 'discarded')
+        .first_or_404()
+    )
+    companies = [
+        c for c in SaleCompany.query.filter_by(is_active=True).order_by(SaleCompany.sort_order, SaleCompany.id).all()
+        if _company_ready(c)
+    ]
+    clients = Client.query.order_by(Client.name).limit(2000).all()
+    if request.method == 'POST':
+        if inv.order_id and inv.from_existing_order:
+            flash('Счёт привязан к существующему заказу — позиции лучше править в заказе')
+            return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+        try:
+            company_id = int(request.form.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        company = SaleCompany.query.get(company_id)
+        if company and _company_ready(company):
+            inv.company_id = company.id
+        inv.comment = (request.form.get('comment') or '')[:500]
+        inv.anonymous = bool(request.form.get('anonymous'))
+        _sale_invoice_apply_client(inv, request.form)
+        if not inv.order_id:
+            _replace_lines(inv, _sale_invoice_lines_from_form())
+            if not inv.lines:
+                flash('Нужна хотя бы одна позиция в пределах свободного остатка')
+                db.session.rollback()
+                return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+        db.session.commit()
+        log_action(f'Обновил счёт клиенту №{inv.doc_number or inv.id}')
+        flash('Счёт сохранён')
+        return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+
+    # free left for current lines (including this invoice's hold released for display)
+    free_now = {f"{r['plant_id']}:{r['size_id']}": r['free'] for r in stock_catalog_for_sale('', exclude_invoice_id=inv.id, limit=5000)}
+    return render_template(
+        'orders/sale_invoice_edit.html',
+        inv=inv,
+        companies=companies,
+        clients=clients,
+        free_now=free_now,
+        free_hint=True,
+        form_action=url_for('orders.sale_invoice_edit', inv_id=inv.id),
+    )
+
+
+@bp.route('/orders/sale_invoices/<int:inv_id>/create-order', methods=['POST'])
+@login_required
+def sale_invoice_create_order(inv_id):
+    """Создать заказ из счёта без автозаполнения поля копки."""
+    if current_user.role != 'admin':
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+    from app.models import SaleInvoice
+    from app.tg_sale import create_order_from_sale_invoice, sale_public_number, _sync_client
+    inv = SaleInvoice.query.get_or_404(inv_id)
+    if inv.status == 'discarded':
+        flash('Счёт удалён')
+        return redirect(url_for('orders.sale_invoices_list'))
+    if inv.order_id:
+        flash(f'Уже привязан заказ №{inv.order_id}')
+        return redirect(url_for('orders.order_detail', order_id=inv.order_id))
+    _sync_client(inv)
+    if not inv.client_id:
+        flash('Сначала выберите или создайте контрагента')
+        return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+    if not inv.lines:
+        flash('В счёте нет позиций')
+        return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+    if inv.status != 'approved':
+        inv.status = 'approved'
+        inv.approved_at = msk_now()
+    try:
+        order = create_order_from_sale_invoice(inv, current_user.id, allocate_fields=False)
+        if not order:
+            db.session.rollback()
+            flash('Не удалось создать заказ')
+            return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('erp sale invoice create order')
+        flash('Ошибка при создании заказа')
+        return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+    log_action(f'Создал заказ #{order.id} из счёта №{sale_public_number(inv)} (без поля копки)')
+    flash(f'Заказ №{order.id} создан. Поле для копки заполните в карточке заказа.')
+    return redirect(url_for('orders.order_detail', order_id=order.id))
+
+
+@bp.route('/orders/sale_invoices/<int:inv_id>/link-order', methods=['POST'])
+@login_required
+def sale_invoice_link_order(inv_id):
+    if current_user.role != 'admin':
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+    from app.models import SaleInvoice
+    from app.tg_sale import sale_public_number
+    inv = SaleInvoice.query.get_or_404(inv_id)
+    if inv.order_id:
+        flash(f'Уже привязан заказ №{inv.order_id}')
+        return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+    raw = (request.form.get('order_id') or '').strip()
+    try:
+        oid = int(raw)
+    except (TypeError, ValueError):
+        flash('Укажите номер заказа')
+        return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+    order = Order.query.get(oid)
+    if not order or order.is_deleted or (order.status or '') in ('canceled', 'ghost'):
+        flash('Заказ не найден или закрыт')
+        return redirect(url_for('orders.sale_invoice_edit', inv_id=inv.id))
+    inv.order_id = order.id
+    inv.from_existing_order = True
+    if inv.status != 'approved':
+        inv.status = 'approved'
+        inv.approved_at = inv.approved_at or msk_now()
+    if not (order.invoice_number or '').strip():
+        order.invoice_number = str(sale_public_number(inv))
+        order.invoice_date = (inv.approved_at or msk_now()).date()
+    db.session.commit()
+    log_action(f'Привязал счёт №{sale_public_number(inv)} к заказу #{order.id}')
+    flash(f'Счёт привязан к заказу №{order.id}. Поля копки в заказе не менялись.')
+    return redirect(url_for('orders.order_detail', order_id=order.id))
+
+
+
+
 @bp.route('/orders/sale_invoices/<int:inv_id>/discard', methods=['POST'])
 @login_required
 def sale_invoice_discard(inv_id):

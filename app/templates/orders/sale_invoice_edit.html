@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">
+            <i class="fas fa-file-invoice-dollar"></i>
+            {% if inv %}Счёт №{{ inv.doc_number or inv.id }}{% else %}Новый счёт клиенту{% endif %}
+        </div>
+        <div class="page-subtitle">
+            Свободный остаток учитывает резервы заказов и другие открытые счета.
+            Поле для копки при создании заказа не заполняется — его укажете в карточке заказа.
+        </div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-outline-secondary" href="{{ url_for('orders.sale_invoices_list') }}">← К списку</a>
+        {% if inv %}
+        <a class="btn btn-outline-primary" href="{{ url_for('orders.sale_invoice_pdf', inv_id=inv.id) }}">PDF</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('orders.sale_invoice_print_edit', inv_id=inv.id) }}">Правка PDF</a>
+        {% endif %}
+    </div>
+</div>
+
+{% if inv and inv.order_id %}
+<div class="alert alert-success py-2">
+    Привязан <a href="{{ url_for('orders.order_detail', order_id=inv.order_id) }}">заказ №{{ inv.order_id }}</a>
+    {% if inv.from_existing_order %}(существующий заказ, позиции заказа не перезаписывались){% else %}(создан из этого счёта){% endif %}
+</div>
+{% endif %}
+
+<form method="POST" action="{{ form_action }}" class="card section-card p-3 mb-3" id="saleInvForm" hx-boost="false">
+    <div class="row g-3">
+        <div class="col-md-4">
+            <label class="form-label">Фирма (поставщик)</label>
+            <select name="company_id" class="form-select select-search" required {% if inv and inv.order_id %}{% endif %}>
+                <option value="">— выберите —</option>
+                {% for c in companies %}
+                <option value="{{ c.id }}" {% if inv and inv.company_id == c.id %}selected{% elif not inv and loop.first %}selected{% endif %}>
+                    {{ c.short_name }}{% if c.vat_mode in ('included_20','included_22') %} · НДС{% else %} · без НДС{% endif %}
+                </option>
+                {% endfor %}
+            </select>
+            {% if not companies %}
+            <div class="form-text text-warning">Нет фирм с ИНН/банком/р/с/БИК.</div>
+            {% endif %}
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Контрагент из справочника</label>
+            <select name="client_id" class="form-select select-search" id="clientSelect">
+                <option value="">— новый или вручную —</option>
+                {% for c in clients %}
+                <option value="{{ c.id }}" {% if inv and inv.client_id == c.id %}selected{% endif %}>{{ c.name }}{% if c.inn %} · {{ c.inn }}{% endif %}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Или новый контрагент</label>
+            <input type="text" name="new_client_name" class="form-control" placeholder="Название" value="">
+            <input type="text" name="new_client_inn" class="form-control mt-1" placeholder="ИНН (необязательно)" value="">
+        </div>
+        <div class="col-md-8">
+            <label class="form-label">Покупатель в счёте (если без справочника)</label>
+            <input type="text" name="buyer_name" class="form-control" value="{{ inv.buyer_name if inv else '' }}" placeholder="Как в PDF">
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" name="anonymous" value="1" id="anon" {% if inv and inv.anonymous %}checked{% endif %}>
+                <label class="form-check-label" for="anon">Обезличенный (без покупателя в PDF)</label>
+            </div>
+        </div>
+        <div class="col-12">
+            <label class="form-label">Основание / комментарий</label>
+            <input type="text" name="comment" class="form-control" value="{{ inv.comment if inv else '' }}" placeholder="Договор поставки № …">
+        </div>
+    </div>
+
+    <hr class="my-4">
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+        <h5 class="mb-0">Позиции</h5>
+        {% if not (inv and inv.order_id) %}
+        <div class="input-group" style="max-width: 420px;">
+            <input type="search" class="form-control form-control-sm" id="stockQ" placeholder="Поиск: растение / размер" autocomplete="off">
+            <button type="button" class="btn btn-sm btn-outline-success" id="stockSearchBtn">Найти</button>
+        </div>
+        {% endif %}
+    </div>
+    <p class="text-muted small mb-2">Кол-во не может превысить свободный остаток. При сохранении лишнее обрежется.</p>
+    <div id="stockHits" class="mb-3"></div>
+
+    <div class="table-responsive">
+        <table class="table table-sm align-middle" id="linesTable">
+            <thead>
+                <tr>
+                    <th>Растение / размер</th>
+                    <th style="width:110px">Свободно</th>
+                    <th style="width:100px">Кол-во</th>
+                    <th style="width:120px">Цена</th>
+                    <th style="width:48px"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if inv and inv.lines %}
+                {% for ln in inv.lines %}
+                {% set fk = (ln.plant_id|string) ~ ':' ~ (ln.size_id|string) %}
+                <tr class="line-row">
+                    <td>
+                        <div class="fw-semibold">{{ ln.plant_name }} · {{ ln.size_name }}</div>
+                        <input type="hidden" name="line_plant_id" value="{{ ln.plant_id or '' }}">
+                        <input type="hidden" name="line_size_id" value="{{ ln.size_id or '' }}">
+                        <input type="hidden" name="line_plant_name" value="{{ ln.plant_name or '' }}">
+                        <input type="hidden" name="line_size_name" value="{{ ln.size_name or '' }}">
+                    </td>
+                    <td class="free-cell text-muted">{{ free_now.get(fk, '—') if free_now is defined else '—' }}</td>
+                    <td><input type="number" min="1" name="line_qty" class="form-control form-control-sm" value="{{ ln.qty }}" {% if inv.order_id %}readonly{% endif %}></td>
+                    <td><input type="number" step="0.01" min="0" name="line_price" class="form-control form-control-sm" value="{{ ln.price }}" {% if inv.order_id %}readonly{% endif %}></td>
+                    <td>{% if not inv.order_id %}<button type="button" class="btn btn-sm btn-outline-danger rm-line">×</button>{% endif %}</td>
+                </tr>
+                {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="mt-3 d-flex gap-2 flex-wrap">
+        <button type="submit" class="btn btn-success" {% if not companies %}disabled{% endif %}>
+            <i class="fas fa-save"></i> {% if inv %}Сохранить{% else %}Создать черновик{% endif %}
+        </button>
+    </div>
+</form>
+
+{% if inv and not inv.order_id %}
+<div class="card section-card p-3 mb-3">
+    <h5 class="mb-3">Заказ</h5>
+    <div class="row g-3">
+        <div class="col-md-6">
+            <form method="POST" action="{{ url_for('orders.sale_invoice_create_order', inv_id=inv.id) }}" hx-boost="false"
+                  onsubmit="return confirm('Создать заказ без поля копки? Позиции попадут в заказ, поле укажете вручную.');">
+                <p class="small text-muted">Создаст заказ со статусом «резерв». Поле/партия для копки — пустые.</p>
+                <button type="submit" class="btn btn-dark">Создать заказ из счёта</button>
+            </form>
+        </div>
+        <div class="col-md-6">
+            <form method="POST" action="{{ url_for('orders.sale_invoice_link_order', inv_id=inv.id) }}" hx-boost="false" class="d-flex gap-2 align-items-end">
+                <div class="flex-grow-1">
+                    <label class="form-label">Привязать существующий заказ №</label>
+                    <input type="number" name="order_id" class="form-control" min="1" required placeholder="Номер заказа">
+                </div>
+                <button type="submit" class="btn btn-outline-dark">Привязать</button>
+            </form>
+            <p class="small text-muted mt-1 mb-0">Позиции и поля копки в заказе не меняются.</p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  const exclude = {{ inv.id if inv else 'null' }};
+  const tbody = document.querySelector('#linesTable tbody');
+  const hits = document.getElementById('stockHits');
+  const qEl = document.getElementById('stockQ');
+  const locked = {{ 'true' if inv and inv.order_id else 'false' }};
+
+  function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function addLine(it) {
+    if (locked) return;
+    const tr = document.createElement('tr');
+    tr.className = 'line-row';
+    tr.innerHTML = `
+      <td>
+        <div class="fw-semibold">${esc(it.plant_name)} · ${esc(it.size_name)}</div>
+        <input type="hidden" name="line_plant_id" value="${it.plant_id}">
+        <input type="hidden" name="line_size_id" value="${it.size_id}">
+        <input type="hidden" name="line_plant_name" value="${esc(it.plant_name)}">
+        <input type="hidden" name="line_size_name" value="${esc(it.size_name)}">
+      </td>
+      <td class="free-cell text-muted">${it.free}</td>
+      <td><input type="number" min="1" max="${it.free}" name="line_qty" class="form-control form-control-sm" value="1"></td>
+      <td><input type="number" step="0.01" min="0" name="line_price" class="form-control form-control-sm" value="${it.price || 0}"></td>
+      <td><button type="button" class="btn btn-sm btn-outline-danger rm-line">×</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  async function search() {
+    if (!hits || locked) return;
+    const q = (qEl && qEl.value || '').trim();
+    if (q.length < 2) { hits.innerHTML = '<div class="text-muted small">Введите от 2 символов</div>'; return; }
+    hits.innerHTML = '<div class="text-muted small">Ищу…</div>';
+    const url = {{ url_for('orders.sale_invoice_stock_api')|tojson }} + '?q=' + encodeURIComponent(q) + (exclude ? '&exclude=' + exclude : '');
+    try {
+      const res = await fetch(url, { credentials: 'same-origin' });
+      const data = await res.json();
+      const items = data.items || [];
+      if (!items.length) { hits.innerHTML = '<div class="text-muted small">Нет свободного остатка по запросу</div>'; return; }
+      hits.innerHTML = items.map((it) => `
+        <button type="button" class="btn btn-sm btn-outline-success me-1 mb-1 stock-hit"
+          data-plant="${it.plant_id}" data-size="${it.size_id}"
+          data-pname="${esc(it.plant_name)}" data-sname="${esc(it.size_name)}"
+          data-free="${it.free}" data-price="${it.price}">
+          ${esc(it.plant_name)} · ${esc(it.size_name)}
+          <span class="badge bg-light text-dark ms-1">своб. ${it.free}</span>
+          <span class="badge bg-light text-dark">${Number(it.price||0).toLocaleString('ru-RU')} ₽</span>
+        </button>
+      `).join('');
+    } catch (e) {
+      hits.innerHTML = '<div class="text-danger small">Ошибка поиска</div>';
+    }
+  }
+
+  if (document.getElementById('stockSearchBtn')) {
+    document.getElementById('stockSearchBtn').addEventListener('click', search);
+    qEl && qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); search(); } });
+  }
+  if (hits) {
+    hits.addEventListener('click', (e) => {
+      const btn = e.target.closest('.stock-hit');
+      if (!btn) return;
+      addLine({
+        plant_id: btn.dataset.plant,
+        size_id: btn.dataset.size,
+        plant_name: btn.dataset.pname,
+        size_name: btn.dataset.sname,
+        free: Number(btn.dataset.free || 0),
+        price: Number(btn.dataset.price || 0),
+      });
+    });
+  }
+  tbody && tbody.addEventListener('click', (e) => {
+    const btn = e.target.closest('.rm-line');
+    if (btn) btn.closest('tr').remove();
+  });
+})();
+</script>
+{% endblock %}

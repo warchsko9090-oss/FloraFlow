@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title"><i class="fas fa-file-alt"></i> Печать счёта — правка текстов</div>
+        <div class="page-subtitle">
+            Только PDF. Справочник растений, заказ и счёт в БД <b>не меняются</b>.
+            {% if inv %}Исходный счёт №{{ inv.id }}{% else %}Произвольный счёт{% endif %}
+        </div>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="{{ url_for('orders.sale_invoices_list') }}">← К списку</a>
+    </div>
+</div>
+
+<form method="POST" action="{{ form_action }}" class="card section-card p-3" id="printEditForm" hx-boost="false" target="_blank">
+    <div class="row g-3">
+        <div class="col-md-4">
+            <label class="form-label">Фирма (поставщик)</label>
+            {% if inv %}
+            <input type="text" class="form-control" value="{{ inv.company.short_name if inv.company else '—' }}" disabled>
+            {% else %}
+            <select name="company_id" class="form-select" required>
+                <option value="">— выберите —</option>
+                {% for c in companies %}
+                <option value="{{ c.id }}" {% if selected_company_id == c.id %}selected{% endif %}>
+                    {{ c.short_name }}{% if c.vat_mode in ('included_20','included_22') %} · НДС{% else %} · без НДС{% endif %}
+                </option>
+                {% endfor %}
+            </select>
+            {% endif %}
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">№ в PDF</label>
+            <input type="text" name="doc_number" class="form-control" value="{{ form.doc_number }}">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Дата счёта</label>
+            <input type="date" name="doc_date" class="form-control" value="{{ form.doc_date }}">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Срок оплаты (дата)</label>
+            <input type="date" name="pay_until" class="form-control" value="{{ form.pay_until }}" id="payUntilDate">
+        </div>
+
+        <div class="col-12">
+            <label class="form-label">Основание</label>
+            <input type="text" name="basis" class="form-control" value="{{ form.basis }}"
+                   placeholder="Договор поставки № … от … г.">
+        </div>
+
+        <div class="col-12">
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" name="anonymous" value="1" id="anonChk" {% if form.anonymous %}checked{% endif %}>
+                <label class="form-check-label" for="anonChk">Без покупателя (обезличенный PDF)</label>
+            </div>
+            <label class="form-label">Покупатель (одной строкой)</label>
+            <textarea name="buyer_line" class="form-control" rows="2" id="buyerLine">{{ form.buyer_line }}</textarea>
+        </div>
+    </div>
+
+    <hr class="my-4">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="mb-0">Позиции счёта</h5>
+        <button type="button" class="btn btn-sm btn-outline-success" id="addLine">+ строка</button>
+    </div>
+    <p class="text-muted small">Свободный текст — без товаров из справочника. Пример: аванс 20% одной строкой, кол-во 1, ед. «усл. ед.».</p>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle" id="linesTable">
+            <thead>
+                <tr>
+                    <th style="width:46%">Наименование</th>
+                    <th style="width:12%">Кол-во</th>
+                    <th style="width:12%">Ед.</th>
+                    <th style="width:18%">Цена</th>
+                    <th style="width:8%"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ln in form.lines %}
+                <tr class="line-row">
+                    <td><textarea name="line_name" class="form-control form-control-sm" rows="2">{{ ln.name }}</textarea></td>
+                    <td><input type="text" name="line_qty" class="form-control form-control-sm" value="{{ ln.qty }}"></td>
+                    <td><input type="text" name="line_unit" class="form-control form-control-sm" value="{{ ln.unit }}"></td>
+                    <td><input type="text" name="line_price" class="form-control form-control-sm" value="{{ ln.price }}"></td>
+                    <td><button type="button" class="btn btn-sm btn-outline-danger rm-line">×</button></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <hr class="my-4">
+    <div class="row g-3">
+        <div class="col-md-6">
+            <label class="form-label">Строка про срок оплаты</label>
+            <input type="text" name="pay_until_line" class="form-control" id="payUntilLine" value="{{ form.pay_until_line }}">
+        </div>
+        <div class="col-md-6">
+            <label class="form-label">Строка про НДС</label>
+            <input type="text" name="vat_note" class="form-control" value="{{ form.vat_note }}"
+                   placeholder="Без налога (НДС) / в т.ч. НДС 22%:">
+        </div>
+        <div class="col-12">
+            <label class="form-label">Сумма прописью <span class="text-muted">(пусто = посчитать автоматически)</span></label>
+            <input type="text" name="amount_words" class="form-control" value="{{ form.amount_words }}">
+        </div>
+        <div class="col-12">
+            <label class="form-label">Нижний блок (условия / пункты счёта-договора)</label>
+            <textarea name="footer_text" class="form-control" rows="8" style="font-family: inherit;">{{ form.footer_text }}</textarea>
+            <div class="form-text">Каждая новая строка — отдельный абзац в PDF. Сюда сроки, неустойки, приложения и т.п.</div>
+        </div>
+    </div>
+
+    <div class="mt-4 d-flex gap-2 flex-wrap">
+        <button type="submit" class="btn btn-success"><i class="fas fa-file-pdf"></i> Открыть PDF</button>
+        <span class="align-self-center text-muted small">В базу ничего не пишется.</span>
+    </div>
+</form>
+
+<template id="lineRowTpl">
+    <tr class="line-row">
+        <td><textarea name="line_name" class="form-control form-control-sm" rows="2"></textarea></td>
+        <td><input type="text" name="line_qty" class="form-control form-control-sm" value="1"></td>
+        <td><input type="text" name="line_unit" class="form-control form-control-sm" value="шт"></td>
+        <td><input type="text" name="line_price" class="form-control form-control-sm" value="0"></td>
+        <td><button type="button" class="btn btn-sm btn-outline-danger rm-line">×</button></td>
+    </tr>
+</template>
+
+<script>
+(function () {
+  const tbody = document.querySelector('#linesTable tbody');
+  const tpl = document.getElementById('lineRowTpl');
+  document.getElementById('addLine').addEventListener('click', () => {
+    tbody.appendChild(tpl.content.cloneNode(true));
+  });
+  tbody.addEventListener('click', (e) => {
+    const btn = e.target.closest('.rm-line');
+    if (!btn) return;
+    const rows = tbody.querySelectorAll('.line-row');
+    if (rows.length <= 1) {
+      rows[0].querySelector('[name=line_name]').value = '';
+      return;
+    }
+    btn.closest('tr').remove();
+  });
+  const payDate = document.getElementById('payUntilDate');
+  const payLine = document.getElementById('payUntilLine');
+  if (payDate && payLine) {
+    payDate.addEventListener('change', () => {
+      if (!payDate.value) return;
+      const [y, m, d] = payDate.value.split('-');
+      const pretty = d + '.' + m + '.' + y;
+      if (!payLine.value || /^Оплатить не позднее /.test(payLine.value)) {
+        payLine.value = 'Оплатить не позднее ' + pretty + ' г.';
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}
