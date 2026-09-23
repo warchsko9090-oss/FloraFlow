@@ -769,11 +769,13 @@ def sale_invoice_pdf(inv_id):
         flash('Доступ запрещен')
         return redirect(url_for('orders.orders_list'))
     from app.models import SaleInvoice
-    from app.tg_sale import render_sale_pdf
+    from app.tg_sale import render_sale_pdf, sale_public_number, allocate_sale_doc_number
     inv = SaleInvoice.query.get_or_404(inv_id)
+    allocate_sale_doc_number(inv)
     blob = render_sale_pdf(inv)
     if blob:
         inv.file_blob = blob
+        inv.file_name = f'schet_{sale_public_number(inv)}.pdf'
         db.session.commit()
     if not blob:
         flash('Не удалось собрать PDF')
@@ -782,7 +784,195 @@ def sale_invoice_pdf(inv_id):
         io.BytesIO(bytes(blob)),
         mimetype='application/pdf',
         as_attachment=False,
-        download_name=inv.file_name or f'schet_{inv.doc_number or inv.id}.pdf',
+        download_name=inv.file_name or f'schet_{sale_public_number(inv)}.pdf',
+    )
+
+
+def _sale_print_lines_from_form():
+    names = request.form.getlist('line_name')
+    qtys = request.form.getlist('line_qty')
+    units = request.form.getlist('line_unit')
+    prices = request.form.getlist('line_price')
+    lines = []
+    for i, name in enumerate(names):
+        lines.append({
+            'name': name,
+            'qty': qtys[i] if i < len(qtys) else '1',
+            'unit': units[i] if i < len(units) else 'шт',
+            'price': prices[i] if i < len(prices) else '0',
+        })
+    return lines
+
+
+def _sale_print_form_defaults(inv=None, company=None):
+    from app.tg_sale import DEFAULT_INVOICE_FOOTER, _buyer_line, _vat_mode_norm, _vat_included, _goods_title, _shop_cards, _shop_attrs
+    doc_dt = (inv.created_at if inv else msk_now()) or msk_now()
+    pay_dt = doc_dt + timedelta(days=3)
+    company = company or (inv.company if inv else None)
+    vat_mode = _vat_mode_norm(company.vat_mode if company else 'none')
+    lines = []
+    if inv:
+        cards = _shop_cards(ln.plant_id for ln in (inv.lines or []))
+        for ln in (inv.lines or []):
+            attrs = _shop_attrs(cards.get(ln.plant_id), ln.size_name or '')
+            qty_dec = Decimal(str(ln.qty or 1))
+            qty_s = str(int(qty_dec)) if qty_dec == qty_dec.to_integral_value() else str(qty_dec)
+            lines.append({
+                'name': _goods_title(ln.plant_name, ln.size_name, attrs),
+                'qty': qty_s,
+                'unit': 'шт',
+                'price': str(ln.price or 0),
+            })
+    if not lines:
+        lines = [{'name': '', 'qty': '1', 'unit': 'усл. ед.', 'price': '0'}]
+    return {
+        'doc_number': str((inv.doc_number or inv.id) if inv else ''),
+        'doc_date': doc_dt.strftime('%Y-%m-%d'),
+        'pay_until': pay_dt.strftime('%Y-%m-%d'),
+        'pay_until_line': f'Оплатить не позднее {pay_dt.strftime("%d.%m.%Y")} г.',
+        'basis': ((inv.comment or '').strip() if inv else '') or '',
+        'buyer_line': ('' if (inv and inv.anonymous) else (_buyer_line(inv) if inv else '')),
+        'anonymous': bool(inv.anonymous) if inv else False,
+        'vat_note': 'в т.ч. НДС 22%:' if _vat_included(vat_mode) else 'Без налога (НДС)',
+        'amount_words': '',
+        'footer_text': DEFAULT_INVOICE_FOOTER,
+        'lines': lines,
+    }
+
+
+@bp.route('/orders/sale_invoices/<int:inv_id>/print-edit', methods=['GET', 'POST'])
+@login_required
+def sale_invoice_print_edit(inv_id):
+    """Админ: правка текстов/позиций перед PDF без записи в БД."""
+    if current_user.role != 'admin':
+        flash('Только для администратора')
+        return redirect(url_for('orders.sale_invoices_list'))
+    from sqlalchemy.orm import joinedload
+    from app.models import SaleInvoice
+    from app.tg_sale import render_sale_pdf
+    inv = (
+        SaleInvoice.query.options(joinedload(SaleInvoice.lines), joinedload(SaleInvoice.company))
+        .filter_by(id=inv_id)
+        .first_or_404()
+    )
+    if request.method == 'POST':
+        pay_until_raw = (request.form.get('pay_until') or '').strip()
+        pay_until_fmt = ''
+        if pay_until_raw:
+            try:
+                pay_until_fmt = datetime.strptime(pay_until_raw, '%Y-%m-%d').strftime('%d.%m.%Y')
+            except ValueError:
+                pay_until_fmt = pay_until_raw
+        overrides = {
+            'basis': request.form.get('basis') or '',
+            'buyer_line': request.form.get('buyer_line') or '',
+            'anonymous': bool(request.form.get('anonymous')),
+            'pay_until': pay_until_fmt,
+            'pay_until_line': request.form.get('pay_until_line') or '',
+            'footer_text': request.form.get('footer_text') or '',
+            'amount_words': request.form.get('amount_words') or '',
+            'vat_note': request.form.get('vat_note') or '',
+            'doc_number': request.form.get('doc_number') or inv.id,
+            'doc_date': request.form.get('doc_date') or None,
+            'lines': _sale_print_lines_from_form(),
+        }
+        blob = render_sale_pdf(inv, overrides)
+        if not blob:
+            flash('Не удалось собрать PDF')
+            return redirect(url_for('orders.sale_invoice_print_edit', inv_id=inv_id))
+        return send_file(
+            io.BytesIO(bytes(blob)),
+            mimetype='application/pdf',
+            as_attachment=False,
+            download_name=f'schet_print_{inv.id}.pdf',
+        )
+    form = _sale_print_form_defaults(inv)
+    return render_template(
+        'orders/sale_invoice_print_edit.html',
+        inv=inv,
+        form=form,
+        form_action=url_for('orders.sale_invoice_print_edit', inv_id=inv.id),
+        companies=[],
+        selected_company_id=None,
+    )
+
+
+@bp.route('/orders/sale_invoices/custom-print', methods=['GET', 'POST'])
+@login_required
+def sale_invoice_custom_print():
+    """Админ: произвольный счёт PDF без записи в БД и без позиций справочника."""
+    if current_user.role != 'admin':
+        flash('Только для администратора')
+        return redirect(url_for('orders.sale_invoices_list'))
+    from app.models import SaleCompany
+    from app.tg_sale import render_sale_pdf_custom, _company_ready
+    companies = (
+        SaleCompany.query.filter_by(is_active=True)
+        .order_by(SaleCompany.sort_order, SaleCompany.id)
+        .all()
+    )
+    companies = [c for c in companies if _company_ready(c)]
+    if request.method == 'POST':
+        try:
+            company_id = int(request.form.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        company = SaleCompany.query.get(company_id)
+        if not company:
+            flash('Выберите фирму')
+            return redirect(url_for('orders.sale_invoice_custom_print'))
+        pay_until_raw = (request.form.get('pay_until') or '').strip()
+        pay_until_fmt = ''
+        doc_date = None
+        doc_date_raw = (request.form.get('doc_date') or '').strip()
+        if doc_date_raw:
+            try:
+                doc_date = datetime.strptime(doc_date_raw, '%Y-%m-%d')
+            except ValueError:
+                doc_date = None
+        if pay_until_raw:
+            try:
+                pay_until_fmt = datetime.strptime(pay_until_raw, '%Y-%m-%d').strftime('%d.%m.%Y')
+            except ValueError:
+                pay_until_fmt = pay_until_raw
+        blob = render_sale_pdf_custom(
+            company,
+            lines=_sale_print_lines_from_form(),
+            basis=request.form.get('basis') or '',
+            buyer_line=request.form.get('buyer_line') or '',
+            anonymous=bool(request.form.get('anonymous')),
+            pay_until=pay_until_fmt,
+            pay_until_line=request.form.get('pay_until_line') or '',
+            footer_text=request.form.get('footer_text'),
+            amount_words=request.form.get('amount_words') or '',
+            vat_note=request.form.get('vat_note') or '',
+            doc_number=request.form.get('doc_number') or 'б/н',
+            doc_date=doc_date,
+        )
+        if not blob:
+            flash('Не удалось собрать PDF')
+            return redirect(url_for('orders.sale_invoice_custom_print'))
+        return send_file(
+            io.BytesIO(bytes(blob)),
+            mimetype='application/pdf',
+            as_attachment=False,
+            download_name='schet_custom.pdf',
+        )
+    form = _sale_print_form_defaults(None)
+    form['basis'] = 'Договор поставки № '
+    form['lines'] = [{
+        'name': 'Предварительная оплата (аванс) 20% за посадочный материал по Договору поставки № … согласно Спецификации',
+        'qty': '1',
+        'unit': 'усл. ед.',
+        'price': '0',
+    }]
+    return render_template(
+        'orders/sale_invoice_print_edit.html',
+        inv=None,
+        form=form,
+        form_action=url_for('orders.sale_invoice_custom_print'),
+        companies=companies,
+        selected_company_id=companies[0].id if companies else None,
     )
 
 

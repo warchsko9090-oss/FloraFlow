@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 from html import escape as html_escape
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -346,11 +346,154 @@ def _fmt_money_ru(value) -> str:
     return f'{sign}{grouped} ₽'
 
 
+def sale_public_number(inv: SaleInvoice) -> int:
+    """Публичный № счёта для PDF/чата: doc_number (с 100), иначе id."""
+    try:
+        if inv.doc_number:
+            return int(inv.doc_number)
+    except (TypeError, ValueError):
+        pass
+    return int(inv.id)
+
+
+def allocate_sale_doc_number(inv: SaleInvoice) -> int:
+    """Счёт №100, 101… в пределах календарного года (MSK). С 1 января снова 100."""
+    if inv.doc_number:
+        return int(inv.doc_number)
+    year = msk_now().year
+    prev = (
+        db.session.query(func.max(SaleInvoice.doc_number))
+        .filter(SaleInvoice.doc_year == year)
+        .scalar()
+    )
+    n = 100 if not prev or int(prev) < 100 else int(prev) + 1
+    inv.doc_year = year
+    inv.doc_number = n
+    return n
+
+
+def apply_client_to_invoice(inv: SaleInvoice, client: Client | None) -> None:
+    if not client:
+        return
+    inv.client_id = client.id
+    inv.buyer_name = (client.name or inv.buyer_name or '')[:300]
+    inn = _inn_digits(client.inn)
+    if inn:
+        inv.buyer_inn = inn
+    if client.kpp:
+        inv.buyer_kpp = _digits(client.kpp, 9)
+    if getattr(client, 'ogrn', None):
+        inv.buyer_ogrn = _digits(client.ogrn, 15)
+    if client.address:
+        inv.buyer_address = (client.address or '')[:500]
+    if client.phone:
+        inv.buyer_phone = str(client.phone)[:40]
+    if getattr(client, 'bank_name', None):
+        inv.buyer_bank = (client.bank_name or '')[:200]
+    if getattr(client, 'rs', None):
+        inv.buyer_rs = _digits(client.rs, 20)
+    if getattr(client, 'bik', None):
+        inv.buyer_bik = _digits(client.bik, 9)
+    if getattr(client, 'ks', None):
+        inv.buyer_ks = _digits(client.ks, 20)
+
+
+def _copy_order_items_to_sale_invoice(inv: SaleInvoice, order: Order) -> None:
+    inv.lines.clear()
+    db.session.flush()
+    grouped: dict[tuple, dict] = {}
+    for it in order.items or []:
+        qty = int(it.quantity or 0)
+        if qty <= 0:
+            continue
+        price = _money(it.price)
+        key = (it.plant_id, it.size_id, str(price))
+        if key not in grouped:
+            grouped[key] = {
+                'plant_id': it.plant_id,
+                'size_id': it.size_id,
+                'plant_name': (it.plant.name if it.plant else '')[:200],
+                'size_name': (it.size.name if it.size else '')[:120],
+                'qty': 0,
+                'price': price,
+            }
+        grouped[key]['qty'] += qty
+    for row in grouped.values():
+        db.session.add(SaleInvoiceLine(
+            invoice=inv,
+            plant_id=row['plant_id'],
+            size_id=row['size_id'],
+            plant_name=row['plant_name'],
+            size_name=row['size_name'],
+            qty=row['qty'],
+            price=row['price'],
+        ))
+    db.session.flush()
+    inv.amount = _line_sum(inv.lines)
+
+
+def create_sale_invoice_from_order(
+    order: Order,
+    company_id: int,
+    user_id: int | None,
+) -> SaleInvoice:
+    """Выгрузка счёта из ERP-заказа с публичным № с 100."""
+    if not order or not order.client_id:
+        raise ValueError('no_client')
+    if order.is_deleted or (order.status or '') in ('canceled', 'ghost'):
+        raise ValueError('bad_order')
+    company = SaleCompany.query.get(int(company_id))
+    if not company or not _company_ready(company):
+        raise ValueError('no_company')
+    if not any(int(it.quantity or 0) > 0 for it in (order.items or [])):
+        raise ValueError('no_lines')
+
+    inv = (
+        SaleInvoice.query
+        .filter(SaleInvoice.order_id == order.id, SaleInvoice.status != 'discarded')
+        .order_by(SaleInvoice.id.desc())
+        .first()
+    )
+    now = msk_now()
+    if inv is None:
+        inv = SaleInvoice(
+            company_id=company.id,
+            user_id=user_id,
+            status='approved',
+            approved_at=now,
+            order_id=order.id,
+            origin='erp',
+            comment=f'Заказ №{order.id}',
+            from_existing_order=True,
+        )
+        db.session.add(inv)
+        db.session.flush()
+    else:
+        inv.company_id = company.id
+        inv.origin = inv.origin or 'erp'
+        inv.from_existing_order = True
+        if inv.status != 'approved':
+            inv.status = 'approved'
+            inv.approved_at = inv.approved_at or now
+
+    apply_client_to_invoice(inv, order.client)
+    _copy_order_items_to_sale_invoice(inv, order)
+    allocate_sale_doc_number(inv)
+    if not (order.invoice_number or '').strip():
+        order.invoice_number = str(sale_public_number(inv))
+        order.invoice_date = (inv.approved_at or now).date()
+    blob = _store_pdf(inv)
+    if not blob:
+        raise ValueError('pdf_failed')
+    return inv
+
+
 def _sale_chat_ref(inv: SaleInvoice, order: Order | None = None) -> str:
     oid = order.id if order is not None else inv.order_id
+    num = sale_public_number(inv)
     if oid:
-        return f'счёт №{inv.id} / Заказ №{oid}'
-    return f'счёт №{inv.id}'
+        return f'счёт №{num} / Заказ №{oid}'
+    return f'счёт №{num}'
 
 
 def _discard_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
@@ -367,16 +510,20 @@ def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     if inv.anonymous:
         buyer = 'обезличенный (без плательщика)'
     oid = order.id if order is not None else inv.order_id
+    num = sale_public_number(inv)
     if oid:
-        head = f'✅ <b>Создан новый заказ №{oid} / счёт на оплату №{inv.id}.</b>'
+        head = f'✅ <b>Создан новый заказ №{oid} / счёт на оплату №{num}.</b>'
     else:
-        head = f'✅ <b>Создан новый счёт на оплату №{inv.id}.</b>'
+        head = f'✅ <b>Создан новый счёт на оплату №{num}.</b>'
     return f'{head}\n👤 Клиент: {buyer}'
 
 
 def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
     data = {
         'id': inv.id,
+        'doc_number': inv.doc_number,
+        'doc_year': inv.doc_year,
+        'number': sale_public_number(inv),
         'status': inv.status,
         'amount': float(inv.amount or 0),
         'created_at': inv.created_at.isoformat() if inv.created_at else None,
@@ -667,11 +814,12 @@ def create_order_from_sale_invoice(inv: SaleInvoice, user_id: int | None) -> Ord
     if not usable:
         return None
 
+    allocate_sale_doc_number(inv)
     order = Order(
         client_id=inv.client_id,
         date=inv.approved_at or msk_now(),
         status='reserved',
-        invoice_number=f'ТГ-{inv.id}',
+        invoice_number=str(sale_public_number(inv)),
         invoice_date=(inv.approved_at or msk_now()).date(),
         created_by_user_id=user_id or inv.user_id,
     )
@@ -957,31 +1105,144 @@ def _sign_line(company: SaleCompany | None) -> str:
     return name
 
 
-def render_sale_pdf(inv: SaleInvoice) -> bytes | None:
+DEFAULT_INVOICE_FOOTER = (
+    'Оплата данного счета означает согласие с условиями поставки товара.\n'
+    'Уведомление об оплате обязательно, в противном случае не гарантируется наличие товара на складе.\n'
+    'Товар отпускается по факту прихода денег на р/с Поставщика, самовывозом, при наличии доверенности и паспорта.'
+)
+
+
+def _parse_print_lines(raw_lines) -> list[dict]:
+    """Свободные строки PDF: без привязки к справочнику растений."""
+    out = []
+    for i, ln in enumerate(raw_lines or [], 1):
+        if not isinstance(ln, dict):
+            continue
+        name = (ln.get('name') or '').strip()
+        if not name:
+            continue
+        try:
+            qty = Decimal(str(ln.get('qty') or 0))
+        except Exception:
+            qty = Decimal('0')
+        try:
+            price = Decimal(str(ln.get('price') or 0))
+        except Exception:
+            price = Decimal('0')
+        unit = (ln.get('unit') or 'шт').strip() or 'шт'
+        sm = (qty * price).quantize(Decimal('0.01'))
+        out.append({
+            'n': i,
+            'name': name,
+            'qty': _fmt_qty(qty),
+            'unit': unit,
+            'price': _fmt_money(price),
+            'sum': _fmt_money(sm),
+            'qty_raw': qty,
+            'price_raw': price,
+            'sum_raw': sm,
+        })
+    # перенумеровать после фильтра пустых
+    for i, row in enumerate(out, 1):
+        row['n'] = i
+    return out
+
+
+def _fmt_qty(value) -> str:
+    q = Decimal(str(value or 0))
+    if q == q.to_integral_value():
+        return str(int(q))
+    return f'{q.normalize()}'
+
+
+def render_sale_pdf(inv: SaleInvoice, overrides: dict | None = None) -> bytes | None:
+    """PDF счёта. overrides — только для печати из ERP, в БД не пишется."""
     company = inv.company
     if not company:
         return None
-    vat_mode = _vat_mode_norm(company.vat_mode)
-    amount = Decimal(str(inv.amount or 0))
-    vat = _vat_amount(amount, vat_mode)
-    doc_date = inv.created_at or msk_now()
-    purpose = f'Оплата по счету N {inv.id} от {doc_date.strftime("%d.%m.%Y")}'
-    pay_until = (doc_date + timedelta(days=3)).strftime('%d.%m.%Y')
-    qr_uri, qr_path = '', ''
-    stamp_uri, stamp_path = '', ''
-    pdf_lines = []
+    ov = overrides if isinstance(overrides, dict) else {}
+
+    vat_mode = _vat_mode_norm(ov.get('vat_mode') or company.vat_mode)
+    doc_date = ov.get('doc_date') or inv.created_at or msk_now()
+    if isinstance(doc_date, str):
+        try:
+            doc_date = datetime.strptime(doc_date[:10], '%Y-%m-%d')
+        except ValueError:
+            doc_date = inv.created_at or msk_now()
+
     cards = _shop_cards(ln.plant_id for ln in (inv.lines or []))
+    default_lines = []
     for i, ln in enumerate(inv.lines or [], 1):
         sm = Decimal(str(ln.qty or 0)) * Decimal(str(ln.price or 0))
         attrs = _shop_attrs(cards.get(ln.plant_id), ln.size_name or '')
         title = _goods_title(ln.plant_name, ln.size_name, attrs)
-        pdf_lines.append({
+        default_lines.append({
             'n': i,
             'name': title,
-            'qty': ln.qty,
+            'qty': _fmt_qty(ln.qty),
+            'unit': 'шт',
             'price': _fmt_money(ln.price),
             'sum': _fmt_money(sm),
+            'qty_raw': Decimal(str(ln.qty or 0)),
+            'price_raw': Decimal(str(ln.price or 0)),
+            'sum_raw': sm,
         })
+
+    if 'lines' in ov:
+        pdf_lines = _parse_print_lines(ov.get('lines'))
+    else:
+        pdf_lines = default_lines
+
+    if ov.get('amount') is not None:
+        try:
+            amount = Decimal(str(ov.get('amount'))).quantize(Decimal('0.01'))
+        except Exception:
+            amount = sum((ln.get('sum_raw') or Decimal('0')) for ln in pdf_lines)
+    else:
+        amount = sum((ln.get('sum_raw') or Decimal('0')) for ln in pdf_lines)
+        if not pdf_lines:
+            amount = Decimal(str(inv.amount or 0))
+
+    vat = _vat_amount(amount, vat_mode)
+    # Всегда выдаём публичный № (100+) перед PDF — иначе в шаблон уходит inv.id.
+    ov_num = ov.get('doc_number')
+    if ov_num not in (None, ''):
+        inv_no = ov_num
+    else:
+        if getattr(inv, 'id', None) and hasattr(inv, 'doc_number') and not inv.doc_number:
+            try:
+                allocate_sale_doc_number(inv)
+            except Exception:
+                current_app.logger.exception('allocate_sale_doc_number failed inv=%s', getattr(inv, 'id', None))
+        inv_no = getattr(inv, 'doc_number', None) or getattr(inv, 'id', None)
+    purpose = (ov.get('purpose') or '').strip() or (
+        f'Оплата по счету N {inv_no} от {doc_date.strftime("%d.%m.%Y")}'
+    )
+    default_pay = (doc_date + timedelta(days=3)).strftime('%d.%m.%Y')
+    pay_until = (ov.get('pay_until') or '').strip() or default_pay
+    pay_until_line = (ov.get('pay_until_line') or '').strip() or f'Оплатить не позднее {pay_until}'
+    basis = (ov.get('basis') if 'basis' in ov else None)
+    if basis is None:
+        basis = (inv.comment or '').strip() or 'Без договора'
+    else:
+        basis = (basis or '').strip() or 'Без договора'
+    footer_text = ov.get('footer_text')
+    if footer_text is None:
+        footer_text = DEFAULT_INVOICE_FOOTER
+    footer_text = (footer_text or '').strip()
+    amount_words = (ov.get('amount_words') or '').strip() or rubles_in_words(amount)
+    anonymous = bool(ov['anonymous']) if 'anonymous' in ov else bool(inv.anonymous)
+    buyer_line = ov.get('buyer_line')
+    if buyer_line is None:
+        buyer_line = '' if anonymous else _buyer_line(inv)
+    else:
+        buyer_line = (buyer_line or '').strip()
+    vat_note = (ov.get('vat_note') or '').strip()
+    if not vat_note:
+        vat_note = 'в т.ч. НДС 22%:' if _vat_included(vat_mode) else 'Без налога (НДС)'
+
+    qr_uri, qr_path = '', ''
+    stamp_uri, stamp_path = '', ''
     try:
         payload = _qr_payload(company, amount, purpose) if company else ''
         if payload:
@@ -997,22 +1258,27 @@ def render_sale_pdf(inv: SaleInvoice) -> bytes | None:
         html = render_template(
             'tg_sale/invoice_pdf.html',
             inv=inv,
+            inv_no=inv_no,
             company=company,
             lines=pdf_lines,
             amount=amount,
             amount_fmt=_fmt_money(amount),
-            amount_words=rubles_in_words(amount),
+            amount_words=amount_words,
             vat=vat,
             vat_fmt=_fmt_money(vat),
             vat_included=_vat_included(vat_mode),
             vat_mode=vat_mode,
+            vat_note=vat_note,
             purpose=purpose,
             date_long=_date_long(doc_date),
             pay_until=pay_until,
+            pay_until_line=pay_until_line,
             supplier_line=_supplier_line(company),
-            buyer_line='' if inv.anonymous else _buyer_line(inv),
-            anonymous=bool(inv.anonymous),
-            basis=(inv.comment or '').strip() or 'Без договора',
+            buyer_line=buyer_line,
+            anonymous=anonymous,
+            basis=basis,
+            footer_text=footer_text,
+            footer_paragraphs=[p.strip() for p in footer_text.split('\n') if p.strip()],
             sign_line=_sign_line(company),
             logo_uri=_logo_uri(),
             qr_uri=qr_uri,
@@ -1029,12 +1295,65 @@ def render_sale_pdf(inv: SaleInvoice) -> bytes | None:
                     pass
 
 
+def render_sale_pdf_custom(
+    company: SaleCompany,
+    *,
+    lines: list[dict],
+    basis: str = '',
+    buyer_line: str = '',
+    anonymous: bool = False,
+    pay_until: str = '',
+    pay_until_line: str = '',
+    footer_text: str | None = None,
+    amount_words: str = '',
+    vat_note: str = '',
+    doc_number: str | int = '',
+    doc_date=None,
+    purpose: str = '',
+    vat_mode: str | None = None,
+) -> bytes | None:
+    """PDF без SaleInvoice в БД — только печать произвольного счёта."""
+    if not company:
+        return None
+    from types import SimpleNamespace
+    tmp = SimpleNamespace(
+        id=doc_number or '—',
+        doc_number=None,
+        created_at=doc_date or msk_now(),
+        anonymous=bool(anonymous),
+        comment=basis or '',
+        company=company,
+        lines=[],
+        amount=0,
+        buyer_name='',
+        buyer_inn='',
+        buyer_kpp='',
+        buyer_address='',
+    )
+    return render_sale_pdf(tmp, {
+        'lines': lines,
+        'basis': basis,
+        'buyer_line': buyer_line,
+        'anonymous': anonymous,
+        'pay_until': pay_until,
+        'pay_until_line': pay_until_line,
+        'footer_text': DEFAULT_INVOICE_FOOTER if footer_text is None else footer_text,
+        'amount_words': amount_words,
+        'vat_note': vat_note,
+        'doc_number': doc_number or 'б/н',
+        'doc_date': doc_date,
+        'purpose': purpose,
+        'vat_mode': vat_mode,
+    })
+
+
 def _store_pdf(inv: SaleInvoice) -> bytes | None:
+    allocate_sale_doc_number(inv)
     blob = render_sale_pdf(inv)
     if not blob:
         return None
     inv.file_blob = blob
-    inv.file_name = f'schet_{inv.id}.pdf'
+    inv.file_name = f'schet_{sale_public_number(inv)}.pdf'
     return blob
 
 
@@ -1366,6 +1685,7 @@ def api_create(user: User):
     _apply_anonymous(inv, body)
     db.session.add(inv)
     db.session.flush()
+    allocate_sale_doc_number(inv)
     if 'order_id' in body:
         order, err = _link_existing_order(inv, body.get('order_id'))
         if err:
@@ -1566,6 +1886,7 @@ def api_approve(user: User, inv_id: int):
         return jsonify({'error': 'need_buyer'}), 400
     inv.amount = _line_sum(inv.lines)
     _sync_client(inv)
+    allocate_sale_doc_number(inv)
     blob = _store_pdf(inv)
     if not blob:
         return jsonify({'error': 'pdf_failed'}), 500

@@ -5,6 +5,13 @@
         <div class="page-title"><i class="fas fa-file-invoice-dollar"></i> Счета клиентам</div>
         <div class="page-subtitle">Исходящие счета из Telegram. После согласования создаётся заказ с резервом.</div>
     </div>
+    {% if current_user.role == 'admin' %}
+    <div>
+        <a class="btn btn-outline-success" href="{{ url_for('orders.sale_invoice_custom_print') }}">
+            <i class="fas fa-pen"></i> Произвольный счёт (без БД)
+        </a>
+    </div>
+    {% endif %}
 </div>
 
 <div class="filter-panel mb-3">
@@ -37,7 +44,7 @@
             <tbody>
                 {% for inv in invoices %}
                 <tr>
-                    <td>{{ inv.id }}</td>
+                    <td>{{ inv.doc_number or inv.id }}</td>
                     <td>{{ inv.created_at|dateru if inv.created_at else '—' }}</td>
                     <td>
                         {{ inv.buyer_name or '—' }}
@@ -63,6 +70,9 @@
                     </td>
                     <td>
                         <a class="btn btn-outline-primary btn-sm" href="{{ url_for('orders.sale_invoice_pdf', inv_id=inv.id) }}">PDF</a>
+                        {% if current_user.role == 'admin' %}
+                        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('orders.sale_invoice_print_edit', inv_id=inv.id) }}" title="Править тексты перед печатью, без записи в БД">Правка PDF</a>
+                        {% endif %}
                         {% if inv.order_id %}
                         <a class="btn btn-success btn-sm" href="{{ url_for('orders.order_detail', order_id=inv.order_id) }}">Заказ №{{ inv.order_id }}</a>
                         {% endif %}
