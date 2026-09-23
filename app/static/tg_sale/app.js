@@ -37,7 +37,7 @@
     }
 
     (function bindPress() {
-        const sel = "button, .btn, .list-item[data-open], .list-item[data-buh], .firm, .size-row, .order-hit";
+        const sel = "button, .btn, .list-item[data-open], .list-item[data-buh-order], .firm, .size-row, .order-hit";
         let cur = null;
         let downAt = 0;
         function clear() {
@@ -1064,8 +1064,8 @@
     }
 
     async function loadBuh() {
-        const data = await api("/tg/sale/api/buh/invoices");
-        state.buhInvoices = data.invoices || [];
+        const data = await api("/tg/sale/api/buh/orders");
+        state.buhOrders = data.orders || [];
     }
 
     function kindLabel(kind) {
@@ -1076,35 +1076,35 @@
 
     function renderBuhList() {
         setTitle("Отгрузки");
-        const rows = (state.buhInvoices || []).map((inv) => {
-            const lines = (inv.lines || []).map((ln) =>
+        const rows = (state.buhOrders || []).map((o) => {
+            const lines = (o.lines || []).map((ln) =>
                 `<li>${esc(ln.plant_name || "—")}${ln.size_name ? ` · ${esc(ln.size_name)}` : ""} ×${ln.qty}`
                 + (ln.shipped_qty ? ` · отгр. ${ln.shipped_qty}` : "") + `</li>`
             ).join("");
+            const invN = Number(o.invoice_count) || 0;
             return `
-            <div class="list-item" data-buh="${inv.id}">
+            <div class="list-item" data-buh-order="${o.order_id}">
                 <div class="row">
                     <div>
-                        <div><b>Счёт №${esc(inv.number)}</b> · ${esc(inv.buyer_name || "—")}</div>
-                        <div class="muted">${esc(inv.company_name || "")} · заказ №${inv.order_id || "—"} · ${esc(kindLabel(inv.kind))}</div>
+                        <div><b>Заказ №${o.order_id}</b> · ${esc(o.client_name || "—")}</div>
+                        <div class="muted">${esc(o.order_status || "")}${invN ? ` · счетов: ${invN}` : " · без счетов"}</div>
                     </div>
                     <div style="text-align:right">
-                        <div style="font-weight:700">${money(inv.amount)}</div>
-                        <div class="muted">заказ ${money(inv.order_sum)}</div>
+                        <div style="font-weight:700">${money(o.order_sum)}</div>
                     </div>
                 </div>
                 ${lines ? `<ul class="order-lines">${lines}</ul>` : ""}
-                ${inv.more_count ? `<p class="muted">ещё ${inv.more_count} поз.</p>` : ""}
+                ${o.more_count ? `<p class="muted">ещё ${o.more_count} поз.</p>` : ""}
             </div>`;
-        }).join("") || `<p class="muted">Пока нет отгруженных заказов со счетами</p>`;
+        }).join("") || `<p class="muted">Пока нет отгруженных заказов</p>`;
         const backSale = state.me && !state.me.accountant_only && state.me.can_buh
             ? `<button class="btn ghost" id="backSale" style="margin-bottom:10px">← К счетам</button>`
             : "";
-        view.innerHTML = `${backSale}<p class="muted" style="margin-top:0">Только счета, привязанные к заказам с отгрузкой. Сумма счёта не меняет сумму заказа.</p><div class="card">${rows}</div>`;
+        view.innerHTML = `${backSale}<p class="muted" style="margin-top:0">Заказы с отгрузкой. Счета открываются внутри заказа.</p><div class="card">${rows}</div>`;
         const back = document.getElementById("backSale");
         if (back) back.onclick = () => { state.screen = "list"; render(); };
-        view.querySelectorAll("[data-buh]").forEach((el) => {
-            el.onclick = () => openBuh(Number(el.dataset.buh));
+        view.querySelectorAll("[data-buh-order]").forEach((el) => {
+            el.onclick = () => openBuhOrder(Number(el.dataset.buhOrder));
         });
     }
 
@@ -1117,14 +1117,22 @@
     function renderBuhView() {
         const d = state.buhCurrent;
         if (!d) { state.screen = "buh"; render(); return; }
-        setTitle(`Счёт №${d.number}`);
-        const invRows = (d.invoice_lines || []).map((ln) => `
-            <tr>
-                <td>${esc(ln.name)}</td>
-                <td>${esc(ln.qty)} ${esc(ln.unit || "")}</td>
-                <td>${money(ln.price)}</td>
-                <td>${money(ln.sum)}</td>
-            </tr>`).join("") || `<tr><td colspan="4" class="muted">В счёте нет строк</td></tr>`;
+        setTitle(`Заказ №${d.order_id}`);
+        const invs = d.invoices || [];
+        const invRows = invs.map((inv) => `
+            <div class="buh-inv" data-inv="${inv.id}">
+                <div class="row">
+                    <div>
+                        <div><b>№${esc(inv.number)}</b> · ${esc(kindLabel(inv.kind))}</div>
+                        <div class="muted">${esc(inv.company_name || "")}</div>
+                    </div>
+                    <div style="text-align:right;font-weight:700">${money(inv.amount)}</div>
+                </div>
+                <div class="buh-inv-actions">
+                    <button type="button" class="btn" data-buh-send="${inv.id}">В чат</button>
+                    <button type="button" class="btn ghost" data-buh-pdf="${inv.id}">PDF</button>
+                </div>
+            </div>`).join("") || `<p class="muted">К заказу нет привязанных счетов</p>`;
         const orderRows = (d.order_lines || []).map((ln) => `
             <tr>
                 <td>${esc(ln.plant_name || "—")}${ln.size_name ? `<div class="muted">${esc(ln.size_name)}</div>` : ""}</td>
@@ -1144,17 +1152,14 @@
         view.innerHTML = `
             <button class="btn ghost" id="back" style="margin-bottom:10px">← К списку</button>
             <div class="card">
-                <div><b>${esc(d.buyer_name || "—")}</b></div>
-                <div class="muted">${esc(d.company_name || "")} · заказ №${d.order_id || "—"} · ${esc(kindLabel(d.kind))}</div>
-                <div style="margin-top:8px">Счёт: <b>${money(d.amount)}</b> · заказ: <b>${money(d.order_sum)}</b></div>
+                <div><b>${esc(d.client_name || "—")}</b></div>
+                <div class="muted">заказ №${d.order_id} · ${esc(d.order_status || "")}</div>
+                <div style="margin-top:8px">Сумма заказа: <b>${money(d.order_sum)}</b></div>
             </div>
-            <h3 class="buh-h">Позиции счёта</h3>
-            <div class="card" style="overflow:auto">
-                <table class="buh-table">
-                    <thead><tr><th>Наименование</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
-                    <tbody>${invRows}</tbody>
-                </table>
-            </div>
+            <details class="buh-acc card" open>
+                <summary>Счета (${invs.length})</summary>
+                <div class="buh-acc-body">${invRows}</div>
+            </details>
             <h3 class="buh-h">Заказ и даты отгрузки</h3>
             <div class="card" style="overflow:auto">
                 <table class="buh-table">
@@ -1165,13 +1170,74 @@
             <h3 class="buh-h">Журнал отгрузок</h3>
             <div class="card">${journal}</div>`;
         document.getElementById("back").onclick = () => { state.screen = "buh"; render(); };
+        view.querySelectorAll("[data-buh-send]").forEach((btn) => {
+            btn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                sendBuhPdf(Number(btn.dataset.buhSend), btn);
+            };
+        });
+        view.querySelectorAll("[data-buh-pdf]").forEach((btn) => {
+            btn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openBuhPdf(Number(btn.dataset.buhPdf), btn);
+            };
+        });
     }
 
-    async function openBuh(id) {
-        const data = await api(`/tg/sale/api/buh/invoices/${id}`);
+    async function openBuhOrder(orderId) {
+        const data = await api(`/tg/sale/api/buh/orders/${orderId}`);
         state.buhCurrent = data;
         state.screen = "buh-view";
         render();
+    }
+
+    async function sendBuhPdf(invId, btn) {
+        const done = armBusy(btn);
+        try {
+            const data = await api(`/tg/sale/api/buh/invoices/${invId}/send-pdf`, { method: "POST", body: "{}" });
+            if (!data.ok) {
+                const err = data.error || "";
+                alert(err === "no_telegram_id"
+                    ? "Не вижу ваш Telegram. Закройте мини-приложение и откройте его кнопкой в чате с ботом."
+                    : "Не удалось отправить счёт в чат.");
+                return;
+            }
+            haptic("medium");
+            const tg = tgApp();
+            if (tg && typeof tg.showAlert === "function") {
+                try { tg.showAlert("Счёт отправил в чат с ботом."); } catch (_) {}
+            }
+        } catch (e) {
+            alert(e.message || "Не удалось отправить счёт в чат.");
+        } finally {
+            done();
+        }
+    }
+
+    async function openBuhPdf(invId, btn) {
+        const done = armBusy(btn);
+        try {
+            const blob = window.FFTg && window.FFTg.fetchBlob
+                ? await window.FFTg.fetchBlob(`/tg/sale/api/buh/invoices/${invId}/pdf`)
+                : null;
+            if (!blob) throw new Error("Нет загрузки PDF");
+            const url = URL.createObjectURL(blob);
+            const opened = window.open(url, "_blank");
+            if (!opened) {
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `schet_${invId}.pdf`;
+                a.click();
+            }
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+            haptic("light");
+        } catch (e) {
+            alert(e.message || "Не удалось открыть PDF.");
+        } finally {
+            done();
+        }
     }
 
     async function reload() {

@@ -2024,111 +2024,19 @@ def _order_line_payload(it: OrderItem, ships: list[dict]) -> dict:
     }
 
 
-def _buh_invoice_card(inv: SaleInvoice, *, with_lines: bool = True) -> dict:
-    order = inv.order
-    items = list(order.items or []) if order else []
-    preview = []
-    if with_lines:
-        for it in items[:6]:
-            preview.append({
-                'plant_name': it.plant.name if it.plant else '',
-                'size_name': it.size.name if it.size else '',
-                'qty': int(it.quantity or 0),
-                'shipped_qty': int(it.shipped_quantity or 0),
-            })
-    return {
-        'id': inv.id,
-        'number': sale_public_number(inv),
-        'kind': inv.kind or 'goods',
-        'buyer_name': inv.buyer_name or (order.client.name if order and order.client else ''),
-        'company_name': inv.company.short_name if inv.company else '',
-        'amount': float(inv.amount or 0),
-        'created_at': inv.created_at.isoformat() if inv.created_at else None,
-        'order_id': order.id if order else None,
-        'order_sum': float(order.total_sum or 0) if order else 0,
-        'order_status': order.status if order else '',
-        'lines': preview,
-        'more_count': max(0, len(items) - len(preview)),
-    }
+def _buh_order_is_shipped(order: Order) -> bool:
+    if Document.query.filter(Document.doc_type == 'shipment', Document.order_id == order.id).first():
+        return True
+    return any(int(it.shipped_quantity or 0) > 0 for it in (order.items or []))
 
 
-@bp.route('/api/buh/invoices')
-@require_buh
-def api_buh_invoices(user: User):
-    """Счета, привязанные к заказам, по которым уже была отгрузка."""
-    rows = (
-        SaleInvoice.query
-        .options(
-            joinedload(SaleInvoice.company),
-            joinedload(SaleInvoice.order).joinedload(Order.client),
-            joinedload(SaleInvoice.order).selectinload(Order.items).joinedload(OrderItem.plant),
-            joinedload(SaleInvoice.order).selectinload(Order.items).joinedload(OrderItem.size),
-        )
-        .filter(
-            SaleInvoice.status != 'discarded',
-            SaleInvoice.order_id.isnot(None),
-            SaleInvoice.order_id.in_(_buh_shipped_order_ids()),
-        )
-        .order_by(SaleInvoice.id.desc())
-        .limit(300)
-        .all()
-    )
-    # joinedload + limit может дублировать строки
-    seen = set()
-    items = []
-    for inv in rows:
-        if inv.id in seen or not inv.order or inv.order.is_deleted:
-            continue
-        seen.add(inv.id)
-        items.append(_buh_invoice_card(inv))
-    return jsonify({'invoices': items})
-
-
-@bp.route('/api/buh/invoices/<int:inv_id>')
-@require_buh
-def api_buh_invoice(user: User, inv_id: int):
-    inv = (
-        SaleInvoice.query
-        .options(
-            joinedload(SaleInvoice.company),
-            joinedload(SaleInvoice.lines),
-            joinedload(SaleInvoice.order).joinedload(Order.client),
-            joinedload(SaleInvoice.order).selectinload(Order.items).joinedload(OrderItem.plant),
-            joinedload(SaleInvoice.order).selectinload(Order.items).joinedload(OrderItem.size),
-        )
-        .filter(SaleInvoice.id == inv_id, SaleInvoice.status != 'discarded')
-        .first_or_404()
-    )
-    order = inv.order
-    if not order or order.is_deleted:
-        return jsonify({'error': 'no_order'}), 404
-    shipped = (
-        Document.query.filter(Document.doc_type == 'shipment', Document.order_id == order.id).first()
-    )
-    if not shipped and not any(int(it.shipped_quantity or 0) > 0 for it in (order.items or [])):
-        return jsonify({'error': 'not_shipped'}), 404
-    ships = _shipment_map(order.id)
-    order_lines = []
-    for it in order.items or []:
-        order_lines.append(_order_line_payload(it, ships.get((it.plant_id, it.size_id), [])))
-    invoice_lines = []
-    for ln in inv.lines or []:
-        qty = float(ln.qty or 0)
-        price = float(ln.price or 0)
-        invoice_lines.append({
-            'name': ln.plant_name or '',
-            'unit': ln.size_name or 'шт',
-            'qty': qty,
-            'price': price,
-            'sum': round(qty * price, 2),
-        })
-    # Журнал отгрузок целиком — даты для УПД, даже если строка счёта без plant_id.
+def _buh_shipment_journal(order_id: int) -> list[dict]:
     docs = (
         Document.query.options(
             joinedload(Document.rows).joinedload(DocumentRow.plant),
             joinedload(Document.rows).joinedload(DocumentRow.size),
         )
-        .filter(Document.doc_type == 'shipment', Document.order_id == order.id)
+        .filter(Document.doc_type == 'shipment', Document.order_id == order_id)
         .order_by(Document.date, Document.id)
         .all()
     )
@@ -2146,11 +2054,192 @@ def api_buh_invoice(user: User, inv_id: int):
             'qty': sum(r['qty'] for r in rows),
             'rows': rows,
         })
-    card = _buh_invoice_card(inv, with_lines=False)
-    card['invoice_lines'] = invoice_lines
-    card['order_lines'] = order_lines
-    card['shipments'] = journal
-    return jsonify(card)
+    return journal
+
+
+def _buh_invoice_brief(inv: SaleInvoice) -> dict:
+    order = inv.order
+    return {
+        'id': inv.id,
+        'number': sale_public_number(inv),
+        'kind': inv.kind or 'goods',
+        'buyer_name': inv.buyer_name or (order.client.name if order and order.client else ''),
+        'company_name': inv.company.short_name if inv.company else '',
+        'amount': float(inv.amount or 0),
+        'created_at': inv.created_at.isoformat() if inv.created_at else None,
+        'order_id': order.id if order else None,
+    }
+
+
+def _buh_order_invoices(order_id: int) -> list[SaleInvoice]:
+    return (
+        SaleInvoice.query
+        .options(joinedload(SaleInvoice.company))
+        .filter(
+            SaleInvoice.order_id == order_id,
+            SaleInvoice.status != 'discarded',
+        )
+        .order_by(SaleInvoice.id.desc())
+        .all()
+    )
+
+
+def _buh_order_list_card(order: Order) -> dict:
+    items = list(order.items or [])
+    preview = []
+    for it in items[:2]:
+        preview.append({
+            'plant_name': it.plant.name if it.plant else '',
+            'size_name': it.size.name if it.size else '',
+            'qty': int(it.quantity or 0),
+            'shipped_qty': int(it.shipped_quantity or 0),
+        })
+    inv_count = (
+        SaleInvoice.query
+        .filter(SaleInvoice.order_id == order.id, SaleInvoice.status != 'discarded')
+        .count()
+    )
+    return {
+        'order_id': order.id,
+        'client_name': order.client.name if order.client else '',
+        'order_sum': float(order.total_sum or 0),
+        'order_status': order.status or '',
+        'invoice_count': inv_count,
+        'lines': preview,
+        'more_count': max(0, len(items) - len(preview)),
+    }
+
+
+def _buh_order_detail_payload(order: Order) -> dict:
+    ships = _shipment_map(order.id)
+    order_lines = [
+        _order_line_payload(it, ships.get((it.plant_id, it.size_id), []))
+        for it in (order.items or [])
+    ]
+    invoices = [_buh_invoice_brief(inv) for inv in _buh_order_invoices(order.id)]
+    return {
+        'order_id': order.id,
+        'client_name': order.client.name if order.client else '',
+        'order_sum': float(order.total_sum or 0),
+        'order_status': order.status or '',
+        'invoice_count': len(invoices),
+        'invoices': invoices,
+        'order_lines': order_lines,
+        'shipments': _buh_shipment_journal(order.id),
+    }
+
+
+def _buh_load_shipped_order(order_id: int) -> Order | None:
+    order = (
+        Order.query
+        .options(
+            joinedload(Order.client),
+            selectinload(Order.items).joinedload(OrderItem.plant),
+            selectinload(Order.items).joinedload(OrderItem.size),
+        )
+        .filter(Order.id == order_id, Order.is_deleted.is_(False))
+        .first()
+    )
+    if not order or not _buh_order_is_shipped(order):
+        return None
+    return order
+
+
+def _buh_allowed_invoice(inv_id: int) -> SaleInvoice | None:
+    """Счёт для PDF бухгалтера: привязан к отгруженному заказу."""
+    inv = (
+        SaleInvoice.query
+        .options(joinedload(SaleInvoice.order).selectinload(Order.items))
+        .filter(SaleInvoice.id == inv_id, SaleInvoice.status != 'discarded')
+        .first()
+    )
+    if not inv or not inv.order_id or not inv.order or inv.order.is_deleted:
+        return None
+    if not _buh_order_is_shipped(inv.order):
+        return None
+    return inv
+
+
+@bp.route('/api/buh/orders')
+@require_buh
+def api_buh_orders(_user: User):
+    """Заказы с отгрузкой — единица экрана УПД для бухгалтера."""
+    orders = (
+        Order.query
+        .options(
+            joinedload(Order.client),
+            selectinload(Order.items).joinedload(OrderItem.plant),
+            selectinload(Order.items).joinedload(OrderItem.size),
+        )
+        .filter(
+            Order.is_deleted.is_(False),
+            Order.id.in_(_buh_shipped_order_ids()),
+        )
+        .order_by(Order.id.desc())
+        .limit(200)
+        .all()
+    )
+    seen = set()
+    items = []
+    for order in orders:
+        if order.id in seen:
+            continue
+        seen.add(order.id)
+        items.append(_buh_order_list_card(order))
+    return jsonify({'orders': items})
+
+
+@bp.route('/api/buh/orders/<int:order_id>')
+@require_buh
+def api_buh_order(_user: User, order_id: int):
+    order = _buh_load_shipped_order(order_id)
+    if not order:
+        return jsonify({'error': 'not_found'}), 404
+    return jsonify(_buh_order_detail_payload(order))
+
+
+@bp.route('/api/buh/invoices/<int:inv_id>/pdf')
+@require_buh
+def api_buh_invoice_pdf(_user: User, inv_id: int):
+    inv = _buh_allowed_invoice(inv_id)
+    if not inv:
+        return jsonify({'error': 'not_found'}), 404
+    blob = _store_pdf(inv)
+    db.session.commit()
+    if not blob:
+        return jsonify({'error': 'pdf_failed'}), 500
+    resp = make_response(bytes(blob))
+    resp.headers['Content-Type'] = 'application/pdf'
+    resp.headers['Content-Disposition'] = f'inline; filename=schet_{sale_public_number(inv)}.pdf'
+    return resp
+
+
+@bp.route('/api/buh/invoices/<int:inv_id>/send-pdf', methods=['POST'])
+@require_buh
+def api_buh_invoice_send_pdf(user: User, inv_id: int):
+    inv = _buh_allowed_invoice(inv_id)
+    if not inv:
+        return jsonify({'ok': False, 'error': 'not_found'}), 404
+    blob = _store_pdf(inv)
+    db.session.commit()
+    if not blob:
+        return jsonify({'ok': False, 'error': 'pdf_failed'}), 500
+    chat_id = current_telegram_id()
+    if not chat_id:
+        current_app.logger.warning('buh send-pdf no telegram_id inv=%s user=%s', inv.id, user.username)
+        return jsonify({'ok': False, 'error': 'no_telegram_id'})
+    caption = (
+        f'Счёт №{sale_public_number(inv)} · заказ №{inv.order_id} · {inv.amount} ₽'
+    )
+    ok, err = send_chat_document(
+        chat_id,
+        filename=inv.file_name or f'schet_{sale_public_number(inv)}.pdf',
+        caption=caption,
+        file_bytes=bytes(blob),
+    )
+    if not ok:
+        current_app.logger.warning('buh send-pdf failed inv=%s chat=%s err=%s', inv.id, chat_id, err)
+    return jsonify({'ok': bool(ok), 'error': err if not ok else None})
 
 
 @bp.route('/api/companies')

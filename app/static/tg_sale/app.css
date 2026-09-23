@@ -62,7 +62,7 @@ h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.
 .chip.gold { background: #efe4cc; color: #7a6238; }
 .list-item { padding: 12px 0; border-bottom: 1px solid #eee7d8; }
 .list-item:last-child { border-bottom: 0; }
-.list-item[data-open], .list-item[data-buh] {
+.list-item[data-open], .list-item[data-buh-order] {
     cursor: pointer;
     border-radius: 12px;
     margin: 0 -6px;
@@ -75,6 +75,37 @@ h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.
 .buh-table th { color: var(--mute); font-weight: 600; font-size: 11px; }
 .buh-ship { padding: 8px 0; border-bottom: 1px solid #eee7d8; }
 .buh-ship:last-child { border-bottom: 0; }
+.buh-acc { padding: 0; overflow: hidden; }
+.buh-acc > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 14px;
+    font-weight: 700;
+    font-size: 15px;
+}
+.buh-acc > summary::-webkit-details-marker { display: none; }
+.buh-acc > summary::after {
+    content: "▾";
+    float: right;
+    color: var(--mute);
+    font-weight: 400;
+}
+.buh-acc[open] > summary::after { content: "▴"; }
+.buh-acc-body { padding: 0 14px 12px; }
+.buh-inv {
+    padding: 10px 0;
+    border-top: 1px solid #eee7d8;
+}
+.buh-inv-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+.buh-inv-actions .btn {
+    flex: 1;
+    padding: 8px 10px;
+    font-size: 13px;
+}
 .suggest { background: transparent; border-radius: 0; margin-top: 8px; overflow: auto; max-height: 58vh; }
 .suggest button { width: 100%; text-align: left; background: none; border: 0; padding: 10px 12px; font-size: 14px; }
 .suggest button:active { background: var(--paper-2); }
