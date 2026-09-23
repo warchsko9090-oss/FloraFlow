@@ -725,7 +725,12 @@ def _create_task_for_chat_expense(row: ChatExpenseMessage, source: str) -> TgTas
     но стратегически страхуемся).
     """
     now = msk_now()
-    if row.parsed_amount is not None:
+    if source == "miniapp" and row.parsed_amount is not None:
+        title = f"Быстрый расход: {row.parsed_amount:.0f} ₽"
+        details_parts = [
+            f"<b>{row.parsed_amount:.0f} ₽</b> — {row.parsed_description}",
+        ]
+    elif row.parsed_amount is not None:
         title = f"Расход из ТГ: {row.parsed_amount:.0f} ₽"
         details_parts = [
             f"<b>{row.parsed_amount:.0f} ₽</b> — {row.parsed_description}",
@@ -741,11 +746,21 @@ def _create_task_for_chat_expense(row: ChatExpenseMessage, source: str) -> TgTas
         )
     if row.sender_name:
         details_parts.append(f"От: {row.sender_name}")
-    details_parts.append(f"Источник: ТГ-чат «Расходы Жемчужниково»")
+    if source == "miniapp":
+        details_parts.append("Источник: Mini App · быстрый расход")
+    else:
+        details_parts.append("Источник: ТГ-чат «Расходы Жемчужниково»")
     if source == "invoice":
         details_parts.append("Похоже на неоплаченный счёт — подтвердите в Mini App «Счета».")
     elif source == "receipt":
         details_parts.append("Фото чека сохранено в базе — откройте вложение на карточке.")
+    elif source == "miniapp":
+        has_file = bool(row.raw_text and '[файл]' in row.raw_text)
+        details_parts.append(
+            "Файл прикреплён — откройте вложение на карточке."
+            if has_file else
+            "Проверьте статью и проведите расход."
+        )
     elif source == "alias":
         details_parts.append("Подсказка статьи — из обучения по прошлым подтверждениям.")
     elif source == "llm":
@@ -770,6 +785,117 @@ def _create_task_for_chat_expense(row: ChatExpenseMessage, source: str) -> TgTas
         last_seen_at=now,
         severity="warning",
     )
+
+
+def ingest_miniapp_quick_expense(
+    user: User,
+    *,
+    amount: Decimal,
+    summary: str,
+    payment_type: str = 'cashless',
+    file_bytes: bytes | None = None,
+    filename: str | None = None,
+) -> dict:
+    """Быстрый расход из Mini App: карточка админу как у AI-агента чата расходов.
+
+    Expense не создаём — админ подтвердит статью на дашборде.
+    """
+    from app.bank_slip import file_hash, BankSlip
+
+    summary = (summary or '').strip()[:500]
+    if not summary:
+        return {'ok': False, 'error': 'need_summary'}
+    if amount is None or amount <= 0:
+        return {'ok': False, 'error': 'bad_amount'}
+    ptype = 'cash' if payment_type == 'cash' else 'cashless'
+    sender = (getattr(user, 'username', None) or f'user#{user.id}')[:150]
+    tg_chat_id = f'miniapp:{user.id}'
+    # Уникальный message_id в пределах пользователя
+    base = int(msk_now().timestamp() * 1000) % 1_000_000_000
+    tg_message_id = base
+    for _ in range(20):
+        exists = ChatExpenseMessage.query.filter_by(
+            tg_chat_id=tg_chat_id, tg_message_id=tg_message_id,
+        ).first()
+        if not exists:
+            break
+        tg_message_id = (tg_message_id + 1) % 1_000_000_000
+
+    slip_id = None
+    has_file = bool(file_bytes)
+    if file_bytes:
+        digest = file_hash(file_bytes)
+        slip = BankSlip.query.filter_by(file_hash=digest).first()
+        if not slip:
+            slip = BankSlip(
+                file_hash=digest,
+                original_name=(filename or 'receipt.jpg')[:255],
+                file_blob=file_bytes,
+                source='miniapp',
+                kind='receipt',
+                tg_chat_id=tg_chat_id[:64],
+                tg_message_id=tg_message_id,
+                created_by_user_id=user.id,
+            )
+            db.session.add(slip)
+            db.session.flush()
+        slip_id = slip.id
+
+    suggested_id, clf_source = classify_budget_item(summary)
+    raw = summary
+    if has_file:
+        raw = f'{summary}\n[файл]'
+
+    row = ChatExpenseMessage(
+        tg_chat_id=tg_chat_id,
+        tg_message_id=tg_message_id,
+        tg_date=msk_now(),
+        raw_text=raw[:4000],
+        sender_name=sender,
+        status='pending',
+        parsed_amount=amount,
+        parsed_description=summary,
+        parsed_payment_type=ptype,
+        suggested_budget_item_id=suggested_id,
+    )
+    db.session.add(row)
+    db.session.flush()
+
+    task = _create_task_for_chat_expense(row, source='miniapp')
+    if task is not None:
+        db.session.add(task)
+        db.session.flush()
+        task.action_payload = json.dumps({
+            'chat_expense_id': row.id,
+            'slip_id': slip_id,
+            'url': f'/expenses/chat/{row.id}',
+            'amount': str(amount),
+            'description': summary,
+            'payment_type': ptype,
+            'suggested_budget_item_id': suggested_id,
+            'classifier_source': clf_source or 'miniapp',
+            'tg_chat_id': tg_chat_id,
+            'tg_message_id': tg_message_id,
+            'sender': sender,
+            'file_url': f'/api/bank-slips/{slip_id}/file' if slip_id else '',
+        }, ensure_ascii=False)
+        row.task_id = task.id
+
+    db.session.commit()
+    return {
+        'ok': True,
+        'chat_expense_id': row.id,
+        'task_id': row.task_id,
+        'slip_id': slip_id,
+        'suggested_budget_item_id': suggested_id,
+        'amount': float(amount),
+        'summary': summary,
+        'payment_type': ptype,
+        'sender': sender,
+        'has_file': has_file,
+        'file_bytes': file_bytes if has_file else None,
+        'filename': (filename or 'receipt.jpg') if has_file else None,
+    }
 
 
 def _safe_react(chat_id, message_id, emoji="✅"):

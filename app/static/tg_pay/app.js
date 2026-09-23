@@ -80,6 +80,7 @@
     const parts = path.split('/').filter(Boolean);
     if (parts[0] === 'inv' && parts[1]) return renderDetail(+parts[1]);
     if (parts[0] === 'new') return renderNew();
+    if (parts[0] === 'quick') return renderQuickExpense();
     if (parts[0] === 'week-plan') return renderWeekPlan();
     if (parts[0] === 'plan') return renderPlan();
     if (parts[0] === 'file') return renderUpload();
@@ -261,16 +262,30 @@
         + `<div class="list">${drafts.map(rowHtml).join('')}</div></details>`;
     }
     if (!shown.length && !drafts.length) {
-      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План недели, счёт или выписка — кнопка +.' : 'Неоплаченных счетов нет.'}</p></div>`;
+      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План недели, счёт или выписка — кнопка +.' : (me.role === 'executive' ? 'Быстрый расход — кнопка +.' : 'Неоплаченных счетов нет.')}</p></div>`;
     } else if (shown.length) {
       html += '<div class="list">' + shown.map(rowHtml).join('') + '</div>';
     }
-    if (me.can_edit) {
+    if (me.can_edit || me.role === 'executive') {
       html += `<button class="fab" type="button" id="fabAdd" aria-label="Добавить">+</button>`;
     }
     view.innerHTML = html;
     const fab = document.getElementById('fabAdd');
-    if (fab) fab.onclick = () => { location.hash = '#/new'; };
+    if (fab) {
+      fab.onclick = () => {
+        location.hash = (me.role === 'executive' && !me.can_edit) ? '#/quick' : '#/new';
+      };
+    }
+    try {
+      if (sessionStorage.getItem('ff_quick_ok')) {
+        sessionStorage.removeItem('ff_quick_ok');
+        const toast = document.createElement('div');
+        toast.className = 'toast-ok';
+        toast.textContent = 'Отправлено админу';
+        view.appendChild(toast);
+        setTimeout(() => toast.remove(), 2800);
+      }
+    } catch (_) {}
   }
 
   async function renderDetail(id) {
@@ -581,6 +596,10 @@
     setTitle('Добавить');
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
+      <a class="choice" href="#/quick">
+        <div class="choice-k">Быстрый расход</div>
+        <p>Сумма, назначение, нал/безнал и файл — админ разнесёт по статье.</p>
+      </a>
       <a class="choice" href="#/week-plan">
         <div class="choice-k">План недели</div>
         <p>Пятничный план: нал и безнал, сохранить и закрепить у бота.</p>
@@ -599,6 +618,83 @@
       </a>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+  }
+
+  async function renderQuickExpense() {
+    if (!(me.can_edit || me.role === 'executive')) {
+      location.hash = '#/';
+      return;
+    }
+    setTitle('Быстрый расход');
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← к списку</button>
+      <div class="card">
+        <p class="hint" style="margin:0 0 12px">Админ получит уведомление и разнесёт по статье бюджета.</p>
+        <div class="field"><label>Сумма, ₽</label>
+          <input id="qAmount" inputmode="decimal" placeholder="0" autofocus></div>
+        <div class="field"><label>Назначение</label>
+          <input id="qSummary" type="text" placeholder="топливо, сетка, ЧОП…"></div>
+        <div class="field"><label>Оплата</label>
+          <div class="pay-toggle" id="qType">
+            <button type="button" class="pay-opt" data-v="cashless" aria-pressed="true">Безнал</button>
+            <button type="button" class="pay-opt" data-v="cash" aria-pressed="false">Нал</button>
+          </div>
+        </div>
+        <div class="field"><label>Файл (необязательно)</label>
+          <label class="file-btn" for="qFile">Прикрепить фото или PDF</label>
+          <input id="qFile" type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp" hidden>
+          <p class="hint" id="qFileName" style="margin-top:6px"></p>
+        </div>
+        <button class="btn btn-ink" type="button" id="btnQuick">Отправить</button>
+        <p class="hint" id="qStatus"></p>
+      </div>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+    let ptype = 'cashless';
+    view.querySelectorAll('#qType .pay-opt').forEach((btn) => {
+      btn.onclick = () => {
+        ptype = btn.dataset.v;
+        view.querySelectorAll('#qType .pay-opt').forEach((b) => {
+          b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+        });
+      };
+    });
+    const fileInput = document.getElementById('qFile');
+    const fileName = document.getElementById('qFileName');
+    fileInput.onchange = () => {
+      const f = fileInput.files && fileInput.files[0];
+      fileName.textContent = f ? f.name : '';
+    };
+    document.getElementById('btnQuick').onclick = async () => {
+      const status = document.getElementById('qStatus');
+      const amount = (document.getElementById('qAmount') || {}).value;
+      const summary = (document.getElementById('qSummary') || {}).value;
+      if (!String(amount || '').trim() || !String(summary || '').trim()) {
+        status.textContent = 'Укажите сумму и назначение.';
+        return;
+      }
+      const fd = new FormData();
+      fd.append('amount', amount);
+      fd.append('summary', summary);
+      fd.append('payment_type', ptype);
+      if (fileInput.files && fileInput.files[0]) fd.append('file', fileInput.files[0]);
+      view.classList.add('busy');
+      status.textContent = 'Отправляю…';
+      try {
+        await api('/tg/pay/api/quick-expense', { method: 'POST', body: fd });
+        haptic('medium');
+        try { sessionStorage.setItem('ff_quick_ok', '1'); } catch (_) {}
+        location.hash = '#/';
+      } catch (e) {
+        status.textContent = e.message || 'Не удалось отправить';
+      } finally {
+        view.classList.remove('busy');
+      }
+    };
+    setTimeout(() => {
+      const el = document.getElementById('qAmount');
+      if (el) el.focus();
+    }, 80);
   }
 
   function weekPlanRowHtml(item, idx, canEdit) {

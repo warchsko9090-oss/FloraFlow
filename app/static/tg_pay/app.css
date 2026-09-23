@@ -314,6 +314,51 @@ h1 {
     padding-top: 12px;
     border-top: 1px solid #eee7d8;
 }
+.pay-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+.pay-opt {
+    border: 1px solid #e4dcc8;
+    background: var(--paper);
+    border-radius: 12px;
+    padding: 12px 10px;
+    font: inherit;
+    font-weight: 600;
+    color: var(--ink-soft);
+}
+.pay-opt[aria-pressed="true"] {
+    background: var(--ink);
+    color: var(--white);
+    border-color: var(--ink);
+}
+.file-btn {
+    display: block;
+    text-align: center;
+    border: 1px dashed #cfc6b0;
+    border-radius: 12px;
+    padding: 14px 12px;
+    background: var(--paper);
+    color: var(--ink);
+    font-weight: 600;
+    cursor: pointer;
+}
+.toast-ok {
+    position: fixed;
+    left: 50%;
+    bottom: calc(28px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    background: var(--ink);
+    color: var(--white);
+    padding: 12px 18px;
+    border-radius: 14px;
+    font-size: 14px;
+    font-weight: 600;
+    z-index: 40;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    max-width: calc(100% - 32px);
+}
 
 .inbox-card .sub { color: var(--mute); font-size: 12px; margin-top: 4px; }
 

@@ -631,12 +631,42 @@ def _can_inbox(user: User) -> bool:
     return (user.role or '') == 'admin'
 
 
+def _can_quick_expense(user: User) -> bool:
+    return (user.role or '') in ('admin', 'executive')
+
+
 def _notify_admins(text: str, except_user: User | None = None):
     q = User.query.filter_by(role='admin').filter(User.telegram_id.isnot(None))
     for u in q.all():
         if except_user is not None and u.id == except_user.id:
             continue
         send_chat_message(u.telegram_id, text)
+
+
+def _notify_admins_quick_expense(
+    text: str,
+    *,
+    except_user: User | None = None,
+    file_bytes: bytes | None = None,
+    filename: str | None = None,
+):
+    """Текст + опциональный файл в личку каждому админу."""
+    q = User.query.filter_by(role='admin').filter(User.telegram_id.isnot(None))
+    for u in q.all():
+        if except_user is not None and u.id == except_user.id:
+            continue
+        chat_id = u.telegram_id
+        if file_bytes:
+            ok, err = send_chat_document(
+                chat_id,
+                filename=filename or 'receipt.jpg',
+                caption=text,
+                file_bytes=file_bytes,
+            )
+            if ok:
+                continue
+            current_app.logger.warning('quick-expense notify file failed admin=%s: %s', u.id, err)
+        send_chat_message(chat_id, text)
 
 
 def _notify_watchers(inv: PaymentInvoice, except_user: User | None = None):
@@ -1803,6 +1833,76 @@ def api_inbox(user: User):
         ChatExpenseMessage.status.in_(['pending', 'invoice_match'])
     ).order_by(ChatExpenseMessage.id.desc()).limit(50).all()
     return jsonify({'items': [_serialize_inbox(r) for r in rows]})
+
+
+@bp.route('/api/quick-expense', methods=['POST'])
+@require_user
+def api_quick_expense(user: User):
+    """Быстрый расход руководителя/админа → карточка админу как у AI-агента."""
+    if not _can_quick_expense(user):
+        return jsonify({'error': 'forbidden'}), 403
+    summary = (request.form.get('summary') or request.form.get('description') or '').strip()
+    ptype = (request.form.get('payment_type') or 'cashless').strip()
+    try:
+        amount = _parse_money(request.form.get('amount'))
+    except (InvalidOperation, TypeError, ValueError):
+        return jsonify({'error': 'bad_amount'}), 400
+    if amount <= 0:
+        return jsonify({'error': 'bad_amount'}), 400
+    if not summary:
+        return jsonify({'error': 'need_summary'}), 400
+
+    file_bytes = None
+    filename = None
+    f = request.files.get('file')
+    if f and f.filename:
+        filename = secure_filename(f.filename) or 'receipt.jpg'
+        ext = os.path.splitext(filename)[1].lower()
+        if ext and ext not in _ALLOWED_EXT:
+            return jsonify({'error': 'bad_file'}), 400
+        file_bytes = f.read()
+        if len(file_bytes) > 12 * 1024 * 1024:
+            return jsonify({'error': 'file_too_large'}), 400
+
+    from app.expense_chat import ingest_miniapp_quick_expense
+    result = ingest_miniapp_quick_expense(
+        user,
+        amount=amount,
+        summary=summary,
+        payment_type=ptype,
+        file_bytes=file_bytes,
+        filename=filename,
+    )
+    if not result.get('ok'):
+        return jsonify({'ok': False, 'error': result.get('error') or 'failed'}), 400
+
+    amt_s = f"{float(amount):,.0f}".replace(',', ' ')
+    ptype_lbl = 'нал' if result.get('payment_type') == 'cash' else 'безнал'
+    text = (
+        f"Расход от {result.get('sender')}: {summary}\n"
+        f"{amt_s} ₽ · {ptype_lbl}\n"
+        f"Проверьте статью на дашборде."
+    )
+    try:
+        _notify_admins_quick_expense(
+            text,
+            except_user=user,
+            file_bytes=result.get('file_bytes'),
+            filename=result.get('filename'),
+        )
+    except Exception:
+        current_app.logger.exception('quick-expense notify admins failed')
+
+    return jsonify({
+        'ok': True,
+        'chat_expense_id': result.get('chat_expense_id'),
+        'task_id': result.get('task_id'),
+        'slip_id': result.get('slip_id'),
+        'amount': result.get('amount'),
+        'summary': result.get('summary'),
+        'payment_type': result.get('payment_type'),
+        'has_file': bool(result.get('has_file')),
+    })
 
 
 @bp.route('/api/inbox/<int:msg_id>/confirm', methods=['POST'])
