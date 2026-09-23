@@ -231,11 +231,18 @@
     }
 
     const isDraft = inv.status === 'draft';
-    const shownAmt = (Number(inv.fact_amount) || 0) > 0
-      ? inv.fact_amount
-      : (inv.amount || inv.planned_amount || 0);
+    const isPlan = (inv.kind || '') === 'plan';
+    const planned = Number(inv.planned_amount) || 0;
+    const factPaid = Number(inv.fact_amount) || 0;
+    const remaining = isPlan
+      ? Math.max(0, Math.round((planned - factPaid) * 100) / 100)
+      : 0;
+    const shownAmt = isPlan
+      ? (planned || inv.amount || 0)
+      : ((Number(inv.fact_amount) || 0) > 0 ? inv.fact_amount : (inv.amount || inv.planned_amount || 0));
     const payHint = `<p class="hint" style="margin-top:10px">${esc(inv.summary)}</p>
-      <p class="ptype" style="margin-top:8px">${inv.payment_type === 'cash' ? 'Нал' : 'Безнал'}${isDraft ? ' · черновик' : ''}</p>`;
+      <p class="ptype" style="margin-top:8px">${inv.payment_type === 'cash' ? 'Нал' : 'Безнал'}${isDraft ? ' · черновик' : ''}${isPlan ? ' · план' : ''}</p>
+      ${isPlan ? `<p class="hint">План ${money(planned)} · оплачено ${money(factPaid)} · остаток ${money(remaining)}</p>` : ''}`;
 
     let assignPanel = '';
     if (can && isDraft) {
@@ -293,12 +300,23 @@
       `;
     }
 
-    const payBtn = (!isDraft && inv.status !== 'paid')
-      ? '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>'
-      : '';
+    let payPanel = '';
+    if (!isDraft && inv.status !== 'paid' && isPlan) {
+      const defPay = remaining > 0 ? remaining : planned;
+      payPanel = `
+        <div class="pay-box">
+          <div class="field"><label>Сумма оплаты</label>
+            <input id="fPayAmt" inputmode="decimal" value="${defPay}"></div>
+          <p class="hint">Можно оплатить частично — остаток останется в плане.</p>
+          <button class="btn btn-ink" type="button" id="btnPaid">Оплатить</button>
+        </div>`;
+    } else if (!isDraft && inv.status !== 'paid') {
+      payPanel = '<button class="btn btn-ink" type="button" id="btnPaid">Оплачено</button>';
+    }
+
     const openBtnHtml = inv.has_file
       ? '<button class="btn btn-brass" type="button" id="btnOpen">Счёт в чат</button>'
-      : (can ? '<p class="warn">Файл счёта не найден — прикрепите в «Ещё».</p>' : '<p class="warn">Файл счёта не найден.</p>');
+      : (can && !isPlan ? '<p class="warn">Файл счёта не найден — прикрепите в «Ещё».</p>' : '');
 
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
@@ -307,9 +325,9 @@
         ${payHint}
         ${openBtnHtml}
         ${assignPanel}
-        ${payBtn}
+        ${payPanel}
         ${editPanel}
-        ${lines}
+        ${isPlan ? '' : lines}
       </div>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
@@ -332,7 +350,7 @@
     const attach = document.getElementById('btnAttach');
     if (attach) attach.onclick = () => attachPdf(inv.id);
     const paid = document.getElementById('btnPaid');
-    if (paid) paid.onclick = () => markPaid(inv.id);
+    if (paid) paid.onclick = () => markPaid(inv.id, isPlan);
     const assignBtn = document.getElementById('btnAssign');
     if (assignBtn) assignBtn.onclick = () => assignDraft(inv.id);
     const drop = document.getElementById('btnDrop');
@@ -371,12 +389,31 @@
     }
   }
 
-  async function markPaid(id) {
-    if (!confirm('Счёт оплачен? Он исчезнет из списка.')) return;
+  async function markPaid(id, isPlan) {
+    let body = {};
+    if (isPlan) {
+      const raw = ((document.getElementById('fPayAmt') || {}).value || '').trim();
+      if (!raw) {
+        alert('Укажите сумму оплаты');
+        return;
+      }
+      body = { amount: raw };
+      if (!confirm('Провести оплату ' + raw + ' ₽?')) return;
+    } else if (!confirm('Счёт оплачен? Он исчезнет из списка.')) {
+      return;
+    }
     view.classList.add('busy');
     try {
-      await api('/tg/pay/api/invoices/' + id + '/mark-paid', { method: 'POST' });
+      const res = await api('/tg/pay/api/invoices/' + id + '/mark-paid', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
       haptic('medium');
+      if (isPlan && res && res.closed === false) {
+        location.hash = '#/inv/' + id;
+        route();
+        return;
+      }
       location.hash = '#/';
     } catch (e) {
       alert(e.message);

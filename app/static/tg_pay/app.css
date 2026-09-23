@@ -265,6 +265,11 @@ h1 {
 }
 .week-row-main { font-size: 15px; margin-bottom: 4px; }
 .week-del { margin-top: 8px; width: 100%; }
+.pay-box {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #eee7d8;
+}
 
 .inbox-card .sub { color: var(--mute); font-size: 12px; margin-top: 4px; }
 

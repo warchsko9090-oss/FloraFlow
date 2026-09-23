@@ -711,20 +711,31 @@ def _week_end(week_start: date) -> date:
     return week_start + timedelta(days=6)
 
 
-def _fmt_plan_amt(value) -> str:
-    """10 000 → «10 тр»; 570961.33 → «570 961,33»."""
+def _fmt_plan_line_amt(value) -> str:
+    """Строка плана: всегда «N тр», округление тысяч вверх (570 961 → 571 тр)."""
+    from decimal import ROUND_UP
+    try:
+        d = Decimal(str(value or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        return '0 тр'
+    if d <= 0:
+        return '0 тр'
+    thousands = (d / Decimal(1000)).to_integral_value(rounding=ROUND_UP)
+    return f'{int(thousands)} тр'
+
+
+def _fmt_plan_total_amt(value) -> str:
+    """Итого: полная сумма без сокращений, пробелы и запятая."""
     try:
         d = Decimal(str(value or 0)).quantize(Decimal('0.01'))
     except (InvalidOperation, TypeError, ValueError):
-        return '0'
-    if d == d.to_integral_value() and d >= 1000 and (d % 1000) == 0:
-        return f'{int(d // 1000)} тр'
+        return '0 ₽'
     whole = int(d)
-    frac = int((d - whole) * 100)
+    frac = int((d - Decimal(whole)) * 100)
     whole_s = f'{whole:,}'.replace(',', ' ')
     if frac:
-        return f'{whole_s},{frac:02d}'
-    return whole_s
+        return f'{whole_s},{frac:02d} ₽'
+    return f'{whole_s} ₽'
 
 
 def _html_escape_plan(text: str) -> str:
@@ -734,6 +745,42 @@ def _html_escape_plan(text: str) -> str:
         .replace('<', '&lt;')
         .replace('>', '&gt;')
     )
+
+
+def _format_week_plan_message(week_start: date, items: list[dict]) -> str:
+    end = _week_end(week_start)
+    period = f'{week_start.strftime("%d.%m")} — {end.strftime("%d.%m.%Y")}'
+    cash = [x for x in items if x.get('payment_type') == 'cash']
+    cashless = [x for x in items if x.get('payment_type') != 'cash']
+
+    def block(title: str, rows: list[dict]) -> str:
+        lines = [f'<b>{_html_escape_plan(title)}</b>', '']
+        if not rows:
+            lines.append('<i>нет позиций</i>')
+            lines.append('')
+            lines.append(f'<b>Итого:</b> {_fmt_plan_total_amt(0)}')
+            return '\n'.join(lines)
+        total = Decimal('0')
+        for i, row in enumerate(rows, 1):
+            amt = Decimal(str(row.get('planned_amount') or 0))
+            total += amt
+            summary = _html_escape_plan(row.get('summary') or '—')
+            lines.append(f'{i}. <b>{_fmt_plan_line_amt(amt)}</b> — {summary}')
+        lines.append('')
+        lines.append(f'<b>Итого:</b> {_fmt_plan_total_amt(total)}')
+        return '\n'.join(lines)
+
+    parts = [
+        '📌 <b>План расходов</b>',
+        f'<code>{period}</code>',
+        '',
+        block('НАЛ', cash),
+        '',
+        '············',
+        '',
+        block('БЕЗНАЛ', cashless),
+    ]
+    return '\n'.join(parts)
 
 
 def _week_plan_pin_key(week_start: date) -> str:
@@ -785,39 +832,6 @@ def _serialize_week_plan_item(inv: PaymentInvoice) -> dict:
         ),
         'status': inv.status,
     }
-
-
-def _format_week_plan_message(week_start: date, items: list[dict]) -> str:
-    end = _week_end(week_start)
-    period = f'{week_start.strftime("%d.%m")} — {end.strftime("%d.%m.%Y")}'
-    cash = [x for x in items if x.get('payment_type') == 'cash']
-    cashless = [x for x in items if x.get('payment_type') != 'cash']
-
-    def block(title: str, rows: list[dict], total_label: str) -> str:
-        lines = [f'<b>{_html_escape_plan(title)}</b>']
-        if not rows:
-            lines.append('<i>пусто</i>')
-            lines.append(f'<b>{total_label}:</b> 0')
-            return '\n'.join(lines)
-        total = Decimal('0')
-        for i, row in enumerate(rows, 1):
-            amt = Decimal(str(row.get('planned_amount') or 0))
-            total += amt
-            summary = _html_escape_plan(row.get('summary') or '—')
-            lines.append(f'{i}. {_fmt_plan_amt(amt)} — {summary}')
-        lines.append('')
-        lines.append(f'<b>{total_label}:</b> {_fmt_plan_amt(total)} руб')
-        return '\n'.join(lines)
-
-    parts = [
-        '📌 <b>План расходов</b>',
-        f'<i>{period}</i>',
-        '',
-        block('НАЛ', cash, 'итого'),
-        '',
-        block('БЕЗНАЛ на след. неделю', cashless, 'ИТОГО'),
-    ]
-    return '\n'.join(parts)
 
 
 def _pin_recipients() -> list[User]:
@@ -1612,6 +1626,87 @@ def api_mark_paid(user: User, inv_id: int):
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if inv.status != 'new':
         return jsonify({'error': 'not_open'}), 400
+
+    body = request.get_json(silent=True) or {}
+
+    # План: частичная оплата — создаём факт-строку, план закрываем когда факт >= плана.
+    if (inv.kind or '') == 'plan':
+        raw_amt = body.get('amount')
+        if raw_amt in (None, ''):
+            return jsonify({'error': 'need_amount', 'hint': 'Укажите сумму оплаты'}), 400
+        try:
+            pay_amt = _parse_money(raw_amt)
+        except (InvalidOperation, TypeError, ValueError):
+            return jsonify({'error': 'bad_amount'}), 400
+        if pay_amt <= 0:
+            return jsonify({'error': 'bad_amount'}), 400
+
+        planned = Decimal(str(inv.planned_amount or 0))
+        already = Decimal(str(_fact_amount(inv)))
+        remaining = planned - already
+        if remaining < 0:
+            remaining = Decimal('0')
+
+        stamp = f"pay_{inv.id}_{int(msk_now().timestamp())}"
+        purpose = _purpose(inv)
+        fact = PaymentInvoice(
+            filename=stamp,
+            original_name=f'Оплата · {purpose}'[:255],
+            summary=f'Оплата · {purpose}'[:500],
+            comment=f'Оплата · {purpose}'[:500],
+            source='miniapp',
+            budget_item_id=inv.budget_item_id,
+            amount=pay_amt,
+            status='paid',
+            priority=inv.priority or 'normal',
+            payment_type=inv.payment_type if inv.payment_type in ('cash', 'cashless') else 'cashless',
+            kind='invoice',
+            plan_id=inv.id,
+            week_start=inv.week_start,
+        )
+        db.session.add(fact)
+        db.session.flush()
+
+        new_fact_total = already + pay_amt
+        closed = False
+        if planned > 0 and new_fact_total + Decimal('0.009') >= planned:
+            inv.status = 'paid'
+            closed = True
+            for kid in list(getattr(inv, 'fact_invoices', None) or []):
+                if kid.status != 'paid':
+                    kid.status = 'paid'
+
+        exp = None
+        try:
+            from app.invoice_files import ensure_expense_for_paid_invoice
+            exp = ensure_expense_for_paid_invoice(fact)
+        except Exception:
+            current_app.logger.exception('expense from miniapp plan partial pay')
+        try:
+            from app.vium_inbox import maybe_enqueue
+            maybe_enqueue(fact, expense=exp)
+        except Exception:
+            current_app.logger.exception('vium_inbox.maybe_enqueue (plan partial)')
+
+        db.session.commit()
+        try:
+            from app.invoice_files import notify_invoice_paid_chat
+            notify_invoice_paid_chat(fact)
+        except Exception:
+            current_app.logger.exception('notify plan partial paid chat')
+
+        left = float(planned - new_fact_total) if planned > new_fact_total else 0.0
+        return jsonify({
+            'ok': True,
+            'id': inv.id,
+            'fact_id': fact.id,
+            'paid_amount': float(pay_amt),
+            'fact_total': float(new_fact_total),
+            'planned_amount': float(planned),
+            'remaining': left,
+            'closed': closed,
+        })
+
     inv.status = 'paid'
     for kid in list(getattr(inv, 'fact_invoices', None) or []):
         kid.status = 'paid'
