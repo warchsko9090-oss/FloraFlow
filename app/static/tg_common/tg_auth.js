@@ -169,8 +169,14 @@
       return (
         "Telegram не привязан к ERP. Ваш id: " + data.telegram_id
         + (data.username ? " (@" + data.username + ")" : "")
-        + ". Добавьте в Amvera TG_USER_ID_MAP: " + data.telegram_id + ":admin"
+        + ". Войдите логином и паролем один раз — привязка сохранится."
       );
+    }
+    if (err === "bad_credentials") {
+      return "Неверный логин или пароль [bad_credentials].";
+    }
+    if (err === "need_credentials") {
+      return "Введите логин и пароль ERP [need_credentials].";
     }
     if (err === "no_init_data" || (data && data.hint === "no_init_data")) {
       return "Telegram не передал вход [" + (err || "no_init_data") + "]. Откройте мини-приложение кнопкой внизу чата с ботом (не ссылкой).";
@@ -194,13 +200,113 @@
       return "Бот не смог отправить файл в чат [send_failed]. Проверьте TG_BOT_TOKEN или повторите позже.";
     }
     if (err === "forbidden" || status === 403) {
-      return "Нет доступа к этому приложению [" + (err || "forbidden") + "].";
+      return (data && data.hint) || ("Нет доступа к этому приложению [" + (err || "forbidden") + "].");
     }
     if (err === "unauthorized" || status === 401) {
-      return "Нет входа [" + (err || "unauthorized") + "]. Откройте Mini App из бота.";
+      return "Нет входа [" + (err || "unauthorized") + "]. Войдите логином ERP или откройте Mini App из бота.";
     }
-    if (err) return String(err) + (status ? " [" + status + "]" : "");
-    return "Нет входа. Откройте Mini App из бота.";
+    if (err) return String((data && data.hint) || err) + (status ? " [" + status + "]" : "");
+    return "Нет входа. Откройте Mini App из бота или войдите логином ERP.";
+  }
+
+  function rememberedUsername() {
+    try { return w.localStorage.getItem("ff_mini_username") || ""; } catch (_) { return ""; }
+  }
+
+  function rememberUsername(name) {
+    try {
+      if (name) w.localStorage.setItem("ff_mini_username", name);
+    } catch (_) {}
+  }
+
+  /**
+   * Форма логина ERP. После успеха сервер привязывает Telegram id навсегда —
+   * пароль в приложении не хранится.
+   */
+  function promptLogin(container, opts) {
+    const options = opts || {};
+    const loginUrl = options.loginUrl;
+    const title = options.title || "Вход в ERP";
+    const hint = options.hint || "Один раз: логин и пароль. Telegram привяжется навсегда — дальше вход через кнопку бота.";
+    const saved = rememberedUsername();
+    container.innerHTML = `
+      <div class="ff-login">
+        <h2>${title}</h2>
+        <p class="ff-login-hint">${hint}</p>
+        <label class="ff-login-label">Логин
+          <input type="text" id="ffLoginUser" autocomplete="username" value="${saved.replace(/"/g, "&quot;")}">
+        </label>
+        <label class="ff-login-label">Пароль
+          <input type="password" id="ffLoginPass" autocomplete="current-password">
+        </label>
+        <p class="ff-login-err" id="ffLoginErr" hidden></p>
+        <button type="button" class="ff-login-btn" id="ffLoginBtn">Войти</button>
+      </div>
+    `;
+    if (!document.getElementById("ff-login-style")) {
+      const st = document.createElement("style");
+      st.id = "ff-login-style";
+      st.textContent = `
+        .ff-login{padding:8px 4px 24px;max-width:360px;margin:0 auto}
+        .ff-login h2{font-size:20px;margin:8px 0 6px;color:inherit}
+        .ff-login-hint{font-size:13px;opacity:.75;line-height:1.4;margin:0 0 16px}
+        .ff-login-label{display:block;font-size:12px;font-weight:600;margin:0 0 10px}
+        .ff-login-label input{display:block;width:100%;margin-top:4px;padding:12px 14px;border-radius:12px;
+          border:1px solid rgba(0,0,0,.12);font-size:16px;box-sizing:border-box;background:#fff;color:#111}
+        .ff-login-btn{width:100%;margin-top:8px;padding:14px;border:0;border-radius:14px;
+          background:#1B5E20;color:#fff;font-weight:700;font-size:15px}
+        .ff-login-btn:disabled{opacity:.55}
+        .ff-login-err{color:#b91c1c;font-size:13px;margin:8px 0}
+      `;
+      document.head.appendChild(st);
+    }
+    const userEl = document.getElementById("ffLoginUser");
+    const passEl = document.getElementById("ffLoginPass");
+    const errEl = document.getElementById("ffLoginErr");
+    const btn = document.getElementById("ffLoginBtn");
+    const showErr = (msg) => {
+      errEl.hidden = !msg;
+      errEl.textContent = msg || "";
+    };
+    const submit = async () => {
+      showErr("");
+      const username = (userEl.value || "").trim();
+      const password = passEl.value || "";
+      if (!username || !password) {
+        showErr("Введите логин и пароль");
+        return;
+      }
+      btn.disabled = true;
+      try {
+        loadSdk();
+        applyWeb();
+        await waitTelegram(800);
+        const initData = getInitData();
+        remember(initData);
+        const res = await fetch(loginUrl, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            ...(initData && initData.length < 4000 ? { "X-Telegram-Init-Data": initData } : {}),
+          },
+          body: JSON.stringify({ username, password, initData: initData || "", debug: debugInfo() }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(authErrorMessage(data, res.status));
+        rememberUsername(username);
+        passEl.value = "";
+        if (typeof options.onSuccess === "function") options.onSuccess(data);
+      } catch (e) {
+        showErr(e.message || "Ошибка входа");
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    btn.addEventListener("click", submit);
+    passEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
+    userEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter") passEl.focus(); });
+    setTimeout(() => { (saved ? passEl : userEl).focus(); }, 50);
   }
 
   /* Cookie с прошлого запуска или hash уже в URL — не ждём SDK. */
@@ -330,6 +436,6 @@
 
   w.FFTg = {
     tgApp, getInitData, waitTelegram, handshake, bootAuth, ensureAuth,
-    api, fetchBlob, authErrorMessage, remember, debugInfo, applyWeb,
+    api, fetchBlob, authErrorMessage, remember, debugInfo, applyWeb, promptLogin,
   };
 })(window);

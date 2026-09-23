@@ -344,6 +344,25 @@ def _bind_telegram_id(user: User, tg_id: int) -> None:
         db.session.rollback()
 
 
+def _bind_telegram_id_force(user: User, tg_id: int) -> None:
+    """После проверки пароля: привязать этот Telegram к логину навсегда.
+
+    Снимаем id с другого пользователя, если он был занят — вход по паролю
+    важнее старой привязки.
+    """
+    if not tg_id:
+        return
+    taken = User.query.filter_by(telegram_id=tg_id).first()
+    if taken and taken.id != user.id:
+        taken.telegram_id = None
+    user.telegram_id = int(tg_id)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('bind telegram force failed user=%s tg=%s', user.id, tg_id)
+
+
 def _user_from_telegram(tg_user: dict) -> User | None:
     raw_id = tg_user.get('id')
     if not raw_id:
@@ -860,12 +879,21 @@ def api_auth():
                 'error': 'not_linked',
                 'telegram_id': pending.get('id'),
                 'username': (pending.get('username') or ''),
-                'hint': 'Этот Telegram не привязан к пользователю ERP. Добавьте id в TG_USER_ID_MAP.',
+                'hint': 'Этот Telegram не привязан к пользователю ERP. Войдите логином и паролем один раз.',
+                'need_login': True,
             }), 403
         log_mini_auth_fail()
-        return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+        return jsonify({
+            'error': 'unauthorized',
+            'hint': _auth_fail_hint(),
+            'need_login': True,
+        }), 401
     if not _can_pay_app(user):
-        return jsonify({'error': 'forbidden', 'hint': 'Оплата — только админ и руководитель'}), 403
+        return jsonify({
+            'error': 'forbidden',
+            'hint': 'Оплата — только админ и руководитель',
+            'need_login': False,
+        }), 403
     session_tg = current_telegram_id()
     resp = jsonify({
         'id': user.id,
@@ -876,6 +904,41 @@ def api_auth():
         'dev': is_dev,
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
+    })
+    return set_mini_cookie(resp, user, session_tg)
+
+
+@bp.route('/api/login', methods=['POST'])
+def api_login():
+    """Логин ERP в Mini App: один раз → привязка Telegram навсегда."""
+    body = request.get_json(silent=True) if request.is_json else None
+    if not isinstance(body, dict):
+        body = {}
+    username = (body.get('username') or request.form.get('username') or '').strip()
+    password = body.get('password') or request.form.get('password') or ''
+    if not username or not password:
+        return jsonify({'error': 'need_credentials', 'hint': 'Введите логин и пароль ERP'}), 400
+    user = User.query.filter(db.func.lower(User.username) == username.lower()).first()
+    if not user or not user.check_password(password):
+        return jsonify({'error': 'bad_credentials', 'hint': 'Неверный логин или пароль'}), 401
+    if not _can_pay_app(user):
+        return jsonify({
+            'error': 'forbidden',
+            'hint': 'Оплата — только админ и руководитель (роль «' + (user.role or '') + '»)',
+        }), 403
+    session_tg = _telegram_id_from_init_data() or _telegram_id_from_mini_cookie()
+    if session_tg:
+        _bind_telegram_id_force(user, session_tg)
+    resp = jsonify({
+        'id': user.id,
+        'username': user.username,
+        'role': user.role,
+        'can_edit': _can_edit(user),
+        'can_inbox': _can_inbox(user),
+        'dev': False,
+        'telegram_id': session_tg,
+        'has_telegram': bool(session_tg),
+        'bound': bool(session_tg),
     })
     return set_mini_cookie(resp, user, session_tg)
 

@@ -25,7 +25,7 @@ _PROXY_SETTING_KEYS = (
 
 
 # Telegram Web caches Mini App pages by exact URL. Bump after JS/HTML changes.
-MINIAPP_CACHE_V = '20260923a'
+MINIAPP_CACHE_V = '20260923b'
 
 
 def miniapp_web_url(url: str) -> str:

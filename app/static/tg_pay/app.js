@@ -108,26 +108,37 @@
   }
 
   async function boot() {
+    const startApp = async (user) => {
+      me = user;
+      try { const w = tgApp(); if (w) { w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } } catch (_) {}
+      window.addEventListener('hashchange', route);
+      route();
+    };
+    const showLogin = (hint) => {
+      setTitle('Вход');
+      window.FFTg.promptLogin(view, {
+        loginUrl: '/tg/pay/api/login',
+        title: 'Вход — счета на оплату',
+        hint: hint || 'Один раз логин и пароль ERP. Telegram привяжется навсегда; дальше открывайте кнопкой бота.',
+        onSuccess: (data) => startApp(data),
+      });
+    };
     try {
       if (window.FFTg && window.FFTg.bootAuth) {
-        me = await window.FFTg.bootAuth('/tg/pay/api/auth');
+        await startApp(await window.FFTg.bootAuth('/tg/pay/api/auth'));
       } else {
         await waitTelegram();
-        me = await api('/tg/pay/api/me');
+        await startApp(await api('/tg/pay/api/me'));
       }
-      try { const w = tgApp(); if (w) { w.setHeaderColor('#F4F0E6'); w.setBackgroundColor('#F4F0E6'); } } catch (_) {}
     } catch (e) {
       try {
         await waitTelegram();
-        if (window.FFTg) me = await window.FFTg.handshake('/tg/pay/api/auth');
+        if (window.FFTg) await startApp(await window.FFTg.handshake('/tg/pay/api/auth'));
         else throw e;
       } catch (e2) {
-        view.innerHTML = `<div class="empty"><h2>Нет входа</h2><p>${e2.message || e.message}</p></div>`;
-        return;
+        showLogin(e2.message || e.message);
       }
     }
-    window.addEventListener('hashchange', route);
-    route();
   }
 
   function rowFill(inv) {

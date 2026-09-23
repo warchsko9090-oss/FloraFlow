@@ -26,7 +26,11 @@ from app.models import (
     db, User, Client, Plant, Size, StockBalance, Order, OrderItem, OrderItemHistory,
     SaleCompany, SaleInvoice, SaleInvoiceLine, ShopPlantCard,
 )
-from app.tg_pay import resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail, current_telegram_id, require_session_telegram
+from app.tg_pay import (
+    resolve_user, _auth_fail_hint, set_mini_cookie, log_mini_auth_fail,
+    current_telegram_id, require_session_telegram,
+    _telegram_id_from_init_data, _telegram_id_from_mini_cookie, _bind_telegram_id_force,
+)
 from app.tg_sale_parse import parse_buyer_file
 from app.utils import msk_now, build_pdf_bytes, size_natural_key
 from app.telegram import send_chat_document, send_message as tg_send_message, default_miniapp_url
@@ -1090,11 +1094,21 @@ def api_auth():
                 'error': 'not_linked',
                 'telegram_id': pending.get('id'),
                 'username': (pending.get('username') or ''),
+                'hint': 'Этот Telegram не привязан к пользователю ERP. Войдите логином и паролем один раз.',
+                'need_login': True,
             }), 403
         log_mini_auth_fail()
-        return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+        return jsonify({
+            'error': 'unauthorized',
+            'hint': _auth_fail_hint(),
+            'need_login': True,
+        }), 401
     if not _can_sale(user):
-        return jsonify({'error': 'forbidden', 'hint': 'Только admin, руководитель или менеджер продаж'}), 403
+        return jsonify({
+            'error': 'forbidden',
+            'hint': 'Только admin, руководитель или менеджер сайта',
+            'need_login': False,
+        }), 403
     session_tg = current_telegram_id()
     resp = jsonify({
         'id': user.id,
@@ -1106,6 +1120,42 @@ def api_auth():
         'dev': is_dev,
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
+    })
+    return set_mini_cookie(resp, user, session_tg)
+
+
+@bp.route('/api/login', methods=['POST'])
+def api_login():
+    """Логин ERP в Mini App счетов: один раз → привязка Telegram навсегда."""
+    body = request.get_json(silent=True) if request.is_json else None
+    if not isinstance(body, dict):
+        body = {}
+    username = (body.get('username') or '').strip()
+    password = body.get('password') or ''
+    if not username or not password:
+        return jsonify({'error': 'need_credentials', 'hint': 'Введите логин и пароль ERP'}), 400
+    user = User.query.filter(db.func.lower(User.username) == username.lower()).first()
+    if not user or not user.check_password(password):
+        return jsonify({'error': 'bad_credentials', 'hint': 'Неверный логин или пароль'}), 401
+    if not _can_sale(user):
+        return jsonify({
+            'error': 'forbidden',
+            'hint': 'Счета клиентам — admin, руководитель или менеджер сайта',
+        }), 403
+    session_tg = _telegram_id_from_init_data() or _telegram_id_from_mini_cookie()
+    if session_tg:
+        _bind_telegram_id_force(user, session_tg)
+    resp = jsonify({
+        'id': user.id,
+        'username': user.username,
+        'role': user.role,
+        'can_firms': _can_firms(user),
+        'can_edit_firms': _can_firms(user),
+        'can_delete_approved': (user.role or '') == 'admin',
+        'dev': False,
+        'telegram_id': session_tg,
+        'has_telegram': bool(session_tg),
+        'bound': bool(session_tg),
     })
     return set_mini_cookie(resp, user, session_tg)
 

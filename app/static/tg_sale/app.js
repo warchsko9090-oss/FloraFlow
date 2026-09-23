@@ -866,21 +866,40 @@
     }
 
     async function boot() {
+        const startApp = async (user) => {
+            state.me = user;
+            await reload();
+            render();
+        };
+        const showLogin = (hint) => {
+            const title = document.getElementById("screenTitle");
+            if (title) title.textContent = "Вход";
+            window.FFTg.promptLogin(view, {
+                loginUrl: "/tg/sale/api/login",
+                title: "Вход — выставить счёт",
+                hint: hint || "Один раз логин и пароль ERP. Telegram привяжется навсегда; дальше открывайте кнопкой бота.",
+                onSuccess: (data) => startApp(data),
+            });
+        };
         try {
             if (window.FFTg && window.FFTg.bootAuth) {
-                state.me = await window.FFTg.bootAuth("/tg/sale/api/auth");
+                await startApp(await window.FFTg.bootAuth("/tg/sale/api/auth"));
             } else {
                 await waitTelegram();
-                state.me = await api("/tg/sale/api/me");
+                await startApp(await api("/tg/sale/api/me"));
             }
-            await reload();
         } catch (e) {
-            if (!/unauthorized|Нет входа|не передал|Подпись/i.test(String(e.message || ""))) throw e;
-            await waitTelegram();
-            if (window.FFTg) state.me = await window.FFTg.handshake("/tg/sale/api/auth");
-            await reload();
+            try {
+                if (!/unauthorized|not_linked|Нет входа|не передал|Подпись|не привязан/i.test(String(e.message || ""))) {
+                    throw e;
+                }
+                await waitTelegram();
+                if (window.FFTg) await startApp(await window.FFTg.handshake("/tg/sale/api/auth"));
+                else throw e;
+            } catch (e2) {
+                showLogin(e2.message || e.message);
+            }
         }
-        render();
     }
     boot().catch((e) => {
         view.innerHTML = `<div class="card err">${esc(e.message)}</div>`;
