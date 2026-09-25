@@ -1144,11 +1144,22 @@ def stock_report():
                     db.session.commit()
                     log_action(f"Обновил латинское название для {plant.name}")
 
-        return redirect(url_for('stock.stock_report', end_date=request.args.get('end_date'), mode=report_mode, filter_field=selected_fields, filter_plant=selected_plants, filter_size=selected_sizes, filter_year=selected_years))
+        return redirect(url_for(
+            'stock.stock_report',
+            end_date=request.args.get('end_date'),
+            mode=report_mode,
+            filter_field=selected_fields,
+            filter_plant=selected_plants,
+            filter_size=(selected_sizes if size_filter_manual else None),
+            filter_year=selected_years,
+        ))
     
     if report_mode == 'fields':
         query_sizes = None
         selected_sizes = []
+        size_filter_manual = False
+    # В UI — только ручной выбор размеров (автофильтр товарных не чекаем «все 54»)
+    ui_selected_sizes = selected_sizes if size_filter_manual else []
     all_plants = sorted(Plant.query.all(), key=lambda x: x.name)
     all_sizes = sorted(Size.query.all(), key=natural_key)
     all_fields = sorted(Field.query.all(), key=natural_key)
@@ -1187,7 +1198,7 @@ def stock_report():
                            end_date=end_date.strftime('%Y-%m-%d'), 
                            report_mode=report_mode, 
                            all_plants=all_plants, selected_plants=selected_plants, 
-                           all_sizes=all_sizes, selected_sizes=selected_sizes, 
+                           all_sizes=all_sizes, selected_sizes=ui_selected_sizes, 
                            all_fields=all_fields, selected_fields=selected_fields, 
                            all_years=all_years, selected_years=selected_years, 
                            print_settings=print_settings,

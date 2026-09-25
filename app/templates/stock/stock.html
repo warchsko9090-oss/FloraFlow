@@ -249,8 +249,71 @@
         }
         .stock-filter-details .dropdown { width: 100%; }
         .stock-filter-details .dropdown > .btn { width: 100%; }
+        .stock-filter-details .stock-filter-ms + .select2-container { width: 100% !important; }
         .stock-filter-details .ms-auto { margin-left: 0 !important; width: 100%; flex-wrap: wrap; }
         .stock-filter-details[open] { padding-bottom: 10px; }
+    }
+
+    /* Multi-select как на заказах: поиск Select2, без тегов — только подпись + счётчик */
+    .stock-filter-panel .stock-filter-ms {
+        min-width: 140px;
+        max-width: 200px;
+    }
+    .stock-filter-panel .stock-filter-ms + .select2-container {
+        min-width: 140px;
+        max-width: 200px;
+    }
+    .stock-filter-panel .stock-filter-ms + .select2-container .select2-selection--multiple {
+        min-height: 31px;
+        display: flex !important;
+        align-items: center;
+        flex-wrap: nowrap;
+        gap: 6px;
+        padding: 2px 10px !important;
+        background: #fff;
+        border-color: #d7e3d9 !important;
+        cursor: pointer;
+    }
+    .stock-filter-panel .stock-filter-ms + .select2-container .select2-selection__rendered {
+        display: flex !important;
+        align-items: center;
+        flex: 1 1 auto;
+        padding: 0 !important;
+        margin: 0 !important;
+        min-width: 0;
+    }
+    .stock-filter-panel .stock-filter-ms + .select2-container .select2-selection__choice,
+    .stock-filter-panel .stock-filter-ms + .select2-container .select2-selection__clear {
+        display: none !important;
+    }
+    .stock-filter-panel .stock-filter-ms + .select2-container .select2-search--inline {
+        float: none;
+        flex: 1 1 auto;
+        margin: 0 !important;
+        min-width: 0;
+    }
+    .stock-filter-panel .stock-filter-ms + .select2-container .select2-search__field {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 100% !important;
+        min-width: 4em !important;
+        font-size: 13px;
+        font-weight: 600;
+        color: #111827;
+        cursor: pointer;
+    }
+    .stock-filter-panel .stock-ms-count {
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 3px 7px;
+        border-radius: 999px;
+        background: #4b5563;
+        color: #fff;
+        line-height: 1.2;
+    }
+    .stock-filter-panel .stock-ms-count.is-empty {
+        display: none;
     }
 
     /* ПК: тот же язык, что на телефоне — карточки, пилюли, воздух. Колонки те же. */
@@ -283,27 +346,22 @@
     @media screen and (min-width: 992px) {
         body:not(.kp-print) .stock-page-head { margin-bottom: 1rem; }
         body:not(.kp-print) .stock-filter-panel {
-            border-radius: 16px;
+            border-radius: 10px;
             padding: 12px 16px;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+            border-color: #d7e3d9;
+            box-shadow: 0 1px 4px rgba(27, 94, 32, 0.03);
         }
         body:not(.kp-print) .stock-filter-panel .form-control,
         body:not(.kp-print) .stock-filter-panel .form-select,
-        body:not(.kp-print) .stock-filter-panel .dropdown > .btn,
-        body:not(.kp-print) .stock-filter-panel .btn {
+        body:not(.kp-print) .stock-filter-panel .btn,
+        body:not(.kp-print) .stock-filter-panel .select2-container--bootstrap-5 .select2-selection {
             border-radius: 10px;
-        }
-        body:not(.kp-print) .stock-filter-panel .dropdown > .btn {
-            background: #fff;
-            border-color: #e5e7eb;
-            font-weight: 600;
-            color: #111827;
         }
         body:not(.kp-print) .stock-filter-panel .btn-group.shadow-sm {
             border-radius: 10px;
             overflow: hidden;
             box-shadow: none !important;
-            border: 1px solid #e5e7eb;
+            border: 1px solid #d7e3d9;
         }
         body:not(.kp-print) .stock-filter-panel .btn-group .btn {
             border-radius: 0;
@@ -584,7 +642,7 @@
 </div>
 
 <div class="filter-panel no-print stock-filter-panel">
-    <!-- ИСПРАВЛЕНИЕ: Добавили hx-boost="false" чтобы браузер корректно очищал кэш формы -->
+    <!-- hx-boost="false": браузер корректно очищает кэш формы -->
     <form class="d-flex align-items-center flex-wrap gap-2 w-100" method="GET" id="stockForm" hx-boost="false">
         <input type="hidden" name="mode" value="{{ report_mode }}">
         <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm" style="width: auto;">
@@ -593,51 +651,40 @@
         <details id="stockFilterDetails" class="stock-filter-details" open>
         <summary>Фильтры и выгрузка</summary>
         <div class="stock-filter-body">
-        
-        <!-- Фильтры -->
-        <div class="dropdown">
-            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Растения {% if selected_plants %}({{ selected_plants|length }}){% endif %}</button>
-            <div class="dropdown-menu dropdown-check-list shadow" style="max-height: 300px; overflow-y: auto;">
-                <!-- ИСПРАВЛЕНИЕ: Заменили href="#" на javascript:void(0) -->
-                <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('plant', false)">Сбросить</a></div>
-                <input type="text" class="form-control form-control-sm mx-2 mb-2" style="width:90%" placeholder="Поиск..." onkeyup="filterList(this, '.chk-plant-div')">
-                {% for p in all_plants %}
-                <div class="form-check ms-3 chk-plant-div"><input class="form-check-input check-plant" type="checkbox" name="filter_plant" value="{{ p.id }}" id="p{{p.id}}" {% if p.id in selected_plants %}checked{% endif %}><label class="form-check-label small" for="p{{p.id}}">{{ p.name }}</label></div>
-                {% endfor %}
-            </div>
-        </div>
-        
-        <div class="dropdown{% if report_mode == 'fields' %} d-none{% endif %}">
-            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Размеры {% if selected_sizes %}<span class="badge bg-secondary">{{ selected_sizes|length }}</span>{% endif %}</button>
-            <div class="dropdown-menu dropdown-check-list shadow" style="max-height: 300px; overflow-y: auto;">
-                <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('size', false)">Сбросить</a></div>
-                {% for s in all_sizes %}
-                <div class="form-check ms-3"><input class="form-check-input check-size" type="checkbox" name="filter_size" value="{{ s.id }}" id="s{{s.id}}" {% if s.id in selected_sizes %}checked{% endif %}><label class="form-check-label small" for="s{{s.id}}">{{ s.name }}</label></div>
-                {% endfor %}
-            </div>
-        </div>
 
-        <div class="dropdown">
-            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Поля {% if selected_fields %}({{ selected_fields|length }}){% endif %}</button>
-            <div class="dropdown-menu dropdown-check-list shadow" style="max-height: 300px; overflow-y: auto;">
-                <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('field', false)">Сбросить</a></div>
-                {% for f in all_fields %}
-                <div class="form-check ms-3"><input class="form-check-input check-field" type="checkbox" name="filter_field" value="{{ f.id }}" id="f{{f.id}}" {% if f.id in selected_fields %}checked{% endif %}><label class="form-check-label small" for="f{{f.id}}">{{ f.name }}</label></div>
-                {% endfor %}
-            </div>
-        </div>
+        <!-- Multi-select как на заказах: список не закрывается, теги скрыты, бейдж = число выбранных -->
+        <select name="filter_plant" class="form-select form-select-sm select-search stock-filter-ms"
+                multiple data-placeholder="Растения" style="min-width: 150px; max-width: 220px;">
+            {% for p in all_plants %}
+            <option value="{{ p.id }}" {% if p.id in selected_plants %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
+        </select>
 
-        <div class="dropdown">
-            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">Год</button>
-            <div class="dropdown-menu dropdown-check-list shadow">
-                <div class="px-2 pb-2"><a href="javascript:void(0)" onclick="checkAll('year', false)">Сбросить</a></div>
-                {% for y in all_years %}
-                <div class="form-check ms-3"><input class="form-check-input check-year" type="checkbox" name="filter_year" value="{{ y }}" id="y{{y}}" {% if y in selected_years %}checked{% endif %}><label class="form-check-label small" for="y{{y}}">{{ y }}</label></div>
-                {% endfor %}
-            </div>
-        </div>
+        {% if report_mode != 'fields' %}
+        <select name="filter_size" class="form-select form-select-sm select-search stock-filter-ms"
+                multiple data-placeholder="Размеры" style="min-width: 130px; max-width: 180px;">
+            {% for s in all_sizes %}
+            <option value="{{ s.id }}" {% if s.id in selected_sizes %}selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
 
-        <!-- Быстрый поиск по растению перенесён выше, чтобы на телефоне был сразу виден -->
+        <select name="filter_field" class="form-select form-select-sm select-search stock-filter-ms"
+                multiple data-placeholder="Поля" style="min-width: 120px; max-width: 180px;">
+            {% for f in all_fields %}
+            <option value="{{ f.id }}" {% if f.id in selected_fields %}selected{% endif %}>{{ f.name }}</option>
+            {% endfor %}
+        </select>
+
+        <select name="filter_year" class="form-select form-select-sm select-search stock-filter-ms"
+                multiple data-placeholder="Год" style="min-width: 100px; max-width: 140px;">
+            {% for y in all_years %}
+            <option value="{{ y }}" {% if y in selected_years %}selected{% endif %}>{{ y }}</option>
+            {% endfor %}
+        </select>
+
+        <a href="{{ url_for('stock.stock_report', mode=report_mode, end_date=end_date) }}"
+           class="btn btn-light border btn-sm text-muted" title="Сбросить фильтры"><i class="fas fa-times"></i></a>
 
         <!-- Кнопки управления гармошкой -->
         <div class="btn-group btn-group-sm ms-2 shadow-sm">
@@ -1079,9 +1126,7 @@
         });
     });
     function checkAll(type, check) {
-        document.querySelectorAll('.check-' + type).forEach(el => el.checked = check);
-        if (typeof window.__stockFiltersMarkDirty === 'function') window.__stockFiltersMarkDirty();
-        if (!check && typeof window.__stockFiltersSubmit === 'function') window.__stockFiltersSubmit();
+        /* legacy no-op: фильтры переведены на Select2 */
     }
     function filterList(input, selector) {
         const filter = input.value.toLowerCase();
@@ -1091,27 +1136,79 @@
     (function initStockFilterAutoApply() {
         const form = document.getElementById('stockForm');
         if (!form) return;
-        let dirty = false;
+
         function submitStockFilters() {
-            dirty = false;
             if (form.requestSubmit) form.requestSubmit();
             else form.submit();
         }
         window.__stockFiltersSubmit = submitStockFilters;
-        window.__stockFiltersMarkDirty = function () { dirty = true; };
 
         const endDate = form.querySelector('input[name="end_date"]');
         if (endDate) endDate.addEventListener('change', submitStockFilters);
 
-        form.querySelectorAll('.check-plant, .check-size, .check-field, .check-year').forEach((el) => {
-            el.addEventListener('change', () => { dirty = true; });
-        });
+        function syncMsBadge($sel) {
+            const n = ($sel.val() || []).length;
+            const $c = $sel.next('.select2-container');
+            if (!$c.length) return;
+            let $badge = $c.find('.stock-ms-count');
+            if (!$badge.length) {
+                $badge = jQuery('<span class="stock-ms-count" aria-hidden="true"></span>');
+                $c.find('.select2-selection--multiple').append($badge);
+            }
+            if (n) {
+                $badge.text(n).removeClass('is-empty');
+            } else {
+                $badge.text('').addClass('is-empty');
+            }
+            // Подпись всегда в поле поиска (теги скрыты CSS)
+            const label = $sel.data('placeholder') || '';
+            const $search = $c.find('.select2-search__field');
+            if ($search.length) {
+                $search.attr('placeholder', label);
+                try { $search.css('width', '100%'); } catch (e) {}
+            }
+        }
 
-        form.querySelectorAll('.dropdown').forEach((dd) => {
-            dd.addEventListener('hidden.bs.dropdown', () => {
-                if (dirty) submitStockFilters();
+        function bindMulti($sel) {
+            $sel.off('.stockFilter');
+            syncMsBadge($sel);
+            let dirty = false;
+            $sel.on('select2:close.stockFilter', () => {
+                if (!dirty) return;
+                dirty = false;
+                submitStockFilters();
             });
-        });
+            $sel.on('change.stockFilter select2:select.stockFilter select2:unselect.stockFilter', () => {
+                dirty = true;
+                syncMsBadge($sel);
+                const open = $sel.data('select2') && $sel.select2('isOpen');
+                if (!open) {
+                    clearTimeout($sel.data('stockDebounce'));
+                    $sel.data('stockDebounce', setTimeout(() => {
+                        dirty = false;
+                        submitStockFilters();
+                    }, 200));
+                }
+            });
+            $sel.on('select2:open.stockFilter', () => {
+                setTimeout(() => syncMsBadge($sel), 0);
+            });
+        }
+
+        function bindAll() {
+            if (!(window.jQuery && jQuery.fn.select2)) {
+                form.querySelectorAll('select.stock-filter-ms').forEach((el) => {
+                    el.addEventListener('change', submitStockFilters);
+                });
+                return;
+            }
+            jQuery(form).find('select.stock-filter-ms').each(function () {
+                bindMulti(jQuery(this));
+            });
+        }
+        bindAll();
+        setTimeout(bindAll, 400);
+        setTimeout(bindAll, 900);
     })();
     function sortStockGroups(n) {
         // Простая сортировка (реализация есть в прошлых версиях, тут для краткости)
