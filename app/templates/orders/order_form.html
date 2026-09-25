@@ -153,6 +153,62 @@
         background-color: #81c784;
         border-color: #81c784;
     }
+
+    @media (max-width: 767.98px) {
+        .create-price-panel {
+            border-radius: 10px;
+        }
+        .create-price-panel .card-body {
+            padding: 0.75rem;
+        }
+        .create-price-toolbar {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.85rem;
+        }
+        .create-price-group {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.5rem;
+        }
+        .create-price-group-label {
+            margin-bottom: 0;
+        }
+        .create-price-panel .btn-group {
+            width: 100%;
+            display: flex;
+            border-radius: 10px;
+        }
+        .create-price-panel .btn-group .btn {
+            flex: 1;
+            min-width: 0;
+            min-height: 42px;
+        }
+        .create-price-group .d-flex.gap-1 {
+            display: grid !important;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px !important;
+            width: 100%;
+        }
+        .create-disc-chip {
+            width: 100%;
+            min-width: 0 !important;
+            min-height: 40px;
+            border-radius: 10px !important;
+        }
+        .create-price-panel .input-group {
+            width: 100%;
+        }
+        .create-price-panel .input-group > .form-control,
+        .create-price-panel .input-group > .input-group-text {
+            min-height: 42px;
+        }
+        .create-price-hint {
+            min-width: 0;
+            flex: none;
+            font-size: 12px;
+        }
+    }
 </style>
 <div class="card create-price-panel">
     <div class="card-body">

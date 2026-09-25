@@ -117,9 +117,39 @@
         padding: 0 !important;
     }
     @media (max-width: 575.98px) {
-        .dig-task-qty-grid { grid-template-columns: 1fr 1fr 1fr; }
+        .dig-task-qty-grid { grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
         .dig-task-fact { flex: 1 1 100%; }
-        .dig-task-client { width: 100%; }
+        .dig-task-client { width: 100%; max-width: none; }
+        .dig-task-card {
+            padding: 12px !important;
+            border-radius: 10px !important;
+        }
+        .dig-task-meta {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+        .dig-task-field,
+        .dig-task-order {
+            width: 100%;
+            justify-content: flex-start;
+        }
+        .dig-task-fact-input {
+            min-height: 48px;
+            font-size: 1.25rem !important;
+        }
+        .dig-day-header {
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            padding: 10px;
+        }
+        .dig-day-header .dig-day-count {
+            margin-left: 0;
+            width: 100%;
+        }
+        .dig-day-header .dig-day-date {
+            font-size: 1rem;
+        }
     }
     .dig-day-section {
         margin-bottom: 1.25rem;

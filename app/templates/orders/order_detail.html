@@ -624,7 +624,7 @@
             </div>
         </div>
         {% if order.status != 'canceled' and current_user.role != 'user2' %}
-        <div class="card mb-3 shadow-sm d-none d-md-block">
+        <div class="card mb-3 shadow-sm">
             <div class="card-body p-2">
                 <form method="POST" hx-boost="false">
                     <label class="small fw-bold text-success"><i class="fas fa-project-diagram"></i> Проект</label>

@@ -222,36 +222,128 @@
         .page-subtitle { display: none; }
         .page-actions .btn-group { width: 100%; display: flex; }
         .page-actions .btn-group .btn { flex: 1; }
+
+        /* «ровный край» на телефоне — та же панель, что на ПК */
+        .stock-filter-panel {
+            border-radius: 10px !important;
+            border-color: #d7e3d9 !important;
+            box-shadow: 0 1px 4px rgba(27, 94, 32, 0.03);
+            padding: 10px 12px !important;
+        }
+        #stockForm {
+            flex-direction: column;
+            align-items: stretch !important;
+            gap: 8px !important;
+        }
+        #stockForm > input[name="end_date"],
+        #stockPlantSearch {
+            width: 100% !important;
+            max-width: none !important;
+            border-radius: 10px;
+            min-height: 42px;
+        }
         .stock-filter-details {
             width: 100%;
-            border: 1px solid #e5e7eb;
-            border-radius: 12px;
+            border: 1px solid #d7e3d9;
+            border-radius: 10px;
             padding: 0 12px;
             background: #fff;
-            margin-top: 4px;
+            margin-top: 0;
         }
         .stock-filter-details > summary {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 10px 0;
+            gap: 8px;
+            padding: 12px 0;
             font-weight: 700;
             cursor: pointer;
+            list-style: none;
+            min-height: 44px;
         }
         .stock-filter-details > summary::-webkit-details-marker { display: none; }
+        .stock-filter-details > summary .stock-filter-summary-counts {
+            display: inline-flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .stock-filter-details > summary .stock-filter-summary-counts .badge {
+            font-size: 11px;
+            font-weight: 700;
+            border-radius: 6px;
+            background: #4b5563;
+        }
         .stock-fields-hint { display: block; color: #6b7280; font-size: 13px; margin: 0 0 10px; }
-        #stockPlantSearch { width: 100% !important; }
         .stock-filter-body {
             flex-direction: column;
             align-items: stretch;
             gap: 8px;
             width: 100%;
         }
-        .stock-filter-details .dropdown { width: 100%; }
-        .stock-filter-details .dropdown > .btn { width: 100%; }
-        .stock-filter-details .stock-filter-ms + .select2-container { width: 100% !important; }
-        .stock-filter-details .ms-auto { margin-left: 0 !important; width: 100%; flex-wrap: wrap; }
-        .stock-filter-details[open] { padding-bottom: 10px; }
+        .stock-filter-panel .stock-filter-ms,
+        .stock-filter-panel .stock-filter-ms + .select2-container {
+            min-width: 0 !important;
+            max-width: none !important;
+            width: 100% !important;
+        }
+        .stock-filter-panel .stock-filter-ms + .select2-container .select2-selection--multiple {
+            min-height: 42px;
+            border-radius: 10px !important;
+            padding: 6px 12px !important;
+        }
+        .stock-filter-panel .stock-filter-ms + .select2-container .select2-search__field {
+            font-size: 14px;
+            min-height: 28px;
+        }
+        .stock-filter-body > a.btn {
+            width: 100%;
+            min-height: 40px;
+            border-radius: 10px;
+        }
+        .stock-filter-body .btn-group {
+            width: 100%;
+            margin-left: 0 !important;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid #d7e3d9;
+            box-shadow: none !important;
+        }
+        .stock-filter-body .btn-group .btn {
+            flex: 1;
+            min-height: 40px;
+            border: 0;
+            border-radius: 0;
+        }
+        .stock-filter-body .ms-auto {
+            margin-left: 0 !important;
+            width: 100%;
+            display: grid !important;
+            grid-template-columns: 1fr auto auto;
+            gap: 8px;
+            align-items: stretch;
+        }
+        .stock-filter-body .ms-auto #stockPriceMode {
+            width: 100% !important;
+            min-height: 40px;
+            border-radius: 10px;
+        }
+        .stock-filter-body .ms-auto .btn {
+            min-height: 40px;
+            border-radius: 10px;
+        }
+        .stock-filter-body .ms-auto .btn-dark {
+            grid-column: 1 / -1;
+            width: 100%;
+        }
+        .stock-filter-details[open] { padding-bottom: 12px; }
+
+        .stock-mobile-card {
+            border-color: #d7e3d9;
+            border-radius: 10px;
+            box-shadow: 0 1px 4px rgba(27, 94, 32, 0.03);
+        }
+        .badge-qty { border-radius: 6px; }
     }
 
     /* Multi-select как на заказах: поиск Select2, без тегов — только подпись + счётчик */
@@ -649,12 +741,15 @@
         <input type="text" id="stockPlantSearch" class="form-control form-control-sm" style="width:200px"
                placeholder="Поиск растения…" oninput="stockApplyPlantSearch()">
         <details id="stockFilterDetails" class="stock-filter-details" open>
-        <summary>Фильтры и выгрузка</summary>
+        <summary>
+            <span>Фильтры и выгрузка</span>
+            <span class="stock-filter-summary-counts" id="stockFilterSummaryCounts" aria-live="polite"></span>
+        </summary>
         <div class="stock-filter-body">
 
         <!-- Multi-select как на заказах: список не закрывается, теги скрыты, бейдж = число выбранных -->
         <select name="filter_plant" class="form-select form-select-sm select-search stock-filter-ms"
-                multiple data-placeholder="Растения" style="min-width: 150px; max-width: 220px;">
+                multiple data-placeholder="Растения">
             {% for p in all_plants %}
             <option value="{{ p.id }}" {% if p.id in selected_plants %}selected{% endif %}>{{ p.name }}</option>
             {% endfor %}
@@ -662,7 +757,7 @@
 
         {% if report_mode != 'fields' %}
         <select name="filter_size" class="form-select form-select-sm select-search stock-filter-ms"
-                multiple data-placeholder="Размеры" style="min-width: 130px; max-width: 180px;">
+                multiple data-placeholder="Размеры">
             {% for s in all_sizes %}
             <option value="{{ s.id }}" {% if s.id in selected_sizes %}selected{% endif %}>{{ s.name }}</option>
             {% endfor %}
@@ -670,14 +765,14 @@
         {% endif %}
 
         <select name="filter_field" class="form-select form-select-sm select-search stock-filter-ms"
-                multiple data-placeholder="Поля" style="min-width: 120px; max-width: 180px;">
+                multiple data-placeholder="Поля">
             {% for f in all_fields %}
             <option value="{{ f.id }}" {% if f.id in selected_fields %}selected{% endif %}>{{ f.name }}</option>
             {% endfor %}
         </select>
 
         <select name="filter_year" class="form-select form-select-sm select-search stock-filter-ms"
-                multiple data-placeholder="Год" style="min-width: 100px; max-width: 140px;">
+                multiple data-placeholder="Год">
             {% for y in all_years %}
             <option value="{{ y }}" {% if y in selected_years %}selected{% endif %}>{{ y }}</option>
             {% endfor %}
@@ -1160,13 +1255,26 @@
             } else {
                 $badge.text('').addClass('is-empty');
             }
-            // Подпись всегда в поле поиска (теги скрыты CSS)
             const label = $sel.data('placeholder') || '';
             const $search = $c.find('.select2-search__field');
             if ($search.length) {
                 $search.attr('placeholder', label);
                 try { $search.css('width', '100%'); } catch (e) {}
             }
+            syncSummaryCounts();
+        }
+
+        function syncSummaryCounts() {
+            const box = document.getElementById('stockFilterSummaryCounts');
+            if (!box) return;
+            const parts = [];
+            form.querySelectorAll('select.stock-filter-ms').forEach((el) => {
+                const n = (window.jQuery ? (jQuery(el).val() || []) : Array.from(el.selectedOptions)).length;
+                if (!n) return;
+                const label = el.getAttribute('data-placeholder') || el.name;
+                parts.push('<span class="badge" title="' + label + '">' + n + '</span>');
+            });
+            box.innerHTML = parts.join('');
         }
 
         function bindMulti($sel) {

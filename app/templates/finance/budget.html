@@ -126,6 +126,19 @@
         }
         .month-filters-scroll::-webkit-scrollbar { display: none; }
 
+        #cfChartsRow .card-body {
+            min-height: 220px !important;
+            padding: 8px !important;
+        }
+        #cfChartsRow .card-header {
+            flex-direction: column;
+            align-items: flex-start !important;
+            gap: 2px;
+        }
+        #cfChartsRow canvas {
+            max-width: 100%;
+        }
+
         /* Уменьшаем ширину закрепленных колонок слева */
         .col-code { width: 35px !important; min-width: 35px !important; left: 0; padding: 4px !important; font-size: 10px; }
         .col-name { left: 35px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; font-size: 11px; padding: 4px !important; }
