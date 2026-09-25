@@ -723,9 +723,9 @@ def _budget_period_to_months(tm):
     if tm == 'q4':
         return [10, 11, 12], '4 кв.'
     if tm == 'spring':
-        return [1, 2, 3, 4, 5, 6], 'Весна'
+        return [1, 2, 3, 4, 5, 6], 'Весна (янв–июн)'
     if tm == 'autumn':
-        return [7, 8, 9, 10, 11, 12], 'Осень'
+        return [7, 8, 9, 10, 11, 12], 'Осень (июл–дек)'
     try:
         m = int(tm)
         if 1 <= m <= 12:

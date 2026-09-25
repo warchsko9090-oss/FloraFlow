@@ -309,8 +309,8 @@
             <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q4', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q4' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q4</a>
         </div>
         <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='spring', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'spring' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Весна</a>
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='autumn', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'autumn' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Осень</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='spring', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'spring' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" title="Январь–июнь">Весна</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='autumn', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'autumn' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" title="Июль–декабрь">Осень</a>
         </div>
 
         {# Multi-select «Несколько месяцев» — позволяет отметить произвольный
@@ -488,8 +488,8 @@
                     {% if active_tab == 'cf_compare' %}План и факт · {{ period_label }} · {{ year }}{% else %}Движение · {{ period_label }} · {{ year }}{% endif %}
                 </span>
                 <span class="small text-muted" id="cfMonthChartHint">
-                    {% if active_tab == 'cf_compare' %}бары: план / факт in·out{% else %}бары: поступления / выплаты факт{% endif %}
-                    {% if not is_year_view %} · только выбранный период{% endif %}
+                    {% if active_tab == 'cf_compare' %}бары: план / факт in·out{% else %}бары: план + факт (как в боксах сверху){% endif %}
+                    {% if not is_year_view %} · только {{ period_label }}{% endif %}
                 </span>
             </div>
             <div class="card-body py-2" style="min-height: 280px;">
@@ -1055,19 +1055,33 @@
         if (prev) prev.destroy();
 
         const datasets = [];
+        // План всегда на графике (как в боксах сверху) — иначе «не сходится» с крупными цифрами плана
+        datasets.push(
+            {
+                type: 'bar',
+                label: 'Поступления план',
+                data: pick(monthData.in_plan || []),
+                backgroundColor: 'rgba(25, 135, 84, 0.18)',
+                borderColor: 'rgba(25, 135, 84, 0.55)',
+                borderWidth: 1,
+                borderRadius: 3,
+                yAxisID: 'y',
+                order: 4,
+            },
+            {
+                type: 'bar',
+                label: 'Выплаты план',
+                data: pick(monthData.out_plan || []),
+                backgroundColor: 'rgba(220, 53, 69, 0.14)',
+                borderColor: 'rgba(220, 53, 69, 0.5)',
+                borderWidth: 1,
+                borderRadius: 3,
+                yAxisID: 'y',
+                order: 4,
+            }
+        );
         if (isCompare) {
             datasets.push(
-                {
-                    type: 'bar',
-                    label: 'Поступления план',
-                    data: pick(monthData.in_plan || []),
-                    backgroundColor: 'rgba(25, 135, 84, 0.25)',
-                    borderColor: 'rgba(25, 135, 84, 0.8)',
-                    borderWidth: 1,
-                    borderRadius: 3,
-                    yAxisID: 'y',
-                    order: 3,
-                },
                 {
                     type: 'bar',
                     label: 'Поступления факт',
@@ -1076,17 +1090,6 @@
                     borderRadius: 3,
                     yAxisID: 'y',
                     order: 2,
-                },
-                {
-                    type: 'bar',
-                    label: 'Выплаты план',
-                    data: pick(monthData.out_plan || []),
-                    backgroundColor: 'rgba(220, 53, 69, 0.22)',
-                    borderColor: 'rgba(220, 53, 69, 0.75)',
-                    borderWidth: 1,
-                    borderRadius: 3,
-                    yAxisID: 'y',
-                    order: 3,
                 },
                 {
                     type: 'bar',
@@ -1104,7 +1107,7 @@
                     type: 'bar',
                     label: 'Поступления факт',
                     data: pick(monthData.in_fact),
-                    backgroundColor: 'rgba(25, 135, 84, 0.65)',
+                    backgroundColor: 'rgba(25, 135, 84, 0.75)',
                     borderRadius: 3,
                     yAxisID: 'y',
                     order: 2,
@@ -1113,7 +1116,7 @@
                     type: 'bar',
                     label: 'Выплаты факт',
                     data: pick(monthData.out_fact),
-                    backgroundColor: 'rgba(220, 53, 69, 0.55)',
+                    backgroundColor: 'rgba(220, 53, 69, 0.65)',
                     borderRadius: 3,
                     yAxisID: 'y',
                     order: 2,
@@ -1244,14 +1247,15 @@
         }
         if (yearCol) yearCol.classList.toggle('d-none', !on);
         if (monthHint) {
+            const periodBit = {{ (' · только ' ~ period_label)|tojson }};
             if (isCompare) {
                 monthHint.textContent = on
-                    ? 'бары: план/факт · линия: накопит. остаток'
-                    : 'бары: план / факт in·out';
+                    ? 'бары: план/факт · линия: накопит. остаток' + periodBit
+                    : 'бары: план / факт in·out' + periodBit;
             } else {
                 monthHint.textContent = on
-                    ? 'бары: факт in/out · линия: накопит. остаток'
-                    : 'бары: поступления / выплаты факт';
+                    ? 'бары: план+факт · линия: накопит. остаток' + periodBit
+                    : 'бары: план + факт (как в боксах сверху)' + periodBit;
             }
         }
         if (monthChart) {
