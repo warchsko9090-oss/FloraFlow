@@ -329,6 +329,29 @@
         margin-left: 20px;
     }
     .sidebar-group.open > .sidebar-sub { display: flex; }
+    /* Вложенные группы (Выкопка / Контейнерная / ВиУМ) */
+    .sidebar-sub .sidebar-group {
+        margin: 2px 0;
+    }
+    .sidebar-sub .sidebar-group > .sidebar-group-toggle {
+        font-weight: 600;
+        font-size: 13px;
+        padding: 6px 10px;
+        color: var(--c-ink-soft);
+    }
+    .sidebar-sub .sidebar-group > .sidebar-group-toggle .sl-icon {
+        width: 18px;
+        height: 18px;
+        font-size: 13px;
+        color: var(--c-brand);
+    }
+    .sidebar-sub .sidebar-group.has-active > .sidebar-group-toggle {
+        color: var(--c-brand-dark);
+    }
+    .sidebar-sub .sidebar-sub {
+        padding: 2px 0 2px 14px;
+        margin-left: 10px;
+    }
     .sidebar-sub .sidebar-link {
         padding: 7px 12px;
         font-size: 13.5px;
@@ -737,6 +760,12 @@
         letter-spacing: .08em;
         color: var(--c-muted-soft);
         padding: 6px 10px;
+    }
+    .drawer-subgroup-title {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--c-brand-dark);
+        padding: 10px 10px 2px;
     }
     .drawer-link {
         display: flex;
@@ -1188,11 +1217,29 @@
                 <span class="sl-label">Заказы</span>
             </a>
 
-            {% if current_user.role == 'admin' %}
-            <a class="sidebar-link {% if request.endpoint in ('orders.sale_invoices_list', 'orders.sale_invoice_pdf', 'orders.sale_invoice_print_edit', 'orders.sale_invoice_custom_print', 'orders.sale_invoice_new', 'orders.sale_invoice_edit', 'orders.sale_invoice_create_order', 'orders.sale_invoice_link_order') %}active{% endif %}" href="{{ url_for('orders.sale_invoices_list') }}">
-                <span class="sl-icon"><i class="fas fa-file-invoice-dollar"></i></span>
-                <span class="sl-label">Счета клиентам</span>
-            </a>
+            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
+            {% set inv_ep = request.endpoint or '' %}
+            {% set sale_inv_eps = ('orders.sale_invoices_list', 'orders.sale_invoice_pdf', 'orders.sale_invoice_print_edit', 'orders.sale_invoice_custom_print', 'orders.sale_invoice_new', 'orders.sale_invoice_edit', 'orders.sale_invoice_create_order', 'orders.sale_invoice_link_order') %}
+            {% set inv_group_active = inv_ep in sale_inv_eps or inv_ep == 'finance.invoices_summary' %}
+            <div class="sidebar-group {% if inv_group_active %}open has-active{% endif %}">
+                <button type="button" class="sidebar-link sidebar-group-toggle">
+                    <span class="sl-icon"><i class="fas fa-file-invoice-dollar"></i></span>
+                    <span class="sl-label">Реестр счетов</span>
+                    <i class="fas fa-chevron-right sl-chevron"></i>
+                </button>
+                <div class="sidebar-sub">
+                    {% if current_user.role == 'admin' %}
+                    <a class="sidebar-link {% if inv_ep in sale_inv_eps %}active{% endif %}" href="{{ url_for('orders.sale_invoices_list') }}">
+                        <span class="sl-icon"><i class="fas fa-file-invoice-dollar"></i></span>
+                        <span class="sl-label">Счета</span>
+                    </a>
+                    {% endif %}
+                    <a class="sidebar-link {% if inv_ep == 'finance.invoices_summary' %}active{% endif %}" href="{{ url_for('finance.invoices_summary') }}">
+                        <span class="sl-icon"><i class="fas fa-list-alt"></i></span>
+                        <span class="sl-label">Реестр заказов</span>
+                    </a>
+                </div>
+            </div>
             {% endif %}
 
             {# ---------- СКЛАД ---------- #}
@@ -1211,10 +1258,6 @@
                         <span class="sl-icon"><i class="fas fa-boxes-stacked"></i></span>
                         <span class="sl-label">Остатки</span>
                     </a>
-                    <a class="sidebar-link {% if request.endpoint == 'stock.stock_receipts' %}active{% endif %}" href="{{ url_for('stock.stock_receipts') }}">
-                        <span class="sl-icon"><i class="fas fa-truck-ramp-box"></i></span>
-                        <span class="sl-label">Поступление</span>
-                    </a>
                     <a class="sidebar-link {% if request.endpoint == 'stock.documents' %}active{% endif %}" href="{{ url_for('stock.documents') }}" data-hx-boost="false">
                         <span class="sl-icon"><i class="fas fa-file-invoice"></i></span>
                         <span class="sl-label">Журнал документов</span>
@@ -1222,66 +1265,102 @@
                     {% if current_user.role != 'user2' %}
                     <a class="sidebar-link {% if request.endpoint == 'finance.reports_turnover' %}active{% endif %}" href="{{ url_for('finance.reports_turnover') }}">
                         <span class="sl-icon"><i class="fas fa-exchange-alt"></i></span>
-                        <span class="sl-label">Оборотная ведомость</span>
+                        <span class="sl-label">Движение товара</span>
                     </a>
                     {% endif %}
                     {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
                     <a class="sidebar-link {% if request.endpoint == 'stock.price_history' %}active{% endif %}" href="{{ url_for('stock.price_history') }}">
                         <span class="sl-icon"><i class="fas fa-clock-rotate-left"></i></span>
-                        <span class="sl-label">История цен</span>
+                        <span class="sl-label">Прайс лист</span>
                     </a>
                     {% endif %}
                 </div>
             </div>
 
-            {# ---------- ПРОИЗВОДСТВО / ВЫКОПКА ---------- #}
-            <div class="sidebar-group {% if request.endpoint and (request.endpoint.startswith('digging.') or request.endpoint.startswith('vium.') or request.endpoint.startswith('production.')) %}open has-active{% endif %}">
+            {# ---------- ПРОИЗВОДСТВО ---------- #}
+            {% set ep = request.endpoint or '' %}
+            {% set dig_active = ep.startswith('digging.') %}
+            {% set pot_active = ep.startswith('production.') %}
+            {% set vium_active = ep.startswith('vium.') %}
+            <div class="sidebar-group {% if dig_active or pot_active or vium_active %}open has-active{% endif %}">
                 <button type="button" class="sidebar-link sidebar-group-toggle">
                     <span class="sl-icon"><i class="fas fa-seedling"></i></span>
                     <span class="sl-label">Производство</span>
                     <i class="fas fa-chevron-right sl-chevron"></i>
                 </button>
                 <div class="sidebar-sub">
-                    <a class="sidebar-link {% if request.endpoint == 'digging.digging_planning' %}active{% endif %}" href="{{ url_for('digging.digging_planning') }}" data-hx-boost="false">
-                        <span class="sl-icon"><i class="fas fa-calendar-check"></i></span>
-                        <span class="sl-label">План выкопки</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint == 'digging.mobile_index' %}active{% endif %}" href="{{ url_for('digging.mobile_index') }}">
-                        <span class="sl-icon"><i class="fas fa-trowel"></i></span>
-                        <span class="sl-label">Ввод выкопки</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint == 'digging.analytics' %}active{% endif %}" href="{{ url_for('digging.analytics') }}">
-                        <span class="sl-icon"><i class="fas fa-chart-area"></i></span>
-                        <span class="sl-label">Аналитика выкопки</span>
-                    </a>
+                    {# 1. Выкопка #}
+                    <div class="sidebar-group {% if dig_active %}open has-active{% endif %}">
+                        <button type="button" class="sidebar-link sidebar-group-toggle">
+                            <span class="sl-icon"><i class="fas fa-trowel"></i></span>
+                            <span class="sl-label">Выкопка</span>
+                            <i class="fas fa-chevron-right sl-chevron"></i>
+                        </button>
+                        <div class="sidebar-sub">
+                            <a class="sidebar-link {% if ep == 'digging.digging_planning' %}active{% endif %}" href="{{ url_for('digging.digging_planning') }}" data-hx-boost="false">
+                                <span class="sl-icon"><i class="fas fa-calendar-check"></i></span>
+                                <span class="sl-label">План выкопки</span>
+                            </a>
+                            <a class="sidebar-link {% if ep == 'digging.mobile_index' %}active{% endif %}" href="{{ url_for('digging.mobile_index') }}">
+                                <span class="sl-icon"><i class="fas fa-trowel"></i></span>
+                                <span class="sl-label">Ввод выкопки</span>
+                            </a>
+                            <a class="sidebar-link {% if ep == 'digging.analytics' %}active{% endif %}" href="{{ url_for('digging.analytics') }}">
+                                <span class="sl-icon"><i class="fas fa-chart-area"></i></span>
+                                <span class="sl-label">Аналитика выкопки</span>
+                            </a>
+                            {% if current_user.role != 'user2' %}
+                            <a class="sidebar-link {% if ep == 'digging.manager_report' %}active{% endif %}" href="{{ url_for('digging.manager_report') }}">
+                                <span class="sl-icon"><i class="fas fa-clipboard-check"></i></span>
+                                <span class="sl-label">Отчёт по выкопке</span>
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    {# 2. Контейнерная площадка #}
                     {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
-                    <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('production.') %}active{% endif %}" href="{{ url_for('production.projects_list') }}">
-                        <span class="sl-icon"><i class="fas fa-seedling"></i></span>
-                        <span class="sl-label">Посадка в горшки</span>
-                    </a>
+                    <div class="sidebar-group {% if pot_active %}open has-active{% endif %}">
+                        <button type="button" class="sidebar-link sidebar-group-toggle">
+                            <span class="sl-icon"><i class="fas fa-seedling"></i></span>
+                            <span class="sl-label">Контейнерная площадка</span>
+                            <i class="fas fa-chevron-right sl-chevron"></i>
+                        </button>
+                        <div class="sidebar-sub">
+                            <a class="sidebar-link {% if pot_active %}active{% endif %}" href="{{ url_for('production.projects_list') }}">
+                                <span class="sl-icon"><i class="fas fa-seedling"></i></span>
+                                <span class="sl-label">Посадка в горшки</span>
+                            </a>
+                        </div>
+                    </div>
                     {% endif %}
-                    {% if current_user.role != 'user2' %}
-                    <a class="sidebar-link {% if request.endpoint == 'digging.manager_report' %}active{% endif %}" href="{{ url_for('digging.manager_report') }}">
-                        <span class="sl-icon"><i class="fas fa-clipboard-check"></i></span>
-                        <span class="sl-label">Отчёт по выкопке</span>
-                    </a>
-                    {% endif %}
+
+                    {# 3. Учёт ВиУМ #}
                     {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
-                    <a class="sidebar-link {% if request.endpoint == 'vium.vium_report' or (request.endpoint and request.endpoint.startswith('vium.') and 'techcard' not in request.endpoint and 'plan_report' not in request.endpoint) %}active{% endif %}"
-                       href="{{ url_for('vium.vium_report') }}">
-                        <span class="sl-icon"><i class="fas fa-boxes-stacked"></i></span>
-                        <span class="sl-label">Учёт ВиУМ</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint and 'techcard' in request.endpoint %}active{% endif %}"
-                       href="{{ url_for('vium.vium_techcards') }}">
-                        <span class="sl-icon"><i class="fas fa-clipboard-list"></i></span>
-                        <span class="sl-label">Тех.карты ВиУМ</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint and 'plan_report' in request.endpoint %}active{% endif %}"
-                       href="{{ url_for('vium.vium_plan_report') }}">
-                        <span class="sl-icon"><i class="fas fa-chart-line"></i></span>
-                        <span class="sl-label">План ВиУМ</span>
-                    </a>
+                    <div class="sidebar-group {% if vium_active %}open has-active{% endif %}">
+                        <button type="button" class="sidebar-link sidebar-group-toggle">
+                            <span class="sl-icon"><i class="fas fa-boxes-stacked"></i></span>
+                            <span class="sl-label">Учёт ВиУМ</span>
+                            <i class="fas fa-chevron-right sl-chevron"></i>
+                        </button>
+                        <div class="sidebar-sub">
+                            <a class="sidebar-link {% if ep == 'vium.vium_report' or (vium_active and 'techcard' not in ep and 'plan_report' not in ep) %}active{% endif %}"
+                               href="{{ url_for('vium.vium_report') }}">
+                                <span class="sl-icon"><i class="fas fa-boxes-stacked"></i></span>
+                                <span class="sl-label">Учёт ВиУМ</span>
+                            </a>
+                            <a class="sidebar-link {% if 'techcard' in ep %}active{% endif %}"
+                               href="{{ url_for('vium.vium_techcards') }}">
+                                <span class="sl-icon"><i class="fas fa-clipboard-list"></i></span>
+                                <span class="sl-label">Тех.карты ВиУМ</span>
+                            </a>
+                            <a class="sidebar-link {% if 'plan_report' in ep %}active{% endif %}"
+                               href="{{ url_for('vium.vium_plan_report') }}">
+                                <span class="sl-icon"><i class="fas fa-chart-line"></i></span>
+                                <span class="sl-label">План ВиУМ</span>
+                            </a>
+                        </div>
+                    </div>
                     {% endif %}
                 </div>
             </div>
@@ -1329,65 +1408,127 @@
             </div>
 
             {# ---------- ФИНАНСЫ ---------- #}
-            <div class="sidebar-group {% if request.endpoint and request.endpoint.startswith('finance.') %}open has-active{% endif %}">
+            {% set fin_ep = request.endpoint or '' %}
+            {% set budget_tab = request.args.get('tab', 'budget') %}
+            {% set cf_active = fin_ep == 'finance.budget' and budget_tab in ('cashflow', 'cf_compare') %}
+            {% set budget_active = fin_ep == 'finance.budget' and not cf_active %}
+            {% set fin_exp_active = fin_ep == 'finance.expenses' %}
+            {% set fin_result_active = fin_ep in ('finance.reports_financial', 'finance.reports_margin', 'finance.reports_order_payments') or cf_active %}
+            {% set fin_tools_active = fin_ep in ('finance.archive_align', 'finance.reports_calculator') %}
+            {% set fin_proj_active = fin_ep.startswith('finance.project') or fin_ep == 'finance.projects_list' %}
+            {% set fin_block_active = fin_ep.startswith('finance.') and fin_ep not in ('finance.invoices_summary', 'finance.reports_turnover') %}
+            <div class="sidebar-group {% if fin_block_active %}open has-active{% endif %}">
                 <button type="button" class="sidebar-link sidebar-group-toggle">
                     <span class="sl-icon"><i class="fas fa-coins"></i></span>
                     <span class="sl-label">Финансы</span>
                     <i class="fas fa-chevron-right sl-chevron"></i>
                 </button>
                 <div class="sidebar-sub">
-                    <a class="sidebar-link {% if request.endpoint == 'finance.invoices_summary' %}active{% endif %}" href="{{ url_for('finance.invoices_summary') }}">
-                        <span class="sl-icon"><i class="fas fa-list-alt"></i></span>
-                        <span class="sl-label">Реестр счетов</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint == 'finance.reports_reconciliation' %}active{% endif %}" href="{{ url_for('finance.reports_reconciliation') }}">
-                        <span class="sl-icon"><i class="fas fa-handshake"></i></span>
-                        <span class="sl-label">Акт сверки</span>
-                    </a>
-                    {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
-                    <a class="sidebar-link {% if request.endpoint == 'finance.reports_order_payments' %}active{% endif %}" href="{{ url_for('finance.reports_order_payments') }}">
-                        <span class="sl-icon"><i class="fas fa-money-bill-wave"></i></span>
-                        <span class="sl-label">Поступления ДС</span>
-                    </a>
-                    {% endif %}
                     {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
-                    <a class="sidebar-link {% if request.endpoint == 'finance.projects_list' %}active{% endif %}" href="{{ url_for('finance.projects_list') }}">
+                    {# 1. Счета и расходы #}
+                    <div class="sidebar-group {% if fin_exp_active %}open has-active{% endif %}">
+                        <button type="button" class="sidebar-link sidebar-group-toggle">
+                            <span class="sl-icon"><i class="fas fa-file-invoice-dollar"></i></span>
+                            <span class="sl-label">Счета и расходы</span>
+                            <i class="fas fa-chevron-right sl-chevron"></i>
+                        </button>
+                        <div class="sidebar-sub">
+                            <a class="sidebar-link {% if fin_exp_active %}active{% endif %}" href="{{ url_for('finance.expenses') }}?tab=invoices">
+                                <span class="sl-icon"><i class="fas fa-file-invoice-dollar"></i></span>
+                                <span class="sl-label">Счета и расходы</span>
+                            </a>
+                        </div>
+                    </div>
+
+                    {# 2. Отчёты #}
+                    <div class="sidebar-group {% if budget_active or fin_ep in ('finance.cost_report', 'finance.reports_reconciliation', 'finance.reports_investor') %}open has-active{% endif %}">
+                        <button type="button" class="sidebar-link sidebar-group-toggle">
+                            <span class="sl-icon"><i class="fas fa-chart-pie"></i></span>
+                            <span class="sl-label">Отчёты</span>
+                            <i class="fas fa-chevron-right sl-chevron"></i>
+                        </button>
+                        <div class="sidebar-sub">
+                            <a class="sidebar-link {% if budget_active %}active{% endif %}" href="{{ url_for('finance.budget') }}">
+                                <span class="sl-icon"><i class="fas fa-wallet"></i></span>
+                                <span class="sl-label">Бюджет</span>
+                            </a>
+                            <a class="sidebar-link {% if fin_ep == 'finance.cost_report' %}active{% endif %}" href="{{ url_for('finance.cost_report') }}">
+                                <span class="sl-icon"><i class="fas fa-calculator"></i></span>
+                                <span class="sl-label">Себестоимость</span>
+                            </a>
+                            <a class="sidebar-link {% if fin_ep == 'finance.reports_reconciliation' %}active{% endif %}" href="{{ url_for('finance.reports_reconciliation') }}">
+                                <span class="sl-icon"><i class="fas fa-handshake"></i></span>
+                                <span class="sl-label">Акт сверки</span>
+                            </a>
+                            <a class="sidebar-link {% if fin_ep == 'finance.reports_investor' %}active{% endif %}" href="{{ url_for('finance.reports_investor') }}">
+                                <span class="sl-icon"><i class="fas fa-briefcase"></i></span>
+                                <span class="sl-label">Партнёр</span>
+                            </a>
+                        </div>
+                    </div>
+
+                    {# 3. Проекты #}
+                    <a class="sidebar-link {% if fin_proj_active %}active{% endif %}" href="{{ url_for('finance.projects_list') }}">
                         <span class="sl-icon"><i class="fas fa-tasks"></i></span>
                         <span class="sl-label">Проекты</span>
                     </a>
-                    <a class="sidebar-link {% if request.endpoint == 'finance.expenses' %}active{% endif %}" href="{{ url_for('finance.expenses') }}?tab=invoices">
-                        <span class="sl-icon"><i class="fas fa-file-invoice-dollar"></i></span>
-                        <span class="sl-label">Счета и расходы</span>
+
+                    {# 4. Фин. результат #}
+                    <div class="sidebar-group {% if fin_result_active %}open has-active{% endif %}">
+                        <button type="button" class="sidebar-link sidebar-group-toggle">
+                            <span class="sl-icon"><i class="fas fa-piggy-bank"></i></span>
+                            <span class="sl-label">Фин. результат</span>
+                            <i class="fas fa-chevron-right sl-chevron"></i>
+                        </button>
+                        <div class="sidebar-sub">
+                            <a class="sidebar-link {% if fin_ep == 'finance.reports_financial' %}active{% endif %}" href="{{ url_for('finance.reports_financial') }}">
+                                <span class="sl-icon"><i class="fas fa-piggy-bank"></i></span>
+                                <span class="sl-label">Фин. результат</span>
+                            </a>
+                            <a class="sidebar-link {% if fin_ep == 'finance.reports_margin' %}active{% endif %}" href="{{ url_for('finance.reports_margin') }}">
+                                <span class="sl-icon"><i class="fas fa-percent"></i></span>
+                                <span class="sl-label">Маржинальность</span>
+                            </a>
+                            <a class="sidebar-link {% if cf_active %}active{% endif %}" href="{{ url_for('finance.budget', tab='cashflow', month='all') }}">
+                                <span class="sl-icon"><i class="fas fa-water"></i></span>
+                                <span class="sl-label">Кешфлоу</span>
+                            </a>
+                            <a class="sidebar-link {% if fin_ep == 'finance.reports_order_payments' %}active{% endif %}" href="{{ url_for('finance.reports_order_payments') }}">
+                                <span class="sl-icon"><i class="fas fa-money-bill-wave"></i></span>
+                                <span class="sl-label">Поступления ДС</span>
+                            </a>
+                        </div>
+                    </div>
+
+                    {# 5. Инструменты #}
+                    <div class="sidebar-group {% if fin_tools_active %}open has-active{% endif %}">
+                        <button type="button" class="sidebar-link sidebar-group-toggle">
+                            <span class="sl-icon"><i class="fas fa-wrench"></i></span>
+                            <span class="sl-label">Инструменты</span>
+                            <i class="fas fa-chevron-right sl-chevron"></i>
+                        </button>
+                        <div class="sidebar-sub">
+                            {% if current_user.role == 'admin' %}
+                            <a class="sidebar-link {% if fin_ep == 'finance.archive_align' %}active{% endif %}" href="{{ url_for('finance.archive_align') }}">
+                                <span class="sl-icon"><i class="fas fa-balance-scale"></i></span>
+                                <span class="sl-label">Выравнивание архива</span>
+                            </a>
+                            {% endif %}
+                            <a class="sidebar-link {% if fin_ep == 'finance.reports_calculator' %}active{% endif %}" href="{{ url_for('finance.reports_calculator') }}">
+                                <span class="sl-icon"><i class="fas fa-divide"></i></span>
+                                <span class="sl-label">Калькулятор партнёра</span>
+                            </a>
+                        </div>
+                    </div>
+                    {% else %}
+                    {# Менеджер (user): ограниченный набор #}
+                    <a class="sidebar-link {% if fin_ep == 'finance.reports_reconciliation' %}active{% endif %}" href="{{ url_for('finance.reports_reconciliation') }}">
+                        <span class="sl-icon"><i class="fas fa-handshake"></i></span>
+                        <span class="sl-label">Акт сверки</span>
                     </a>
-                    <a class="sidebar-link {% if request.endpoint == 'finance.budget' %}active{% endif %}" href="{{ url_for('finance.budget') }}">
-                        <span class="sl-icon"><i class="fas fa-wallet"></i></span>
-                        <span class="sl-label">Бюджет</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint == 'finance.cost_report' %}active{% endif %}" href="{{ url_for('finance.cost_report') }}">
-                        <span class="sl-icon"><i class="fas fa-calculator"></i></span>
-                        <span class="sl-label">Себестоимость</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint == 'finance.reports_financial' %}active{% endif %}" href="{{ url_for('finance.reports_financial') }}">
-                        <span class="sl-icon"><i class="fas fa-piggy-bank"></i></span>
-                        <span class="sl-label">Фин. результат</span>
-                    </a>
-                    {% if current_user.role == 'admin' %}
-                    <a class="sidebar-link {% if request.endpoint == 'finance.archive_align' %}active{% endif %}" href="{{ url_for('finance.archive_align') }}">
-                        <span class="sl-icon"><i class="fas fa-balance-scale"></i></span>
-                        <span class="sl-label">Выравнивание архива</span>
-                    </a>
-                    {% endif %}
-                    <a class="sidebar-link {% if request.endpoint == 'finance.reports_margin' %}active{% endif %}" href="{{ url_for('finance.reports_margin') }}">
-                        <span class="sl-icon"><i class="fas fa-percent"></i></span>
-                        <span class="sl-label">Маржинальность</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint == 'finance.reports_investor' %}active{% endif %}" href="{{ url_for('finance.reports_investor') }}">
-                        <span class="sl-icon"><i class="fas fa-briefcase"></i></span>
-                        <span class="sl-label">Партнёр</span>
-                    </a>
-                    <a class="sidebar-link {% if request.endpoint == 'finance.reports_calculator' %}active{% endif %}" href="{{ url_for('finance.reports_calculator') }}">
-                        <span class="sl-icon"><i class="fas fa-divide"></i></span>
-                        <span class="sl-label">Калькулятор партнёра</span>
+                    <a class="sidebar-link {% if fin_ep == 'finance.reports_order_payments' %}active{% endif %}" href="{{ url_for('finance.reports_order_payments') }}">
+                        <span class="sl-icon"><i class="fas fa-money-bill-wave"></i></span>
+                        <span class="sl-label">Поступления ДС</span>
                     </a>
                     {% endif %}
                 </div>
@@ -1575,22 +1716,18 @@
             <div class="drawer-group-title">Главное</div>
             <a class="drawer-link" href="{{ url_for('main.index') }}"><i class="fas fa-gauge-high"></i> Дашборд</a>
             <a class="drawer-link" href="{{ url_for('orders.orders_list') }}"><i class="fas fa-shopping-basket"></i> Заказы</a>
-            {% if current_user.role == 'admin' %}
-            <a class="drawer-link" href="{{ url_for('orders.sale_invoices_list') }}"><i class="fas fa-file-invoice-dollar"></i> Счета клиентам</a>
-            {% endif %}
         </div>
 
         <div class="drawer-group">
             <div class="drawer-group-title">Склад</div>
             <a class="drawer-link" href="{{ url_for('stock.inventory_mobile') }}"><i class="fas fa-mobile-screen"></i> Моб. инвентаризация</a>
             <a class="drawer-link" href="{{ url_for('stock.stock_report') }}"><i class="fas fa-boxes-stacked"></i> Остатки</a>
-            <a class="drawer-link" href="{{ url_for('stock.stock_receipts') }}"><i class="fas fa-truck-ramp-box"></i> Поступление</a>
             <a class="drawer-link" href="{{ url_for('stock.documents') }}" data-hx-boost="false"><i class="fas fa-file-invoice"></i> Журнал документов</a>
             {% if current_user.role != 'user2' %}
-            <a class="drawer-link" href="{{ url_for('finance.reports_turnover') }}"><i class="fas fa-exchange-alt"></i> Оборотная ведомость</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_turnover') }}"><i class="fas fa-exchange-alt"></i> Движение товара</a>
             {% endif %}
             {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
-            <a class="drawer-link" href="{{ url_for('stock.price_history') }}"><i class="fas fa-clock-rotate-left"></i> История цен</a>
+            <a class="drawer-link" href="{{ url_for('stock.price_history') }}"><i class="fas fa-clock-rotate-left"></i> Прайс лист</a>
             {% endif %}
         </div>
 
@@ -1599,16 +1736,19 @@
             {% if current_user.is_authenticated and current_user.role in ['user2', 'brigadier'] %}
             <a class="drawer-link" href="{{ url_for('digging.mobile_index') }}"><i class="fas fa-trowel"></i> Ввод выкопки</a>
             {% else %}
+            <div class="drawer-subgroup-title">Выкопка</div>
             <a class="drawer-link" href="{{ url_for('digging.digging_planning') }}" data-hx-boost="false"><i class="fas fa-calendar-check"></i> План выкопки</a>
             <a class="drawer-link" href="{{ url_for('digging.mobile_index') }}"><i class="fas fa-trowel"></i> Ввод выкопки</a>
             <a class="drawer-link" href="{{ url_for('digging.analytics') }}"><i class="fas fa-chart-area"></i> Аналитика выкопки</a>
-            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
-            <a class="drawer-link" href="{{ url_for('production.projects_list') }}"><i class="fas fa-seedling"></i> Посадка в горшки</a>
-            {% endif %}
             {% if current_user.role != 'user2' %}
             <a class="drawer-link" href="{{ url_for('digging.manager_report') }}"><i class="fas fa-clipboard-check"></i> Отчёт по выкопке</a>
             {% endif %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user'] %}
+            <div class="drawer-subgroup-title">Контейнерная площадка</div>
+            <a class="drawer-link" href="{{ url_for('production.projects_list') }}"><i class="fas fa-seedling"></i> Посадка в горшки</a>
+            {% endif %}
             {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
+            <div class="drawer-subgroup-title">Учёт ВиУМ</div>
             <a class="drawer-link" href="{{ url_for('vium.vium_report') }}"><i class="fas fa-boxes-stacked"></i> Учёт ВиУМ</a>
             <a class="drawer-link" href="{{ url_for('vium.vium_techcards') }}"><i class="fas fa-clipboard-list"></i> Тех.карты ВиУМ</a>
             <a class="drawer-link" href="{{ url_for('vium.vium_plan_report') }}"><i class="fas fa-chart-line"></i> План ВиУМ</a>
@@ -1630,22 +1770,38 @@
         </div>
 
         <div class="drawer-group">
+            <div class="drawer-group-title">Реестр счетов</div>
+            {% if current_user.role == 'admin' %}
+            <a class="drawer-link" href="{{ url_for('orders.sale_invoices_list') }}"><i class="fas fa-file-invoice-dollar"></i> Счета</a>
+            {% endif %}
+            <a class="drawer-link" href="{{ url_for('finance.invoices_summary') }}"><i class="fas fa-list-alt"></i> Реестр заказов</a>
+        </div>
+
+        <div class="drawer-group">
             <div class="drawer-group-title">Финансы</div>
-            <a class="drawer-link" href="{{ url_for('finance.invoices_summary') }}"><i class="fas fa-list-alt"></i> Реестр счетов</a>
-            <a class="drawer-link" href="{{ url_for('finance.reports_reconciliation') }}"><i class="fas fa-handshake"></i> Акт сверки</a>
-            <a class="drawer-link" href="{{ url_for('finance.reports_order_payments') }}"><i class="fas fa-money-bill-wave"></i> Поступления ДС</a>
             {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
-            <a class="drawer-link" href="{{ url_for('finance.projects_list') }}"><i class="fas fa-tasks"></i> Проекты</a>
+            <div class="drawer-subgroup-title">Счета и расходы</div>
             <a class="drawer-link" href="{{ url_for('finance.expenses') }}?tab=invoices"><i class="fas fa-file-invoice-dollar"></i> Счета и расходы</a>
+            <div class="drawer-subgroup-title">Отчёты</div>
             <a class="drawer-link" href="{{ url_for('finance.budget') }}"><i class="fas fa-wallet"></i> Бюджет</a>
             <a class="drawer-link" href="{{ url_for('finance.cost_report') }}"><i class="fas fa-calculator"></i> Себестоимость</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_reconciliation') }}"><i class="fas fa-handshake"></i> Акт сверки</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_investor') }}"><i class="fas fa-briefcase"></i> Партнёр</a>
+            <div class="drawer-subgroup-title">Проекты</div>
+            <a class="drawer-link" href="{{ url_for('finance.projects_list') }}"><i class="fas fa-tasks"></i> Проекты</a>
+            <div class="drawer-subgroup-title">Фин. результат</div>
             <a class="drawer-link" href="{{ url_for('finance.reports_financial') }}"><i class="fas fa-piggy-bank"></i> Фин. результат</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_margin') }}"><i class="fas fa-percent"></i> Маржинальность</a>
+            <a class="drawer-link" href="{{ url_for('finance.budget', tab='cashflow', month='all') }}"><i class="fas fa-water"></i> Кешфлоу</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_order_payments') }}"><i class="fas fa-money-bill-wave"></i> Поступления ДС</a>
+            <div class="drawer-subgroup-title">Инструменты</div>
             {% if current_user.role == 'admin' %}
             <a class="drawer-link" href="{{ url_for('finance.archive_align') }}"><i class="fas fa-balance-scale"></i> Выравнивание архива</a>
             {% endif %}
-            <a class="drawer-link" href="{{ url_for('finance.reports_margin') }}"><i class="fas fa-percent"></i> Маржинальность</a>
-            <a class="drawer-link" href="{{ url_for('finance.reports_investor') }}"><i class="fas fa-briefcase"></i> Партнёр</a>
             <a class="drawer-link" href="{{ url_for('finance.reports_calculator') }}"><i class="fas fa-divide"></i> Калькулятор партнёра</a>
+            {% else %}
+            <a class="drawer-link" href="{{ url_for('finance.reports_reconciliation') }}"><i class="fas fa-handshake"></i> Акт сверки</a>
+            <a class="drawer-link" href="{{ url_for('finance.reports_order_payments') }}"><i class="fas fa-money-bill-wave"></i> Поступления ДС</a>
             {% endif %}
         </div>
         {% endif %}
@@ -1928,6 +2084,9 @@
                     language: 'ru',
                     width: '100%',
                     matcher: smartSelectMatcher,
+                    // Multi-select: список остаётся открытым, чтобы отметить несколько пунктов подряд.
+                    closeOnSelect: !$this.prop('multiple'),
+                    placeholder: $this.data('placeholder') || undefined,
                     dropdownParent: $this.closest('.modal').length ? $this.closest('.modal') : $(document.body)
                 });
             } catch(e) { console.warn('Select2 init warning:', e); }

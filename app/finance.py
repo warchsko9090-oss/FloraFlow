@@ -32,6 +32,54 @@ from app.services import (
 
 bp = Blueprint('finance', __name__)
 
+
+def _shared_project_economics_caches(projects):
+    """Общие кэши для списка проектов: склад и себестоимость считаются один раз."""
+    from collections import defaultdict
+    from sqlalchemy.orm import selectinload
+
+    stock_prices = {
+        (sb.plant_id, sb.size_id, sb.field_id, sb.year): sb.purchase_price
+        for sb in StockBalance.query.all()
+    }
+    costs_cache = {}
+    yard_rows_by_field = {}
+
+    field_ids = set()
+    for p in projects:
+        fid = _project_potting_stock_field_id(p)
+        if fid:
+            field_ids.add(fid)
+    if field_ids:
+        rows = (
+            db.session.query(OrderItem)
+            .options(selectinload(OrderItem.order))
+            .join(Order, OrderItem.order_id == Order.id)
+            .filter(
+                OrderItem.field_id.in_(field_ids),
+                Order.status != 'canceled',
+                Order.is_deleted == False,
+                OrderItem.shipped_quantity > 0,
+            )
+            .all()
+        )
+        by_field = defaultdict(list)
+        for item in rows:
+            by_field[item.field_id].append(item)
+        yard_rows_by_field.update(by_field)
+
+    return stock_prices, costs_cache, yard_rows_by_field
+
+
+def _project_list_load_options():
+    from sqlalchemy.orm import selectinload
+    return (
+        selectinload(Project.orders).selectinload(Order.items),
+        selectinload(Project.expenses),
+        selectinload(Project.budget_items),
+    )
+
+
 @bp.route('/expenses', methods=['GET', 'POST'])
 @login_required
 def expenses():
@@ -722,8 +770,9 @@ def _year_partner_debt(y):
 
 def _year_expenses_fin(y):
     """Расходы года: нал + безнал + прочее + 15% от нал (без партнёров)."""
+    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
     rows = db.session.query(Expense.payment_type, func.sum(Expense.amount)).filter(
-        func.extract('year', Expense.date) == y
+        actual_year == y
     ).group_by(Expense.payment_type).all()
     ec = next((x[1] for x in rows if x[0] == 'cash'), Decimal(0)) or Decimal(0)
     ecl = next((x[1] for x in rows if x[0] == 'cashless'), Decimal(0)) or Decimal(0)
@@ -746,19 +795,18 @@ def _year_expenses_fin(y):
 
 
 def _month_realized_revenue(y):
+    """Реализованная выручка по месяцам — один GROUP BY, без N+1 по позициям."""
     result = {m: Decimal(0) for m in range(1, 13)}
-    orders = Order.query.filter(
+    rows = db.session.query(
+        func.extract('month', Order.date).label('month'),
+        func.coalesce(func.sum(OrderItem.shipped_quantity * OrderItem.price), 0),
+    ).join(Order, OrderItem.order_id == Order.id).filter(
         func.extract('year', Order.date) == y,
         Order.status != 'canceled',
         Order.is_deleted == False,
-    ).all()
-    for o in orders:
-        if not o.date:
-            continue
-        m = int(o.date.month)
-        for item in o.items:
-            price = item.price if item.price is not None else Decimal(0)
-            result[m] += Decimal(item.shipped_quantity or 0) * Decimal(str(price))
+    ).group_by('month').all()
+    for month, amt in rows:
+        result[int(month)] = Decimal(amt or 0)
     return result
 
 
@@ -778,16 +826,25 @@ def _month_payments(y):
 
 
 def _month_expenses_fin(y, include_cash=True, include_tax15=True):
-    """Расходы по месяцам. include_cash=False → только безнал/прочее, без 15%."""
+    """Расходы по месяцам. include_cash=False → только безнал/прочее, без 15%.
+
+    Месяц/год — как в бюджете: target_month/target_year, иначе дата расхода.
+    """
     result = {m: Decimal(0) for m in range(1, 13)}
     cash_m = {m: Decimal(0) for m in range(1, 13)}
+    actual_month = func.coalesce(Expense.target_month, func.extract('month', Expense.date))
+    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
     rows = db.session.query(
-        func.extract('month', Expense.date).label('month'),
+        actual_month.label('month'),
         Expense.payment_type,
         func.sum(Expense.amount),
-    ).filter(func.extract('year', Expense.date) == y).group_by('month', Expense.payment_type).all()
+    ).filter(actual_year == y).group_by(actual_month, Expense.payment_type).all()
     for month, ptype, amt in rows:
+        if month is None:
+            continue
         m = int(month)
+        if m < 1 or m > 12:
+            continue
         amt = Decimal(amt or 0)
         if ptype == 'cash':
             cash_m[m] += amt
@@ -799,6 +856,86 @@ def _month_expenses_fin(y, include_cash=True, include_tax15=True):
         for m in range(1, 13):
             result[m] += cash_m[m] * Decimal('0.15')
     return result
+
+
+def _payments_totals_by_year():
+    """{year: Decimal} — реальные приходы ДС по годам (один запрос)."""
+    rows = db.session.query(
+        func.extract('year', Payment.date).label('y'),
+        func.coalesce(func.sum(Payment.amount), 0),
+    ).filter(Payment.cash_inflow_filter()).group_by('y').all()
+    return {int(y): Decimal(amt or 0) for y, amt in rows if y is not None}
+
+
+def _expenses_fin_totals_by_year():
+    """{year: {'total', 'no_cash'}} — расходы с 15% нал / без нал (один запрос)."""
+    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
+    rows = db.session.query(
+        actual_year.label('y'),
+        Expense.payment_type,
+        func.coalesce(func.sum(Expense.amount), 0),
+    ).group_by(actual_year, Expense.payment_type).all()
+    by_year = {}
+    for y, ptype, amt in rows:
+        if y is None:
+            continue
+        y = int(y)
+        bucket = by_year.setdefault(y, {'cash': Decimal(0), 'cashless': Decimal(0), 'other': Decimal(0)})
+        amt = Decimal(amt or 0)
+        if ptype == 'cash':
+            bucket['cash'] += amt
+        elif ptype == 'cashless':
+            bucket['cashless'] += amt
+        else:
+            bucket['other'] += amt
+    out = {}
+    for y, b in by_year.items():
+        tax15 = b['cash'] * Decimal('0.15')
+        base = b['cash'] + b['cashless'] + b['other']
+        out[y] = {
+            'total': base + tax15,
+            'no_cash': b['cashless'] + b['other'],
+        }
+    return out
+
+
+def _realized_revenue_by_year():
+    """{year: Decimal} — отгрузки × цена по годам (один запрос)."""
+    rows = db.session.query(
+        func.extract('year', Order.date).label('y'),
+        func.coalesce(func.sum(OrderItem.shipped_quantity * OrderItem.price), 0),
+    ).join(Order, OrderItem.order_id == Order.id).filter(
+        Order.status != 'canceled',
+        Order.is_deleted == False,
+    ).group_by('y').all()
+    return {int(y): Decimal(amt or 0) for y, amt in rows if y is not None}
+
+
+def _cashflow_year_nets_map(mode='money', through_year=None):
+    """
+    Net по годам за 2–3 SQL вместо 2×N.
+    money   — Payment − (Expense+15%)
+    accrual — отгрузки − Expense без нал
+    """
+    exp_map = _expenses_fin_totals_by_year()
+    if mode == 'accrual':
+        rev_map = _realized_revenue_by_year()
+        years = set(exp_map) | set(rev_map)
+        nets = {}
+        for y in years:
+            if through_year is not None and y > through_year:
+                continue
+            nets[y] = rev_map.get(y, Decimal(0)) - exp_map.get(y, {}).get('no_cash', Decimal(0))
+        return nets
+
+    pay_map = _payments_totals_by_year()
+    years = set(exp_map) | set(pay_map)
+    nets = {}
+    for y in years:
+        if through_year is not None and y > through_year:
+            continue
+        nets[y] = pay_map.get(y, Decimal(0)) - exp_map.get(y, {}).get('total', Decimal(0))
+    return nets
 
 
 def _cashflow_year_net_fact(y, mode='money'):
@@ -817,20 +954,8 @@ def _cashflow_year_net_fact(y, mode='money'):
 
 def _cashflow_opening_balance_before_year(year, mode='money'):
     """Входящий остаток на 1 янв = Σ net всех лет < year (в выбранном режиме)."""
-    pay_years = db.session.query(func.extract('year', Payment.date)).distinct().all()
-    order_years = db.session.query(func.extract('year', Order.date)).distinct().all()
-    exp_years = db.session.query(func.extract('year', Expense.date)).distinct().all()
-    years = set()
-    for src in (pay_years, order_years, exp_years):
-        for (y,) in src:
-            if y is not None:
-                years.add(int(y))
-    total = Decimal(0)
-    for y in sorted(years):
-        if y >= year:
-            continue
-        total += _cashflow_year_net_fact(y, mode=mode)
-    return total
+    nets = _cashflow_year_nets_map(mode=mode, through_year=year - 1)
+    return sum((nets[y] for y in nets if y < year), Decimal(0))
 
 
 def _years_with_fin_activity():
@@ -848,26 +973,20 @@ def _years_with_fin_activity():
 
 def _cashflow_yearly_series(through_year, lookback=4, mode='money'):
     """Накопительный остаток по годам в выбранном режиме."""
-    start_y = through_year - lookback
-    mins = []
-    for q in (
-        db.session.query(func.min(func.extract('year', Payment.date))).scalar(),
-        db.session.query(func.min(func.extract('year', Order.date))).scalar(),
-        db.session.query(func.min(func.extract('year', Expense.date))).scalar(),
-    ):
-        if q is not None:
-            mins.append(int(q))
-    if mins:
-        start_y = min(start_y, min(mins))
+    nets = _cashflow_year_nets_map(mode=mode, through_year=through_year)
+    if not nets:
+        return [{'year': through_year, 'net_fact': Decimal(0), 'cum_fact': Decimal(0)}]
 
-    all_years = _years_with_fin_activity() or {through_year}
+    start_y = through_year - lookback
+    min_y = min(nets)
+    start_y = min(start_y, min_y)
 
     running = Decimal(0)
     series = []
-    for y in sorted(all_years):
+    for y in sorted(nets):
         if y > through_year:
             break
-        net = _cashflow_year_net_fact(y, mode=mode)
+        net = nets[y]
         running += net
         if y >= start_y:
             series.append({'year': y, 'net_fact': net, 'cum_fact': running})
@@ -883,13 +1002,16 @@ def _fin_result_year_net(y):
 
 def _fin_result_yearly_series(through_year):
     """Накопительный финрез по годам: Σ (выручка − расходы − 15%). Без партнёров."""
-    all_years = _years_with_fin_activity() or {through_year}
+    # Тот же пакетный расчёт, что accrual cashflow: отгрузки − expense total (с 15%)
+    exp_map = _expenses_fin_totals_by_year()
+    rev_map = _realized_revenue_by_year()
+    years = set(exp_map) | set(rev_map) or {through_year}
     running = Decimal(0)
     series = []
-    for y in sorted(all_years):
+    for y in sorted(years):
         if y > through_year:
             break
-        net = _fin_result_year_net(y)
+        net = rev_map.get(y, Decimal(0)) - exp_map.get(y, {}).get('total', Decimal(0))
         running += net
         series.append({'year': y, 'net': net, 'cum': running})
     if not series:
@@ -1001,6 +1123,75 @@ def budget():
 
     export = request.args.get('export')
 
+    # POST — сразу сохраняем и редиректим, без тяжёлых агрегатов
+    if request.method == 'POST':
+        if current_user.role in ('executive', 'shop_manager'):
+            flash('Только просмотр')
+            return redirect(url_for('finance.budget', year=year, month=target_month, tab=tab, cf_mode=cf_mode))
+
+        act = request.form.get('action')
+        if act == 'add_item':
+            db.session.add(BudgetItem(
+                code=request.form.get('code'),
+                name=request.form.get('name'),
+                is_amortization=bool(request.form.get('is_amortization')),
+                is_vium_source=bool(request.form.get('is_vium_source')),
+            ))
+            db.session.commit()
+            flash('Статья добавлена')
+        elif act == 'edit_item':
+            item = BudgetItem.query.get(request.form.get('id'))
+            if item:
+                item.code = request.form.get('code')
+                item.name = request.form.get('name')
+                item.is_amortization = bool(request.form.get('is_amortization'))
+                item.is_vium_source = bool(request.form.get('is_vium_source'))
+                db.session.commit()
+                flash('Статья обновлена')
+        elif act == 'delete_item':
+            item_id = request.form.get('id')
+            if not Expense.query.filter_by(budget_item_id=item_id).first():
+                BudgetItem.query.filter_by(id=item_id).delete()
+                db.session.commit()
+                flash('Статья удалена')
+            else:
+                flash('Нельзя удалить статью с расходами')
+        elif 'save_plan' in request.form:
+            for k, v in request.form.items():
+                if k.startswith('plan['):
+                    match = re.findall(r'\[(\d+)\]\[(\d+)\]', k)
+                    if match:
+                        iid, m = int(match[0][0]), int(match[0][1])
+                        p = BudgetPlan.query.filter_by(year=year, budget_item_id=iid, month=m).first()
+                        if not p:
+                            p = BudgetPlan(year=year, budget_item_id=iid, month=m)
+                            db.session.add(p)
+                        try:
+                            p.amount = float(v.replace(' ', '').replace(',', '.') or 0)
+                        except Exception:
+                            pass
+            db.session.commit()
+            flash('План сохранен')
+        elif 'save_cashflow' in request.form:
+            for k, v in request.form.items():
+                if k.startswith('cashflow['):
+                    match = re.findall(r'\[(\d+)\]', k)
+                    if match:
+                        m = int(match[0])
+                        p = CashflowPlan.query.filter_by(year=year, month=m).first()
+                        if not p:
+                            p = CashflowPlan(year=year, month=m)
+                            db.session.add(p)
+                        try:
+                            val_str = re.sub(r'[^\d.,-]', '', str(v)).replace(',', '.')
+                            p.amount = float(val_str or 0)
+                        except Exception as e:
+                            print(f"Error parsing cashflow value: {v} -> {e}")
+            db.session.commit()
+            flash('План поступлений сохранен')
+
+        return redirect(url_for('finance.budget', year=year, month=target_month, tab=tab, cf_mode=cf_mode))
+
     # Поддерживаем два механизма выбора периода:
     #   • multi-select «месяцы» (?months=2&months=3) — приоритетный,
     #   • старые быстрые кнопки (Год / Q1-Q4 / Весна / Осень) через ?month=…
@@ -1095,83 +1286,117 @@ def budget():
     if period_totals['plan'] > 0:
         period_totals['pct'] = float((period_totals['fact'] / period_totals['plan']) * 100)
 
-    # CASHFLOW
-    # mode=money (по умолчанию): приход = Payment; расход = Expense+15% + партнёры (год → в декабрь)
-    # mode=accrual (переключатель): приход = отгрузки; расход = Expense без нал; без партнёров
+    # CASHFLOW — только на вкладках Cashflow / План vs Факт (не на «Бюджет»).
+    need_cf = tab in ('cashflow', 'cf_compare')
+
     cashflow_data = {m: {'plan': Decimal(0), 'fact': Decimal(0)} for m in range(1, 13)}
-    cashflow_records = CashflowPlan.query.filter_by(year=year).all()
-    for r in cashflow_records:
-        if r.month in cashflow_data:
-            cashflow_data[r.month]['plan'] = r.amount
-
-    partner_year = _year_partner_debt(year) if cf_mode == 'money' else Decimal(0)
-
-    if cf_mode == 'accrual':
-        in_by_month = _month_realized_revenue(year)
-        out_by_month = _month_expenses_fin(year, include_cash=False, include_tax15=False)
-        in_label = 'Отгрузки (без денег)'
-        out_label = 'Expense без нал'
-    else:
-        in_by_month = _month_payments(year)
-        out_by_month = _month_expenses_fin(year, include_cash=True, include_tax15=True)
-        # партнёры из финреза — одной суммой в декабрь
-        out_by_month[12] = out_by_month[12] + partner_year
-        in_label = 'Приход ДС (оплаты)'
-        out_label = 'Expense + 15% нал + партнёры'
-
-    for m in range(1, 13):
-        cashflow_data[m]['fact'] = in_by_month[m]
-
-    cashflow_out = {
-        m: {'plan': grand_totals[m]['plan'], 'fact': out_by_month[m]} for m in range(1, 13)
-    }
-
-    cashflow_total_plan = sum(cashflow_data[m]['plan'] for m in range(1, 13))
-    cashflow_total_fact = sum(cashflow_data[m]['fact'] for m in range(1, 13))
-    cashflow_out_total_plan = sum(cashflow_out[m]['plan'] for m in range(1, 13))
-    cashflow_out_total_fact = sum(cashflow_out[m]['fact'] for m in range(1, 13))
-
-    cashflow_period_plan = sum(cashflow_data[m]['plan'] for m in selected_months)
-    cashflow_period_fact = sum(cashflow_data[m]['fact'] for m in selected_months)
-    cashflow_period_out_plan = sum(cashflow_out[m]['plan'] for m in selected_months)
-    cashflow_period_out_fact = sum(cashflow_out[m]['fact'] for m in selected_months)
-
-    opening_balance = _cashflow_opening_balance_before_year(year, mode=cf_mode)
-
-    cumulative = {
-        m: {'plan_balance': Decimal(0), 'fact_balance': Decimal(0)} for m in range(1, 13)
-    }
-    cum_in_plan = Decimal(0)
-    cum_in_fact = Decimal(0)
-    cum_out_plan = Decimal(0)
-    cum_out_fact = Decimal(0)
-
-    for m in range(1, 13):
-        cum_in_plan += cashflow_data[m]['plan']
-        cum_in_fact += cashflow_data[m]['fact']
-        cum_out_plan += cashflow_out[m]['plan']
-        cum_out_fact += cashflow_out[m]['fact']
-        cumulative[m]['plan_balance'] = opening_balance + cum_in_plan - cum_out_plan
-        cumulative[m]['fact_balance'] = opening_balance + cum_in_fact - cum_out_fact
-
-    yearly_cashflow = _cashflow_yearly_series(year, mode=cf_mode)
-
+    cashflow_out = {m: {'plan': grand_totals[m]['plan'], 'fact': Decimal(0)} for m in range(1, 13)}
+    partner_year = Decimal(0)
+    in_label = 'Приход ДС (оплаты)'
+    out_label = 'Expense + 15% нал + партнёры'
+    opening_balance = Decimal(0)
+    cumulative = {m: {'plan_balance': Decimal(0), 'fact_balance': Decimal(0)} for m in range(1, 13)}
+    yearly_cashflow = []
     cashflow_chart = {
         'labels': [MONTH_NAMES.get(m, str(m)) for m in range(1, 13)],
-        'in_fact': [float(cashflow_data[m]['fact'] or 0) for m in range(1, 13)],
-        'out_fact': [float(cashflow_out[m]['fact'] or 0) for m in range(1, 13)],
-        'in_plan': [float(cashflow_data[m]['plan'] or 0) for m in range(1, 13)],
-        'out_plan': [float(cashflow_out[m]['plan'] or 0) for m in range(1, 13)],
-        'cum_fact': [float(cumulative[m]['fact_balance'] or 0) for m in range(1, 13)],
-        'cum_plan': [float(cumulative[m]['plan_balance'] or 0) for m in range(1, 13)],
+        'in_fact': [0.0] * 12,
+        'out_fact': [0.0] * 12,
+        'in_plan': [0.0] * 12,
+        'out_plan': [0.0] * 12,
+        'cum_fact': [0.0] * 12,
+        'cum_plan': [0.0] * 12,
         'selected_months': list(selected_months),
         'mode': cf_mode,
     }
-    yearly_chart = {
-        'labels': [str(y['year']) for y in yearly_cashflow],
-        'cum_fact': [float(y['cum_fact'] or 0) for y in yearly_cashflow],
-        'net_fact': [float(y['net_fact'] or 0) for y in yearly_cashflow],
-    }
+    yearly_chart = {'labels': [], 'cum_fact': [], 'net_fact': []}
+    cashflow_total_plan = cashflow_total_fact = Decimal(0)
+    cashflow_out_total_plan = cashflow_out_total_fact = Decimal(0)
+    cashflow_period_plan = cashflow_period_fact = Decimal(0)
+    cashflow_period_out_plan = cashflow_period_out_fact = Decimal(0)
+
+    if need_cf:
+        # mode=money: приход = Payment; расход = Expense+15% + партнёры (год → в декабрь)
+        # mode=accrual: приход = отгрузки; расход = Expense без нал; без партнёров
+        cashflow_records = CashflowPlan.query.filter_by(year=year).all()
+        for r in cashflow_records:
+            if r.month in cashflow_data:
+                cashflow_data[r.month]['plan'] = r.amount
+
+        partner_year = _year_partner_debt(year) if cf_mode == 'money' else Decimal(0)
+
+        if cf_mode == 'accrual':
+            in_by_month = _month_realized_revenue(year)
+            out_by_month = _month_expenses_fin(year, include_cash=False, include_tax15=False)
+            in_label = 'Отгрузки (без денег)'
+            out_label = 'Expense без нал'
+        else:
+            in_by_month = _month_payments(year)
+            out_by_month = _month_expenses_fin(year, include_cash=True, include_tax15=True)
+            out_by_month[12] = out_by_month[12] + partner_year
+            in_label = 'Приход ДС (оплаты)'
+            out_label = 'Expense + 15% нал + партнёры'
+
+        for m in range(1, 13):
+            cashflow_data[m]['fact'] = in_by_month[m]
+
+        cashflow_out = {
+            m: {'plan': grand_totals[m]['plan'], 'fact': out_by_month[m]} for m in range(1, 13)
+        }
+
+        cashflow_total_plan = sum(cashflow_data[m]['plan'] for m in range(1, 13))
+        cashflow_total_fact = sum(cashflow_data[m]['fact'] for m in range(1, 13))
+        cashflow_out_total_plan = sum(cashflow_out[m]['plan'] for m in range(1, 13))
+        cashflow_out_total_fact = sum(cashflow_out[m]['fact'] for m in range(1, 13))
+
+        cashflow_period_plan = sum(cashflow_data[m]['plan'] for m in selected_months)
+        cashflow_period_fact = sum(cashflow_data[m]['fact'] for m in selected_months)
+        cashflow_period_out_plan = sum(cashflow_out[m]['plan'] for m in selected_months)
+        cashflow_period_out_fact = sum(cashflow_out[m]['fact'] for m in selected_months)
+
+        # Один проход по годам (2–3 SQL) вместо десятков запросов на каждый прошлый год
+        nets_map = _cashflow_year_nets_map(mode=cf_mode, through_year=year)
+        opening_balance = sum((nets_map[y] for y in nets_map if y < year), Decimal(0))
+
+        start_y = year - 4
+        if nets_map:
+            start_y = min(start_y, min(nets_map))
+        running = Decimal(0)
+        yearly_cashflow = []
+        for y in sorted(nets_map):
+            if y > year:
+                break
+            net = nets_map[y]
+            running += net
+            if y >= start_y:
+                yearly_cashflow.append({'year': y, 'net_fact': net, 'cum_fact': running})
+        if not yearly_cashflow:
+            yearly_cashflow = [{'year': year, 'net_fact': Decimal(0), 'cum_fact': Decimal(0)}]
+
+        cum_in_plan = cum_in_fact = cum_out_plan = cum_out_fact = Decimal(0)
+        for m in range(1, 13):
+            cum_in_plan += cashflow_data[m]['plan']
+            cum_in_fact += cashflow_data[m]['fact']
+            cum_out_plan += cashflow_out[m]['plan']
+            cum_out_fact += cashflow_out[m]['fact']
+            cumulative[m]['plan_balance'] = opening_balance + cum_in_plan - cum_out_plan
+            cumulative[m]['fact_balance'] = opening_balance + cum_in_fact - cum_out_fact
+
+        cashflow_chart = {
+            'labels': [MONTH_NAMES.get(m, str(m)) for m in range(1, 13)],
+            'in_fact': [float(cashflow_data[m]['fact'] or 0) for m in range(1, 13)],
+            'out_fact': [float(cashflow_out[m]['fact'] or 0) for m in range(1, 13)],
+            'in_plan': [float(cashflow_data[m]['plan'] or 0) for m in range(1, 13)],
+            'out_plan': [float(cashflow_out[m]['plan'] or 0) for m in range(1, 13)],
+            'cum_fact': [float(cumulative[m]['fact_balance'] or 0) for m in range(1, 13)],
+            'cum_plan': [float(cumulative[m]['plan_balance'] or 0) for m in range(1, 13)],
+            'selected_months': list(selected_months),
+            'mode': cf_mode,
+        }
+        yearly_chart = {
+            'labels': [str(y['year']) for y in yearly_cashflow],
+            'cum_fact': [float(y['cum_fact'] or 0) for y in yearly_cashflow],
+            'net_fact': [float(y['net_fact'] or 0) for y in yearly_cashflow],
+        }
 
     # Экспорт PDF — учитывает текущий период (multi-select или target_month)
     # и активный таб (бюджет / кешфлоу).
@@ -1197,75 +1422,7 @@ def budget():
         period_safe = (period_label or 'period').replace(' ', '_').replace('/', '-').replace('·', '')
         suffix = 'Cashflow' if tab == 'cashflow' else 'Budget'
         return create_pdf_response(rendered, f"{suffix}_{year}_{period_safe}.pdf")
-        
-    # Обработка сохранения (POST)
-    if request.method == 'POST':
-        if current_user.role in ('executive', 'shop_manager'):
-            flash('Только просмотр')
-            return redirect(url_for('finance.budget', year=year, month=target_month, tab=tab, cf_mode=cf_mode))
 
-        act = request.form.get('action')
-        
-        if act == 'add_item':
-            db.session.add(BudgetItem(
-                code=request.form.get('code'),
-                name=request.form.get('name'),
-                is_amortization=bool(request.form.get('is_amortization')),
-                is_vium_source=bool(request.form.get('is_vium_source')),
-            ))
-            db.session.commit()
-            flash('Статья добавлена')
-        elif act == 'edit_item':
-            item = BudgetItem.query.get(request.form.get('id'))
-            if item:
-                item.code = request.form.get('code')
-                item.name = request.form.get('name')
-                item.is_amortization = bool(request.form.get('is_amortization'))
-                item.is_vium_source = bool(request.form.get('is_vium_source'))
-                db.session.commit()
-                flash('Статья обновлена')
-        elif act == 'delete_item':
-            item_id = request.form.get('id')
-            if not Expense.query.filter_by(budget_item_id=item_id).first():
-                BudgetItem.query.filter_by(id=item_id).delete()
-                db.session.commit()
-                flash('Статья удалена')
-            else: flash('Нельзя удалить статью с расходами')
-        elif 'save_plan' in request.form:
-            for k, v in request.form.items():
-                if k.startswith('plan['):
-                    match = re.findall(r'\[(\d+)\]\[(\d+)\]', k) # Ищем plan[ID][MONTH]
-                    if match:
-                        iid, m = int(match[0][0]), int(match[0][1])
-                        p = BudgetPlan.query.filter_by(year=year, budget_item_id=iid, month=m).first()
-                        if not p: 
-                            p = BudgetPlan(year=year, budget_item_id=iid, month=m)
-                            db.session.add(p)
-                        try: p.amount = float(v.replace(' ', '').replace(',', '.') or 0)
-                        except: pass
-            db.session.commit()
-            flash('План сохранен')
-        elif 'save_cashflow' in request.form:
-            for k, v in request.form.items():
-                if k.startswith('cashflow['):
-                    match = re.findall(r'\[(\d+)\]', k) # Ищем cashflow[MONTH]
-                    if match:
-                        m = int(match[0])
-                        p = CashflowPlan.query.filter_by(year=year, month=m).first()
-                        if not p:
-                            p = CashflowPlan(year=year, month=m)
-                            db.session.add(p)
-                        try:
-                            # Извлекаем только цифры, запятую и точку перед конвертацией
-                            val_str = re.sub(r'[^\d.,-]', '', str(v)).replace(',', '.')
-                            p.amount = float(val_str or 0)
-                        except Exception as e:
-                            print(f"Error parsing cashflow value: {v} -> {e}")
-            db.session.commit()
-            flash('План поступлений сохранен')
-            
-        return redirect(url_for('finance.budget', year=year, month=target_month, tab=tab, cf_mode=cf_mode))
-        
     return render_template('finance/budget.html',
                            year=year,
                            now_year=msk_now().year,
@@ -4620,7 +4777,7 @@ def reports_projects():
     f_year = request.args.get('year', msk_now().year, type=int)
     
     # Берем проекты
-    projects_db = Project.query.filter(
+    projects_db = Project.query.options(*_project_list_load_options()).filter(
         or_(
             func.extract('year', Project.created_at) == f_year,
             Project.status == 'active'
@@ -4628,10 +4785,14 @@ def reports_projects():
     ).order_by(Project.created_at.desc()).all()
     
     report_data = []
+    stock_prices, costs_cache, yard_rows_by_field = _shared_project_economics_caches(projects_db)
     
     for p in projects_db:
-        # ВСЯ МАГИЯ ТЕПЕРЬ ТУТ:
-        eco = p.get_economics()
+        eco = p.get_economics(
+            stock_prices=stock_prices,
+            costs_cache=costs_cache,
+            yard_rows_by_field=yard_rows_by_field,
+        )
         
         report_data.append({
             'id': p.id,
@@ -5996,13 +6157,18 @@ def projects_list():
     # Таб "Список"
     projects_data = []
     if tab == 'list':
-        query = Project.query
+        query = Project.query.options(*_project_list_load_options())
         if not show_closed:
             query = query.filter_by(status='active')
         projects_db = query.order_by(Project.created_at.desc()).all()
+        stock_prices, costs_cache, yard_rows_by_field = _shared_project_economics_caches(projects_db)
 
         for p in projects_db:
-            eco = p.get_economics()
+            eco = p.get_economics(
+                stock_prices=stock_prices,
+                costs_cache=costs_cache,
+                yard_rows_by_field=yard_rows_by_field,
+            )
             projects_data.append({
                 'id': p.id,
                 'name': p.name,
@@ -6017,15 +6183,20 @@ def projects_list():
     report_data = []
     selected_year = request.args.get('year', msk_now().year, type=int)
     if tab == 'reports':
-        projects_db = Project.query.filter(
+        projects_db = Project.query.options(*_project_list_load_options()).filter(
             or_(
                 func.extract('year', Project.created_at) == selected_year,
                 Project.status == 'active'
             )
         ).order_by(Project.created_at.desc()).all()
+        stock_prices, costs_cache, yard_rows_by_field = _shared_project_economics_caches(projects_db)
 
         for p in projects_db:
-            eco = p.get_economics()
+            eco = p.get_economics(
+                stock_prices=stock_prices,
+                costs_cache=costs_cache,
+                yard_rows_by_field=yard_rows_by_field,
+            )
             report_data.append({
                 'id': p.id,
                 'name': p.name,

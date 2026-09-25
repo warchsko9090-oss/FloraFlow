@@ -151,12 +151,12 @@ def save_shop_prices_from_form(form, catalog_items):
     return changed, rejected_below_wholesale
 
 
-def transform_stock_report_price_mode(sorted_groups, price_mode='wholesale'):
+def transform_stock_report_price_mode(sorted_groups, price_mode='wholesale', overrides=None):
     """Для выгрузки остатков: wholesale — как в отчёте, retail — прайсовая (сайт)."""
     if price_mode != 'retail':
         return sorted_groups
 
-    ov = get_shop_price_map()
+    ov = overrides if overrides is not None else get_shop_price_map()
     out = []
     for group in sorted_groups:
         gd = deepcopy(group)

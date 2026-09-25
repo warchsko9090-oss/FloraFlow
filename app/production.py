@@ -69,20 +69,28 @@ def projects_list():
     query = Project.query
     if not show_closed:
         query = query.filter_by(status='active')
-    projects_db = query.order_by(Project.created_at.desc()).all()
+    from sqlalchemy.orm import selectinload
+    projects_db = query.options(selectinload(Project.items)).order_by(Project.created_at.desc()).all()
+
+    all_item_ids = [i.id for p in projects_db for i in p.items]
+    potted_by_item = {}
+    if all_item_ids:
+        rows = (
+            db.session.query(
+                ProjectPottingLog.project_item_id,
+                func.sum(ProjectPottingLog.quantity),
+            )
+            .filter(ProjectPottingLog.project_item_id.in_(all_item_ids))
+            .group_by(ProjectPottingLog.project_item_id)
+            .all()
+        )
+        potted_by_item = {item_id: int(qty or 0) for item_id, qty in rows}
 
     projects_data = []
     for p in projects_db:
         items = list(p.items)
-        item_ids = [i.id for i in items]
-        potted_total = 0
-        if item_ids:
-            potted_total = int(db.session.query(
-                func.sum(ProjectPottingLog.quantity),
-            ).filter(
-                ProjectPottingLog.project_item_id.in_(item_ids),
-            ).scalar() or 0)
         supply_total = sum(i.quantity or 0 for i in items)
+        potted_total = sum(potted_by_item.get(i.id, 0) for i in items)
         projects_data.append({
             'id': p.id,
             'name': p.name,

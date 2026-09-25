@@ -1,5 +1,165 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+    /* «ровный край» — карточка ввода выкопки */
+    .dig-task-card {
+        border-color: #d7e3d9 !important;
+        border-radius: 10px !important;
+    }
+    .dig-task-id {
+        margin-bottom: 12px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #eef1ee;
+    }
+    .dig-task-size {
+        font-size: 1.5rem;
+        font-weight: 800;
+        color: #14532d;
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+        margin-bottom: 8px;
+    }
+    .dig-task-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 10px;
+    }
+    .dig-task-field,
+    .dig-task-order {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 700;
+        color: #1f2937;
+        background: #f3f6f3;
+        border: 1px solid #d7e3d9;
+        border-radius: 8px;
+        padding: 5px 10px;
+    }
+    .dig-task-field i { color: #2e7d32; }
+    .dig-task-order i { color: #1565c0; }
+    .dig-task-client {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: #111827;
+        min-width: 0;
+    }
+    .dig-task-overdue { margin-top: 8px; }
+    .dig-task-comment {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #6b7280;
+    }
+    .dig-task-qty {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: stretch;
+        gap: 12px;
+    }
+    .dig-task-qty-grid {
+        flex: 1 1 200px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        background: #f7faf7;
+        border: 1px solid #e3ebe4;
+        border-radius: 10px;
+        padding: 10px;
+    }
+    .dig-task-stat {
+        min-width: 0;
+        text-align: center;
+    }
+    .dig-task-stat-label {
+        display: block;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #6b7c6e;
+        margin-bottom: 2px;
+    }
+    .dig-task-stat-value {
+        display: block;
+        font-size: 1.15rem;
+        font-weight: 800;
+        color: #1f2937;
+        line-height: 1.2;
+    }
+    .dig-task-stat-value small {
+        font-size: 0.7em;
+        font-weight: 600;
+        color: #6b7280;
+    }
+    .dig-task-stat-note {
+        display: block;
+        font-size: 10px;
+        color: #8a968c;
+        margin-top: 2px;
+    }
+    .dig-task-stat-left .dig-task-stat-value { color: #15803d; }
+    .dig-task-fact {
+        flex: 0 0 120px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+    }
+    .dig-task-fact-input {
+        font-size: 28px !important;
+        height: 60px;
+        border: 2px solid #2e7d32 !important;
+        border-radius: 10px !important;
+        color: #15803d !important;
+        font-weight: 800;
+        text-align: center;
+        padding: 0 !important;
+    }
+    @media (max-width: 575.98px) {
+        .dig-task-qty-grid { grid-template-columns: 1fr 1fr 1fr; }
+        .dig-task-fact { flex: 1 1 100%; }
+        .dig-task-client { width: 100%; }
+    }
+    .dig-day-section {
+        margin-bottom: 1.25rem;
+    }
+    .dig-day-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 0 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #eaf4eb;
+        border: 1px solid #d7e3d9;
+    }
+    .dig-day-header.is-overdue {
+        background: #fef2f2;
+        border-color: #fecaca;
+    }
+    .dig-day-header .dig-day-date {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: #14532d;
+        letter-spacing: -0.01em;
+    }
+    .dig-day-header.is-overdue .dig-day-date { color: #b91c1c; }
+    .dig-day-header .dig-day-label {
+        font-size: 12px;
+        font-weight: 700;
+        color: #5f7163;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .dig-day-header.is-overdue .dig-day-label { color: #b91c1c; }
+    .dig-day-header .dig-day-count {
+        margin-left: auto;
+        font-size: 12px;
+        font-weight: 600;
+        color: #6b7c6e;
+    }
+</style>
 <div class="row justify-content-center">
     <div class="col-md-8 col-lg-6">
         
@@ -19,69 +179,102 @@
         </div>
 
         <div class="alert alert-info py-2 small mb-3">
-            <i class="fas fa-info-circle"></i> Показаны задания на <b>{{ today.strftime('%d.%m.%Y') if today else 'сегодня' }}</b>{% if overdue_count and overdue_count > 0 %} и <b class="text-danger">{{ overdue_count }}</b> просроченных с прошлых дней{% endif %}. Введите фактически выкопанное количество.
+            <i class="fas fa-info-circle"></i>
+            Задания сгруппированы по датам плана.
+            {% if overdue_count and overdue_count > 0 %}
+            Есть <b class="text-danger">{{ overdue_count }}</b> просроченных с прошлых дней — они сверху.
+            {% else %}
+            Сегодня: <b>{{ today.strftime('%d.%m.%Y') if today else '—' }}</b>.
+            {% endif %}
+            Введите фактически выкопанное количество.
         </div>
 
         <form method="POST" onsubmit="showDiggingOverlay()">
             {% if tasks %}
-                {% for plant_name, items in tasks|groupby('plant_name') %}
-                <div class="card mb-3 shadow-sm border-0">
-                    <div class="card-header p-2 bg-white">
-                        <button class="btn btn-link w-100 text-start text-decoration-none" type="button"
-                                data-bs-toggle="collapse" data-bs-target="#plantCollapse{{ loop.index }}"
-                                aria-expanded="false" aria-controls="plantCollapse{{ loop.index }}">
-                            <span class="fw-bold">{{ plant_name }}</span>
-                            <span class="small text-muted">({{ items|length }} {{ 'задание' if items|length == 1 else 'заданий' }})</span>
-                        </button>
+                {% for planned_date, day_items in tasks|groupby('planned_date') %}
+                {% set day_list = day_items|list %}
+                {% set day_overdue = day_list and day_list[0].is_overdue %}
+                <div class="dig-day-section">
+                    <div class="dig-day-header{% if day_overdue %} is-overdue{% endif %}">
+                        <i class="fas fa-calendar-day{% if day_overdue %} text-danger{% else %} text-success{% endif %}"></i>
+                        <div>
+                            <div class="dig-day-date">{{ planned_date.strftime('%d.%m.%Y') }}</div>
+                            <div class="dig-day-label">
+                                {% if day_overdue %}Просроченный план{% elif today and planned_date == today %}Сегодня{% else %}План{% endif %}
+                            </div>
+                        </div>
+                        <span class="dig-day-count">{{ day_list|length }} {{ 'задание' if day_list|length == 1 else 'заданий' }}</span>
                     </div>
-                    <div id="plantCollapse{{ loop.index }}" class="collapse show">
-                        <div class="card-body p-2 bg-light">
-                            {% for t in items %}
-                            <div class="border border-2 rounded-3 p-3 mb-3 bg-white shadow-sm">
-                                <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
-                                    <div class="fw-bold text-dark fs-4 lh-1">{{ t.size_name }}</div>
-                                    <div class="badge bg-secondary fs-6 py-2 px-3 shadow-sm">
-                                        <i class="fas fa-map-marker-alt opacity-75 me-2"></i>Поле {{ t.field_name }}{% if t.year %} · {{ t.year }} г.{% endif %}
-                                    </div>
-                                </div>
 
-                                <div class="small text-muted mb-2">
-                                    <div><i class="fas fa-file-invoice me-1 text-primary"></i>Заказ <b>#{{ t.order_id }}</b> · <span class="text-dark">{{ t.client_name }}</span></div>
-                                    <div>
-                                        <i class="fas fa-calendar-day me-1 {% if t.is_overdue %}text-danger{% else %}text-warning{% endif %}"></i>План на
-                                        <b{% if t.is_overdue %} class="text-danger"{% endif %}>{{ t.planned_date.strftime('%d.%m.%Y') }}</b>:
-                                        <b>{{ t.planned_qty }}</b> шт.
+                    {% for plant_name, items in day_list|groupby('plant_name') %}
+                    <div class="card mb-3 shadow-sm border-0">
+                        <div class="card-header p-2 bg-white">
+                            <button class="btn btn-link w-100 text-start text-decoration-none" type="button"
+                                    data-bs-toggle="collapse" data-bs-target="#plantCollapse{{ loop.parent.index }}_{{ loop.index }}"
+                                    aria-expanded="true" aria-controls="plantCollapse{{ loop.parent.index }}_{{ loop.index }}">
+                                <span class="fw-bold">{{ plant_name }}</span>
+                                <span class="small text-muted">({{ items|length }} {{ 'задание' if items|length == 1 else 'заданий' }})</span>
+                            </button>
+                        </div>
+                        <div id="plantCollapse{{ loop.parent.index }}_{{ loop.index }}" class="collapse show">
+                            <div class="card-body p-2 bg-light">
+                                {% for t in items %}
+                                <div class="dig-task-card border rounded-3 p-3 mb-3 bg-white shadow-sm">
+                                    <div class="dig-task-id">
+                                        <div class="dig-task-size">{{ t.size_name }}</div>
+                                        <div class="dig-task-meta">
+                                            <span class="dig-task-field">
+                                                <i class="fas fa-map-marker-alt"></i>
+                                                Поле {{ t.field_name }}{% if t.year %} · {{ t.year }} г.{% endif %}
+                                            </span>
+                                            <span class="dig-task-order">
+                                                <i class="fas fa-file-invoice"></i>
+                                                #{{ t.order_id }}
+                                            </span>
+                                            <span class="dig-task-client" title="{{ t.client_name }}">{{ t.client_name }}</span>
+                                        </div>
                                         {% if t.is_overdue %}
-                                        <span class="badge bg-danger ms-1">Просрочено{% if t.days_overdue %} · {{ t.days_overdue }} дн.{% endif %}</span>
+                                        <span class="badge bg-danger dig-task-overdue">Просрочено{% if t.days_overdue %} · {{ t.days_overdue }} дн.{% endif %}</span>
+                                        {% endif %}
+                                        {% if t.comment %}
+                                        <div class="dig-task-comment"><i class="fas fa-comment me-1"></i>{{ t.comment }}</div>
                                         {% endif %}
                                     </div>
-                                    {% if t.comment %}<div><i class="fas fa-comment me-1 text-muted"></i>{{ t.comment }}</div>{% endif %}
-                                </div>
 
-                                <div class="d-flex justify-content-between align-items-end">
-                                    <div class="text-muted mb-1">
-                                        <div class="small text-uppercase fw-bold mb-1">Уже выкопано:</div>
-                                        <div class="fs-5 fw-bold text-dark lh-1">
-                                            {{ t.already_before_today }} + {{ t.fact_today }} <span class="fs-6 text-muted fw-normal">из {{ t.ordered }} шт.</span>
+                                    <div class="dig-task-qty">
+                                        <div class="dig-task-qty-grid">
+                                            <div class="dig-task-stat">
+                                                <span class="dig-task-stat-label">План</span>
+                                                <span class="dig-task-stat-value">{{ t.planned_qty }} <small>шт</small></span>
+                                            </div>
+                                            <div class="dig-task-stat">
+                                                <span class="dig-task-stat-label">Выкопано</span>
+                                                <span class="dig-task-stat-value">{{ t.already_before_today + t.fact_today }} <small>/ {{ t.ordered }}</small></span>
+                                                <span class="dig-task-stat-note">{{ t.already_before_today }} + {{ t.fact_today }} сегодня</span>
+                                            </div>
+                                            <div class="dig-task-stat dig-task-stat-left">
+                                                <span class="dig-task-stat-label">Осталось</span>
+                                                <span class="dig-task-stat-value text-success">{{ t.left_to_dig }} <small>шт</small></span>
+                                            </div>
                                         </div>
-                                        <div class="small text-success">Осталось: <b>{{ t.left_to_dig }}</b> шт.</div>
-                                    </div>
-                                    <div style="width: 130px;">
-                                        <label class="small fw-bold text-success text-uppercase mb-1 d-block text-center">Факт (шт)</label>
-                                        <input type="number"
-                                               name="qty_task_{{ t.id }}"
-                                               class="form-control border-success text-success fw-bold text-center shadow-sm"
-                                               style="font-size: 28px; height: 60px; border-width: 2px; border-radius: 12px; padding: 0;"
-                                               placeholder="0"
-                                               min="0"
-                                               max="{{ t.left_to_dig }}"
-                                               inputmode="numeric">
+                                        <div class="dig-task-fact">
+                                            <label class="dig-task-stat-label d-block text-center mb-1" for="qty_task_{{ t.id }}">Факт (шт)</label>
+                                            <input type="number"
+                                                   id="qty_task_{{ t.id }}"
+                                                   name="qty_task_{{ t.id }}"
+                                                   class="form-control dig-task-fact-input"
+                                                   placeholder="0"
+                                                   min="0"
+                                                   max="{{ t.left_to_dig }}"
+                                                   inputmode="numeric">
+                                        </div>
                                     </div>
                                 </div>
+                                {% endfor %}
                             </div>
-                            {% endfor %}
                         </div>
                     </div>
+                    {% endfor %}
                 </div>
                 {% endfor %}
 

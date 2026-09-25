@@ -16,63 +16,65 @@
 {%- endmacro %}
 
 {% block content %}
+<div class="orders-page">
 <style>
-    /* === СТИЛИ ДЛЯ ТАБЛИЦЫ ЗАКАЗОВ (ПК) === */
-    .table-orders { 
-        width: 100%; 
-        border-collapse: collapse; 
-        font-size: 13px; 
-        background-color: transparent; /* Прозрачный фон, чтобы видны были отступы */
+    /* === «ровный край» — мягкая рамка снаружи, без капсульных ячеек === */
+    .table-orders-wrap {
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid #d7e3d9;
+        box-shadow: 0 1px 4px rgba(27, 94, 32, 0.04);
+        background: #fff;
+        margin-bottom: 0.5rem;
     }
-    
-    /* Шапка таблицы */
-    .table-orders th { 
-        background-color: #E8F5E9; /* Светло-зеленый */
-        color: #1B5E20; 
-        font-weight: 700; 
-        text-transform: uppercase; 
-        font-size: 11px; 
-        padding: 12px 8px;
-        border-bottom: 2px solid #2E7D32;
+    .table-orders {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        background-color: transparent;
+    }
+
+    .table-orders th {
+        background: #eaf4eb;
+        color: #1B5E20;
+        font-weight: 700;
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 0.03em;
+        padding: 11px 8px;
+        border-bottom: 1px solid #c5dcc8;
         border-top: none;
         vertical-align: middle;
         text-align: center;
     }
-    
-    /* Ячейки таблицы */
-    .table-orders td { 
-        background-color: #fff; /* Белый фон карточек */
-        padding: 12px 8px; 
-        vertical-align: top; /* Выравнивание по верху */
-        border-bottom: 1px solid #f0f0f0;
+
+    .table-orders td {
+        background-color: #fff;
+        padding: 11px 8px;
+        vertical-align: top;
+        border-bottom: 1px solid #eef1ee;
         color: #333;
+        border-radius: 0;
     }
 
-    /* === ГЛАВНЫЙ ЭФФЕКТ "ОСТРОВКОВ" === */
-    /* Добавляем толстую границу цвета фона страницы сверху каждого нового заказа */
-    .row-separator td { 
-        border-top: 15px solid #F8F9FA !important; /* Цвет фона base.html */
+    /* Островки заказов — ровный зазор, без скругления ячеек */
+    .row-separator td {
+        border-top: 10px solid #f3f6f3 !important;
         position: relative;
     }
-    
-    /* Убираем отступ у самого первого заказа в списке, чтобы не было дырки под шапкой */
+
     tbody tr:first-child.row-separator td { border-top: none !important; }
 
-    /* Эффект наведения мыши на заказ */
-    .table-orders tr:hover td { 
-        background-color: #FFFDE7; /* Нежный желтый при наведении */
-        transition: background-color 0.2s;
+    .table-orders tr:hover td {
+        background-color: #fbfcf8;
+        transition: background-color 0.15s ease;
     }
 
-    /* === ЦВЕТНЫЕ СТАТУСЫ СЛЕВА === */
-    /* Левая граница первой ячейки (где кнопки) */
-    .table-orders td:first-child { 
-        border-left: 5px solid transparent; 
-        border-radius: 4px 0 0 4px; /* Скругление слева */
+    .table-orders td:first-child {
+        border-left: 4px solid transparent;
     }
     .table-orders td:last-child {
-        border-radius: 0 4px 4px 0; /* Скругление справа */
-        border-right: 1px solid #e0e0e0;
+        border-right: 1px solid #e8eee9;
     }
 
 /* ЛОГИСТИКА: Цвета полосок слева (Ход работ) */
@@ -88,7 +90,7 @@
        Всегда отображаются внизу списка (сортировка в orders_list). */
     .order-done td { background-color: #e8f5e9 !important; }
     .order-done:hover td { background-color: #dcedc8 !important; }
-    .order-done.row-separator td:first-child { border-left: 6px solid #2E7D32 !important; }
+    .order-done.row-separator td:first-child { border-left: 5px solid #2E7D32 !important; }
     .mobile-card.order-done { background: #e8f5e9; border-color: #81C784; }
     .mobile-card.order-done .mobile-card-header { background: #e8f5e9; }
 
@@ -97,13 +99,17 @@
     .pay-partial { background-color: #fffde7 !important; } /* Бледно-желтый */
     .pay-unpaid { background-color: #fff5f5 !important; }  /* Бледно-красный */
 
-    /* Бейджи (цветные плашки для текста) */
-    .badge-pay-paid { background-color: #4CAF50; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
-    .badge-pay-partial { background-color: #FBC02D; color: black; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
-    .badge-pay-unpaid { background-color: #ef5350; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
+    .badge-pay-paid { background-color: #4CAF50; color: white; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; }
+    .badge-pay-partial { background-color: #FBC02D; color: #4a3b00; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; }
+    .badge-pay-unpaid { background-color: #ef5350; color: white; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; }
 
-    /* МОБИЛЬНЫЕ СТИЛИ (оставляем без изменений) */
-    .mobile-card { border: 1px solid #e0e0e0; border-radius: 12px; background: white; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); overflow: hidden; }
+    .orders-page .filter-panel {
+        border-radius: 10px;
+        box-shadow: 0 1px 4px rgba(27, 94, 32, 0.03);
+        border-color: #d7e3d9;
+    }
+
+    .mobile-card { border: 1px solid #d7e3d9; border-radius: 10px; background: white; margin-bottom: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.03); overflow: hidden; }
     .mobile-card-header { padding: 12px; background: #fff; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
     .mobile-card-header.collapsed { border-bottom: none; }
     .mobile-card-header:not(.collapsed) { border-bottom: 1px solid #f0f0f0; background: #f9f9f9; }
@@ -166,6 +172,7 @@
 <div class="filter-panel" style="position: relative; z-index: 10;">
     <form method="GET" class="d-flex gap-2 flex-wrap align-items-center w-100" id="filterForm" hx-boost="false">
         <input type="hidden" name="mode" value="{{ mode }}">
+        <input type="hidden" name="sort" value="{{ sort or 'date' }}">
         
         <div class="d-flex align-items-center bg-light rounded px-2 border">
             <i class="fas fa-calendar-alt text-muted me-2"></i>
@@ -182,11 +189,7 @@
         </select>
 
         <!-- Фильтр по номеру заказа (multi-select).
-             Работает аналогично выбору клиента: можно отметить один или
-             несколько заказов и нажать «Поиск», чтобы в списке остались
-             только они. Кнопка «Excel» рядом учитывает все активные
-             фильтры (включая выбранные номера) и выгружает ровно то,
-             что сейчас в списке. -->
+             Применяется автоматически после закрытия списка выбранных номеров. -->
         <select name="filter_ids" class="form-select form-select-sm select-search"
                 multiple
                 data-placeholder="По номеру заказа"
@@ -208,8 +211,7 @@
         </select>
         {% endif %}
         
-        <button class="btn btn-primary btn-sm px-3"><i class="fas fa-search"></i></button>
-        <a href="{{ url_for('orders.orders_list', mode=mode) }}" class="btn btn-light border btn-sm text-muted"><i class="fas fa-times"></i></a>
+        <a href="{{ url_for('orders.orders_list', mode=mode) }}" class="btn btn-light border btn-sm text-muted" title="Сбросить фильтры"><i class="fas fa-times"></i></a>
         
         <!-- Кнопки сортировки.
              В URL передаём также filter_ids, чтобы выбранные номера заказов
@@ -236,27 +238,13 @@
            hx-boost="false">
            <i class="fas fa-file-excel"></i> Excel
         </a>
-        <a href="{{ url_for('orders.export_client_catalog') }}"
-           class="btn btn-outline-success btn-sm"
-           hx-boost="false"
-           title="Выгрузка для клиента: Наименование, Размер, Цена, Свободный остаток и колонка Заказать">
-           <i class="fas fa-file-export"></i> Excel клиенту
-        </a>
-        <button
-            type="button"
-            class="btn btn-outline-primary btn-sm"
-            title="Скопировать ссылку на витрину заказа"
-            onclick="copyShopLink('{{ url_for('public_client_api.public_shop', _external=True) }}')"
-        >
-            <i class="fas fa-link"></i> Ссылка на /shop
-        </button>
     </form>
 </div>
 
 <!-- ============================================ -->
 <!--           ВЕРСИЯ ДЛЯ ПК (TABLE)              -->
 <!-- ============================================ -->
-<div class="table-responsive d-none d-lg-block">
+<div class="table-responsive table-orders-wrap d-none d-lg-block">
     <table class="table-orders">
         <colgroup>
             <col style="width: 50px;"> <!-- Кнопки -->
@@ -350,7 +338,7 @@
 
                 <!-- Клиент -->
                 <td rowspan="{{ rowspan }}" class="fw-bold text-dark">
-                    {{ o.client.name }}
+                    {{ o.client_label }}
                 </td>
                 
                 <!-- ПЕРВАЯ ПОЗИЦИЯ ТОВАРА -->
@@ -490,7 +478,7 @@
                     <span class="fw-bold text-dark me-2">#{{ o.id }}</span>
                     <small class="text-muted">{{ o.date|dateru }}</small>
                 </div>
-                <div class="text-primary fw-bold text-truncate" style="max-width: 180px;">{{ o.client.name }}</div>
+                <div class="text-primary fw-bold text-truncate" style="max-width: 180px;">{{ o.client_label }}</div>
             </div>
             <div class="text-end">
                 {% if current_user.role != 'user2' %}
@@ -575,40 +563,52 @@
         <div class="text-end small text-muted">Отгружено: {{ stats.shipped_fact }} шт.</div>
     </div>
 </div>
+</div>
 
 {% endblock %}
 
 {% block scripts %}
 <script>
-function copyShopLink(shopUrl) {
-    const done = () => {
-        if (window.showToast) {
-            window.showToast('Ссылка на витрину скопирована');
-        } else {
-            alert('Ссылка скопирована: ' + shopUrl);
-        }
-    };
+(function () {
+    const form = document.getElementById('filterForm');
+    if (!form) return;
 
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(shopUrl).then(done).catch(() => {
-            fallbackCopy(shopUrl, done);
-        });
-    } else {
-        fallbackCopy(shopUrl, done);
+    function submitFilters() {
+        form.requestSubmit ? form.requestSubmit() : form.submit();
     }
-}
 
-function fallbackCopy(text, onDone) {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly', '');
-    ta.style.position = 'absolute';
-    ta.style.left = '-9999px';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    onDone();
-}
+    form.querySelectorAll('select[name="filter_client"], select[name="filter_status"], input[name="start_date"], input[name="end_date"]').forEach((el) => {
+        el.addEventListener('change', submitFilters);
+    });
+
+    const ids = form.querySelector('select[name="filter_ids"]');
+    if (!ids) return;
+
+    let debounceTimer = null;
+    function bindMulti() {
+        if (!(window.jQuery && jQuery.fn.select2)) {
+            ids.addEventListener('change', submitFilters);
+            return;
+        }
+        const $ids = jQuery(ids);
+        $ids.off('.ordersFilter');
+        $ids.on('select2:close.ordersFilter', () => {
+            clearTimeout(debounceTimer);
+            submitFilters();
+        });
+        // Снятие тега, когда список уже закрыт
+        $ids.on('change.ordersFilter', () => {
+            const open = $ids.data('select2') && $ids.select2('isOpen');
+            if (open) {
+                clearTimeout(debounceTimer);
+                return;
+            }
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(submitFilters, 200);
+        });
+    }
+    bindMulti();
+    setTimeout(bindMulti, 500);
+})();
 </script>
 {% endblock %}

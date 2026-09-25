@@ -13,6 +13,10 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('"order"', 'is_barter', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
     ('"order"', 'reserve_ack_at', 'TIMESTAMP', 'DATETIME'),
     ('"order"', 'created_by_user_id', 'INTEGER', 'INTEGER'),
+    ('"order"', 'billing_client_id', 'INTEGER', 'INTEGER'),
+    ('"order"', 'buh_exclude', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
+    ('"order"', 'buh_posted_at', 'TIMESTAMP', 'DATETIME'),
+    ('"order"', 'buh_posted_by_id', 'INTEGER', 'INTEGER'),
     ('employee', 'official_budget_item_id', 'INTEGER', 'INTEGER'),
     ('employee', 'unofficial_budget_item_id', 'INTEGER', 'INTEGER'),
     ('payment', 'payment_type', "VARCHAR(20) DEFAULT 'cashless'", "VARCHAR(20) DEFAULT 'cashless'"),
@@ -120,6 +124,8 @@ _LEGACY_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_expense_invoice ON expense (invoice_id)',
     'CREATE INDEX IF NOT EXISTS idx_timelog_date ON time_log (date)',
     'CREATE INDEX IF NOT EXISTS idx_order_created_by ON "order" (created_by_user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_order_billing_client ON "order" (billing_client_id)',
+    'CREATE INDEX IF NOT EXISTS idx_order_buh_posted ON "order" (buh_posted_at)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_dedup ON tg_task (dedup_key)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_source ON tg_task (source)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_status_deadline ON tg_task (status, deadline)',
@@ -226,6 +232,27 @@ def _publish_invoice_drafts(logger=None) -> None:
 
 
 _CHANGELOG_RELEASES = (
+    {
+        'version': 'v1.4.1',
+        'date': '2026-09-25',
+        'content': (
+            'Сделано:\n'
+            'Ввод выкопки: задания сгруппированы по дате плана — просроченные дни сверху, сегодня отдельно.\n'
+            'Меню «Производство»: подуровни Выкопка, Контейнерная площадка, Учёт ВиУМ.\n'
+            'Меню «Финансы»: подуровни Счета и расходы, Отчёты, Проекты, Фин. результат (с прямой ссылкой на Кешфлоу), Инструменты.\n'
+            '«Реестр счетов» — группа: счета ERP и «Реестр заказов» (бывший /finance/summary). Переименования: «Движение товара», «Счета по заказам».\n'
+            'В карточке заказа блок «Проект» перенесён ниже — под «Списать долг», над «Отменить заказ».\n'
+            'Панель цен при создании заказа: видимая скруглённая рамка у поля скидки и переключателя Опт/Розница.\n'
+            '\n'
+            'Ускорено:\n'
+            'Отчёт по выкопке — без N+1 и без проверки схемы на каждый заход.\n'
+            'Список проектов — общий кэш склада и себестоимости на весь список.\n'
+            'Бюджет / Cashflow / План vs Факт — тяжёлый кешфлоу только на нужных вкладках; итоги по годам пакетом; сохранение без лишнего пересчёта.\n'
+            '\n'
+            'Исправлено:\n'
+            'Фильтры периода на Cashflow: график и сводки обновляются вместе с периодом (Осень, квартал, месяц); выплаты считают месяц как в бюджете (target_month).'
+        ),
+    },
     {
         'version': 'v1.4.0',
         'date': '2026-09-23',

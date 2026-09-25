@@ -237,12 +237,14 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
     if selected_fields is None or not selected_fields:
         selected_fields = [f.id for f in all_fields]
 
+    selected_fields_set = set(selected_fields)
+    selected_plants_set = set(selected_plants) if selected_plants else None
+    selected_sizes_set = set(selected_sizes) if selected_sizes else None
+    selected_years_set = set(selected_years) if selected_years else None
+
     fact_map, income_map, shipped_map = aggregate_stock_movements(end_date, selected_fields)
 
-    reserve_map = {}
-    for (pid, sid, fid, yr), res_q in get_reserved_map().items():
-        if fid in selected_fields and res_q > 0:
-            reserve_map[(pid, sid, fid, yr)] = res_q
+    reserve_map = get_reserved_map(field_ids=selected_fields)
 
     # --- Собираем уникальные ключи ---
     all_keys = set(fact_map.keys()) | set(income_map.keys()) | set(reserve_map.keys())
@@ -269,35 +271,51 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
     for h in hist_rows:
         hist_prices_map[(h.plant_id, h.size_id, h.field_id, h.year)] = h.price
         hist_plant_size_map[(h.plant_id, h.size_id, h.year)] = h.price
+
+    sb_price_q = StockBalance.query.with_entities(
+        StockBalance.plant_id,
+        StockBalance.size_id,
+        StockBalance.field_id,
+        StockBalance.year,
+        StockBalance.price,
+    ).filter(StockBalance.field_id.in_(selected_fields))
+    if selected_plants_set:
+        sb_price_q = sb_price_q.filter(StockBalance.plant_id.in_(selected_plants_set))
+    if selected_sizes_set:
+        sb_price_q = sb_price_q.filter(StockBalance.size_id.in_(selected_sizes_set))
     stock_prices_map = {
         (sb.plant_id, sb.size_id, sb.field_id, sb.year): sb.price
-        for sb in StockBalance.query.with_entities(
-            StockBalance.plant_id,
-            StockBalance.size_id,
-            StockBalance.field_id,
-            StockBalance.year,
-            StockBalance.price,
-        ).all()
+        for sb in sb_price_q.all()
     }
     pair_price_map = {}
     for (pid, sid, _fid, _year), p in stock_prices_map.items():
         if p is not None and float(p or 0) > 0:
             pair_price_map.setdefault((pid, sid), p)
-    for h in PriceHistory.query.with_entities(
-        PriceHistory.plant_id, PriceHistory.size_id, PriceHistory.price,
-    ).filter(PriceHistory.price > 0).order_by(PriceHistory.year.desc()).all():
-        if h.price is not None and float(h.price or 0) > 0:
-            pair_price_map.setdefault((h.plant_id, h.size_id), h.price)
+
+    fallback_pids = {k[0] for k in all_keys}
+    fallback_sids = {k[1] for k in all_keys}
+    if fallback_pids and fallback_sids:
+        for h in PriceHistory.query.with_entities(
+            PriceHistory.plant_id, PriceHistory.size_id, PriceHistory.price,
+        ).filter(
+            PriceHistory.price > 0,
+            PriceHistory.plant_id.in_(fallback_pids),
+            PriceHistory.size_id.in_(fallback_sids),
+        ).order_by(PriceHistory.year.desc()).all():
+            if h.price is not None and float(h.price or 0) > 0:
+                pair_price_map.setdefault((h.plant_id, h.size_id), h.price)
 
     aggregated = {}
     grand_total = {'income': 0, 'reserved': 0, 'free': 0, 'shipped': 0, 'qty': 0, 'sum': 0, 'free_sum': 0}
 
     for (pid, sid, fid, byear) in all_keys:
-        if selected_plants and pid not in selected_plants:
+        if selected_plants_set and pid not in selected_plants_set:
             continue
-        if selected_sizes and sid not in selected_sizes:
+        if selected_sizes_set and sid not in selected_sizes_set:
             continue
-        if selected_years and byear not in selected_years:
+        if selected_years_set and byear not in selected_years_set:
+            continue
+        if fid not in selected_fields_set:
             continue
 
         fact = fact_map.get((pid, sid, fid, byear), 0)
@@ -1235,8 +1253,11 @@ def stock_report_export():
     price_mode = request.args.get('price_mode', 'wholesale')
     if price_mode not in ('wholesale', 'retail'):
         price_mode = 'wholesale'
+    price_overrides = get_shop_price_map()
     if price_mode == 'retail':
-        sorted_groups = transform_stock_report_price_mode(sorted_groups, 'retail')
+        sorted_groups = transform_stock_report_price_mode(
+            sorted_groups, 'retail', overrides=price_overrides,
+        )
 
     if skip_raw_rows:
         grand_total = grand_total_from_stock_groups(

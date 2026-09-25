@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import os
 import re
+from decimal import Decimal
 
 from flask import current_app, send_file
 
@@ -249,7 +250,6 @@ def ensure_unassigned_budget_item():
 
 def invoice_base_amount(inv: PaymentInvoice) -> Decimal:
     """Сумма к отображению: у плана — planned_amount, иначе amount."""
-    from decimal import Decimal
     if (getattr(inv, 'kind', None) or '') == 'plan':
         return Decimal(str(inv.planned_amount or 0))
     return Decimal(str(inv.amount or 0))
@@ -257,9 +257,8 @@ def invoice_base_amount(inv: PaymentInvoice) -> Decimal:
 
 def invoice_paid_amount(inv: PaymentInvoice) -> Decimal:
     """Уже оплачено по счёту/плану (факты + расходы)."""
-    from decimal import Decimal
     from sqlalchemy import func
-    from app.models import Expense, PaymentInvoice as PI, db
+    from app.models import Expense, PaymentInvoice as PI
     total = Decimal('0')
     if (getattr(inv, 'kind', None) or '') == 'plan':
         kids = list(getattr(inv, 'fact_invoices', None) or [])

@@ -10,7 +10,7 @@
     }
     const view = document.getElementById("view");
     const titleEl = document.getElementById("screenTitle");
-    const state = { me: null, companies: [], allCompanies: [], invoices: [], screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "", orderHits: [], orderQ: "", priceMode: "retail", discountPct: 0 };
+    const state = { me: null, companies: [], allCompanies: [], invoices: [], invoiceScope: "active", screen: "list", draft: emptyDraft(), current: null, stockGroups: [], lastQ: "", lastInnLookup: "", orderHits: [], orderQ: "", priceMode: "retail", discountPct: 0, buhOrders: [], buhScope: "active", buhQ: "", buhSort: "date", buhDir: "desc", buhCurrent: null };
 
     function haptic(kind) {
         try { const tg = tgApp(); tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || "light"); } catch (_) {}
@@ -114,7 +114,7 @@
             else renderBuhList();
             return;
         }
-        if (state.screen === "buh" || state.screen === "buh-view") {
+        if (state.screen === "buh" || state.screen === "buh-view" || state.screen === "buh-archive") {
             if (state.screen === "buh-view") renderBuhView();
             else renderBuhList();
             return;
@@ -131,7 +131,8 @@
     }
 
     function renderList() {
-        setTitle("Выставить счёт");
+        const isArchive = state.invoiceScope === "archive";
+        setTitle(isArchive ? "Архив счетов" : "Выставить счёт");
         const rows = (state.invoices || []).map((inv) => `
             <div class="list-item" data-open="${inv.id}">
                 <div class="row">
@@ -144,25 +145,43 @@
                         <div style="text-align:right;margin-top:4px;font-weight:700">${money(inv.amount)}</div>
                     </div>
                 </div>
-            </div>`).join("") || `<p class="muted">Пока нет счетов</p>`;
-        view.innerHTML = `
-            <div class="grid2" style="margin-bottom:12px">
+            </div>`).join("") || `<p class="muted">${isArchive ? "В архиве пока пусто" : "Пока нет счетов"}</p>`;
+        const topActions = isArchive
+            ? `<button class="btn ghost" id="btnBackActive" style="margin-bottom:12px;width:100%">← К счетам</button>
+               <p class="muted" style="margin-top:0">Оплачены и отгружены в ERP — только просмотр.</p>`
+            : `<div class="grid2" style="margin-bottom:12px">
                 <button class="btn gold" id="btnNew">Новый счёт</button>
                 <button class="btn ghost" id="btnFromOrder">На заказ</button>
             </div>
             ${state.me && state.me.can_buh ? `<button class="btn ghost" id="btnBuh" style="margin-bottom:12px">Отгрузки · УПД</button>` : ""}
-            ${state.me && (state.me.can_firms || state.me.can_edit_firms) ? `<button class="btn ghost" id="btnFirms" style="margin-bottom:12px">Фирмы</button>` : ""}
-            <div class="card">${rows}</div>`;
-        document.getElementById("btnNew").onclick = () => startNewInvoice();
-        document.getElementById("btnFromOrder").onclick = () => startPickOrder();
+            ${state.me && state.me.role === "admin" ? `<button class="btn ghost" id="btnFirms" style="margin-bottom:12px">Фирмы</button>` : ""}
+            <button class="btn ghost" id="btnInvArchive" style="margin-bottom:12px">Архив</button>`;
+        view.innerHTML = `${topActions}<div class="card">${rows}</div>`;
+        const btnNew = document.getElementById("btnNew");
+        if (btnNew) btnNew.onclick = () => startNewInvoice();
+        const btnFrom = document.getElementById("btnFromOrder");
+        if (btnFrom) btnFrom.onclick = () => startPickOrder();
         const bb = document.getElementById("btnBuh");
         if (bb) bb.onclick = async () => {
+            state.buhScope = "active";
             state.screen = "buh";
             await loadBuh();
             render();
         };
         const bf = document.getElementById("btnFirms");
         if (bf) bf.onclick = () => { state.screen = "firms"; render(); };
+        const ba = document.getElementById("btnInvArchive");
+        if (ba) ba.onclick = async () => {
+            state.invoiceScope = "archive";
+            await reload();
+            render();
+        };
+        const backActive = document.getElementById("btnBackActive");
+        if (backActive) backActive.onclick = async () => {
+            state.invoiceScope = "active";
+            await reload();
+            render();
+        };
         view.querySelectorAll("[data-open]").forEach((el) => {
             el.onclick = () => openInvoice(Number(el.dataset.open));
         });
@@ -200,8 +219,8 @@
 
     function orderBannerHtml(d) {
         const ord = d.order;
-        if (ord && ord.id) {
-            return `
+        if (!(ord && ord.id)) return "";
+        return `
             <div class="card order-banner">
                 <div class="row">
                     <div>
@@ -212,8 +231,6 @@
                 </div>
                 ${orderLinesHtml(ord)}
             </div>`;
-        }
-        return `<button type="button" class="btn ghost" id="btnPickOrder" style="margin-bottom:10px">Привязать заказ из базы</button>`;
     }
 
     function bindOrderBanner() {
@@ -352,8 +369,7 @@
                  <button type="button" class="btn sm ghost" id="innLookup">По ИНН</button>
                </div>
                <div class="muted" id="innHint">${esc(b._hint || "Подставим название, КПП, ОГРН и адрес из ЕГРЮЛ")}</div>`
-            + f("kpp", "КПП") + f("ogrn", "ОГРН") + f("address", "Адрес") + f("phone", "Телефон")
-            + f("bank", "Банк") + f("rs", "Расчётный счёт") + f("bik", "БИК") + f("ks", "Корр. счёт");
+            + f("kpp", "КПП") + f("ogrn", "ОГРН") + f("address", "Адрес");
     }
 
     function renderEdit() {
@@ -381,7 +397,7 @@
             <div class="label">Фирма</div>
             ${firms}
             <div class="label">Позиции</div>
-            <div class="card">
+            <div class="card price-card">
                 <div class="price-bar">
                     <div class="grid2">
                         <button type="button" class="btn sm ${state.priceMode === "wholesale" ? "" : "ghost"}" id="modeWholesale">Опт</button>
@@ -397,16 +413,22 @@
                     </div>
                     <p class="muted" style="margin-top:6px">Скидка к прайсу (опт/розница). У позиции можно задать свою %.</p>
                 </div>
+            </div>
+            <div class="card stock-card">
+                <div class="stock-head">Растения</div>
                 <input class="input" id="q" placeholder="Название или размер, например туя 160" value="${esc(state.lastQ || "")}">
+                <p class="muted" style="margin-top:6px">Нажмите размер в поиске, чтобы добавить</p>
                 <div id="suggest" class="suggest"></div>
                 <div id="linesBox"></div>
             </div>
             <div class="card row"><span class="muted">Итого</span><span class="tot" id="totVal">0 ₽</span></div>
             <div id="saveErr" class="err hide"></div>
-            <button class="btn gold" id="save">Сохранить счёт</button>
+            <button class="btn gold" id="save">${state.current && state.current.status === "approved" ? "Сохранить изменения" : "Сохранить счёт"}</button>
             ${state.current ? `<div class="grid2" style="margin-top:8px">
                 <button class="btn" id="pdf">Счёт в чат</button>
-                <button class="btn ghost" id="approve">Согласовать</button>
+                ${state.current.status === "approved"
+                    ? `<button class="btn ghost" id="backView">К просмотру</button>`
+                    : `<button class="btn ghost" id="approve">Согласовать</button>`}
             </div>
             <button class="btn danger" id="discard" style="margin-top:8px">Удалить</button>` : ""}`;
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
@@ -443,6 +465,8 @@
         if (pdf) pdf.onclick = sendPdf;
         const ap = document.getElementById("approve");
         if (ap) ap.onclick = approveInv;
+        const backView = document.getElementById("backView");
+        if (backView) backView.onclick = () => { state.screen = "view"; render(); };
         const ds = document.getElementById("discard");
         if (ds) ds.onclick = discardInv;
     }
@@ -460,15 +484,22 @@
                 <div class="tot" style="margin-top:10px">${money(inv.amount)}</div>
             </div>
             ${inv.order ? `<div class="card order-banner">${orderLinesHtml(inv.order)}</div>` : ""}
+            <button class="btn" id="editApproved" style="margin-bottom:8px">Править</button>
             <button class="btn gold" id="pdf">Счёт в чат</button>
             ${state.me && state.me.can_delete_approved ? `<button class="btn danger" id="discard" style="margin-top:8px">Удалить счёт${inv.from_existing_order ? "" : " и заказ"}</button>` : ""}`;
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
+        document.getElementById("editApproved").onclick = () => editApprovedInvoice();
         document.getElementById("pdf").onclick = sendPdf;
         const ds = document.getElementById("discard");
         if (ds) ds.onclick = discardInv;
     }
 
     function renderFirms() {
+        if (!(state.me && state.me.role === "admin")) {
+            state.screen = "list";
+            render();
+            return;
+        }
         setTitle("Фирмы");
         const rows = state.allCompanies.length ? state.allCompanies : state.companies;
         view.innerHTML = `<button class="btn ghost" id="back">← Назад</button>` + rows.map((c) => `
@@ -763,7 +794,7 @@
                     <div>
                         <div class="label">Кол-во, шт</div>
                         <input class="input" data-qty="${i}" type="number" min="1" max="${ln.free_qty || 9999}" inputmode="numeric" value="${ln.qty}">
-                        <div class="muted" style="margin-top:4px">свободно ${ln.free_qty || "—"}</div>
+                        <div class="free-stock" style="margin-top:4px">свободно ${ln.free_qty || "—"}</div>
                     </div>
                     <div>
                         <div class="label">Цена, ₽</div>
@@ -955,6 +986,7 @@
             }
             state.current = saved;
             await reload();
+            if (saved.status === "approved") state.screen = "view";
             render();
             notifySaved(saved);
         } catch (ex) {
@@ -1030,13 +1062,8 @@
         render();
     }
 
-    async function openInvoice(id) {
-        const inv = (state.invoices || []).find((x) => x.id === id);
-        if (!inv) return;
-        const full = await api(`/tg/sale/api/invoices/${id}`);
-        state.current = full;
-        if (full.status === "approved") { state.screen = "view"; render(); return; }
-        state.draft = {
+    function draftFromInvoice(full) {
+        return {
             company_id: full.company_id,
             client_id: full.client_id || (full.order && full.order.client_id) || null,
             buyer: {
@@ -1055,6 +1082,22 @@
             order: full.order || null,
             anonymous: !!full.anonymous,
         };
+    }
+
+    function editApprovedInvoice() {
+        if (!state.current) return;
+        state.draft = draftFromInvoice(state.current);
+        state.screen = "edit";
+        render();
+    }
+
+    async function openInvoice(id) {
+        const inv = (state.invoices || []).find((x) => x.id === id);
+        if (!inv) return;
+        const full = await api(`/tg/sale/api/invoices/${id}`);
+        state.current = full;
+        if (full.status === "approved") { state.screen = "view"; render(); return; }
+        state.draft = draftFromInvoice(full);
         state.screen = "edit";
         render();
     }
@@ -1064,8 +1107,16 @@
     }
 
     async function loadBuh() {
-        const data = await api("/tg/sale/api/buh/orders");
+        const scope = state.buhScope === "archive" ? "archive" : "active";
+        const params = new URLSearchParams({
+            scope,
+            q: state.buhQ || "",
+            sort: state.buhSort || "date",
+            dir: state.buhDir || "desc",
+        });
+        const data = await api(`/tg/sale/api/buh/orders?${params.toString()}`);
         state.buhOrders = data.orders || [];
+        state.buhScope = data.scope || scope;
     }
 
     function kindLabel(kind) {
@@ -1074,20 +1125,48 @@
         return "позиции";
     }
 
+    function orderStatusLabel(st) {
+        const m = {
+            reserved: "резерв",
+            in_progress: "в работе",
+            ready: "готов",
+            shipped: "отгружен",
+            canceled: "отменён",
+            ghost: "призрак",
+        };
+        return m[st] || st || "";
+    }
+
+    async function buhPostOrder(orderId) {
+        await api(`/tg/sale/api/buh/orders/${orderId}/post`, { method: "POST", body: "{}" });
+    }
+
+    async function buhUnpostOrder(orderId) {
+        await api(`/tg/sale/api/buh/orders/${orderId}/unpost`, { method: "POST", body: "{}" });
+    }
+
     function renderBuhList() {
-        setTitle("Отгрузки");
+        const isArchive = state.buhScope === "archive";
+        setTitle(isArchive ? "Архив отгрузок" : "Отгрузки");
         const rows = (state.buhOrders || []).map((o) => {
             const lines = (o.lines || []).map((ln) =>
                 `<li>${esc(ln.plant_name || "—")}${ln.size_name ? ` · ${esc(ln.size_name)}` : ""} ×${ln.qty}`
                 + (ln.shipped_qty ? ` · отгр. ${ln.shipped_qty}` : "") + `</li>`
             ).join("");
             const invN = Number(o.invoice_count) || 0;
+            const postedHint = o.posted_at
+                ? `<div class="muted">проведено ${fmtDate(o.posted_at)}</div>`
+                : "";
+            const actBtn = isArchive
+                ? `<button type="button" class="btn ghost buh-arch-btn" data-buh-unpost="${o.order_id}">Вернуть</button>`
+                : `<button type="button" class="btn buh-arch-btn" data-buh-post="${o.order_id}">В архив</button>`;
             return `
             <div class="list-item" data-buh-order="${o.order_id}">
                 <div class="row">
                     <div>
                         <div><b>Заказ №${o.order_id}</b> · ${esc(o.client_name || "—")}</div>
-                        <div class="muted">${esc(o.order_status || "")}${invN ? ` · счетов: ${invN}` : " · без счетов"}</div>
+                        <div class="muted">${esc(orderStatusLabel(o.order_status))}${invN ? ` · счетов: ${invN}` : " · без счетов"}</div>
+                        ${postedHint}
                     </div>
                     <div style="text-align:right">
                         <div style="font-weight:700">${money(o.order_sum)}</div>
@@ -1095,16 +1174,104 @@
                 </div>
                 ${lines ? `<ul class="order-lines">${lines}</ul>` : ""}
                 ${o.more_count ? `<p class="muted">ещё ${o.more_count} поз.</p>` : ""}
+                <div class="buh-list-actions">${actBtn}</div>
             </div>`;
-        }).join("") || `<p class="muted">Пока нет отгруженных заказов</p>`;
+        }).join("") || `<p class="muted">${isArchive ? "В архиве пока пусто" : "Нет непроведённых отгрузок"}</p>`;
         const backSale = state.me && !state.me.accountant_only && state.me.can_buh
             ? `<button class="btn ghost" id="backSale" style="margin-bottom:10px">← К счетам</button>`
             : "";
-        view.innerHTML = `${backSale}<p class="muted" style="margin-top:0">Заказы с отгрузкой. Счета открываются внутри заказа.</p><div class="card">${rows}</div>`;
+        const tabs = `
+            <div class="buh-tabs">
+                <button type="button" class="btn ${isArchive ? "ghost" : ""}" id="buhTabActive">Отгрузки</button>
+                <button type="button" class="btn ${isArchive ? "" : "ghost"}" id="buhTabArchive">Архив</button>
+            </div>`;
+        const filters = `
+            <div class="buh-filters card">
+                <input id="buhQ" type="search" placeholder="№ заказа, клиент, счёт" value="${esc(state.buhQ || "")}">
+                <div class="buh-filter-row">
+                    <select id="buhSort">
+                        <option value="date" ${state.buhSort === "date" ? "selected" : ""}>${isArchive ? "По дате проведения" : "По дате заказа"}</option>
+                        <option value="client" ${state.buhSort === "client" ? "selected" : ""}>По клиенту</option>
+                        <option value="sum" ${state.buhSort === "sum" ? "selected" : ""}>По сумме</option>
+                        ${isArchive ? `<option value="posted" ${state.buhSort === "posted" ? "selected" : ""}>По отметке</option>` : ""}
+                    </select>
+                    <select id="buhDir">
+                        <option value="desc" ${state.buhDir !== "asc" ? "selected" : ""}>Сначала новые</option>
+                        <option value="asc" ${state.buhDir === "asc" ? "selected" : ""}>Сначала старые</option>
+                    </select>
+                </div>
+                <div class="buh-filter-actions">
+                    <button type="button" class="btn" id="buhApply">Найти</button>
+                    <button type="button" class="btn ghost" id="buhReset">Сбросить</button>
+                </div>
+            </div>`;
+        view.innerHTML = `${backSale}${tabs}${filters}<p class="muted" style="margin-top:0">${isArchive ? "Проведённые отгрузки. Можно открыть и вернуть на главную." : "Кнопка «В архив» — сразу убрать с главной. Карточка открывается по нажатию на заказ."}</p><div class="card">${rows}</div>`;
         const back = document.getElementById("backSale");
         if (back) back.onclick = () => { state.screen = "list"; render(); };
+        document.getElementById("buhTabActive").onclick = async () => {
+            state.buhScope = "active";
+            state.screen = "buh";
+            await loadBuh();
+            render();
+        };
+        document.getElementById("buhTabArchive").onclick = async () => {
+            state.buhScope = "archive";
+            state.screen = "buh-archive";
+            await loadBuh();
+            render();
+        };
+        document.getElementById("buhApply").onclick = async () => {
+            state.buhQ = (document.getElementById("buhQ").value || "").trim();
+            state.buhSort = document.getElementById("buhSort").value || "date";
+            state.buhDir = document.getElementById("buhDir").value || "desc";
+            await loadBuh();
+            render();
+        };
+        document.getElementById("buhReset").onclick = async () => {
+            state.buhQ = "";
+            state.buhSort = "date";
+            state.buhDir = "desc";
+            await loadBuh();
+            render();
+        };
+        const qEl = document.getElementById("buhQ");
+        if (qEl) {
+            qEl.addEventListener("keydown", async (e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                document.getElementById("buhApply").click();
+            });
+        }
         view.querySelectorAll("[data-buh-order]").forEach((el) => {
             el.onclick = () => openBuhOrder(Number(el.dataset.buhOrder));
+        });
+        view.querySelectorAll("[data-buh-post]").forEach((btn) => {
+            btn.onclick = async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const done = armBusy(btn);
+                try {
+                    await buhPostOrder(Number(btn.dataset.buhPost));
+                    await loadBuh();
+                    render();
+                } catch (err) {
+                    alert("Не удалось отправить в архив");
+                } finally { done(); }
+            };
+        });
+        view.querySelectorAll("[data-buh-unpost]").forEach((btn) => {
+            btn.onclick = async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const done = armBusy(btn);
+                try {
+                    await buhUnpostOrder(Number(btn.dataset.buhUnpost));
+                    await loadBuh();
+                    render();
+                } catch (err) {
+                    alert("Не удалось вернуть");
+                } finally { done(); }
+            };
         });
     }
 
@@ -1116,7 +1283,7 @@
 
     function renderBuhView() {
         const d = state.buhCurrent;
-        if (!d) { state.screen = "buh"; render(); return; }
+        if (!d) { state.screen = state.buhScope === "archive" ? "buh-archive" : "buh"; render(); return; }
         setTitle(`Заказ №${d.order_id}`);
         const invs = d.invoices || [];
         const invRows = invs.map((inv) => `
@@ -1149,12 +1316,20 @@
                     `<li>${esc(r.plant_name || "—")}${r.size_name ? ` · ${esc(r.size_name)}` : ""} ×${r.qty}</li>`
                 ).join("")}</ul>
             </div>`).join("") || `<p class="muted">Документов отгрузки нет</p>`;
+        const postBtn = d.posted
+            ? `<button type="button" class="btn ghost" id="buhUnpost" style="width:100%;margin-top:10px">Вернуть на главную</button>`
+            : `<button type="button" class="btn" id="buhPost" style="width:100%;margin-top:10px">В архив</button>`;
+        const postedNote = d.posted_at
+            ? `<div class="muted" style="margin-top:6px">Проведено ${fmtDate(d.posted_at)}</div>`
+            : "";
         view.innerHTML = `
             <button class="btn ghost" id="back" style="margin-bottom:10px">← К списку</button>
             <div class="card">
                 <div><b>${esc(d.client_name || "—")}</b></div>
-                <div class="muted">заказ №${d.order_id} · ${esc(d.order_status || "")}</div>
+                <div class="muted">заказ №${d.order_id} · ${esc(orderStatusLabel(d.order_status || ""))}</div>
                 <div style="margin-top:8px">Сумма заказа: <b>${money(d.order_sum)}</b></div>
+                ${postedNote}
+                ${postBtn}
             </div>
             <details class="buh-acc card" open>
                 <summary>Счета (${invs.length})</summary>
@@ -1169,7 +1344,40 @@
             </div>
             <h3 class="buh-h">Журнал отгрузок</h3>
             <div class="card">${journal}</div>`;
-        document.getElementById("back").onclick = () => { state.screen = "buh"; render(); };
+        document.getElementById("back").onclick = () => {
+            state.screen = state.buhScope === "archive" ? "buh-archive" : "buh";
+            render();
+        };
+        const postEl = document.getElementById("buhPost");
+        if (postEl) {
+            postEl.onclick = async () => {
+                const done = armBusy(postEl);
+                try {
+                    await buhPostOrder(d.order_id);
+                    state.buhScope = "active";
+                    state.screen = "buh";
+                    await loadBuh();
+                    render();
+                } catch (err) {
+                    alert("Не удалось отправить в архив");
+                } finally { done(); }
+            };
+        }
+        const unpostEl = document.getElementById("buhUnpost");
+        if (unpostEl) {
+            unpostEl.onclick = async () => {
+                const done = armBusy(unpostEl);
+                try {
+                    await buhUnpostOrder(d.order_id);
+                    state.buhScope = "archive";
+                    state.screen = "buh-archive";
+                    await loadBuh();
+                    render();
+                } catch (err) {
+                    alert("Не удалось вернуть");
+                } finally { done(); }
+            };
+        }
         view.querySelectorAll("[data-buh-send]").forEach((btn) => {
             btn.onclick = (e) => {
                 e.preventDefault();
@@ -1241,9 +1449,10 @@
     }
 
     async function reload() {
+        const scope = state.invoiceScope === "archive" ? "archive" : "active";
         const [cos, invs] = await Promise.all([
             api("/tg/sale/api/companies"),
-            api("/tg/sale/api/invoices"),
+            api(`/tg/sale/api/invoices?scope=${scope}`),
         ]);
         state.companies = cos.companies || cos.items || [];
         state.allCompanies = cos.all || [];

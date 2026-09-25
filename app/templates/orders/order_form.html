@@ -31,40 +31,158 @@
 </div>
 </div>
 </div>
-<!-- Таблица позиций -->
-<div class="form-check mb-2">
-    <input class="form-check-input" type="checkbox" id="toggleSeedlings">
-    <label class="form-check-label" for="toggleSeedlings">Показать саженцы</label>
-</div>
 {% if current_user.role not in ['brigadier', 'user2'] %}
-<div class="card mb-3 border-primary">
-    <div class="card-body py-2">
-        <div class="row g-2 align-items-end">
-            <div class="col-md-4">
-                <label class="small fw-bold text-muted mb-1">Режим цен при создании</label>
-                <div class="btn-group w-100" role="group">
+<style>
+    /* «мягкий край» — панель цен при создании заказа */
+    .create-price-panel {
+        border: 1px solid #dde8df;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #f7fbf8 0%, #f3f8f4 100%);
+        box-shadow: 0 2px 8px rgba(27, 94, 32, 0.04);
+        margin-bottom: 1rem;
+    }
+    .create-price-panel .card-body {
+        padding: 0.85rem 1rem;
+    }
+    .create-price-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem 1.25rem;
+    }
+    .create-price-group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.45rem 0.6rem;
+    }
+    .create-price-group-label {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: #5f7163;
+        margin: 0;
+        white-space: nowrap;
+    }
+    .create-price-hint {
+        font-size: 12px;
+        color: #8a968c;
+        margin: 0;
+        flex: 1 1 180px;
+        min-width: 160px;
+        line-height: 1.35;
+    }
+    .create-price-panel .btn-group {
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid #c5d6c8;
+        background: #fff;
+    }
+    .create-price-panel .btn-group .btn {
+        border-radius: 0;
+        border: 0;
+        min-width: 5.5rem;
+    }
+    .create-price-panel .btn-group .btn-check:checked + .btn {
+        background: #2e7d32;
+        color: #fff;
+    }
+    .create-disc-chip {
+        border-radius: 999px !important;
+        min-width: 2.6rem;
+        padding-left: 0.55rem;
+        padding-right: 0.55rem;
+        border-color: #c5d6c8;
+        background: #fff;
+    }
+    .create-disc-chip.active,
+    .create-disc-chip.btn-success {
+        background: #2e7d32;
+        border-color: #2e7d32;
+        color: #fff;
+    }
+    /* Скруглённая «оболочка»: overflow обрезает поля, рамка — на группе */
+    .create-price-panel .input-group {
+        width: 7.5rem;
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid #c5d6c8;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(27, 94, 32, 0.05);
+    }
+    .create-price-panel .input-group .form-control,
+    .create-price-panel .input-group .input-group-text {
+        border: 0;
+        border-radius: 0 !important;
+        background: #fff;
+        box-shadow: none;
+    }
+    .create-price-panel .input-group .input-group-text {
+        color: #5f7163;
+        background: #f3f8f4;
+    }
+    .create-price-panel .input-group .form-control:focus {
+        box-shadow: none;
+    }
+    .create-price-panel .input-group:focus-within {
+        border-color: #2e7d32;
+        box-shadow: 0 0 0 0.18rem rgba(46, 125, 50, 0.18);
+    }
+    .seedlings-toggle-quiet {
+        font-size: 12px;
+        color: #8a968c !important;
+        opacity: 0.85;
+    }
+    .seedlings-toggle-quiet .form-check-input {
+        width: 0.9em;
+        height: 0.9em;
+        margin-top: 0.2em;
+        border-color: #c5cec7;
+        background-color: transparent;
+    }
+    .seedlings-toggle-quiet .form-check-input:checked {
+        background-color: #81c784;
+        border-color: #81c784;
+    }
+</style>
+<div class="card create-price-panel">
+    <div class="card-body">
+        <div class="create-price-toolbar">
+            <div class="create-price-group">
+                <span class="create-price-group-label">Цены</span>
+                <div class="btn-group" role="group" aria-label="Режим цен">
                     <input type="radio" class="btn-check" name="price_mode" id="createModeWholesale" value="wholesale" autocomplete="off">
-                    <label class="btn btn-outline-primary btn-sm" for="createModeWholesale">Опт</label>
+                    <label class="btn btn-outline-success btn-sm" for="createModeWholesale">Опт</label>
                     <input type="radio" class="btn-check" name="price_mode" id="createModeRetail" value="retail" autocomplete="off" checked>
                     <label class="btn btn-outline-success btn-sm" for="createModeRetail">Розница</label>
                 </div>
             </div>
-            <div class="col-md-5">
-                <label class="small fw-bold text-muted mb-1">Скидка %</label>
-                <div class="d-flex flex-wrap gap-1 mb-1" id="createDiscountChips">
+            <div class="create-price-group">
+                <span class="create-price-group-label">Скидка</span>
+                <div class="d-flex flex-wrap gap-1" id="createDiscountChips">
                     {% for d in [0, 5, 10, 15, 20, 25] %}
                     <button type="button" class="btn btn-sm btn-outline-secondary create-disc-chip" data-pct="{{ d }}">{{ d }}%</button>
                     {% endfor %}
                 </div>
-                <div class="input-group input-group-sm" style="max-width:180px">
+                <div class="input-group input-group-sm">
                     <input type="number" step="0.1" min="0" max="100" class="form-control" name="discount_pct" id="createDiscountPct" value="0">
                     <span class="input-group-text">%</span>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="small text-muted">Цены в таблице пересчитаются по прайсу с учётом режима и скидки.</div>
+            <p class="create-price-hint">Пересчёт по прайсу с учётом режима и скидки.</p>
+            <div class="form-check form-check-inline mb-0 seedlings-toggle-quiet ms-md-auto" title="Редко нужно: показать саженцы в списках">
+                <input class="form-check-input" type="checkbox" id="toggleSeedlings">
+                <label class="form-check-label" for="toggleSeedlings">Саженцы</label>
             </div>
         </div>
+    </div>
+</div>
+{% else %}
+<div class="mb-2">
+    <div class="form-check form-check-inline mb-0 seedlings-toggle-quiet" title="Редко нужно: показать саженцы в списках">
+        <input class="form-check-input" type="checkbox" id="toggleSeedlings">
+        <label class="form-check-label" for="toggleSeedlings">Саженцы</label>
     </div>
 </div>
 {% endif %}
@@ -119,7 +237,10 @@
                     </div>
                 </td>
                 <td class="text-center align-middle stock-info text-muted small">-</td>
-                <td class="text-end align-middle price-info small">-</td>
+                <td class="align-middle">
+                    <input type="number" name="price[]" class="form-control form-control-sm text-end price-input"
+                           step="0.01" min="0" placeholder="—" title="Цена позиции (можно править вручную)">
+                </td>
                 <td>
                     <input type="number" name="quantity[]" class="form-control form-control-sm text-end" min="1" required>
                 </td>
@@ -172,7 +293,10 @@ function addRow() {
     // Очистка полей
     newRow.querySelectorAll('input').forEach(i => i.value = '');
     newRow.querySelector('.stock-info').innerText = '-';
-    newRow.querySelector('.price-info').innerText = '-';
+    const priceInp = newRow.querySelector('.price-input');
+    if (priceInp) priceInp.value = '';
+    newRow.dataset.wholesale = '';
+    newRow.dataset.retail = '';
     
     // Сброс блока Года
     const yearWrapper = newRow.querySelector('.year-wrapper');
@@ -350,7 +474,10 @@ async function updateRowInfo(row, targetYear = null) {
                 yearSelect.style.display = 'block';
                 yearLabel.classList.add('d-none');
                 row.querySelector('.stock-info').innerText = '0';
-                row.querySelector('.price-info').innerText = '-';
+                const priceInp = row.querySelector('.price-input');
+                if (priceInp) priceInp.value = '';
+                row.dataset.wholesale = '';
+                row.dataset.retail = '';
             }
         } catch (e) { console.error(e); }
     }
@@ -374,6 +501,15 @@ function pricedFromList(wholesale, retail) {
     const disc = getCreateDiscountPct();
     return Math.round(Math.max(0, base * (1 - disc / 100)) * 100) / 100;
 }
+function setRowPrice(row, price) {
+    const inp = row.querySelector('.price-input');
+    if (!inp) return;
+    if (price || price === 0) {
+        inp.value = String(Math.round(Number(price) * 100) / 100);
+    } else {
+        inp.value = '';
+    }
+}
 function updateRowStatsImpl(row, free, wholesale, retail) {
     const stockCell = row.querySelector('.stock-info');
     stockCell.innerText = free;
@@ -381,7 +517,7 @@ function updateRowStatsImpl(row, free, wholesale, retail) {
     row.dataset.wholesale = wholesale != null ? wholesale : '';
     row.dataset.retail = retail != null ? retail : '';
     const price = pricedFromList(wholesale, retail);
-    row.querySelector('.price-info').innerText = (price || price === 0) ? (price + ' ₽') : '-';
+    setRowPrice(row, price);
 }
 function refreshAllCreatePrices() {
     document.querySelectorAll('#rowsContainer .item-row').forEach((row) => {

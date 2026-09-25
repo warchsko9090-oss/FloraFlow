@@ -32,76 +32,116 @@
     <a href="{{ return_to or url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm"><i class="fas fa-arrow-left"></i> Назад</a>
 </div>
 
-<div class="form-check mb-3">
-    <input class="form-check-input" type="checkbox" id="toggleSeedlings">
-    <label class="form-check-label" for="toggleSeedlings">Показать саженцы</label>
-</div>
-
 <!-- БЛОК "СВЯЗАННЫЕ ДОКУМЕНТЫ" (Цепочка) -->
 <style>
-    /* ДЕРЕВО ДОКУМЕНТОВ */
+    /* «мягкий край» + дорожки процессов */
     .doc-tree-container {
         display: flex;
         align-items: flex-start;
-        padding: 10px 0;
+        padding: 12px 4px;
         overflow-x: auto;
+        gap: 0;
     }
 
-    /* Узлы (Карточки) */
     .doc-node {
-        min-width: 220px;
-        max-width: 250px;
+        min-width: 200px;
+        max-width: 240px;
         background: #fff;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 10px;
+        border: 1px solid #dde8df;
+        border-radius: 12px;
+        padding: 10px 12px;
         position: relative;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        box-shadow: 0 2px 8px rgba(27, 94, 32, 0.04);
         font-size: 12px;
-        transition: 0.2s;
-        margin-bottom: 10px;
+        transition: box-shadow 0.18s ease, transform 0.18s ease;
+        margin-bottom: 0;
     }
-    
-    /* Эффект наведения и кликабельность для ссылок */
-    .doc-node.clickable:hover { 
-        box-shadow: 0 4px 10px rgba(0,0,0,0.15); 
-        transform: translateY(-2px); 
-        z-index: 5; 
+
+    .doc-node.clickable:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        transform: translateY(-1px);
+        z-index: 5;
         border-color: #FF9800;
         cursor: pointer;
     }
-    
-    /* Цветовые акценты */
-    .node-invoice { border-left: 5px solid #607D8B; background: #ECEFF1; }
-    .node-order { border-left: 5px solid #FF9800; }
-    .node-order.current { border: 2px solid #FF9800; background: #FFF3E0; } /* Текущий заказ выделен */
-    .node-payment { border-left: 4px solid #4CAF50; margin-left: 20px; font-size: 11px; }
-    .node-shipment { border-left: 4px solid #2196F3; margin-left: 20px; font-size: 11px; }
 
-    /* Структура */
-    .tree-level { display: flex; flex-direction: column; justify-content: center; margin-right: 40px; position: relative; }
-    .tree-branch { display: flex; flex-direction: column; gap: 15px; position: relative; }
-    
-    /* Линии связи */
+    .node-invoice { border-left: 4px solid #607D8B; background: #f5f7f8; }
+    .node-order { border-left: 4px solid #FF9800; }
+    .node-order.current { border: 2px solid #FF9800; background: #FFF8F0; }
+    .node-payment { border-left: 4px solid #4CAF50; font-size: 11px; }
+    .node-sale-inv { border-left: 4px solid #78909C; font-size: 11px; background: #fafbfc; }
+    .node-shipment { border-left: 4px solid #2196F3; font-size: 11px; }
+
+    .tree-level { display: flex; flex-direction: column; justify-content: center; margin-right: 36px; position: relative; }
+    .tree-branch { display: flex; flex-direction: column; gap: 20px; position: relative; }
+
     .connector-h {
-        position: absolute; left: 100%; top: 25px; width: 40px; height: 2px; background: #ccc;
+        position: absolute; left: 100%; top: 28px; width: 36px; height: 2px; background: #d0d7d2; border-radius: 1px;
     }
     .branch-item { position: relative; }
-    
-    /* Вертикальная линия для списка заказов */
+
     .branch-line-v {
-        position: absolute; left: -20px; top: 0; bottom: 0; width: 2px; background: #ccc;
+        position: absolute; left: -18px; top: 0; bottom: 0; width: 2px; background: #d0d7d2; border-radius: 1px;
     }
-    /* Горизонтальная линия от вертикальной к заказу */
     .branch-line-h {
-        position: absolute; left: -20px; top: 25px; width: 20px; height: 2px; background: #ccc;
+        position: absolute; left: -18px; top: 28px; width: 18px; height: 2px; background: #d0d7d2;
     }
-    
-    /* Линии для детей заказа (оплаты/отгрузки) */
-    .sub-item-line {
-        position: absolute; left: -15px; top: 18px; width: 15px; height: 2px; background: #eee;
+
+    /* Три горизонтальные дорожки: платежи | счета | отгрузки */
+    .order-children-lanes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 14px;
+        margin-left: 8px;
+        padding-top: 12px;
+        border-top: 1px dashed #d5ddd6;
+        align-items: flex-start;
     }
-    .sub-item-wrapper { position: relative; border-left: 2px solid #eee; padding-left: 0; margin-left: 10px; }
+    .order-lane {
+        flex: 1 1 160px;
+        min-width: 160px;
+        max-width: 220px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .order-lane-label {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 2px 0 4px;
+        border-bottom: 2px solid transparent;
+        margin-bottom: 2px;
+    }
+    .lane-payments .order-lane-label { color: #2e7d32; border-bottom-color: #a5d6a7; }
+    .lane-invoices .order-lane-label { color: #546e7a; border-bottom-color: #b0bec5; }
+    .lane-shipments .order-lane-label { color: #1565c0; border-bottom-color: #90caf9; }
+    .order-lane .doc-node { width: 100%; max-width: none; min-width: 0; }
+    .order-lane-empty {
+        font-size: 11px;
+        color: #9aa59c;
+        font-style: italic;
+        padding: 6px 0;
+    }
+
+    .seedlings-toggle-quiet {
+        font-size: 12px;
+        color: #8a968c !important;
+        opacity: 0.85;
+    }
+    .seedlings-toggle-quiet .form-check-input {
+        width: 0.9em;
+        height: 0.9em;
+        margin-top: 0.2em;
+        border-color: #c5cec7;
+        background-color: transparent;
+    }
+    .seedlings-toggle-quiet .form-check-input:checked {
+        background-color: #81c784;
+        border-color: #81c784;
+    }
 </style>
 
 <div class="card mb-3 shadow-sm bg-light">
@@ -119,7 +159,7 @@
                 <!-- 0. УРОВЕНЬ: ПРОЕКТ (ЕСЛИ ЕСТЬ) -->
                 {% if order.project %}
                 <div class="tree-level">
-                    <div class="doc-node clickable" style="border-left: 5px solid #9C27B0; background: #F3E5F5;">
+                    <div class="doc-node clickable" style="border-left: 4px solid #9C27B0; background: #F8F0FA;">
                         <a href="{{ url_for('finance.project_detail', project_id=order.project.id) }}" class="text-decoration-none stretched-link text-dark">
                             <div class="fw-bold text-primary mb-1"><i class="fas fa-project-diagram"></i> ПРОЕКТ</div>
                             <div class="fw-bold">{{ order.project.name }}</div>
@@ -135,7 +175,7 @@
                 <div class="tree-level">
                     <div class="doc-node node-invoice clickable bg-light">
                         <!-- Ссылка на новую страницу Счета -->
-                        <a href="{{ url_for('orders.invoice_detail', client_id=order.client_id, invoice_number=order.invoice_number) }}" class="text-decoration-none stretched-link">
+                        <a href="{{ url_for('orders.invoice_detail', client_id=order.invoice_client_id, invoice_number=order.invoice_number) }}" class="text-decoration-none stretched-link">
                             <div class="fw-bold text-secondary mb-1"><i class="fas fa-file-invoice"></i> ОБЩИЙ СЧЕТ <i class="fas fa-external-link-alt ms-1 small"></i></div>
                             <div class="fs-6 fw-bold text-dark text-decoration-underline">№ {{ order.invoice_number }}</div>
                             <div class="text-muted mb-1">{{ order.invoice_date|dateru }}</div>
@@ -154,7 +194,7 @@
                 <div class="tree-branch">
                     <!-- Рисуем вертикальную линию, если есть родитель-счет и заказов > 1 -->
                     {% if order.invoice_number and orders_data|length > 1 %}
-                    <div class="branch-line-v" style="top: 25px; bottom: 25px;"></div> 
+                    <div class="branch-line-v" style="top: 28px; bottom: 28px;"></div> 
                     {% endif %}
 
                     {% for item in orders_data %}
@@ -166,10 +206,8 @@
                         {% endif %}
 
                         <!-- КАРТОЧКА ЗАКАЗА -->
-                        <!-- Добавили класс clickable для неактивных заказов -->
                         <div class="doc-node node-order {% if item.is_current %}current{% else %}clickable{% endif %}">
                             <div class="d-flex justify-content-between mb-1">
-                                <!-- stretched-link делает кликабельной всю карточку -->
                                 <a href="{% if return_to %}{{ url_for('orders.order_detail', order_id=ord.id, return_to=return_to) }}{% else %}{{ url_for('orders.order_detail', order_id=ord.id) }}{% endif %}" class="fw-bold text-decoration-none stretched-link {% if item.is_current %}text-dark{% else %}text-primary{% endif %}">
                                     <i class="fas fa-shopping-cart"></i> Заказ #{{ ord.id }}
                                 </a>
@@ -195,65 +233,71 @@
                             {% endif %}
                         </div>
 
-                        <!-- 3. УРОВЕНЬ: ДЕТИ ЗАКАЗА (Оплаты и Отгрузки) -->
-                        <div class="sub-item-wrapper">
-                            
-                            <!-- ОПЛАТЫ -->
-                            {% if current_user.role != 'user2' %}
-                            {% for p in ord.payments %}
-                            <div class="position-relative mb-2">
-                                <div class="sub-item-line"></div>
+                        <!-- 3. ДОРОЖКИ: платежи | счета | отгрузки -->
+                        {% set _pays = ord.payments if current_user.role != 'user2' else [] %}
+                        {% set _invs = item.sale_invoices|default([]) if current_user.role != 'user2' else [] %}
+                        {% set _ships = item.shipments|default([]) %}
+                        {% if _pays or _invs or _ships %}
+                        <div class="order-children-lanes">
+                            <div class="order-lane lane-payments">
+                                <div class="order-lane-label"><i class="fas fa-money-bill-wave me-1"></i>Платежи</div>
+                                {% if _pays %}
+                                {% for p in _pays %}
                                 <div class="doc-node node-payment">
                                     <div class="d-flex justify-content-between">
-                                        <span class="text-success fw-bold"><i class="fas fa-money-bill-wave"></i> Платеж</span>
+                                        <span class="text-success fw-bold">Платеж</span>
                                         <small class="text-muted">{{ p.date|dateru }}</small>
                                     </div>
                                     <div class="fw-bold text-success">+ {{ p.amount|money }}</div>
-                                    {% if p.comment %}<div class="text-truncate text-muted fst-italic" style="max-width: 150px;">{{ p.comment }}</div>{% endif %}
+                                    {% if p.comment %}<div class="text-truncate text-muted fst-italic">{{ p.comment }}</div>{% endif %}
                                 </div>
+                                {% endfor %}
+                                {% else %}
+                                <div class="order-lane-empty">нет</div>
+                                {% endif %}
                             </div>
-                            {% endfor %}
-                            {% endif %}
-
-                            <!-- СЧЕТА КЛИЕНТУ -->
-                            {% if current_user.role != 'user2' %}
-                            {% for inv in item.sale_invoices|default([]) %}
-                            <div class="position-relative mb-2">
-                                <div class="sub-item-line"></div>
-                                <div class="doc-node node-invoice">
-                                    <div class="d-flex justify-content-between">
+                            <div class="order-lane lane-invoices">
+                                <div class="order-lane-label"><i class="fas fa-file-invoice-dollar me-1"></i>Счета</div>
+                                {% if _invs %}
+                                {% for inv in _invs %}
+                                <div class="doc-node node-sale-inv">
+                                    <div class="d-flex justify-content-between gap-1">
                                         <a href="{{ url_for('orders.sale_invoice_pdf', inv_id=inv.id) }}" class="fw-bold text-decoration-none text-dark" target="_blank" rel="noopener">
-                                            <i class="fas fa-file-invoice-dollar"></i> Счёт №{{ inv.number }}
+                                            №{{ inv.number }}
                                         </a>
-                                        <small class="text-muted">{% if inv.created_at %}{{ inv.created_at|dateru }}{% endif %}</small>
+                                        <small class="text-muted text-nowrap">{% if inv.created_at %}{{ inv.created_at|dateru }}{% endif %}</small>
                                     </div>
                                     <div class="small">
                                         {% if inv.kind == 'advance' %}произвольный{% elif inv.kind == 'balance' %}остаток{% else %}позиции{% endif %}
                                         · <b>{{ inv.amount|money }}</b>
                                     </div>
                                 </div>
+                                {% endfor %}
+                                {% else %}
+                                <div class="order-lane-empty">нет</div>
+                                {% endif %}
                             </div>
-                            {% endfor %}
-                            {% endif %}
-
-                            <!-- ОТГРУЗКИ -->
-                            {% for group in item.shipments %}
-                            <div class="position-relative mb-2">
-                                <div class="sub-item-line"></div>
+                            <div class="order-lane lane-shipments">
+                                <div class="order-lane-label"><i class="fas fa-truck me-1"></i>Отгрузки</div>
+                                {% if _ships %}
+                                {% for group in _ships %}
                                 <div class="doc-node node-shipment {% if group.type == 'ghost' %}border-warning{% endif %}">
                                     <div class="d-flex justify-content-between">
-                                        <span class="fw-bold text-primary"><i class="fas fa-truck"></i> Факт</span>
+                                        <span class="fw-bold text-primary">Факт</span>
                                         <small class="text-muted">{{ group.date.strftime('%d.%m') }}</small>
                                     </div>
                                     <div>Товаров: <b>{{ group.total_qty }} шт.</b></div>
                                     {% if group.comment %}
-                                    <div class="text-truncate text-muted fst-italic" style="max-width: 150px;">{{ group.comment }}</div>
+                                    <div class="text-truncate text-muted fst-italic">{{ group.comment }}</div>
                                     {% endif %}
                                 </div>
+                                {% endfor %}
+                                {% else %}
+                                <div class="order-lane-empty">нет</div>
+                                {% endif %}
                             </div>
-                            {% endfor %}
-                            
-                        </div> <!-- Конец детей -->
+                        </div>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
@@ -356,6 +400,24 @@
                             {% endfor %}
                         </select>
                     </div>
+                    {% if current_user.role in ['admin', 'executive'] %}
+                    <div class="mb-2">
+                        <label class="small text-muted">Плательщик</label>
+                        <select name="billing_client_id" class="form-select form-select-sm select-search">
+                            <option value="">— тот же, что клиент —</option>
+                            {% for c in clients %}
+                            <option value="{{ c.id }}" {% if order.billing_client_id and c.id == order.billing_client_id %}selected{% endif %}>{{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="preserve_as_billing" name="preserve_as_billing"
+                               {% if not order.billing_client_id %}checked{% endif %}>
+                        <label class="form-check-label small" for="preserve_as_billing">
+                            При смене клиента оставить прежнего плательщиком на счёт
+                        </label>
+                    </div>
+                    {% endif %}
                     <hr class="my-2">
                     <div class="mb-2">
                         <label class="small text-muted">Номер счета</label>
@@ -373,25 +435,15 @@
                         </div>
                     </div>
                     {% endif %}
-                    
-                    <!-- БЛОК ПРИВЯЗКИ К ПРОЕКТУ -->
-                    <hr class="my-2">
+                    {% if current_user.role == 'admin' %}
                     <div class="mb-2">
-                        <label class="small fw-bold text-success"><i class="fas fa-project-diagram"></i> Проект</label>
-                        <div class="input-group input-group-sm">
-                            <select name="project_id" class="form-select select-search">
-                                <option value="">- Не привязан -</option>
-                                {% for p in active_projects %}
-                                <option value="{{ p.id }}" {% if order.project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
-                                {% endfor %}
-                                {% if order.project and order.project.status != 'active' %}
-                                <option value="{{ order.project.id }}" selected>{{ order.project.name }} (Закрыт)</option>
-                                {% endif %}
-                            </select>
-                            <button type="submit" name="link_project" value="1" class="btn btn-outline-success" title="Обновить привязку"><i class="fas fa-check"></i></button>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="buh_exclude_edit" name="buh_exclude" {% if order.buh_exclude %}checked{% endif %}>
+                            <label class="form-check-label small" for="buh_exclude_edit">Не выгружать счет в ТГ</label>
                         </div>
+                        <div class="form-text">Отгрузка не попадёт в мини-приложение «Отгрузки · УПД».</div>
                     </div>
-                    <!-- КОНЕЦ БЛОКА -->
+                    {% endif %}
 
                     {% if order.status != 'canceled' %}
                     <button type="submit" class="btn btn-primary btn-sm w-100">Сохранить изменения</button>
@@ -469,35 +521,13 @@
                     {% endif %}
                 </div>
                 {% endif %}
-{% if can_use_price_editor %}
-                <div class="border rounded p-2 mt-2 mb-2" style="border-color:#b6d4fe!important;background:#f8fbff;">
-                    <div class="small fw-bold mb-2"><i class="fas fa-tags me-1 text-primary"></i> Редактор цен</div>
-                    <div class="d-flex gap-1 mb-2">
-                        <form method="POST" action="{{ url_for('orders.order_apply_prices', order_id=order.id) }}" class="flex-fill" hx-boost="false"
-                              onsubmit="return confirm('Поставить всем позициям оптовые цены из прайса?');">
-                            <input type="hidden" name="price_mode" value="wholesale">
-                            <input type="hidden" name="discount_pct" value="0">
-                            <button type="submit" class="btn btn-outline-primary btn-sm w-100">Опт</button>
-                        </form>
-                        <form method="POST" action="{{ url_for('orders.order_apply_prices', order_id=order.id) }}" class="flex-fill" hx-boost="false"
-                              onsubmit="return confirm('Поставить всем позициям розничные цены из прайса?');">
-                            <input type="hidden" name="price_mode" value="retail">
-                            <input type="hidden" name="discount_pct" value="0">
-                            <button type="submit" class="btn btn-outline-success btn-sm w-100">Розница</button>
-                        </form>
-                    </div>
-                    <button type="button" class="btn btn-primary btn-sm w-100" data-bs-toggle="modal" data-bs-target="#priceEditorModal">
-                        <i class="fas fa-percent me-1"></i> Скидки и пересчёт
-                    </button>
-                </div>
-                {% endif %}
                 <div class="d-md-none">
-                    <p class="mb-2"><i class="fas fa-user me-2 text-muted"></i>{{ order.client.name }}</p>
+                    <p class="mb-2"><i class="fas fa-user me-2 text-muted"></i>{{ order.client_label }}</p>
                     <p class="mb-2">Счет: <b>{{ order.invoice_number or '-' }}</b></p>
                     <p class="mb-0">Проект: <b>{% if order.project %}{{ order.project.name }}{% else %}-{% endif %}</b></p>
                 </div>
                 {% else %}
-                <p class="mb-2"><i class="fas fa-user me-2 text-muted"></i>{{ order.client.name }}</p>
+                <p class="mb-2"><i class="fas fa-user me-2 text-muted"></i>{{ order.client_label }}</p>
                 <p>Счет: <b>{{ order.invoice_number or '-' }}</b></p>
                 {% endif %}
             </div>
@@ -593,6 +623,27 @@
                 {% endif %}
             </div>
         </div>
+        {% if order.status != 'canceled' and current_user.role != 'user2' %}
+        <div class="card mb-3 shadow-sm d-none d-md-block">
+            <div class="card-body p-2">
+                <form method="POST" hx-boost="false">
+                    <label class="small fw-bold text-success"><i class="fas fa-project-diagram"></i> Проект</label>
+                    <div class="input-group input-group-sm">
+                        <select name="project_id" class="form-select select-search">
+                            <option value="">- Не привязан -</option>
+                            {% for p in active_projects %}
+                            <option value="{{ p.id }}" {% if order.project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+                            {% endfor %}
+                            {% if order.project and order.project.status != 'active' %}
+                            <option value="{{ order.project.id }}" selected>{{ order.project.name }} (Закрыт)</option>
+                            {% endif %}
+                        </select>
+                        <button type="submit" name="link_project" value="1" class="btn btn-outline-success" title="Обновить привязку"><i class="fas fa-check"></i></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endif %}
         {% if order.status != 'canceled' %}
         <form method="POST" onsubmit="return confirm('Отменить заказ?');" class="mt-3 d-none d-md-block">
             <input type="hidden" name="cancel_order" value="1">
@@ -610,13 +661,14 @@
     <div class="col-md-9">
         <div class="card shadow-sm">
             <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <span class="fw-bold">Состав заказа</span>
+                <div class="d-flex align-items-center flex-wrap gap-3">
+                    <span class="fw-bold">Состав заказа</span>
+                    <div class="form-check form-check-inline mb-0 seedlings-toggle-quiet" title="Редко нужно: показать саженцы в выпадающих списках">
+                        <input class="form-check-input" type="checkbox" id="toggleSeedlings">
+                        <label class="form-check-label" for="toggleSeedlings">Саженцы</label>
+                    </div>
+                </div>
                 <div class="d-flex gap-2">
-                    {% if current_user.role != 'user2' %}
-                    <a href="{{ url_for('orders.export_order_history', order_id=order.id) }}" class="btn btn-outline-success btn-sm d-none d-md-inline-block">
-                        <i class="fas fa-file-excel"></i> История .xlsx
-                    </a>
-                    {% endif %}
                     {% if order.status != 'canceled' and current_user.role != 'user2' %}
                     <button class="btn btn-success btn-sm d-none d-md-inline-block" data-bs-toggle="modal" data-bs-target="#addItemModal">
                         <i class="fas fa-plus"></i> Добавить позицию
@@ -644,6 +696,29 @@
                     Цену, поле и партию менять нельзя — новые позиции добавляются без поля/партии,
                     задача на назначение уходит менеджеру питомника и админу.
                 </div>
+            </div>
+            {% endif %}
+            {% if can_use_price_editor %}
+            <div class="px-3 py-2 d-flex flex-wrap align-items-center gap-2 border-bottom"
+                 style="background:#f8fbff;border-color:#b6d4fe!important;">
+                <span class="small fw-bold text-nowrap me-1">
+                    <i class="fas fa-tags me-1 text-primary"></i> Редактор цен
+                </span>
+                <form method="POST" action="{{ url_for('orders.order_apply_prices', order_id=order.id) }}" class="m-0" hx-boost="false"
+                      onsubmit="return confirm('Поставить всем позициям оптовые цены из прайса?');">
+                    <input type="hidden" name="price_mode" value="wholesale">
+                    <input type="hidden" name="discount_pct" value="0">
+                    <button type="submit" class="btn btn-outline-primary btn-sm">Опт</button>
+                </form>
+                <form method="POST" action="{{ url_for('orders.order_apply_prices', order_id=order.id) }}" class="m-0" hx-boost="false"
+                      onsubmit="return confirm('Поставить всем позициям розничные цены из прайса?');">
+                    <input type="hidden" name="price_mode" value="retail">
+                    <input type="hidden" name="discount_pct" value="0">
+                    <button type="submit" class="btn btn-outline-success btn-sm">Розница</button>
+                </form>
+                <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#priceEditorModal">
+                    <i class="fas fa-percent me-1"></i> Скидки и пересчёт
+                </button>
             </div>
             {% endif %}
             <div class="card-body p-0">
@@ -857,9 +932,17 @@
                         </tbody>
                     </table>
                 </div>
-                {% if order.status != 'canceled' and order.items and current_user.role != 'user2' %}
-                <div class="p-2 bg-light text-end border-top">
-                    <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-save me-1"></i> Сохранить изменения</button>
+                {% if current_user.role != 'user2' %}
+                <div class="p-2 bg-light d-flex justify-content-between align-items-center gap-2 border-top">
+                    <a href="{{ url_for('orders.export_order_history', order_id=order.id) }}"
+                       class="btn btn-outline-success btn-sm d-none d-md-inline-block"
+                       hx-boost="false"
+                       target="_blank">
+                        <i class="fas fa-file-excel"></i> История .xlsx
+                    </a>
+                    {% if order.status != 'canceled' and order.items %}
+                    <button type="submit" class="btn btn-primary btn-sm ms-auto"><i class="fas fa-save me-1"></i> Сохранить изменения</button>
+                    {% endif %}
                 </div>
                 {% endif %}
                 </form>

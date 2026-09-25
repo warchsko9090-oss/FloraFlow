@@ -333,15 +333,49 @@ class Order(db.Model):
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     created_by = db.relationship('User', foreign_keys=[created_by_user_id])
 
-    client = db.relationship('Client')
+    # Опциональный плательщик на счёт (вариант «двойного клиента»):
+    # client_id — ключевой клиент/канал (ландшафтник и т.п.);
+    # billing_client_id — юрлицо на документы. NULL = счёт на client_id.
+    billing_client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+
+    # Бухгалтер (ТГ «Отгрузки · УПД»): скрыть из приложения / пометить проведённым.
+    buh_exclude = db.Column(db.Boolean, default=False)  # админ: не показывать в приложении
+    buh_posted_at = db.Column(db.DateTime, nullable=True)  # бухгалтер пометила отгрузку проведённой
+    buh_posted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    client = db.relationship('Client', foreign_keys=[client_id])
+    billing_client = db.relationship('Client', foreign_keys=[billing_client_id])
+    buh_posted_by = db.relationship('User', foreign_keys=[buh_posted_by_id])
     items = db.relationship('OrderItem', backref='order', cascade="all, delete-orphan")
     payments = db.relationship('Payment', backref='order', cascade="all, delete-orphan")
 
     __table_args__ = (
         db.Index('idx_order_date', 'date'),
         db.Index('idx_order_client', 'client_id'),
+        db.Index('idx_order_billing_client', 'billing_client_id'),
         db.Index('idx_order_status', 'status'),
     )
+
+    @property
+    def invoice_client(self):
+        """Клиент для счёта/УПД: плательщик, иначе ключевой."""
+        return self.billing_client or self.client
+
+    @property
+    def invoice_client_id(self):
+        return self.billing_client_id or self.client_id
+
+    @property
+    def client_label(self):
+        """Подпись в списках: ключ · счёт: плательщик (если отличаются)."""
+        key = self.client.name if self.client else '—'
+        if (
+            self.billing_client_id
+            and self.billing_client
+            and self.billing_client_id != self.client_id
+        ):
+            return f'{key} · счёт: {self.billing_client.name}'
+        return key
 
     @property
     def total_sum(self):
@@ -953,13 +987,16 @@ class Project(db.Model):
         # Сумма всех заказов, привязанных к проекту
         return sum(o.total_sum for o in self.orders if o.status != 'canceled')
 
-    def get_economics(self):
+    def get_economics(self, stock_prices=None, costs_cache=None, yard_rows_by_field=None):
         """
         Возвращает полную экономику проекта:
         - Выручка (План по заказам + отгрузки с контейнерной площадки проекта)
         - Себестоимость растений (Закупка + Накопленные за (Год-1))
         - Прямые расходы (Факт)
         - Прибыль и Рентабельность
+
+        Опциональные кэши (для списка проектов / отчётов): stock_prices, costs_cache,
+        yard_rows_by_field — чтобы не грузить склад и себестоимость заново на каждый проект.
         """
         from decimal import Decimal
         from app.models import StockBalance, Order, OrderItem
@@ -976,17 +1013,22 @@ class Project(db.Model):
         yard_field_id = _project_potting_stock_field_id(self)
         yard_extra_items = []
         if yard_field_id:
-            yard_rows = (
-                db.session.query(OrderItem)
-                .join(Order, OrderItem.order_id == Order.id)
-                .filter(
-                    OrderItem.field_id == yard_field_id,
-                    Order.status != 'canceled',
-                    Order.is_deleted == False,
-                    OrderItem.shipped_quantity > 0,
+            if yard_rows_by_field is not None and yard_field_id in yard_rows_by_field:
+                yard_rows = yard_rows_by_field[yard_field_id]
+            else:
+                yard_rows = (
+                    db.session.query(OrderItem)
+                    .join(Order, OrderItem.order_id == Order.id)
+                    .filter(
+                        OrderItem.field_id == yard_field_id,
+                        Order.status != 'canceled',
+                        Order.is_deleted == False,
+                        OrderItem.shipped_quantity > 0,
+                    )
+                    .all()
                 )
-                .all()
-            )
+                if yard_rows_by_field is not None:
+                    yard_rows_by_field[yard_field_id] = yard_rows
             for item in yard_rows:
                 if item.order_id in linked_order_ids:
                     continue
@@ -1001,13 +1043,15 @@ class Project(db.Model):
 
         # 3. Себестоимость растений
         plants_cost_total = Decimal(0)
-        costs_cache = {} # Кэш для накопленных расходов по годам
-        
+        if costs_cache is None:
+            costs_cache = {}
+
         # Кэш цен закупки (чтобы не дергать базу 1000 раз)
-        stock_prices = { 
-            (sb.plant_id, sb.size_id, sb.field_id, sb.year): sb.purchase_price 
-            for sb in StockBalance.query.all() 
-        }
+        if stock_prices is None:
+            stock_prices = {
+                (sb.plant_id, sb.size_id, sb.field_id, sb.year): sb.purchase_price
+                for sb in StockBalance.query.all()
+            }
 
         def _ensure_cost_year(calc_basis_year):
             if calc_basis_year not in costs_cache:

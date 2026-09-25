@@ -613,7 +613,7 @@ def orders_list():
         v = (v or '').strip()
         if v.isdigit():
             f_ids.append(int(v))
-    sort = request.args.get('sort', 'name')  # По умолчанию сортировка по названию (имени клиента)
+    sort = request.args.get('sort', 'date')  # По умолчанию — по дате создания
     
     if request.method == 'POST' and current_user.role == 'admin':
         oid = request.form.get('order_id')
@@ -652,11 +652,14 @@ def orders_list():
     show_hidden = mode in ('hidden', 'trash')
     q = Order.query.options(
         joinedload(Order.client),
+        joinedload(Order.billing_client),
         joinedload(Order.items).joinedload(OrderItem.plant),
         joinedload(Order.items).joinedload(OrderItem.size),
     ).filter_by(is_deleted=show_hidden)
         
-    if f_client: q = q.filter(Order.client_id == int(f_client))
+    if f_client:
+        cid = int(f_client)
+        q = q.filter(or_(Order.client_id == cid, Order.billing_client_id == cid))
     if f_status: q = q.filter(Order.status == f_status)
     if not f_status: q = q.filter(Order.status != 'ghost')
     if f_date_start: q = q.filter(func.date(Order.date) >= f_date_start)
@@ -667,7 +670,7 @@ def orders_list():
     # Применяем сортировку
     if sort == 'date':
         orders = q.order_by((Order.status == 'canceled'), Order.date.desc()).all()
-    else:  # sort == 'name' (по умолчанию)
+    else:  # sort == 'name'
         orders = q.order_by((Order.status == 'canceled')).all()
         # Сортируем по имени клиента в памяти, чтобы использовать natural_key
         orders.sort(key=lambda x: natural_key(x.client.name))
@@ -717,7 +720,7 @@ def orders_list():
     all_orders_for_filter = [
         {
             'id': o.id,
-            'client_name': (o.client.name if o.client else '—'),
+            'client_name': o.client_label,
         }
         for o in filter_orders_q.all()
     ]
@@ -1126,14 +1129,14 @@ def sale_invoice_search_orders_api():
         out.append({
             'id': o.id,
             'client_id': o.client_id,
-            'client_name': o.client.name if o.client else '',
+            'client_name': o.client_label,
             'status': o.status,
             'date': o.date.strftime('%d.%m.%Y') if o.date else '',
             'invoice_number': o.invoice_number or '',
             'total': total,
             'paid': paid,
             'label': (
-                f"#{o.id} · {(o.client.name if o.client else '—')}"
+                f"#{o.id} · {o.client_label}"
                 + (f" · счёт {o.invoice_number}" if o.invoice_number else "")
                 + f" · {total:,.0f} ₽".replace(',', ' ')
             ),
@@ -1578,19 +1581,20 @@ def order_custom_sale_invoice(order_id):
 
     if form is None:
         buyer = ''
-        if o.client:
+        payer = o.invoice_client
+        if payer:
             from types import SimpleNamespace
             tmp = SimpleNamespace(
-                buyer_name=o.client.name or '',
-                buyer_inn=getattr(o.client, 'inn', None),
-                buyer_kpp=getattr(o.client, 'kpp', None),
-                buyer_ogrn=getattr(o.client, 'ogrn', None),
-                buyer_address=getattr(o.client, 'address', None),
-                buyer_phone=getattr(o.client, 'phone', None),
-                buyer_bank=getattr(o.client, 'bank_name', None),
-                buyer_rs=getattr(o.client, 'rs', None),
-                buyer_bik=getattr(o.client, 'bik', None),
-                buyer_ks=getattr(o.client, 'ks', None),
+                buyer_name=payer.name or '',
+                buyer_inn=getattr(payer, 'inn', None),
+                buyer_kpp=getattr(payer, 'kpp', None),
+                buyer_ogrn=getattr(payer, 'ogrn', None),
+                buyer_address=getattr(payer, 'address', None),
+                buyer_phone=getattr(payer, 'phone', None),
+                buyer_bank=getattr(payer, 'bank_name', None),
+                buyer_rs=getattr(payer, 'rs', None),
+                buyer_bik=getattr(payer, 'bik', None),
+                buyer_ks=getattr(payer, 'ks', None),
                 anonymous=False,
             )
             buyer = _buyer_line(tmp)
@@ -2040,6 +2044,7 @@ def order_create():
         f_ids = request.form.getlist('field[]')
         y_ids = request.form.getlist('year[]')
         q_ids = request.form.getlist('quantity[]')
+        price_ids = request.form.getlist('price[]')
         
         created_items = []
         deficit_notes = []
@@ -2085,6 +2090,14 @@ def order_create():
                 base = wholesale if create_price_mode == 'wholesale' else retail
                 from app.shop_prices import price_with_discount
                 p = price_with_discount(base, create_discount_pct)
+                raw_price = price_ids[i] if i < len(price_ids) else ''
+                if str(raw_price or '').strip() != '':
+                    try:
+                        p = float(str(raw_price).replace(',', '.').replace(' ', '').replace('\u00a0', ''))
+                        if p < 0:
+                            p = 0.0
+                    except (TypeError, ValueError):
+                        pass
                 new_item = OrderItem(
                     order_id=o.id,
                     plant_id=int(p_ids[i]),
@@ -2423,14 +2436,42 @@ def order_detail(order_id):
             flash('Привязка к проекту обновлена')
 
         if 'update_info' in request.form:
-            new_client_id = request.form.get('client_id')
-            if new_client_id: o.client_id = int(new_client_id)
+            old_client_id = o.client_id
+            new_client_raw = request.form.get('client_id')
+            new_client_id = int(new_client_raw) if new_client_raw else o.client_id
+
+            if current_user.role in ['admin', 'executive']:
+                billing_raw = (request.form.get('billing_client_id') or '').strip()
+                preserve = request.form.get('preserve_as_billing') == 'on'
+                if billing_raw:
+                    billing_id = int(billing_raw)
+                else:
+                    billing_id = None
+                # Перепривязка: сменили ключевого, плательщик не указан явно —
+                # оставляем прежнего клиента как плательщика на счёт.
+                if (
+                    billing_id is None
+                    and preserve
+                    and new_client_id
+                    and int(new_client_id) != int(old_client_id or 0)
+                ):
+                    billing_id = old_client_id
+                if billing_id and int(billing_id) == int(new_client_id):
+                    billing_id = None
+                o.client_id = new_client_id
+                o.billing_client_id = billing_id
+            else:
+                if new_client_id:
+                    o.client_id = int(new_client_id)
+
             o.invoice_number = request.form.get('invoice_number')
             d = request.form.get('invoice_date')
             o.invoice_date = datetime.strptime(d, '%Y-%m-%d') if d else None
             
             if current_user.role in ['admin', 'executive']:
                 o.is_barter = request.form.get('is_barter') == 'on'
+            if current_user.role == 'admin':
+                o.buh_exclude = request.form.get('buh_exclude') == 'on'
                 
             db.session.commit()
             flash('Обновлено')
@@ -3244,7 +3285,8 @@ def order_detail(order_id):
             .limit(80)
         )
         free_rows = q_free.all()
-        same_client = [inv for inv in free_rows if o.client_id and inv.client_id == o.client_id]
+        payer_id = o.invoice_client_id
+        same_client = [inv for inv in free_rows if payer_id and inv.client_id == payer_id]
         others = [inv for inv in free_rows if inv not in same_client]
         linkable_sale_invoices = (same_client + others)[:40]
         sale_companies = [
@@ -3444,6 +3486,9 @@ def order_ship(order_id):
 
         if o.status == 'reserved': o.status = 'in_progress'
         if all(i.shipped_quantity >= i.quantity for i in o.items): o.status = 'shipped'
+
+        from app.digging import clear_plan_after_ship
+        clear_plan_after_ship(o)
 
         db.session.commit()
 

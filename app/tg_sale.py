@@ -19,7 +19,7 @@ from pathlib import Path
 from flask import (
     Blueprint, current_app, jsonify, request, render_template, make_response,
 )
-from sqlalchemy import event, func, inspect, or_
+from sqlalchemy import event, func, inspect, or_, cast, String
 from sqlalchemy.orm import Session, joinedload, selectinload
 from werkzeug.utils import secure_filename
 
@@ -101,7 +101,7 @@ def _can_sale(user: User) -> bool:
 
 
 def _can_firms(user: User) -> bool:
-    return (user.role or '') in ('admin', 'executive')
+    return (user.role or '') == 'admin'
 
 
 def _is_accountant(user: User | None) -> bool:
@@ -709,7 +709,7 @@ def create_sale_invoice_from_order(
             inv.status = 'approved'
             inv.approved_at = inv.approved_at or now
 
-    apply_client_to_invoice(inv, order.client)
+    apply_client_to_invoice(inv, order.invoice_client)
     _copy_order_items_to_sale_invoice(inv, order)
     allocate_sale_doc_number(inv)
     # Order.invoice_number — старый «общий счёт» для группировки дерева; не трогаем,
@@ -794,7 +794,7 @@ def create_custom_sale_invoice(
     db.session.add(inv)
     db.session.flush()
     if order is not None:
-        apply_client_to_invoice(inv, order.client)
+        apply_client_to_invoice(inv, order.invoice_client)
     else:
         name = (buyer_name or '').strip()
         if not name and buyer_line:
@@ -946,8 +946,14 @@ def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
     if extra > 0:
         items.append(f'• … и ещё {extra} {pos_word}')
     body = '\n'.join(items) if items else '• нет позиций'
+    oid = order.id if order is not None else inv.order_id
+    num = sale_public_number(inv)
+    if oid:
+        title = f'✅ <b>Новый заказ №{oid}</b> / счёт №{num}'
+    else:
+        title = f'✅ <b>Новый счёт №{num}</b>'
     text = '\n'.join([
-        f'✅ <b>Согласован на выкопку</b> {_sale_chat_ref(inv, order)}',
+        title,
         '',
         f'👤 {buyer}',
         f'💰 ИТОГО: {_fmt_money_ru(inv.amount)} · {npos} {pos_word}',
@@ -956,6 +962,38 @@ def _approved_orders_text(inv: SaleInvoice, order: Order | None = None) -> str:
         body,
     ])
     return text[:3500]
+
+
+def _order_is_paid_and_shipped(order: Order | None) -> bool:
+    """Как в ERP-списке заказов: полностью оплачен и всё отгружено → «неактивен»."""
+    if not order:
+        return False
+    if getattr(order, 'is_deleted', False):
+        return False
+    if (order.status or '') in ('canceled', 'ghost'):
+        return False
+    items = list(order.items or [])
+    if not items:
+        return False
+    if order.payment_status != 'paid':
+        return False
+    return all(
+        int(it.shipped_quantity or 0) >= int(it.quantity or 0)
+        for it in items
+    )
+
+
+def _invoice_is_erp_archived(inv: SaleInvoice) -> bool:
+    """Счёт уходит в архив мини-приложения, если заказ ERP уже оплачен и отгружен."""
+    if not inv.order_id:
+        return False
+    order = inv.order
+    if order is None:
+        order = Order.query.options(
+            selectinload(Order.items),
+            selectinload(Order.payments),
+        ).get(inv.order_id)
+    return _order_is_paid_and_shipped(order)
 
 
 def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
@@ -980,6 +1018,7 @@ def _serialize_invoice(inv: SaleInvoice, *, detail: bool = False) -> dict:
         'origin': inv.origin or 'miniapp',
         'from_existing_order': bool(inv.from_existing_order),
         'anonymous': bool(inv.anonymous),
+        'erp_archived': _invoice_is_erp_archived(inv),
     }
     if detail:
         free_map = _free_pairs()
@@ -1063,12 +1102,22 @@ def _apply_buyer(inv: SaleInvoice, body: dict):
 
 
 def sync_order_client_from_sale_invoice(inv: SaleInvoice | None) -> bool:
-    """Смена клиента в Mini App-счёте → тот же клиент у связанного заказа ERP."""
+    """Смена клиента в Mini App-счёте → плательщик/клиент у связанного заказа.
+
+    Если у заказа уже задан billing_client (двойной клиент) — обновляем
+    только его, ключевого client_id не трогаем. Иначе — как раньше:
+    пишем в order.client_id (менеджерский поток «заказ = плательщик»).
+    """
     if not inv or not inv.order_id or not inv.client_id:
         return False
     order = inv.order or Order.query.get(inv.order_id)
     if not order:
         return False
+    if order.billing_client_id:
+        if int(order.billing_client_id or 0) == int(inv.client_id):
+            return False
+        order.billing_client_id = inv.client_id
+        return True
     if int(order.client_id or 0) == int(inv.client_id):
         return False
     order.client_id = inv.client_id
@@ -1146,6 +1195,7 @@ def _serialize_order(order: Order, *, preview: bool = True) -> dict:
     shown = lines[:4] if preview else lines
     more = max(0, len(lines) - len(shown))
     client = order.client
+    payer = order.invoice_client
     return {
         'id': order.id,
         'status': order.status or '',
@@ -1159,7 +1209,7 @@ def _serialize_order(order: Order, *, preview: bool = True) -> dict:
         'items_count': len(lines),
         'more_count': more,
         'lines': shown if preview else lines,
-        'buyer': _buyer_from_client(client),
+        'buyer': _buyer_from_client(payer),
     }
 
 
@@ -1200,11 +1250,13 @@ def _link_existing_order(inv: SaleInvoice, order_id) -> tuple[Order | None, str 
     # При обычном «Сохранить» клиент, выбранный в Mini App, не должен
     # затираться старым order.client_id.
     if first_link:
-        inv.client_id = order.client_id
-        buyer = _buyer_from_client(order.client)
+        payer = order.invoice_client
+        payer_id = order.invoice_client_id
+        inv.client_id = payer_id
+        buyer = _buyer_from_client(payer)
         if buyer.get('name'):
             _apply_buyer(inv, {
-                'client_id': order.client_id,
+                'client_id': payer_id,
                 'buyer_name': buyer.get('name'),
                 'buyer_inn': buyer.get('inn'),
                 'buyer_kpp': buyer.get('kpp'),
@@ -1216,8 +1268,8 @@ def _link_existing_order(inv: SaleInvoice, order_id) -> tuple[Order | None, str 
                 'buyer_bik': buyer.get('bik'),
                 'buyer_ks': buyer.get('ks'),
             })
-    elif not inv.client_id and order.client_id:
-        inv.client_id = order.client_id
+    elif not inv.client_id and order.invoice_client_id:
+        inv.client_id = order.invoice_client_id
     return order, None
 
 
@@ -2063,7 +2115,9 @@ def _buh_invoice_brief(inv: SaleInvoice) -> dict:
         'id': inv.id,
         'number': sale_public_number(inv),
         'kind': inv.kind or 'goods',
-        'buyer_name': inv.buyer_name or (order.client.name if order and order.client else ''),
+        'buyer_name': inv.buyer_name or (
+            order.invoice_client.name if order and order.invoice_client else ''
+        ),
         'company_name': inv.company.short_name if inv.company else '',
         'amount': float(inv.amount or 0),
         'created_at': inv.created_at.isoformat() if inv.created_at else None,
@@ -2107,6 +2161,9 @@ def _buh_order_list_card(order: Order) -> dict:
         'invoice_count': inv_count,
         'lines': preview,
         'more_count': max(0, len(items) - len(preview)),
+        'posted': bool(order.buh_posted_at),
+        'posted_at': order.buh_posted_at.isoformat() if order.buh_posted_at else None,
+        'order_date': order.date.isoformat() if order.date else None,
     }
 
 
@@ -2126,6 +2183,8 @@ def _buh_order_detail_payload(order: Order) -> dict:
         'invoices': invoices,
         'order_lines': order_lines,
         'shipments': _buh_shipment_journal(order.id),
+        'posted': bool(order.buh_posted_at),
+        'posted_at': order.buh_posted_at.isoformat() if order.buh_posted_at else None,
     }
 
 
@@ -2140,7 +2199,9 @@ def _buh_load_shipped_order(order_id: int) -> Order | None:
         .filter(Order.id == order_id, Order.is_deleted.is_(False))
         .first()
     )
-    if not order or not _buh_order_is_shipped(order):
+    if not order or getattr(order, 'buh_exclude', False):
+        return None
+    if not _buh_order_is_shipped(order):
         return None
     return order
 
@@ -2155,16 +2216,16 @@ def _buh_allowed_invoice(inv_id: int) -> SaleInvoice | None:
     )
     if not inv or not inv.order_id or not inv.order or inv.order.is_deleted:
         return None
+    if getattr(inv.order, 'buh_exclude', False):
+        return None
     if not _buh_order_is_shipped(inv.order):
         return None
     return inv
 
 
-@bp.route('/api/buh/orders')
-@require_buh
-def api_buh_orders(_user: User):
-    """Заказы с отгрузкой — единица экрана УПД для бухгалтера."""
-    orders = (
+def _buh_orders_query(scope: str = 'active'):
+    """Базовый запрос отгруженных заказов для экрана бухгалтера."""
+    q = (
         Order.query
         .options(
             joinedload(Order.client),
@@ -2174,11 +2235,55 @@ def api_buh_orders(_user: User):
         .filter(
             Order.is_deleted.is_(False),
             Order.id.in_(_buh_shipped_order_ids()),
+            or_(Order.buh_exclude.is_(False), Order.buh_exclude.is_(None)),
         )
-        .order_by(Order.id.desc())
-        .limit(200)
-        .all()
     )
+    if scope == 'archive':
+        q = q.filter(Order.buh_posted_at.isnot(None))
+    else:
+        q = q.filter(Order.buh_posted_at.is_(None))
+    return q
+
+
+@bp.route('/api/buh/orders')
+@require_buh
+def api_buh_orders(_user: User):
+    """Заказы с отгрузкой — активные или архив проведённых."""
+    scope = (request.args.get('scope') or 'active').strip().lower()
+    if scope not in ('active', 'archive'):
+        scope = 'active'
+    q_text = (request.args.get('q') or '').strip()
+    sort = (request.args.get('sort') or 'date').strip().lower()
+    direction = (request.args.get('dir') or 'desc').strip().lower()
+    if direction not in ('asc', 'desc'):
+        direction = 'desc'
+
+    q = _buh_orders_query(scope)
+    if q_text:
+        like = f'%{q_text}%'
+        id_filters = [
+            Client.name.ilike(like),
+            Order.invoice_number.ilike(like),
+            cast(Order.id, String).ilike(like),
+        ]
+        if q_text.isdigit():
+            id_filters.append(Order.id == int(q_text))
+        q = q.outerjoin(Client, Order.client_id == Client.id).filter(or_(*id_filters))
+
+    orders = q.all()
+    reverse = direction == 'desc'
+    if sort == 'client':
+        orders.sort(key=lambda o: ((o.client.name if o.client else '') or '').lower(), reverse=reverse)
+    elif sort == 'sum':
+        orders.sort(key=lambda o: float(o.total_sum or 0), reverse=reverse)
+    elif sort == 'posted' and scope == 'archive':
+        orders.sort(key=lambda o: o.buh_posted_at or datetime.min, reverse=reverse)
+    else:
+        if scope == 'archive' and sort == 'date':
+            orders.sort(key=lambda o: o.buh_posted_at or o.date or datetime.min, reverse=reverse)
+        else:
+            orders.sort(key=lambda o: o.date or datetime.min, reverse=reverse)
+
     seen = set()
     items = []
     for order in orders:
@@ -2186,7 +2291,7 @@ def api_buh_orders(_user: User):
             continue
         seen.add(order.id)
         items.append(_buh_order_list_card(order))
-    return jsonify({'orders': items})
+    return jsonify({'orders': items, 'scope': scope, 'count': len(items)})
 
 
 @bp.route('/api/buh/orders/<int:order_id>')
@@ -2196,6 +2301,34 @@ def api_buh_order(_user: User, order_id: int):
     if not order:
         return jsonify({'error': 'not_found'}), 404
     return jsonify(_buh_order_detail_payload(order))
+
+
+@bp.route('/api/buh/orders/<int:order_id>/post', methods=['POST'])
+@require_buh
+def api_buh_order_post(user: User, order_id: int):
+    """Пометить отгрузку проведённой бухгалтером → в архив."""
+    order = _buh_load_shipped_order(order_id)
+    if not order:
+        return jsonify({'error': 'not_found'}), 404
+    if order.buh_posted_at:
+        return jsonify({'ok': True, 'posted': True, 'already': True})
+    order.buh_posted_at = msk_now()
+    order.buh_posted_by_id = user.id
+    db.session.commit()
+    return jsonify({'ok': True, 'posted': True})
+
+
+@bp.route('/api/buh/orders/<int:order_id>/unpost', methods=['POST'])
+@require_buh
+def api_buh_order_unpost(_user: User, order_id: int):
+    """Вернуть заказ из архива на главную бухгалтера."""
+    order = _buh_load_shipped_order(order_id)
+    if not order:
+        return jsonify({'error': 'not_found'}), 404
+    order.buh_posted_at = None
+    order.buh_posted_by_id = None
+    db.session.commit()
+    return jsonify({'ok': True, 'posted': False})
 
 
 @bp.route('/api/buh/invoices/<int:inv_id>/pdf')
@@ -2454,14 +2587,28 @@ def api_invoices(_user: User):
     except Exception:
         db.session.rollback()
         current_app.logger.exception('align sale invoices with orders')
-    rows = (
+    scope = (request.args.get('scope') or 'active').strip().lower()
+    if scope not in ('active', 'archive'):
+        scope = 'active'
+    # Берём запас по id: часть уйдёт в архив (оплачен+отгружен в ERP).
+    candidates = (
         SaleInvoice.query
+        .options(
+            joinedload(SaleInvoice.company),
+            joinedload(SaleInvoice.order).selectinload(Order.items),
+            joinedload(SaleInvoice.order).selectinload(Order.payments),
+        )
         .filter(SaleInvoice.status != 'discarded')
         .order_by(SaleInvoice.id.desc())
-        .limit(80)
+        .limit(500)
         .all()
     )
-    return jsonify({'invoices': [_serialize_invoice(r) for r in rows]})
+    if scope == 'archive':
+        rows = [r for r in candidates if _invoice_is_erp_archived(r)]
+    else:
+        rows = [r for r in candidates if not _invoice_is_erp_archived(r)]
+    rows = rows[:80]
+    return jsonify({'invoices': [_serialize_invoice(r) for r in rows], 'scope': scope})
 
 
 @bp.route('/api/invoices', methods=['POST'])
@@ -2520,7 +2667,9 @@ def api_get(_user: User, inv_id: int):
 @require_sale
 def api_save(_user: User, inv_id: int):
     inv = SaleInvoice.query.get_or_404(inv_id)
-    if inv.status != 'draft':
+    if inv.status == 'discarded':
+        return jsonify({'error': 'not_found'}), 404
+    if inv.status not in ('draft', 'approved'):
         return jsonify({'error': 'locked'}), 400
     body = request.get_json(silent=True) or {}
     if body.get('company_id'):
@@ -2548,6 +2697,10 @@ def api_save(_user: User, inv_id: int):
     else:
         inv.amount = _line_sum(inv.lines)
     sync_order_client_from_sale_invoice(inv)
+    if inv.status == 'approved':
+        blob = _store_pdf(inv)
+        if not blob:
+            return jsonify({'error': 'pdf_failed'}), 500
     db.session.commit()
     return jsonify(_serialize_invoice(inv, detail=True))
 

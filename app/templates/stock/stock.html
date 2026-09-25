@@ -645,7 +645,6 @@
             <button type="button" class="btn btn-white border" onclick="collapseAllStocks()" title="Свернуть все"><i class="fas fa-angle-double-up text-secondary"></i></button>
         </div>
 
-        <button class="btn btn-success btn-sm ms-2"><i class="fas fa-sync-alt"></i></button>
         <div class="ms-auto d-flex gap-2 align-items-center">
             {% if current_user.role != 'user2' %}
             <select id="stockPriceMode" class="form-select form-select-sm" style="width:auto" title="Тип цены в выгрузке">
@@ -1079,11 +1078,41 @@
             }
         });
     });
-    function checkAll(type, check) { document.querySelectorAll('.check-' + type).forEach(el => el.checked = check); }
+    function checkAll(type, check) {
+        document.querySelectorAll('.check-' + type).forEach(el => el.checked = check);
+        if (typeof window.__stockFiltersMarkDirty === 'function') window.__stockFiltersMarkDirty();
+        if (!check && typeof window.__stockFiltersSubmit === 'function') window.__stockFiltersSubmit();
+    }
     function filterList(input, selector) {
         const filter = input.value.toLowerCase();
         document.querySelectorAll(selector).forEach(div => { div.style.display = div.textContent.toLowerCase().includes(filter) ? '' : 'none'; });
     }
+
+    (function initStockFilterAutoApply() {
+        const form = document.getElementById('stockForm');
+        if (!form) return;
+        let dirty = false;
+        function submitStockFilters() {
+            dirty = false;
+            if (form.requestSubmit) form.requestSubmit();
+            else form.submit();
+        }
+        window.__stockFiltersSubmit = submitStockFilters;
+        window.__stockFiltersMarkDirty = function () { dirty = true; };
+
+        const endDate = form.querySelector('input[name="end_date"]');
+        if (endDate) endDate.addEventListener('change', submitStockFilters);
+
+        form.querySelectorAll('.check-plant, .check-size, .check-field, .check-year').forEach((el) => {
+            el.addEventListener('change', () => { dirty = true; });
+        });
+
+        form.querySelectorAll('.dropdown').forEach((dd) => {
+            dd.addEventListener('hidden.bs.dropdown', () => {
+                if (dirty) submitStockFilters();
+            });
+        });
+    })();
     function sortStockGroups(n) {
         // Простая сортировка (реализация есть в прошлых версиях, тут для краткости)
     }

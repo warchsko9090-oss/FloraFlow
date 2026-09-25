@@ -74,6 +74,18 @@
 
   function setTitle(t) { titleEl.textContent = t; }
 
+  function goHome() {
+    location.hash = '#/';
+  }
+
+  function errHuman(e, fallback) {
+    const raw = String((e && e.message) || '').trim();
+    if (raw === 'bad_amount') return 'Проверьте суммы: у каждой строки должна быть сумма больше 0.';
+    if (raw === 'need_summary') return 'Укажите назначение.';
+    if (raw === 'empty') return 'Добавьте хотя бы одну строку.';
+    return raw || fallback || 'Ошибка';
+  }
+
   function route() {
     const hash = (location.hash || '#/').replace(/^#/, '');
     const path = hash.split('?')[0];
@@ -81,20 +93,17 @@
     if (parts[0] === 'inv' && parts[1]) return renderDetail(+parts[1]);
     if (parts[0] === 'new') return renderNew();
     if (parts[0] === 'quick') return renderQuickExpense();
-    if (parts[0] === 'week-plan') return renderWeekPlan();
+    if (parts[0] === 'week-plan') {
+      if (parts[1] === 'full') return renderWeekPlan();
+      if (parts[1] === 'line') return renderPlan();
+      return renderWeekPlanMenu();
+    }
     if (parts[0] === 'plan') return renderPlan();
-    if (parts[0] === 'file') return renderUpload();
-    if (parts[0] === 'bank') return renderBank();
     if (parts[0] === 'inbox') {
       if (!me.can_inbox) return renderList();
       return renderInbox();
     }
     return renderList();
-  }
-
-  function hashParam(name) {
-    const q = (location.hash.split('?')[1] || '');
-    return new URLSearchParams(q).get(name);
   }
 
   function prioBadge(p) {
@@ -262,7 +271,7 @@
       </div>
     `;
     if (me.can_edit || me.role === 'executive') {
-      html += `<a class="week-plan-link" href="#/week-plan">План недели →</a>`;
+      html += `<a class="week-plan-link" href="#/week-plan/full">План недели →</a>`;
     }
     if (me.can_inbox && data.inbox_count) {
       html += `<a class="inbox-banner" href="#/inbox">Входящие из чата · ${data.inbox_count}</a>`;
@@ -287,11 +296,18 @@
       };
     }
     try {
+      let toastText = '';
       if (sessionStorage.getItem('ff_quick_ok')) {
         sessionStorage.removeItem('ff_quick_ok');
+        toastText = 'Отправлено админу';
+      } else if (sessionStorage.getItem('ff_week_ok')) {
+        sessionStorage.removeItem('ff_week_ok');
+        toastText = 'План сохранён';
+      }
+      if (toastText) {
         const toast = document.createElement('div');
         toast.className = 'toast-ok';
-        toast.textContent = 'Отправлено админу';
+        toast.textContent = toastText;
         view.appendChild(toast);
         setTimeout(() => toast.remove(), 2800);
       }
@@ -695,22 +711,26 @@
       </a>
       <a class="choice" href="#/week-plan">
         <div class="choice-k">План недели</div>
-        <p>Пятничный план: нал и безнал, сохранить и закрепить у бота.</p>
-      </a>
-      <a class="choice" href="#/plan">
-        <div class="choice-k">Одна строка плана</div>
-        <p>Одна позиция плана без общего закрепа.</p>
-      </a>
-      <a class="choice" href="#/file">
-        <div class="choice-k">Файл</div>
-        <p>PDF или фото реального счёта.</p>
-      </a>
-      <a class="choice" href="#/bank">
-        <div class="choice-k">Выписка</div>
-        <p>Квитанция Альфа-Банка, платёжка или скрин списаний.</p>
+        <p>Общий план или одна строка.</p>
       </a>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+  }
+
+  function renderWeekPlanMenu() {
+    setTitle('План недели');
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← назад</button>
+      <a class="choice" href="#/week-plan/full">
+        <div class="choice-k">Общий план</div>
+        <p>Пятничный план: нал и безнал, сохранить и закрепить у бота.</p>
+      </a>
+      <a class="choice" href="#/week-plan/line">
+        <div class="choice-k">Одна строка</div>
+        <p>Одна позиция плана без общего закрепа.</p>
+      </a>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
   }
 
   async function renderQuickExpense() {
@@ -863,13 +883,13 @@
         <p class="hint">${data.pinned ? 'Закреплён в чате с ботом.' : 'Админ ещё не закрепил план.'}</p>`;
     }
     view.innerHTML = `
-      <button class="back" type="button" id="goBack">← к списку</button>
+      <button class="back" type="button" id="goBack">← назад</button>
       <div class="card">
         <p class="hint" style="margin:0">Период: <b>${esc(data.period_label || '')}</b></p>
       </div>
       ${body}
     `;
-    document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+    document.getElementById('goBack').onclick = () => { location.hash = '#/week-plan'; };
     if (canEdit) bindBudgetPickers(view);
     const addBtn = document.getElementById('btnAddRow');
     if (addBtn) {
@@ -892,6 +912,14 @@
           alert('Добавьте хотя бы одну строку плана.');
           return;
         }
+        const bad = items.find((it) => {
+          const n = Number(String(it.planned_amount || '').replace(/\s/g, '').replace(',', '.'));
+          return !(n > 0) || !(it.summary || '').trim();
+        });
+        if (bad) {
+          status.textContent = 'У каждой строки нужны назначение и сумма больше 0.';
+          return;
+        }
         view.classList.add('busy');
         try {
           const res = await api('/tg/pay/api/week-plan', {
@@ -903,15 +931,10 @@
             }),
           });
           haptic('medium');
-          const pin = res.pin || {};
-          status.textContent = pin.pinned_to
-            ? `Сохранено и закреплено у ${pin.pinned_to} чел.`
-            : 'Сохранено, но закрепить не удалось — проверьте telegram_id админа/руководителя.';
-          if (pin.errors && pin.errors.length) {
-            status.textContent += ' ' + pin.errors.slice(0, 2).join('; ');
-          }
+          try { sessionStorage.setItem('ff_week_ok', '1'); } catch (_) {}
+          goHome();
         } catch (e) {
-          status.textContent = e.message || 'Ошибка сохранения';
+          status.textContent = errHuman(e, 'Ошибка сохранения');
         } finally {
           view.classList.remove('busy');
         }
@@ -931,7 +954,7 @@
   }
 
   async function renderPlan() {
-    setTitle('План на неделю');
+    setTitle('Одна строка плана');
     await ensureBudgetItems();
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← назад</button>
@@ -954,7 +977,7 @@
         <p class="hint" id="pStatus"></p>
       </div>
     `;
-    document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
+    document.getElementById('goBack').onclick = () => { location.hash = '#/week-plan'; };
     bindBudgetPickers(view);
     document.getElementById('btnPlan').onclick = createPlan;
   }
@@ -965,7 +988,7 @@
     const planned_amount = (document.getElementById('pAmount') || {}).value;
     view.classList.add('busy');
     try {
-      const inv = await api('/tg/pay/api/invoices/plan', {
+      await api('/tg/pay/api/invoices/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -976,9 +999,9 @@
         }),
       });
       haptic('medium');
-      location.hash = '#/inv/' + inv.id;
+      goHome();
     } catch (e) {
-      status.textContent = e.message;
+      status.textContent = errHuman(e, 'Не удалось создать план');
     } finally {
       view.classList.remove('busy');
     }
@@ -999,125 +1022,6 @@
       location.hash = '#/inv/' + inv.id;
     } catch (e) {
       alert(e.message);
-    } finally {
-      view.classList.remove('busy');
-    }
-  }
-
-  function renderUpload() {
-    setTitle('Новый счёт');
-    view.innerHTML = `
-      <button class="back" type="button" id="goBack">← назад</button>
-      <div class="card">
-        <p class="hint">PDF или фото счёта — разберём сумму и позиции.</p>
-        <div class="field"><label>Файл</label>
-          <input id="fFile" type="file" accept="application/pdf,image/*"></div>
-        <div class="field"><label>Оплата</label>
-          <select id="fUpType">
-            <option value="cashless">Безнал</option>
-            <option value="cash">Нал</option>
-          </select>
-        </div>
-        <button class="btn btn-ink" type="button" id="btnUp">Разобрать</button>
-        <p class="hint" id="upStatus"></p>
-      </div>
-    `;
-    document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
-    document.getElementById('btnUp').onclick = uploadFile;
-  }
-
-  function renderBank() {
-    setTitle('Выписка / платёжка');
-    view.innerHTML = `
-      <button class="back" type="button" id="goBack">← назад</button>
-      <div class="card">
-        <p class="hint">Скрин списка в Альфе, фото платёжки с монитора или PDF. Несколько платежей на одном кадре — разнесём все.</p>
-        <div class="field"><label>Файл</label>
-          <input id="bFile" type="file" accept="image/*,application/pdf,.jfif"></div>
-        <button class="btn btn-ink" type="button" id="btnBank">Разнести</button>
-        <p class="hint" id="bStatus"></p>
-      </div>
-    `;
-    document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
-    document.getElementById('btnBank').onclick = uploadBank;
-  }
-
-  function bankActLabel(act) {
-    if (act === 'matched') return 'оплачен';
-    if (act === 'created') return 'черновик';
-    return 'пропуск';
-  }
-
-  function renderBankResult(data) {
-    setTitle('Разнос');
-    const items = data.items || [];
-    const c = data.counts || {};
-    let html = `<button class="back" type="button" id="goBack">← к списку</button>`;
-    if (data.duplicate) {
-      html += '<p class="hint">Этот файл уже загружали — повторно не проводим.</p>';
-    }
-    html += `<div class="card"><p class="hint">${c.matched || 0} оплачено · ${c.created || 0} черновик · ${c.skipped || 0} пропуск</p></div>`;
-    if (!items.length) {
-      html += `<div class="empty"><h2>Платежей нет</h2><p>${esc(data.error || 'Попробуйте более крупный кадр или другой файл.')}</p></div>`;
-    } else {
-      html += '<div class="list">';
-      for (const it of items) {
-        const href = it.invoice_id ? `#/inv/${it.invoice_id}` : '#/';
-        html += `<a class="choice" href="${href}">
-          <div class="choice-k">${esc(it.payee || it.invoice_no || 'платёж')}</div>
-          <p>${money(it.amount)} · <span class="act-${esc(it.action)}">${bankActLabel(it.action)}</span>${it.invoice_no ? ' · №' + esc(it.invoice_no) : ''}</p>
-          <p>${esc(it.note || '')}</p>
-        </a>`;
-      }
-      html += '</div>';
-    }
-    view.innerHTML = html;
-    document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
-  }
-
-  async function uploadBank() {
-    const input = document.getElementById('bFile');
-    const status = document.getElementById('bStatus');
-    if (!input.files || !input.files[0]) {
-      status.textContent = 'Выберите файл.';
-      return;
-    }
-    const fd = new FormData();
-    fd.append('file', input.files[0]);
-    status.textContent = 'Читаю выписку… может занять полминуты.';
-    view.classList.add('busy');
-    try {
-      const data = await api('/tg/pay/api/bank-slips', { method: 'POST', body: fd });
-      haptic('medium');
-      renderBankResult(data);
-    } catch (e) {
-      status.textContent = e.message;
-    } finally {
-      view.classList.remove('busy');
-    }
-  }
-
-  async function uploadFile() {
-    const input = document.getElementById('fFile');
-    const status = document.getElementById('upStatus');
-    if (!input.files || !input.files[0]) {
-      status.textContent = 'Выберите файл.';
-      return;
-    }
-    const fd = new FormData();
-    fd.append('file', input.files[0]);
-    const ptype = (document.getElementById('fUpType') || {}).value;
-    if (ptype) fd.append('payment_type', ptype);
-    const planId = hashParam('plan');
-    if (planId) fd.append('plan_id', planId);
-    status.textContent = 'Читаю счёт…';
-    view.classList.add('busy');
-    try {
-      const inv = await api('/tg/pay/api/invoices/upload', { method: 'POST', body: fd });
-      haptic('medium');
-      location.hash = '#/inv/' + inv.id;
-    } catch (e) {
-      status.textContent = e.message;
     } finally {
       view.classList.remove('busy');
     }

@@ -227,10 +227,16 @@
         color: #10b981;
         font-size: 11px;
         opacity: 0.55;
-        transition: opacity 0.15s;
+        transition: opacity 0.15s, background 0.15s;
+        cursor: grab;
+        user-select: none;
+        padding: 2px 4px;
+        border-radius: 4px;
     }
+    .cal-drag-handle:active { cursor: grabbing; }
     .cal-cell.has-tasks:hover .cal-drag-handle {
         opacity: 1;
+        background: rgba(16, 185, 129, 0.12);
     }
     .cal-date-row { margin-bottom: 5px; }
 
@@ -274,6 +280,13 @@
         min-height: 16px;
         overflow: hidden;
         border-left: 3px solid #3b82f6;
+        cursor: grab;
+        user-select: none;
+    }
+    .cal-client-chip:active { cursor: grabbing; }
+    .cal-client-chip.drag-source-chip {
+        opacity: 0.4;
+        outline: 1px dashed #3b82f6;
     }
     .cal-client-chip .chip-name {
         white-space: nowrap;
@@ -289,6 +302,27 @@
         padding: 1px 4px;
         font-size: 9px;
     }
+    .digging-trash-zone {
+        margin: 0 12px 10px;
+        padding: 12px 14px;
+        border: 2px dashed #cbd5e1;
+        border-radius: 12px;
+        background: #fff;
+        color: #64748b;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 600;
+        transition: border-color 0.15s, background 0.15s, color 0.15s;
+        flex-shrink: 0;
+    }
+    .digging-trash-zone i { display: block; font-size: 18px; margin-bottom: 4px; opacity: 0.75; }
+    .digging-trash-zone .trash-hint { display: block; font-size: 11px; font-weight: 500; color: #94a3b8; margin-top: 2px; }
+    .digging-trash-zone.is-drag-over {
+        border-color: #ef4444;
+        background: #fef2f2;
+        color: #b91c1c;
+    }
+    .digging-trash-zone.is-drag-over .trash-hint { color: #f87171; }
     .cal-clients-more {
         font-size: 10px;
         color: #64748b;
@@ -815,8 +849,17 @@
     <div class="planner-sidebar">
         <div class="sidebar-header">
             <h6 class="fw-bold text-primary m-0"><i class="fas fa-inbox me-2"></i>Ждут плана</h6>
-            <div class="small text-muted mt-1 d-none d-lg-block">Разверните состав кликом по шеврону, перетащите карточку на день.</div>
-            <div class="small text-muted mt-1 d-lg-none">Зажмите карточку и перенесите на дату в календаре.</div>
+            <div class="small text-muted mt-1 d-none d-lg-block">Разверните состав кликом по шеврону, перетащите карточку на день. Чип с дня — в урну, чтобы снять с плана.</div>
+            <div class="small text-muted mt-1 d-lg-none">Зажмите карточку и перенесите на дату. Чип заказа с дня — в урну.</div>
+        </div>
+        <div id="diggingTrash"
+             class="digging-trash-zone"
+             ondragover="diggingTrashAllow(event)"
+             ondragleave="diggingTrashLeave(event)"
+             ondrop="diggingTrashDrop(event)">
+            <i class="fas fa-trash-alt"></i>
+            Урна — снять с плана
+            <span class="trash-hint">Перетащите сюда заказ с дня календаря</span>
         </div>
         <div class="sidebar-content" id="unplanned-orders">
             {% for o in orders_to_plan %}
@@ -922,7 +965,6 @@
                              data-brigadier-off="{{ '1' if day.brigadier_off else '0' }}"
                              data-day-json='{{ day.orders_groups|tojson }}'
                              data-ship-json='{{ day.shipments|tojson }}'
-                             {% if day.tasks_count > 0 %}draggable="true" ondragstart="diggingDayDragStart(event, '{{ day.date_str }}')"{% endif %}
                              ondrop="diggingDrop(event, '{{ day.date_str }}')"
                              ondragover="diggingAllowDrop(event)"
                              ondragleave="diggingLeaveDrop(event)"
@@ -938,7 +980,12 @@
                             <div class="cal-date-row d-flex justify-content-between align-items-center">
                                 <div class="cal-date {% if day.is_today %}today{% endif %}">{{ day.day }}</div>
                                 {% if day.tasks_count > 0 %}
-                                <span class="cal-drag-handle" title="Перетащите, чтобы перенести весь план на другой день">
+                                <span class="cal-drag-handle"
+                                      draggable="true"
+                                      data-date="{{ day.date_str }}"
+                                      ondragstart="diggingDayDragStart(event, '{{ day.date_str }}')"
+                                      onclick="event.stopPropagation()"
+                                      title="Перетащите, чтобы перенести весь план на другой день">
                                     <i class="fas fa-grip-vertical"></i>
                                 </span>
                                 {% endif %}
@@ -956,7 +1003,13 @@
                             {% if day.clients_summary %}
                             <div class="cal-clients">
                                 {% for c in day.clients_summary[:3] %}
-                                <div class="cal-client-chip" title="{{ c.client }} — {{ c.qty }} шт">
+                                <div class="cal-client-chip"
+                                     title="{{ c.client }} — {{ c.qty }} шт · перетащите в урну, чтобы снять с плана"
+                                     draggable="true"
+                                     data-order-id="{{ c.order_id }}"
+                                     data-from-date="{{ day.date_str }}"
+                                     ondragstart="diggingChipDragStart(event, '{{ day.date_str }}', {{ c.order_id }})"
+                                     onclick="event.stopPropagation()">
                                     <span class="chip-name">{{ c.client }}</span>
                                     <span class="chip-qty">{{ c.qty }}</span>
                                 </div>
@@ -1157,12 +1210,30 @@
             if (card) card.classList.add('drag-source');
         };
 
-        // Перетаскивание всей ячейки календаря — перенос плана с одной даты на другую.
+        // Чип заказа внутри дня — снимаем только этот заказ с плана (в урну).
+        window.diggingChipDragStart = function (ev, dateStr, orderId) {
+            ev.stopPropagation();
+            if (ev.dataTransfer) {
+                ev.dataTransfer.setData('unplan_order_id', String(orderId));
+                ev.dataTransfer.setData('unplan_from_date', dateStr);
+                ev.dataTransfer.effectAllowed = 'move';
+            }
+            if (typeof window.__diggingHidePreview === 'function') {
+                window.__diggingHidePreview();
+            }
+            const chip = ev.currentTarget;
+            if (chip) chip.classList.add('drag-source-chip');
+            window.__diggingSkipClick = true;
+        };
+
         window.diggingDayDragStart = function (ev, dateStr) {
+            // Если тянут чип — день не двигаем.
+            if (ev.target && ev.target.closest && ev.target.closest('.cal-client-chip')) {
+                return;
+            }
             ev.stopPropagation();
             ev.dataTransfer.setData('move_date', dateStr);
             ev.dataTransfer.effectAllowed = 'move';
-            // Прячем hover-попап, если он «висит» — чтобы не мешал.
             if (typeof window.__diggingHidePreview === 'function') {
                 window.__diggingHidePreview();
             }
@@ -1189,12 +1260,67 @@
             applyDiggingDrop(dateStr, moveDate, orderId);
         };
 
+        window.diggingTrashAllow = function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const zone = document.getElementById('diggingTrash');
+            if (zone) zone.classList.add('is-drag-over');
+        };
+
+        window.diggingTrashLeave = function (ev) {
+            const zone = document.getElementById('diggingTrash');
+            if (zone) zone.classList.remove('is-drag-over');
+        };
+
+        window.diggingTrashDrop = function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const zone = document.getElementById('diggingTrash');
+            if (zone) zone.classList.remove('is-drag-over');
+            const orderId = ev.dataTransfer.getData('unplan_order_id');
+            const fromDate = ev.dataTransfer.getData('unplan_from_date');
+            if (orderId && fromDate) {
+                diggingUnplanOrder(fromDate, orderId);
+            }
+        };
+
+        function diggingUnplanOrder(dateStr, orderId) {
+            document.querySelectorAll('.cal-client-chip').forEach(el => el.classList.remove('drag-source-chip'));
+            document.querySelectorAll('.cal-cell').forEach(el => {
+                el.classList.remove('drag-over');
+                el.classList.remove('drag-source-day');
+            });
+            if (!confirm('Снять этот заказ с плана на выбранный день? Остальные заказы дня останутся.')) return;
+            const fd = new FormData();
+            fd.append('order_id', orderId);
+            fd.append('date_str', dateStr);
+            fetch('/api/digging/unplan_order', {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+            })
+                .then(r => r.json().then(j => ({ ok: r.ok, body: j })))
+                .then(({ ok, body }) => {
+                    if (!ok || !body || !body.ok) {
+                        alert('Не удалось снять с плана: ' + (body && body.error ? body.error : 'unknown'));
+                        return;
+                    }
+                    window.location.reload();
+                })
+                .catch(err => {
+                    console.error('[planner] unplan error', err);
+                    alert('Ошибка сети при снятии с плана.');
+                });
+        }
+        window.diggingUnplanOrder = diggingUnplanOrder;
+
         function applyDiggingDrop(dateStr, moveDate, orderId) {
             document.querySelectorAll('.cal-cell').forEach(el => {
                 el.classList.remove('drag-over');
                 el.classList.remove('drag-source-day');
             });
             document.querySelectorAll('.order-card').forEach(el => el.classList.remove('drag-source'));
+            document.querySelectorAll('.cal-client-chip').forEach(el => el.classList.remove('drag-source-chip'));
 
             if (moveDate) {
                 if (moveDate === dateStr) return;
@@ -1260,6 +1386,9 @@
             document.addEventListener('dragend', function () {
                 document.querySelectorAll('.order-card.drag-source').forEach(el => el.classList.remove('drag-source'));
                 document.querySelectorAll('.cal-cell.drag-source-day').forEach(el => el.classList.remove('drag-source-day'));
+                document.querySelectorAll('.cal-client-chip.drag-source-chip').forEach(el => el.classList.remove('drag-source-chip'));
+                const zone = document.getElementById('diggingTrash');
+                if (zone) zone.classList.remove('is-drag-over');
             });
             window.__diggingDragendBound = true;
         }
@@ -1273,7 +1402,7 @@
             let overCell = null;
 
             if (window.matchMedia('(pointer: coarse)').matches) {
-                document.querySelectorAll('.order-card__head[draggable], .cal-cell[draggable]').forEach(el => {
+                document.querySelectorAll('.order-card__head[draggable], .cal-drag-handle[draggable], .cal-client-chip[draggable]').forEach(el => {
                     el.setAttribute('draggable', 'false');
                 });
             }
@@ -1290,18 +1419,32 @@
                 return null;
             }
 
+            function trashAt(x, y) {
+                const stack = document.elementsFromPoint
+                    ? document.elementsFromPoint(x, y)
+                    : [document.elementFromPoint(x, y)];
+                for (const el of stack) {
+                    if (!el || !el.closest) continue;
+                    if (el.closest('#diggingTrash')) return true;
+                }
+                return false;
+            }
+
             function clearOver() {
                 if (overCell) overCell.classList.remove('drag-over');
                 overCell = null;
+                const zone = document.getElementById('diggingTrash');
+                if (zone) zone.classList.remove('is-drag-over');
             }
 
-            function setOver(cell) {
-                if (overCell === cell) return;
-                clearOver();
-                if (cell) {
-                    cell.classList.add('drag-over');
-                    overCell = cell;
+            function setOver(cell, onTrash) {
+                if (overCell !== cell) {
+                    if (overCell) overCell.classList.remove('drag-over');
+                    overCell = cell || null;
+                    if (overCell) overCell.classList.add('drag-over');
                 }
+                const zone = document.getElementById('diggingTrash');
+                if (zone) zone.classList.toggle('is-drag-over', !!onTrash);
             }
 
             function ghostText(p) {
@@ -1309,6 +1452,11 @@
                     const name = (p.source.querySelector('.order-card__client') || {}).textContent || '';
                     const qty = (p.source.querySelector('.order-card__badge') || {}).textContent || '';
                     return ('#' + p.orderId + ' ' + name + ' ' + qty).trim();
+                }
+                if (p.kind === 'chip') {
+                    const name = (p.source.querySelector('.chip-name') || {}).textContent || '';
+                    const qty = (p.source.querySelector('.chip-qty') || {}).textContent || '';
+                    return (name + ' ' + qty).trim() || ('Заказ #' + p.orderId);
                 }
                 const chips = Array.from(p.source.querySelectorAll('.chip-name')).map(n => n.textContent.trim()).filter(Boolean);
                 return chips.length ? ('План: ' + chips.join(', ')) : ('План ' + p.moveDate.split('-').reverse().join('.'));
@@ -1335,18 +1483,26 @@
                 if (ghost) { ghost.remove(); ghost = null; }
                 document.body.classList.remove('digging-touch-dragging');
                 const dropCell = overCell;
+                const zone = document.getElementById('diggingTrash');
+                const dropTrash = !!(zone && zone.classList.contains('is-drag-over'));
                 clearOver();
                 if (!p) return;
                 try { p.source && p.source.releasePointerCapture(p.pointerId); } catch (_) {}
                 if (p.source) {
                     p.source.classList.remove('drag-source');
                     p.source.classList.remove('drag-source-day');
+                    p.source.classList.remove('drag-source-chip');
                 }
                 if (p.timer) { clearTimeout(p.timer); p.timer = null; }
                 if (!p.armed) return;
                 window.__diggingSkipClick = true;
                 setTimeout(() => { window.__diggingSkipClick = false; }, 400);
-                if (!drop || !dropCell) return;
+                if (!drop) return;
+                if (p.kind === 'chip' && dropTrash) {
+                    diggingUnplanOrder(p.fromDate, p.orderId);
+                    return;
+                }
+                if (!dropCell) return;
                 const toDate = dropCell.getAttribute('data-date');
                 if (!toDate) return;
                 applyDiggingDrop(toDate, p.kind === 'day' ? p.moveDate : '', p.kind === 'order' ? p.orderId : '');
@@ -1356,6 +1512,7 @@
                 p.armed = true;
                 document.body.classList.add('digging-touch-dragging');
                 if (p.kind === 'order') p.source.classList.add('drag-source');
+                else if (p.kind === 'chip') p.source.classList.add('drag-source-chip');
                 else p.source.classList.add('drag-source-day');
                 makeGhost(p, x, y);
                 if (typeof window.__diggingHidePreview === 'function') window.__diggingHidePreview();
@@ -1367,24 +1524,31 @@
                 if (ev.pointerType === 'mouse') return;
                 if (ev.button != null && ev.button !== 0) return;
                 if (ev.target.closest('.js-toggle-order')) return;
+                const chip = ev.target.closest('.cal-client-chip[data-order-id]');
                 const head = ev.target.closest('.order-card__head');
-                const cell = ev.target.closest('.cal-cell');
+                const dayHandle = ev.target.closest('.cal-drag-handle[data-date]');
                 let kind = null;
                 let source = null;
-                if (head) {
+                if (chip) {
+                    kind = 'chip';
+                    source = chip;
+                } else if (head) {
                     kind = 'order';
                     source = head.closest('.order-card');
-                } else if (cell && cell.getAttribute('data-has-tasks') === '1') {
+                } else if (dayHandle) {
                     kind = 'day';
-                    source = cell;
+                    source = dayHandle;
                 }
                 if (!kind || !source) return;
                 const x = ev.clientX, y = ev.clientY;
                 press = {
                     kind,
                     source,
-                    orderId: source.dataset.orderId || (head && head.dataset.orderId) || '',
-                    moveDate: cell ? cell.getAttribute('data-date') : '',
+                    orderId: kind === 'chip'
+                        ? (source.dataset.orderId || '')
+                        : (source.dataset.orderId || (head && head.dataset.orderId) || ''),
+                    fromDate: kind === 'chip' ? (source.dataset.fromDate || '') : '',
+                    moveDate: kind === 'day' ? (source.getAttribute('data-date') || '') : '',
                     x, y, armed: false, pointerId: ev.pointerId,
                     timer: setTimeout(() => {
                         if (!press || press.armed) return;
@@ -1407,7 +1571,7 @@
                 ev.preventDefault();
                 press.x = x; press.y = y;
                 moveGhost(x, y);
-                setOver(cellAt(x, y));
+                setOver(cellAt(x, y), press.kind === 'chip' && trashAt(x, y));
             }
 
             function onUp(ev) {

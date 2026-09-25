@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
 from flask import Blueprint, render_template, request, redirect, url_for, flash, make_response, current_app
 from flask_login import login_required, current_user
+from collections import defaultdict
 from sqlalchemy import func, inspect, text, or_
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import joinedload
 from app.models import (
     db, Order, OrderItem, DiggingLog, Client, Plant, Size, Field, TimeLog, ActionLog,
     DiggingTask, ShipmentPlan, DiggingCalendarMark,
@@ -92,6 +94,28 @@ def _upsert_shipment_plan(order_id: int, planned_date, comment: str | None, user
     )
     db.session.add(plan)
     return plan
+
+
+def clear_plan_after_ship(order) -> None:
+    """После отгрузки по системе: закрыть план выкопки по полностью
+    отгруженным позициям; если заказ целиком отгружен — снять дату
+    отгрузки из календаря. Без отдельного commit (в той же транзакции)."""
+    if not order:
+        return
+    fully_shipped_item_ids = [
+        it.id for it in (order.items or [])
+        if int(it.quantity or 0) > 0
+        and int(it.shipped_quantity or 0) >= int(it.quantity or 0)
+    ]
+    if fully_shipped_item_ids:
+        DiggingTask.query.filter(
+            DiggingTask.order_item_id.in_(fully_shipped_item_ids),
+            DiggingTask.status == 'pending',
+        ).update({'status': 'done'}, synchronize_session=False)
+
+    if (order.status or '') == 'shipped':
+        for plan in list(ShipmentPlan.query.filter_by(order_id=order.id).all()):
+            db.session.delete(plan)
 
 
 def _is_sqlite_engine() -> bool:
@@ -509,12 +533,38 @@ def mobile_order(order_id):
     # Оставлен для совместимости (но не используется в новом UI)
     return redirect(url_for('digging.mobile_index'))
 
+def _digging_report_log_options():
+    """Eager-load для строк отчёта — без N+1 в шаблоне."""
+    return (
+        joinedload(DiggingLog.user),
+        joinedload(DiggingLog.plant),
+        joinedload(DiggingLog.size),
+        joinedload(DiggingLog.field),
+        joinedload(DiggingLog.item).joinedload(OrderItem.plant),
+        joinedload(DiggingLog.item).joinedload(OrderItem.size),
+        joinedload(DiggingLog.item).joinedload(OrderItem.field),
+        joinedload(DiggingLog.item).joinedload(OrderItem.order).joinedload(Order.client),
+    )
+
+
+def _load_digging_report_logs(target_date):
+    return (
+        DiggingLog.query.options(*_digging_report_log_options())
+        .filter(
+            or_(
+                DiggingLog.date == target_date,
+                (DiggingLog.date < target_date) & (DiggingLog.order_item_id == None),
+            )
+        )
+        .order_by(DiggingLog.order_item_id.nullsfirst(), DiggingLog.created_at.desc())
+        .all()
+    )
+
+
 @bp.route('/digging/report', methods=['GET', 'POST'])
 @login_required
 def manager_report():
     # Отчет для менеджера: Просмотр и правка выкопки за дату
-    ensure_digging_table_exists()
-    
     # По умолчанию сегодня
     date_str = request.args.get('date')
     if date_str:
@@ -716,60 +766,79 @@ def manager_report():
 
         return redirect(url_for('digging.manager_report', date=target_date))
 
-    # Получаем логи за выбранную дату + все нераспределенные логи из прошлых дат
-    # (с защитой от устаревшей схемы базы)
+    # GET: логи за дату + прошлые нераспределённые (без ensure schema на каждый запрос)
     try:
-        logs = DiggingLog.query.filter(
-            or_(
-                DiggingLog.date == target_date,  # Логи за выбранную дату
-                (DiggingLog.date < target_date) & (DiggingLog.order_item_id == None)  # Прошлые нераспределенные логи
-            )
-        ).outerjoin(OrderItem).outerjoin(Order).outerjoin(Client)\
-            .order_by(Order.id.nullsfirst(), DiggingLog.created_at.desc()).all()
+        logs = _load_digging_report_logs(target_date)
     except OperationalError as oe:
-        # Иногда в старой БД отсутствуют новые колонки (plant_id/size_id/...) - добавляем и пробуем ещё раз
         if 'digging_log.plant_id' in str(oe) or 'digging_log.size_id' in str(oe) or 'digging_log.field_id' in str(oe) or 'digging_log.year' in str(oe):
             ensure_digging_table_exists()
-            logs = DiggingLog.query.filter(
-                or_(
-                    DiggingLog.date == target_date,  # Логи за выбранную дату
-                    (DiggingLog.date < target_date) & (DiggingLog.order_item_id == None)  # Прошлые нераспределенные логи
-                )
-            ).outerjoin(OrderItem).outerjoin(Order).outerjoin(Client)\
-                .order_by(Order.id.nullsfirst(), DiggingLog.created_at.desc()).all()
+            logs = _load_digging_report_logs(target_date)
         else:
             raise
 
-    # Подготовка вариантов распределения для незакрепленных записей
+    # Кандидаты для незакреплённых: один запрос вместо N+1
     candidates = {}
+    unassigned_logs = []
+    key_set = set()
     for log in logs:
         if log.order_item_id:
             continue
         if not (log.plant_id and log.size_id and log.field_id and log.year):
             continue
+        unassigned_logs.append(log)
+        key_set.add((log.plant_id, log.size_id, log.field_id, log.year))
 
-        items = OrderItem.query.join(Order).filter(
-            Order.status.in_(['reserved', 'in_progress', 'ready']),
-            Order.is_deleted == False,
-            OrderItem.plant_id == log.plant_id,
-            OrderItem.size_id == log.size_id,
-            OrderItem.field_id == log.field_id,
-            OrderItem.year == log.year
-        ).all()
-        candidates[log.id] = items
+    if key_set:
+        plant_ids = {k[0] for k in key_set}
+        size_ids = {k[1] for k in key_set}
+        field_ids = {k[2] for k in key_set}
+        years = {k[3] for k in key_set}
+        items = (
+            OrderItem.query
+            .options(joinedload(OrderItem.order).joinedload(Order.client))
+            .join(Order)
+            .filter(
+                Order.status.in_(['reserved', 'in_progress', 'ready']),
+                Order.is_deleted == False,
+                OrderItem.plant_id.in_(plant_ids),
+                OrderItem.size_id.in_(size_ids),
+                OrderItem.field_id.in_(field_ids),
+                OrderItem.year.in_(years),
+            )
+            .all()
+        )
+        by_key = defaultdict(list)
+        for it in items:
+            key = (it.plant_id, it.size_id, it.field_id, it.year)
+            if key in key_set:
+                by_key[key].append(it)
+        for log in unassigned_logs:
+            candidates[log.id] = by_key.get(
+                (log.plant_id, log.size_id, log.field_id, log.year), []
+            )
 
     admin_add_items = []
     if current_user.role == 'admin':
-        open_items = (OrderItem.query
-                      .join(Order)
-                      .filter(
-                          Order.status.in_(['reserved', 'in_progress', 'ready']),
-                          Order.is_deleted == False
-                      )
-                      .order_by(Order.id.desc(), OrderItem.id.desc())
-                      .all())
+        open_items = (
+            OrderItem.query
+            .options(
+                joinedload(OrderItem.plant),
+                joinedload(OrderItem.size),
+                joinedload(OrderItem.field),
+                joinedload(OrderItem.order).joinedload(Order.client),
+            )
+            .join(Order)
+            .filter(
+                Order.status.in_(['reserved', 'in_progress', 'ready']),
+                Order.is_deleted == False,
+            )
+            .order_by(Order.id.desc(), OrderItem.id.desc())
+            .all()
+        )
         for it in open_items:
-            left_qty = int((it.quantity or 0) - (it.dug_total or 0))
+            # dug_quantity — колонка; dug_total иначе делает отдельный SUM-запрос
+            dug = int(it.dug_quantity or 0)
+            left_qty = int((it.quantity or 0) - dug)
             if left_qty <= 0:
                 continue
             admin_add_items.append({
@@ -1130,6 +1199,8 @@ def digging_planning():
         o = sp.order
         if not o or o.is_deleted:
             continue
+        if (o.status or '') in ('shipped', 'canceled', 'ghost'):
+            continue
         ships_by_date.setdefault(sp.planned_date, []).append({
             'id': sp.id,
             'order_id': o.id,
@@ -1184,7 +1255,10 @@ def digging_planning():
                     'comment': t.comment or '',
                 })
             orders_groups = sorted(orders_map.values(), key=lambda g: (-g['total_qty'], g['client']))
-            clients_summary = [{'client': g['client'], 'qty': g['total_qty']} for g in orders_groups]
+            clients_summary = [
+                {'client': g['client'], 'qty': g['total_qty'], 'order_id': g['order_id']}
+                for g in orders_groups
+            ]
             day_ships = ships_by_date.get(d, [])
             kinds = marks_by_date.get(d, set())
             days_arr.append({
@@ -1365,7 +1439,7 @@ def _render_day_details_html(target_date):
         cards = ""
         for sp in ships:
             o = sp.order
-            if not o:
+            if not o or o.is_deleted or (o.status or '') in ('shipped', 'canceled', 'ghost'):
                 continue
             client = o.client.name if o.client else '—'
             comment_html = (
@@ -1609,3 +1683,45 @@ def digging_day_move():
         "from": from_str,
         "to": to_str,
     }
+
+@bp.route('/api/digging/unplan_order', methods=['POST'])
+@login_required
+def digging_unplan_order():
+    """Снять с плана все pending-задания одного заказа на дату."""
+    if not _can_plan_digging(current_user):
+        return ({"ok": False, "error": "forbidden"}, 403)
+
+    date_str = (request.form.get('date_str') or request.form.get('from_date') or '').strip()
+    try:
+        order_id = int(request.form.get('order_id') or 0)
+        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return ({"ok": False, "error": "bad_params"}, 400)
+
+    if order_id <= 0:
+        return ({"ok": False, "error": "bad_order"}, 400)
+
+    tasks = (
+        DiggingTask.query
+        .join(OrderItem, DiggingTask.order_item_id == OrderItem.id)
+        .filter(
+            OrderItem.order_id == order_id,
+            DiggingTask.planned_date == target_date,
+            DiggingTask.status == 'pending',
+        )
+        .all()
+    )
+    deleted = 0
+    for t in tasks:
+        db.session.delete(t)
+        deleted += 1
+    if deleted:
+        db.session.commit()
+
+    return {
+        "ok": True,
+        "deleted": deleted,
+        "order_id": order_id,
+        "date": date_str,
+    }
+

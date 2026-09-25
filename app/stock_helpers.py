@@ -12,21 +12,25 @@ def _active_order_filter():
     )
 
 
-def get_reserved_map(plant_id=None, size_id=None, field_id=None, year=None,
-                     exclude_item_id=None):
+def get_reserved_map(plant_id=None, size_id=None, field_id=None, field_ids=None,
+                     year=None, exclude_item_id=None):
     """Build a dict {(plant_id, size_id, field_id, year): reserved_qty}.
 
-    Все опциональные параметры сужают запрос. exclude_item_id пропускает
-    конкретную позицию (нужно для split, чтобы не учитывать «саму себя»).
+    Все опциональные параметры сужают запрос. field_ids — список полей (IN).
+    exclude_item_id пропускает конкретную позицию (нужно для split).
     «Активные» заказы — не canceled, не ghost, не is_deleted.
     """
+    if field_ids is not None and not field_ids:
+        return {}
+
+    reserved_expr = func.sum(OrderItem.quantity - OrderItem.shipped_quantity)
     q = (
         db.session.query(
             OrderItem.plant_id,
             OrderItem.size_id,
             OrderItem.field_id,
             OrderItem.year,
-            func.sum(OrderItem.quantity - OrderItem.shipped_quantity),
+            reserved_expr,
         )
         .join(Order)
         .filter(
@@ -39,14 +43,18 @@ def get_reserved_map(plant_id=None, size_id=None, field_id=None, year=None,
         q = q.filter(OrderItem.plant_id == plant_id)
     if size_id is not None:
         q = q.filter(OrderItem.size_id == size_id)
-    if field_id is not None:
+    if field_ids is not None:
+        q = q.filter(OrderItem.field_id.in_(field_ids))
+    elif field_id is not None:
         q = q.filter(OrderItem.field_id == field_id)
     if year is not None:
         q = q.filter(OrderItem.year == year)
     if exclude_item_id:
         q = q.filter(OrderItem.id != exclude_item_id)
 
-    q = q.group_by(OrderItem.plant_id, OrderItem.size_id, OrderItem.field_id, OrderItem.year)
+    q = q.group_by(
+        OrderItem.plant_id, OrderItem.size_id, OrderItem.field_id, OrderItem.year,
+    ).having(reserved_expr > 0)
     return {(r[0], r[1], r[2], r[3]): int(r[4] or 0) for r in q.all()}
 
 
