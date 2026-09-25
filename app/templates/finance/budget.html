@@ -170,13 +170,13 @@
         
         <ul class="nav nav-pills bg-light rounded p-1" style="border: 1px solid #e9ecef; width: 100%; max-width: 560px;">
             <li class="nav-item flex-fill text-center">
-                <a class="nav-link py-1 {% if active_tab == 'budget' %}active bg-success text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='budget', months=selected_months if is_custom_months else None) }}">Бюджет</a>
+                <a hx-boost="false" class="nav-link py-1 {% if active_tab == 'budget' %}active bg-success text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='budget', months=selected_months if is_custom_months else None) }}">Бюджет</a>
             </li>
             <li class="nav-item flex-fill text-center">
-                <a class="nav-link py-1 {% if active_tab == 'cashflow' %}active bg-primary text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cashflow', cf_mode=cf_mode, months=selected_months if is_custom_months else None) }}">Cashflow</a>
+                <a hx-boost="false" class="nav-link py-1 {% if active_tab == 'cashflow' %}active bg-primary text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cashflow', cf_mode=cf_mode, months=selected_months if is_custom_months else None) }}">Cashflow</a>
             </li>
             <li class="nav-item flex-fill text-center">
-                <a class="nav-link py-1 {% if active_tab == 'cf_compare' %}active bg-dark text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cf_compare', cf_mode=cf_mode, months=selected_months if is_custom_months else None) }}">План vs Факт</a>
+                <a hx-boost="false" class="nav-link py-1 {% if active_tab == 'cf_compare' %}active bg-dark text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cf_compare', cf_mode=cf_mode, months=selected_months if is_custom_months else None) }}">План vs Факт</a>
             </li>
         </ul>
     </div>
@@ -203,9 +203,9 @@
 
             {% if show_cf %}
             <div class="btn-group btn-group-sm shadow-sm" role="group" title="Режим расчёта факта кешфлоу">
-                <a href="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode='money', months=selected_months if is_custom_months else None) }}"
+                <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode='money', months=selected_months if is_custom_months else None) }}"
                    class="btn {% if cf_mode == 'money' %}btn-primary fw-bold{% else %}btn-outline-primary bg-white{% endif %}">ДС (оплаты)</a>
-                <a href="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode='accrual', months=selected_months if is_custom_months else None) }}"
+                <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode='accrual', months=selected_months if is_custom_months else None) }}"
                    class="btn {% if cf_mode == 'accrual' %}btn-info text-dark fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Отгрузки</a>
             </div>
             {% endif %}
@@ -297,20 +297,20 @@
     <!-- 3. Скролл месяцев (Всегда внизу панели, растянут на 100%) -->
     <div class="month-filters-scroll w-100">
         <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
-            <a href="{{ url_for('finance.budget', year=year, month='all', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if target_month == 'all' and not is_custom_months %}btn-dark fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Год</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='all', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if target_month == 'all' and not is_custom_months %}btn-dark fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Год</a>
             {% for m in range(1, 13) %}
-            <a href="{{ url_for('finance.budget', year=year, month=m, tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month|string == m|string %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" style="min-width: 38px; padding: 4px 0;">{{ m }}</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month=m, tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month|string == m|string %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" style="min-width: 38px; padding: 4px 0;">{{ m }}</a>
             {% endfor %}
         </div>
         <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
-            <a href="{{ url_for('finance.budget', year=year, month='q1', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q1' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q1</a>
-            <a href="{{ url_for('finance.budget', year=year, month='q2', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q2' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q2</a>
-            <a href="{{ url_for('finance.budget', year=year, month='q3', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q3' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q3</a>
-            <a href="{{ url_for('finance.budget', year=year, month='q4', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q4' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q4</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q1', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q1' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q1</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q2', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q2' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q2</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q3', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q3' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q3</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q4', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q4' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q4</a>
         </div>
         <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
-            <a href="{{ url_for('finance.budget', year=year, month='spring', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'spring' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Весна</a>
-            <a href="{{ url_for('finance.budget', year=year, month='autumn', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'autumn' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Осень</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='spring', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'spring' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Весна</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='autumn', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'autumn' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Осень</a>
         </div>
 
         {# Multi-select «Несколько месяцев» — позволяет отметить произвольный
@@ -1027,238 +1027,250 @@
     }
 
     document.addEventListener('DOMContentLoaded', loadColumnPrefs);
-
-    // Chart.js: по умолчанию только бары месяцев; накопление / прошлые годы — по кнопке
-    (function initCashflowCharts() {
-        const monthEl = document.getElementById('cfChartData');
-        const yearEl = document.getElementById('cfYearChartData');
-        if (!monthEl || typeof Chart === 'undefined') return;
-
-        const monthData = JSON.parse(monthEl.textContent);
-        const isCompare = {{ 'true' if active_tab == 'cf_compare' else 'false' }};
-        const selected = (monthData.selected_months || []).map(Number).filter(m => m >= 1 && m <= 12);
-        const useAll = !selected.length || selected.length === 12;
-        const months = useAll ? [1,2,3,4,5,6,7,8,9,10,11,12] : selected.slice().sort((a,b) => a - b);
-        const pick = (arr) => months.map(m => (arr && arr[m - 1] != null) ? arr[m - 1] : 0);
-        const labels = months.map(m => (monthData.labels && monthData.labels[m - 1]) || String(m));
-        const moneyFmt = (v) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v);
-
-        let monthChart = null;
-        const ctx = document.getElementById('cfMonthChart');
-        if (ctx) {
-            const datasets = [];
-            if (isCompare) {
-                datasets.push(
-                    {
-                        type: 'bar',
-                        label: 'Поступления план',
-                        data: pick(monthData.in_plan || []),
-                        backgroundColor: 'rgba(25, 135, 84, 0.25)',
-                        borderColor: 'rgba(25, 135, 84, 0.8)',
-                        borderWidth: 1,
-                        borderRadius: 3,
-                        yAxisID: 'y',
-                        order: 3,
-                    },
-                    {
-                        type: 'bar',
-                        label: 'Поступления факт',
-                        data: pick(monthData.in_fact),
-                        backgroundColor: 'rgba(25, 135, 84, 0.75)',
-                        borderRadius: 3,
-                        yAxisID: 'y',
-                        order: 2,
-                    },
-                    {
-                        type: 'bar',
-                        label: 'Выплаты план',
-                        data: pick(monthData.out_plan || []),
-                        backgroundColor: 'rgba(220, 53, 69, 0.22)',
-                        borderColor: 'rgba(220, 53, 69, 0.75)',
-                        borderWidth: 1,
-                        borderRadius: 3,
-                        yAxisID: 'y',
-                        order: 3,
-                    },
-                    {
-                        type: 'bar',
-                        label: 'Выплаты факт',
-                        data: pick(monthData.out_fact),
-                        backgroundColor: 'rgba(220, 53, 69, 0.65)',
-                        borderRadius: 3,
-                        yAxisID: 'y',
-                        order: 2,
-                    }
-                );
-            } else {
-                datasets.push(
-                    {
-                        type: 'bar',
-                        label: 'Поступления факт',
-                        data: pick(monthData.in_fact),
-                        backgroundColor: 'rgba(25, 135, 84, 0.65)',
-                        borderRadius: 3,
-                        yAxisID: 'y',
-                        order: 2,
-                    },
-                    {
-                        type: 'bar',
-                        label: 'Выплаты факт',
-                        data: pick(monthData.out_fact),
-                        backgroundColor: 'rgba(220, 53, 69, 0.55)',
-                        borderRadius: 3,
-                        yAxisID: 'y',
-                        order: 2,
-                    }
-                );
-            }
-            datasets.push({
-                type: 'line',
-                label: 'Остаток (накоп.)',
-                data: pick(monthData.cum_fact),
-                borderColor: '#212529',
-                backgroundColor: 'rgba(33,37,41,0.08)',
-                borderWidth: 2,
-                tension: 0.25,
-                pointRadius: 3,
-                yAxisID: 'y1',
-                order: 1,
-                hidden: true,
-            });
-
-            monthChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: datasets,
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: { mode: 'index', intersect: false },
-                    plugins: {
-                        legend: {
-                            position: 'bottom',
-                            labels: {
-                                boxWidth: 12,
-                                font: { size: 11 },
-                            },
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: (c) => `${c.dataset.label}: ${moneyFmt(c.parsed.y)}`,
-                            },
-                        },
-                    },
-                    scales: {
-                        y: {
-                            position: 'left',
-                            ticks: { callback: (v) => moneyFmt(v) },
-                            title: { display: true, text: 'In / Out', font: { size: 10 } },
-                        },
-                        y1: {
-                            position: 'right',
-                            display: false,
-                            grid: { drawOnChartArea: false },
-                            ticks: { callback: (v) => moneyFmt(v) },
-                            title: { display: false, text: 'Накоп. остаток', font: { size: 10 } },
-                        },
-                    },
-                },
-            });
-        }
-
-        let yearChart = null;
-        const btn = document.getElementById('btnToggleCfCum');
-        const monthCol = document.getElementById('cfMonthChartCol');
-        const yearCol = document.getElementById('cfYearChartCol');
-        const monthHint = document.getElementById('cfMonthChartHint');
-
-        function ensureYearChart() {
-            if (yearChart || !yearEl) return;
-            const yearData = JSON.parse(yearEl.textContent);
-            yearChart = new Chart(document.getElementById('cfYearChart'), {
-                type: 'line',
-                data: {
-                    labels: yearData.labels,
-                    datasets: [{
-                        label: 'Накопительный остаток на конец года',
-                        data: yearData.cum_fact,
-                        borderColor: '#0d6efd',
-                        backgroundColor: 'rgba(13,110,253,0.12)',
-                        fill: true,
-                        tension: 0.2,
-                        borderWidth: 2,
-                        pointRadius: 4,
-                    }],
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: (c) => {
-                                    const net = (yearData.net_fact || [])[c.dataIndex];
-                                    const netStr = net == null ? '' : ` (год: ${moneyFmt(net)})`;
-                                    return `Остаток: ${moneyFmt(c.parsed.y)}${netStr}`;
-                                },
-                            },
-                        },
-                    },
-                    scales: {
-                        y: { ticks: { callback: (v) => moneyFmt(v) } },
-                    },
-                },
-            });
-        }
-
-        function setCumMode(on) {
-            document.querySelectorAll('.cf-cum-row').forEach((el) => {
-                el.classList.toggle('d-none', !on);
-            });
-            if (btn) {
-                btn.classList.toggle('btn-dark', on);
-                btn.classList.toggle('btn-outline-dark', !on);
-                btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-                btn.innerHTML = on
-                    ? '<i class="fas fa-times me-1"></i>Скрыть накопительный'
-                    : '<i class="fas fa-layer-group me-1"></i>Накопительный · прошлые годы';
-            }
-            if (monthCol) {
-                monthCol.classList.toggle('col-12', !on);
-                monthCol.classList.toggle('col-lg-8', on);
-            }
-            if (yearCol) yearCol.classList.toggle('d-none', !on);
-            if (monthHint) {
-                if (isCompare) {
-                    monthHint.textContent = on
-                        ? 'бары: план/факт · линия: накопит. остаток'
-                        : 'бары: план / факт in·out';
-                } else {
-                    monthHint.textContent = on
-                        ? 'бары: факт in/out · линия: накопит. остаток'
-                        : 'бары: поступления / выплаты факт';
-                }
-            }
-            if (monthChart) {
-                const cumDs = monthChart.data.datasets[monthChart.data.datasets.length - 1];
-                if (cumDs) cumDs.hidden = !on;
-                monthChart.options.scales.y1.display = on;
-                monthChart.options.scales.y1.title.display = on;
-                monthChart.update();
-            }
-            if (on) ensureYearChart();
-        }
-
-        if (btn) {
-            btn.addEventListener('click', () => {
-                const on = btn.getAttribute('aria-pressed') !== 'true';
-                setCumMode(on);
-            });
-        }
-    })();
 </script>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* После Chart.js (base.html): иначе при полном reload фильтров canvas пустой. */
+(function initCashflowCharts() {
+    const monthEl = document.getElementById('cfChartData');
+    const yearEl = document.getElementById('cfYearChartData');
+    if (!monthEl || typeof Chart === 'undefined') return;
+
+    const monthData = JSON.parse(monthEl.textContent);
+    const isCompare = {{ 'true' if active_tab == 'cf_compare' else 'false' }};
+    const selected = (monthData.selected_months || []).map(Number).filter(m => m >= 1 && m <= 12);
+    const useAll = !selected.length || selected.length === 12;
+    const months = useAll ? [1,2,3,4,5,6,7,8,9,10,11,12] : selected.slice().sort((a,b) => a - b);
+    const pick = (arr) => months.map(m => (arr && arr[m - 1] != null) ? arr[m - 1] : 0);
+    const labels = months.map(m => (monthData.labels && monthData.labels[m - 1]) || String(m));
+    const moneyFmt = (v) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v);
+
+    let monthChart = null;
+    const ctx = document.getElementById('cfMonthChart');
+    if (ctx) {
+        const prev = Chart.getChart(ctx);
+        if (prev) prev.destroy();
+
+        const datasets = [];
+        if (isCompare) {
+            datasets.push(
+                {
+                    type: 'bar',
+                    label: 'Поступления план',
+                    data: pick(monthData.in_plan || []),
+                    backgroundColor: 'rgba(25, 135, 84, 0.25)',
+                    borderColor: 'rgba(25, 135, 84, 0.8)',
+                    borderWidth: 1,
+                    borderRadius: 3,
+                    yAxisID: 'y',
+                    order: 3,
+                },
+                {
+                    type: 'bar',
+                    label: 'Поступления факт',
+                    data: pick(monthData.in_fact),
+                    backgroundColor: 'rgba(25, 135, 84, 0.75)',
+                    borderRadius: 3,
+                    yAxisID: 'y',
+                    order: 2,
+                },
+                {
+                    type: 'bar',
+                    label: 'Выплаты план',
+                    data: pick(monthData.out_plan || []),
+                    backgroundColor: 'rgba(220, 53, 69, 0.22)',
+                    borderColor: 'rgba(220, 53, 69, 0.75)',
+                    borderWidth: 1,
+                    borderRadius: 3,
+                    yAxisID: 'y',
+                    order: 3,
+                },
+                {
+                    type: 'bar',
+                    label: 'Выплаты факт',
+                    data: pick(monthData.out_fact),
+                    backgroundColor: 'rgba(220, 53, 69, 0.65)',
+                    borderRadius: 3,
+                    yAxisID: 'y',
+                    order: 2,
+                }
+            );
+        } else {
+            datasets.push(
+                {
+                    type: 'bar',
+                    label: 'Поступления факт',
+                    data: pick(monthData.in_fact),
+                    backgroundColor: 'rgba(25, 135, 84, 0.65)',
+                    borderRadius: 3,
+                    yAxisID: 'y',
+                    order: 2,
+                },
+                {
+                    type: 'bar',
+                    label: 'Выплаты факт',
+                    data: pick(monthData.out_fact),
+                    backgroundColor: 'rgba(220, 53, 69, 0.55)',
+                    borderRadius: 3,
+                    yAxisID: 'y',
+                    order: 2,
+                }
+            );
+        }
+        datasets.push({
+            type: 'line',
+            label: 'Остаток (накоп.)',
+            data: pick(monthData.cum_fact),
+            borderColor: '#212529',
+            backgroundColor: 'rgba(33,37,41,0.08)',
+            borderWidth: 2,
+            tension: 0.25,
+            pointRadius: 3,
+            yAxisID: 'y1',
+            order: 1,
+            hidden: true,
+        });
+
+        monthChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: datasets,
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            boxWidth: 12,
+                            font: { size: 11 },
+                        },
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (c) => `${c.dataset.label}: ${moneyFmt(c.parsed.y)}`,
+                        },
+                    },
+                },
+                scales: {
+                    y: {
+                        position: 'left',
+                        ticks: { callback: (v) => moneyFmt(v) },
+                        title: { display: true, text: 'In / Out', font: { size: 10 } },
+                    },
+                    y1: {
+                        position: 'right',
+                        display: false,
+                        grid: { drawOnChartArea: false },
+                        ticks: { callback: (v) => moneyFmt(v) },
+                        title: { display: false, text: 'Накоп. остаток', font: { size: 10 } },
+                    },
+                },
+            },
+        });
+    }
+
+    let yearChart = null;
+    const btn = document.getElementById('btnToggleCfCum');
+    const monthCol = document.getElementById('cfMonthChartCol');
+    const yearCol = document.getElementById('cfYearChartCol');
+    const monthHint = document.getElementById('cfMonthChartHint');
+
+    function ensureYearChart() {
+        if (yearChart || !yearEl) return;
+        const yCanvas = document.getElementById('cfYearChart');
+        if (!yCanvas) return;
+        const prevY = Chart.getChart(yCanvas);
+        if (prevY) prevY.destroy();
+        const yearData = JSON.parse(yearEl.textContent);
+        yearChart = new Chart(yCanvas, {
+            type: 'line',
+            data: {
+                labels: yearData.labels,
+                datasets: [{
+                    label: 'Накопительный остаток на конец года',
+                    data: yearData.cum_fact,
+                    borderColor: '#0d6efd',
+                    backgroundColor: 'rgba(13,110,253,0.12)',
+                    fill: true,
+                    tension: 0.2,
+                    borderWidth: 2,
+                    pointRadius: 4,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (c) => {
+                                const net = (yearData.net_fact || [])[c.dataIndex];
+                                const netStr = net == null ? '' : ` (год: ${moneyFmt(net)})`;
+                                return `Остаток: ${moneyFmt(c.parsed.y)}${netStr}`;
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    y: { ticks: { callback: (v) => moneyFmt(v) } },
+                },
+            },
+        });
+    }
+
+    function setCumMode(on) {
+        document.querySelectorAll('.cf-cum-row').forEach((el) => {
+            el.classList.toggle('d-none', !on);
+        });
+        if (btn) {
+            btn.classList.toggle('btn-dark', on);
+            btn.classList.toggle('btn-outline-dark', !on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            btn.innerHTML = on
+                ? '<i class="fas fa-times me-1"></i>Скрыть накопительный'
+                : '<i class="fas fa-layer-group me-1"></i>Накопительный · прошлые годы';
+        }
+        if (monthCol) {
+            monthCol.classList.toggle('col-12', !on);
+            monthCol.classList.toggle('col-lg-8', on);
+        }
+        if (yearCol) yearCol.classList.toggle('d-none', !on);
+        if (monthHint) {
+            if (isCompare) {
+                monthHint.textContent = on
+                    ? 'бары: план/факт · линия: накопит. остаток'
+                    : 'бары: план / факт in·out';
+            } else {
+                monthHint.textContent = on
+                    ? 'бары: факт in/out · линия: накопит. остаток'
+                    : 'бары: поступления / выплаты факт';
+            }
+        }
+        if (monthChart) {
+            const cumDs = monthChart.data.datasets[monthChart.data.datasets.length - 1];
+            if (cumDs) cumDs.hidden = !on;
+            monthChart.options.scales.y1.display = on;
+            monthChart.options.scales.y1.title.display = on;
+            monthChart.update();
+        }
+        if (on) ensureYearChart();
+    }
+
+    if (btn && btn.dataset.cfBound !== '1') {
+        btn.dataset.cfBound = '1';
+        btn.addEventListener('click', () => {
+            const on = btn.getAttribute('aria-pressed') !== 'true';
+            setCumMode(on);
+        });
+    }
+})();
+</script>
 {% endblock %}
