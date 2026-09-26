@@ -376,6 +376,7 @@ def apply_parsed(
 
     save_name = f"bank_{digest[:10]}_{os.path.splitext(filename or 'bank.jpg')[1] or '.jpg'}"
     payments = parsed.get('payments') or []
+    touched_weeks = set()
     for pay in payments:
         dup = _already_processed(pay)
         if dup is not None:
@@ -390,6 +391,13 @@ def apply_parsed(
             _attach_receipt(inv, data, save_name)
             _mark_paid_quiet(inv)
             _item_row(slip, pay, 'matched', f'оплачен счёт #{inv.id}', inv)
+            try:
+                from app.tg_pay import plan_week_for_pin
+                week = plan_week_for_pin(inv)
+                if week:
+                    touched_weeks.add(week)
+            except Exception:
+                log.exception('plan week for pin')
         elif reason == 'paid' and inv is not None:
             _attach_receipt(inv, data, save_name)
             _item_row(slip, pay, 'skipped', f'уже оплачен счёт #{inv.id}', inv)
@@ -397,6 +405,13 @@ def apply_parsed(
             created = _create_draft(pay, data, save_name)
             _item_row(slip, pay, 'created', 'черновик — поправьте', created)
     db.session.commit()
+    if touched_weeks:
+        try:
+            from app.tg_pay import refresh_week_plan_pin
+            for week in touched_weeks:
+                refresh_week_plan_pin(week)
+        except Exception:
+            log.exception('refresh week plan pin after bank slip')
     return serialize_slip(slip)
 
 

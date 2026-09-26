@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    .season-close-page .season-panel {
+        background: #fff;
+        border: 1px solid #d7e3d9;
+        border-radius: 10px;
+        box-shadow: 0 1px 4px rgba(27, 94, 32, 0.04);
+        overflow: hidden;
+    }
+    .season-close-page table { border-collapse: collapse; width: 100%; }
+    .season-close-page thead th {
+        background: #eaf4eb;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        color: #1b5e20;
+        padding: 8px 10px;
+        border-bottom: 1px solid #d7e3d9;
+        white-space: nowrap;
+    }
+    .season-close-page tbody td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #eef3ef;
+        vertical-align: middle;
+        font-size: 13px;
+    }
+    .season-close-page tbody tr.is-carry { background: #f7fbf7; }
+    .season-close-page .badge-soft {
+        border-radius: 6px;
+        font-size: 10px;
+        font-weight: 600;
+        padding: 2px 6px;
+    }
+    .season-close-page .kpi {
+        border: 1px solid #d7e3d9;
+        border-radius: 10px;
+        background: #fff;
+        padding: 10px 14px;
+        min-width: 140px;
+    }
+    .season-close-page .kpi b { font-size: 20px; color: #1b5e20; }
+</style>
+
+<div class="season-close-page">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+        <div>
+            <h4 class="mb-1 text-success fw-bold"><i class="fas fa-box-archive me-2"></i>Закрытие сезона {{ year }}</h4>
+            <p class="text-muted mb-0 small" style="max-width: 720px;">
+                Оплаченные и полностью отгруженные заказы по умолчанию уходят в архив и пропадают из рабочего списка.
+                Незакрытые остаются на {{ year + 1 }} год — резерв по ним сохраняется.
+                Строки, платежи, счета и годовые отчёты не удаляются: список просто перестаёт загружать архив.
+            </p>
+        </div>
+        <a href="{{ url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm">К заказам</a>
+    </div>
+
+    <form method="GET" class="d-flex flex-wrap gap-2 align-items-center mb-3">
+        <label class="small text-muted mb-0" for="seasonYear">Сезон</label>
+        <select id="seasonYear" name="year" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+            {% for y in years %}
+            <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+            {% endfor %}
+        </select>
+        <a class="btn btn-outline-success btn-sm" hx-boost="false"
+           href="{{ url_for('orders.export_orders', mode='season', start_date=year ~ '-01-01', end_date=year ~ '-12-31') }}">
+            <i class="fas fa-file-excel"></i> Excel сезона
+        </a>
+    </form>
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <div class="kpi">В архив <div><b id="kpiArchive">{{ archive_default }}</b></div></div>
+        <div class="kpi">На {{ year + 1 }} <div><b id="kpiCarry">{{ carry_default }}</b></div></div>
+        <div class="kpi">Уже в архиве <div><b>{{ archived|length }}</b></div></div>
+    </div>
+
+    {% if rows %}
+    <form method="POST" id="seasonForm" class="season-panel mb-4">
+        <input type="hidden" name="year" value="{{ year }}">
+        <input type="hidden" name="action" value="close">
+        <div class="d-flex flex-wrap gap-2 align-items-center p-2 border-bottom" style="background:#f7fbf7;">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnDefaults">Как предложено</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAllCarry">Все оставить</button>
+            <button type="submit" class="btn btn-success btn-sm ms-auto">Закрыть сезон</button>
+        </div>
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th>№ / дата</th>
+                        <th>Клиент</th>
+                        <th class="text-end">Сумма</th>
+                        <th>Оплата</th>
+                        <th>Остаток</th>
+                        <th>Куда</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    {% set o = row.order %}
+                    <tr class="{% if row.default_bucket == 'carry' %}is-carry{% endif %} {% if row.open_qty and o.status != 'canceled' %}is-open{% endif %}" data-default="{{ row.default_bucket }}">
+                        <td>
+                            <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="fw-bold text-dark">#{{ o.id }}</a>
+                            <div class="text-muted" style="font-size:11px;">{{ o.date|dateru }}</div>
+                        </td>
+                        <td>{{ o.client_label }}</td>
+                        <td class="text-end">{{ o.total_sum|money }}</td>
+                        <td>
+                            {% if o.status == 'canceled' %}
+                            <span class="badge-soft bg-secondary text-white">отменён</span>
+                            {% elif o.payment_status == 'paid' %}
+                            <span class="badge-soft bg-success text-white">оплачен</span>
+                            {% elif o.payment_status == 'partial' %}
+                            <span class="badge-soft" style="background:#FBC02D;color:#4a3b00;">частично</span>
+                            {% else %}
+                            <span class="badge-soft bg-danger text-white">долг</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if row.open_qty %}
+                            <span class="text-danger fw-bold">{{ row.open_qty }} шт</span>
+                            {% else %}
+                            <span class="text-success">0</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <select name="bucket_{{ o.id }}" class="form-select form-select-sm bucket-select" style="min-width: 180px;">
+                                <option value="archive" {% if row.default_bucket == 'archive' %}selected{% endif %}>В архив</option>
+                                <option value="carry" {% if row.default_bucket == 'carry' %}selected{% endif %}>На следующий год</option>
+                            </select>
+                            {% if row.open_qty and o.status != 'canceled' %}
+                            <div class="text-muted" style="font-size:11px;">резерв сохранится</div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </form>
+    {% else %}
+    <div class="season-panel p-4 text-muted mb-4">За сезон {{ year }} нет заказов, которые ещё в работе.</div>
+    {% endif %}
+
+    {% if archived %}
+    <h6 class="text-secondary">Уже в архиве сезона {{ year }}</h6>
+    <form method="POST" class="season-panel" onsubmit="return confirm('Вернуть отмеченные заказы в рабочий список?');">
+        <input type="hidden" name="year" value="{{ year }}">
+        <input type="hidden" name="action" value="restore">
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:36px;"></th>
+                        <th>№ / дата</th>
+                        <th>Клиент</th>
+                        <th class="text-end">Сумма</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for o in archived %}
+                    <tr>
+                        <td><input type="checkbox" name="restore_ids" value="{{ o.id }}"></td>
+                        <td>
+                            <a href="{{ url_for('orders.order_detail', order_id=o.id) }}" class="fw-bold text-dark">#{{ o.id }}</a>
+                            <div class="text-muted" style="font-size:11px;">{{ o.date|dateru }}</div>
+                        </td>
+                        <td>{{ o.client_label }}</td>
+                        <td class="text-end">{{ o.total_sum|money }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="p-2 border-top">
+            <button class="btn btn-outline-success btn-sm">Вернуть отмеченные</button>
+        </div>
+    </form>
+    {% endif %}
+</div>
+<script>
+(function () {
+    const form = document.getElementById('seasonForm');
+    if (!form) return;
+    const selects = () => Array.from(form.querySelectorAll('.bucket-select'));
+    function refresh() {
+        let archive = 0, carry = 0;
+        selects().forEach(function (el) {
+            if (el.value === 'archive') archive += 1; else carry += 1;
+        });
+        const a = document.getElementById('kpiArchive');
+        const c = document.getElementById('kpiCarry');
+        if (a) a.textContent = archive;
+        if (c) c.textContent = carry;
+    }
+    selects().forEach(function (el) { el.addEventListener('change', refresh); });
+    const defaults = document.getElementById('btnDefaults');
+    if (defaults) defaults.addEventListener('click', function () {
+        selects().forEach(function (el) {
+            el.value = el.closest('tr').getAttribute('data-default') || 'carry';
+        });
+        refresh();
+    });
+    const allCarry = document.getElementById('btnAllCarry');
+    if (allCarry) allCarry.addEventListener('click', function () {
+        selects().forEach(function (el) { el.value = 'carry'; });
+        refresh();
+    });
+    form.addEventListener('submit', function (e) {
+        let archive = 0, carry = 0, openForced = 0;
+        selects().forEach(function (el) {
+            if (el.value === 'archive') {
+                archive += 1;
+                if (el.closest('tr').classList.contains('is-open')) openForced += 1;
+            } else {
+                carry += 1;
+            }
+        });
+        let msg = 'В архив: ' + archive + '. На следующий год: ' + carry + '. Платежи и отчёты сохранятся.';
+        if (openForced) {
+            msg += ' Незакрытых среди архива: ' + openForced + ' — резерв растений сохранится, из списка заказов они уйдут.';
+        }
+        if (!window.confirm(msg)) e.preventDefault();
+    });
+})();
+</script>
+{% endblock %}

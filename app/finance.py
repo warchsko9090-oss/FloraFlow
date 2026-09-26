@@ -256,10 +256,18 @@ def expenses():
             inv = PaymentInvoice.query.get(inv_id)
             if inv:
                 action = request.form.get('action')
+                pin_week = None
+                delete_err = None
+                try:
+                    from app.tg_pay import plan_week_for_pin
+                    pin_week = plan_week_for_pin(inv)
+                except Exception:
+                    current_app.logger.exception('plan week for pin')
                 if action == 'delete':
                     from app.invoice_files import delete_unpaid_invoice
                     name = inv.original_name
                     err = delete_unpaid_invoice(inv)
+                    delete_err = err
                     if err:
                         flash(err)
                     else:
@@ -287,6 +295,12 @@ def expenses():
                         notify_invoice_paid_chat(inv)
                     except Exception:
                         current_app.logger.exception('notify invoice paid chat')
+                if pin_week and not delete_err:
+                    try:
+                        from app.tg_pay import refresh_week_plan_pin
+                        refresh_week_plan_pin(pin_week)
+                    except Exception:
+                        current_app.logger.exception('refresh week plan pin')
             return redirect(url_for('finance.expenses', tab='invoices'))
 
         elif 'due_date' in request.form or 'add_invoice' in request.form:
@@ -398,10 +412,12 @@ def expenses():
                 # Пересчёт статуса связанных счетов (старый и новый, если менялся)
                 touched_invoice_ids = {iid for iid in (old_invoice_id, exp.invoice_id) if iid}
                 paid_invoices = []
+                touched_for_pin = []
                 for iid in touched_invoice_ids:
                     inv = PaymentInvoice.query.get(iid)
                     if not inv:
                         continue
+                    touched_for_pin.append(inv)
                     paid_sum = db.session.query(func.sum(Expense.amount)).filter(
                         Expense.invoice_id == inv.id
                     ).scalar() or Decimal(0)
@@ -421,6 +437,11 @@ def expenses():
                     except Exception:
                         current_app.logger.exception('vium_inbox.maybe_enqueue (edit) failed')
                     db.session.commit()
+                    try:
+                        from app.tg_pay import refresh_week_plan_pins
+                        refresh_week_plan_pins(touched_for_pin)
+                    except Exception:
+                        current_app.logger.exception('refresh week plan pin after expense edit')
 
                 flash('Расход обновлен')
                 log_action(f"Отредактировал расход #{exp.id}")
@@ -497,6 +518,11 @@ def expenses():
                         except Exception:
                             current_app.logger.exception('vium_inbox.maybe_enqueue (create) failed')
                         db.session.commit()
+                        try:
+                            from app.tg_pay import refresh_week_plan_pins
+                            refresh_week_plan_pins([inv])
+                        except Exception:
+                            current_app.logger.exception('refresh week plan pin after expense create')
 
                 flash('Добавлен')
                 log_action("Добавил расход")
@@ -504,8 +530,13 @@ def expenses():
                 flash(f'Ошибка: {e}')
         return redirect(url_for('finance.expenses', tab='expenses'))
         
-    active_orders = Order.query.filter(Order.status != 'canceled', Order.is_deleted == False).order_by(Order.id.desc()).limit(50).all()
-    barter_orders = Order.query.filter(Order.is_barter == True, Order.status != 'canceled', Order.is_deleted == False).order_by(Order.id.desc()).all()
+    active_orders = Order.query.filter(
+        Order.status != 'canceled', Order.is_deleted == False, Order.archived_at.is_(None),
+    ).order_by(Order.id.desc()).limit(50).all()
+    barter_orders = Order.query.filter(
+        Order.is_barter == True, Order.status != 'canceled',
+        Order.is_deleted == False, Order.archived_at.is_(None),
+    ).order_by(Order.id.desc()).all()
     # Загружаем проекты и их бюджетные статьи (для JS)
     active_projects = Project.query.filter_by(status='active').order_by(Project.name).all()
 
@@ -3792,6 +3823,7 @@ def reports_turnover():
         return redirect(url_for('main.index'))
     
     f_plant = request.args.get('plant_id', type=int)
+    f_size = request.args.get('size_id', type=int)
     f_field = request.args.get('field_id', type=int)
     f_year = request.args.get('year', type=int)
     f_start = request.args.get('start_date')
@@ -3801,14 +3833,15 @@ def reports_turnover():
     opening_balance = 0
     closing_balance = 0
 
-    if f_plant and f_field and f_year:
+    if f_plant and f_size and f_field and f_year:
         doc_rows = db.session.query(DocumentRow, Document).join(Document).filter(
-            DocumentRow.plant_id == f_plant, DocumentRow.year == f_year, 
+            DocumentRow.plant_id == f_plant, DocumentRow.size_id == f_size, DocumentRow.year == f_year,
             or_(DocumentRow.field_from_id == f_field, DocumentRow.field_to_id == f_field)
         ).all()
         
         ghosts = db.session.query(OrderItem, Order).join(Order).filter(
-            OrderItem.plant_id == f_plant, OrderItem.field_id == f_field, OrderItem.year == f_year, Order.status == 'ghost'
+            OrderItem.plant_id == f_plant, OrderItem.size_id == f_size,
+            OrderItem.field_id == f_field, OrderItem.year == f_year, Order.status == 'ghost'
         ).all()
         
         all_events =[]

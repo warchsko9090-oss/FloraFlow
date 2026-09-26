@@ -102,11 +102,18 @@
     .badge-pay-paid { background-color: #4CAF50; color: white; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; }
     .badge-pay-partial { background-color: #FBC02D; color: #4a3b00; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; }
     .badge-pay-unpaid { background-color: #ef5350; color: white; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; }
+    .badge-carry { display: inline-block; margin-top: 2px; background: #eaf4eb; color: #1b5e20; border: 1px solid #d7e3d9; border-radius: 6px; font-size: 9px; font-weight: 600; padding: 1px 5px; }
 
     .orders-page .filter-panel {
         border-radius: 10px;
         box-shadow: 0 1px 4px rgba(27, 94, 32, 0.03);
         border-color: #d7e3d9;
+    }
+    .orders-page .orders-filter-fold { border: 0; background: transparent; }
+    .orders-page .orders-filter-fold > summary { display: none; list-style: none; }
+    @media (min-width: 992px) {
+        .orders-page .orders-filter-fold > summary { display: none !important; }
+        .orders-page .orders-filter-fold > form { display: flex !important; }
     }
 
     .mobile-card { border: 1px solid #d7e3d9; border-radius: 10px; background: white; margin-bottom: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.03); overflow: hidden; }
@@ -140,7 +147,49 @@
         .orders-page .page-actions .btn-group .btn { flex: 1; }
         .orders-page .page-actions > a.btn { flex: 1 1 auto; text-align: center; }
         .orders-page .filter-panel {
-            padding: 10px 12px;
+            padding: 0 12px;
+        }
+        .orders-page .orders-filter-fold > summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            min-height: 44px;
+            padding: 10px 0;
+            font-weight: 700;
+            color: #1b5e20;
+            cursor: pointer;
+            list-style: none;
+        }
+        .orders-page .orders-filter-fold > summary::-webkit-details-marker { display: none; }
+        .orders-page .orders-filter-fold > summary::after {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-right: 2px solid #1b5e20;
+            border-bottom: 2px solid #1b5e20;
+            transform: rotate(45deg);
+            flex: 0 0 auto;
+            margin-right: 4px;
+        }
+        .orders-page .orders-filter-fold[open] > summary::after {
+            transform: rotate(-135deg);
+            margin-top: 4px;
+        }
+        .orders-page .orders-filter-fold:not([open]) > form {
+            display: none !important;
+        }
+        .orders-page .orders-filter-fold[open] > form {
+            padding-bottom: 12px;
+        }
+        .orders-page .orders-filter-count {
+            margin-left: auto;
+            background: #1b5e20;
+            color: #fff;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 7px;
         }
         .orders-page #filterForm {
             flex-direction: column;
@@ -225,16 +274,24 @@
             Заказы
         </div>
         <div class="page-subtitle">
+            {% if show_archive %}
+            Архив сезонов. Заказы на месте: платежи и отчёты сохранены, в рабочем списке их нет.
+            {% else %}
             Управление активными и скрытыми заказами клиентов.
+            {% endif %}
         </div>
     </div>
     <div class="page-actions">
         <div class="btn-group btn-group-sm shadow-sm">
-            <a href="{{ url_for('orders.orders_list', mode='active') }}" class="btn {% if not show_hidden %}btn-success text-white{% else %}btn-white border{% endif %}">Активные</a>
+            <a href="{{ url_for('orders.orders_list', mode='active') }}" class="btn {% if not show_hidden and not show_archive %}btn-success text-white{% else %}btn-white border{% endif %}">Активные</a>
             {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('orders.orders_list', mode='archive') }}" class="btn {% if show_archive %}btn-secondary text-white{% else %}btn-white border{% endif %}">Архив</a>
             <a href="{{ url_for('orders.orders_list', mode='hidden') }}" class="btn {% if show_hidden %}btn-danger{% else %}btn-white border text-danger{% endif %}">Скрытые</a>
             {% endif %}
         </div>
+        {% if current_user.role == 'admin' %}
+        <a href="{{ url_for('orders.season_close') }}" class="btn btn-outline-success btn-sm"><i class="fas fa-box-archive me-1"></i> Закрытие сезона</a>
+        {% endif %}
         {% if current_user.role != 'user2' %}
         <a href="{{ url_for('orders.client_drafts_list') }}" class="btn btn-outline-primary btn-sm position-relative">
             Заказы на согласование
@@ -261,11 +318,18 @@
     </div>
 </div>
 
-<!-- Панель фильтров -->
+<!-- Панель фильтров. На телефоне свёрнута, на ПК всегда открыта. -->
+{% set orders_filter_count = (1 if (filters.start or filters.end) else 0) + (1 if filters.clients else 0) + (1 if filters.ids else 0) + (1 if filters.statuses else 0) %}
 <div class="filter-panel" style="position: relative; z-index: 10;">
+    <details class="orders-filter-fold" id="ordersFilterDetails" open>
+    <summary>
+        <span><i class="fas fa-sliders-h me-1"></i> Фильтры</span>
+        {% if orders_filter_count %}<span class="orders-filter-count">{{ orders_filter_count }}</span>{% endif %}
+    </summary>
     <form method="GET" class="d-flex gap-2 flex-wrap align-items-center w-100" id="filterForm" hx-boost="false">
         <input type="hidden" name="mode" value="{{ mode }}">
         <input type="hidden" name="sort" value="{{ sort or 'date' }}">
+        {% if filters.archive_year %}<input type="hidden" name="archive_year" value="{{ filters.archive_year }}">{% endif %}
         
         <div class="d-flex align-items-center bg-light rounded px-2 border">
             <i class="fas fa-calendar-alt text-muted me-2"></i>
@@ -310,12 +374,12 @@
              В URL передаём также filter_ids, чтобы выбранные номера заказов
              не сбрасывались при переключении вида сортировки. -->
         <div class="btn-group btn-group-sm">
-            <a href="{{ url_for('orders.orders_list', mode=mode, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids, sort='name') }}"
+            <a href="{{ url_for('orders.orders_list', mode=mode, archive_year=filters.archive_year, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids, sort='name') }}"
                class="btn {% if sort == 'name' %}btn-primary text-white{% else %}btn-light border{% endif %}"
                title="Сортировка по алфавиту">
                <i class="fas fa-sort-alpha-down"></i> По названию
             </a>
-            <a href="{{ url_for('orders.orders_list', mode=mode, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids, sort='date') }}"
+            <a href="{{ url_for('orders.orders_list', mode=mode, archive_year=filters.archive_year, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids, sort='date') }}"
                class="btn {% if sort == 'date' %}btn-primary text-white{% else %}btn-light border{% endif %}"
                title="Сортировка по дате создания">
                <i class="fas fa-calendar"></i> По дате
@@ -326,12 +390,13 @@
              Передаём ВСЕ активные фильтры, включая выбранные номера
              заказов (filter_ids). Excel выгрузит ровно то, что сейчас
              отфильтровано на странице. -->
-        <a href="{{ url_for('orders.export_orders', mode=mode, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids) }}"
+        <a href="{{ url_for('orders.export_orders', mode=mode, archive_year=filters.archive_year, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids) }}"
            class="btn btn-success btn-sm ms-2"
            hx-boost="false">
            <i class="fas fa-file-excel"></i> Excel
         </a>
     </form>
+    </details>
 </div>
 
 <!-- ============================================ -->
@@ -404,7 +469,12 @@
                             <i class="fas fa-print"></i>
                         </a>
                         {% if current_user.role == 'admin' %}
-                            {% if o.is_deleted %}
+                            {% if show_archive %}
+                            <form method="POST" onsubmit="return confirm('Вернуть заказ в рабочий список?');">
+                                <input type="hidden" name="action" value="unarchive"><input type="hidden" name="order_id" value="{{ o.id }}">
+                                <button class="btn btn-link text-success p-0" title="Вернуть в работу"><i class="fas fa-undo"></i></button>
+                            </form>
+                            {% elif o.is_deleted %}
                             <form method="POST" onsubmit="return confirm('Показать заказ?');">
                                 <input type="hidden" name="action" value="restore"><input type="hidden" name="order_id" value="{{ o.id }}">
                                 <button class="btn btn-link text-success p-0" title="Показать в списке"><i class="fas fa-eye"></i></button>
@@ -427,6 +497,11 @@
                 <td rowspan="{{ rowspan }}" class="text-center">
                     <span class="fw-bold text-dark fs-6">#{{ o.id }}</span><br>
                     <small class="text-muted" style="font-size: 10px;">{{ o.date|dateru }}</small>
+                    {% if o.carried_from_year and not o.archived_at %}
+                    <br><span class="badge-carry">с {{ o.carried_from_year }}</span>
+                    {% elif show_archive and o.archive_season %}
+                    <br><span class="badge-carry">сезон {{ o.archive_season }}</span>
+                    {% endif %}
                 </td>
 
                 <!-- Клиент -->
@@ -570,6 +645,11 @@
                     <span class="status-dot dot-{{ o.status }}"></span>
                     <span class="fw-bold text-dark me-2">#{{ o.id }}</span>
                     <small class="text-muted">{{ o.date|dateru }}</small>
+                    {% if o.carried_from_year and not o.archived_at %}
+                    <span class="badge-carry ms-1">с {{ o.carried_from_year }}</span>
+                    {% elif show_archive and o.archive_season %}
+                    <span class="badge-carry ms-1">сезон {{ o.archive_season }}</span>
+                    {% endif %}
                 </div>
                 <div class="text-primary fw-bold text-truncate" style="max-width: 180px;">{{ o.client_label }}</div>
             </div>
@@ -635,10 +715,17 @@
                     <i class="fas fa-print"></i> Печать
                 </a>
                 {% if current_user.role == 'admin' %}
+                {% if show_archive %}
+                <form method="POST" class="flex-grow-1" onsubmit="return confirm('Вернуть заказ в рабочий список?');">
+                    <input type="hidden" name="action" value="unarchive"><input type="hidden" name="order_id" value="{{ o.id }}">
+                    <button class="btn btn-outline-success btn-sm w-100">В работу</button>
+                </form>
+                {% else %}
                 <form method="POST" class="flex-grow-1" onsubmit="return confirm('Удалить?');">
                     <input type="hidden" name="action" value="delete"><input type="hidden" name="order_id" value="{{ o.id }}">
                     <button class="btn btn-outline-danger btn-sm w-100">Удалить</button>
                 </form>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
@@ -662,6 +749,12 @@
 
 {% block scripts %}
 <script>
+document.addEventListener('DOMContentLoaded', function () {
+    const fold = document.getElementById('ordersFilterDetails');
+    if (fold && window.matchMedia('(max-width: 991.98px)').matches) {
+        fold.removeAttribute('open');
+    }
+});
 (function () {
     const form = document.getElementById('filterForm');
     if (!form) return;

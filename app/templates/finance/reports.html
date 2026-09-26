@@ -579,11 +579,20 @@
                 <select name="plant_id" id="t_plant" class="form-select form-select-sm select-search" required>
                     <option value="" disabled {% if not filters.get('plant_id') %}selected{% endif %}>Выберите...</option>
                     {% for p in plants %}
-                    <option value="{{ p.id }}" {% if filters.get('plant_id')|int == p.id %}selected{% endif %}>{{ p.name }}</option>
+                    <option value="{{ p.id }}" {% if filters.get('plant_id') and filters.get('plant_id')|int == p.id %}selected{% endif %}>{{ p.name }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2">
+                <label class="form-label small fw-bold">Размер</label>
+                <select name="size_id" id="t_size" class="form-select form-select-sm select-search" required>
+                    <option value="" disabled {% if not filters.get('size_id') %}selected{% endif %}>Выберите...</option>
+                    {% for s in sizes|sort(attribute='name') %}
+                    <option value="{{ s.id }}" {% if filters.get('size_id') and filters.get('size_id')|int == s.id %}selected{% endif %}>{{ s.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
                 <label class="form-label small fw-bold">Поле</label>
                 <select name="field_id" id="t_field" class="form-select form-select-sm select-search" required>
                     <option value="" disabled {% if not filters.get('field_id') %}selected{% endif %}>Выберите...</option>
@@ -598,11 +607,11 @@
                     {% if filters.get('year') %}
                     <option value="{{ filters.get('year') }}" selected>{{ filters.get('year') }}</option>
                     {% else %}
-                    <option value="" disabled selected>Сначала товар...</option>
+                    <option value="" disabled selected>Сначала размер...</option>
                     {% endif %}
                 </select>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <label class="form-label small fw-bold">Период</label>
                 <div class="input-group input-group-sm">
                     <input type="date" name="start_date" value="{{ filters.get('start_date') or '' }}" class="form-control">
@@ -1786,32 +1795,34 @@
 {% block scripts %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        // Подгрузка годов при выборе поля в Оборотной ведомости
-        $(document).on('select2:select change', '#t_plant, #t_field', function() {
-            let p = $('#t_plant').val();
-            let f = $('#t_field').val();
-            let ySelect = $('#t_year');
-            if (p && f) {
-                fetch(`/api/turnover_years?plant=${p}&field=${f}`)
+        // Партия (год) — только когда выбраны растение, размер и поле.
+        function loadTurnoverYears() {
+            const ySelect = $('#t_year');
+            if (!ySelect.length) return;
+            const p = $('#t_plant').val();
+            const s = $('#t_size').val();
+            const f = $('#t_field').val();
+            const keep = ySelect.val();
+            if (!(p && s && f)) {
+                ySelect.empty().append('<option value="" disabled selected>Сначала размер...</option>');
+                return;
+            }
+            fetch(`/api/turnover_years?plant=${p}&size=${s}&field=${f}`)
                 .then(res => res.json())
                 .then(years => {
                     ySelect.empty().append('<option value="" disabled selected>Выберите год...</option>');
-                    if(years && years.length > 0) {
+                    if (years && years.length) {
                         years.forEach(y => { ySelect.append(new Option(y, y)); });
-                        if(years.length === 1) { ySelect.val(years); }
-                    } else { ySelect.append('<option disabled>Нет истории на поле</option>'); }
+                        if (keep && years.map(String).includes(String(keep))) ySelect.val(String(keep));
+                        else if (years.length === 1) ySelect.val(String(years[0]));
+                    } else {
+                        ySelect.append('<option disabled>Нет партии</option>');
+                    }
                 })
                 .catch(err => console.error('Ошибка:', err));
-            }
-        });
-        // если при загрузке уже выбраны растение и поле, подгружаем список годов сразу
-        document.addEventListener('DOMContentLoaded', function() {
-            const p0 = $('#t_plant').val();
-            const f0 = $('#t_field').val();
-            if (p0 && f0) {
-                $('#t_plant, #t_field').trigger('change');
-            }
-        });
+        }
+        $(document).on('select2:select change', '#t_plant, #t_size, #t_field', loadTurnoverYears);
+        loadTurnoverYears();
     });
 
     {% if active_tab == 'calculator' %}

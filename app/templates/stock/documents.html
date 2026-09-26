@@ -7,6 +7,22 @@
     .nav-tabs .nav-link:hover { border-color: #e9ecef #e9ecef #dee2e6; color: #1b5e20 !important; }
     .row-remove-btn { color: #dc3545; cursor: pointer; }
     #fieldRecountTable tfoot td { background: #f8f9fa; }
+    .seedling-docs-fold { border: 1px solid #d7e3d9; border-radius: 10px; background: #fff; }
+    .seedling-docs-fold > summary {
+        list-style: none; cursor: pointer; padding: 10px 14px;
+        font-weight: 700; color: #6c757d; user-select: none;
+    }
+    .seedling-docs-fold > summary::-webkit-details-marker { display: none; }
+    .seedling-docs-fold:not([open]) > :not(summary) { display: none !important; }
+    .seedling-docs-fold > summary::before {
+        content: "▸"; display: inline-block; width: 1.1em; color: #1b5e20;
+    }
+    .seedling-docs-fold[open] > summary { border-bottom: 1px solid #eef3ef; }
+    .seedling-docs-fold[open] > summary::before { content: "▾"; }
+    .seedling-docs-fold .seedling-docs-count {
+        font-weight: 600; font-size: 11px; background: #eaf4eb; color: #1b5e20;
+        border-radius: 6px; padding: 2px 6px; margin-left: 6px;
+    }
 
     /* ==============================================================
        ДВИЖОК БЕСКОНЕЧНОЙ КАРТЫ (Figma / Map style) — для Drag & Drop режима
@@ -1030,10 +1046,6 @@
 
   <!-- ИЗМЕНЕНИЕ РАЗМЕРА / ПЕРЕСЧЕТ ПО ПОЛЮ -->
   <div class="tab-pane fade {% if active_tab == 'regrading' %}show active{% endif %}" id="regrading">
-      <div class="alert alert-info py-2 small border-info bg-info bg-opacity-10">
-          <i class="fas fa-ruler-combined me-2"></i>
-          Выберите поле, внесите фактические остатки после пересчета и сохраните карточку. Изменения сразу отражаются на складе.
-      </div>
       <form method="POST">
           <input type="hidden" name="doc_type" value="field_recount">
           <div class="card border-0 shadow-sm mb-3">
@@ -1125,9 +1137,13 @@
       </form>
 
       <hr class="my-4">
-      <h6 class="fw-bold text-secondary mb-3"><i class="fas fa-seedling me-1"></i> Документы саженцев</h6>
+      <details class="seedling-docs-fold mb-4">
+      <summary>
+          <i class="fas fa-seedling me-1"></i> Документы саженцев
+          <span class="seedling-docs-count">{{ seedling_docs|length }}</span>
+      </summary>
       {% if seedling_docs %}
-      <div class="table-responsive mb-4">
+      <div class="table-responsive">
           <table class="table table-sm table-hover bg-white mb-0" style="font-size:13px;">
               <thead class="table-light">
                   <tr>
@@ -1162,10 +1178,16 @@
           </table>
       </div>
       {% else %}
-      <div class="text-muted small mb-4">Документов саженцев пока нет.</div>
+      <div class="text-muted small px-3 pb-3">Документов саженцев пока нет.</div>
       {% endif %}
+      </details>
 
-      <h6 class="fw-bold text-secondary mb-3"><i class="fas fa-layer-group me-1"></i> Карточки пересчета</h6>
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+          <h6 class="fw-bold text-secondary mb-0"><i class="fas fa-layer-group me-1"></i> Карточки пересчета</h6>
+          {% if recount_pager.total %}
+          <span class="small text-muted">{{ recount_pager.from }}–{{ recount_pager.to }} из {{ recount_pager.total }}</span>
+          {% endif %}
+      </div>
       {% for card in recount_cards %}
       <div class="card mb-3 border-secondary shadow-sm">
           <div class="card-header bg-light d-flex justify-content-between align-items-center py-2">
@@ -1249,6 +1271,22 @@
           Пока нет сохраненных карточек пересчета
       </div>
       {% endfor %}
+      {% if recount_pager.pages > 1 %}
+      <nav class="d-flex flex-wrap align-items-center gap-1 mb-3" aria-label="Страницы карточек пересчета">
+          {% if recount_pager.prev_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ recount_pager.prev_url }}" hx-boost="false">Назад</a>
+          {% endif %}
+          {% set pg = namespace(prev=0) %}
+          {% for p in recount_pager.numbers %}
+          {% if pg.prev and p.n - pg.prev > 1 %}<span class="text-muted px-1">…</span>{% endif %}
+          <a class="btn btn-sm {% if p.current %}btn-success{% else %}btn-outline-secondary{% endif %}" href="{{ p.url }}" hx-boost="false">{{ p.n }}</a>
+          {% set pg.prev = p.n %}
+          {% endfor %}
+          {% if recount_pager.next_url %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ recount_pager.next_url }}" hx-boost="false">Дальше</a>
+          {% endif %}
+      </nav>
+      {% endif %}
   </div>
 
   <!-- ОТГРУЗКИ (ЖУРНАЛ) -->

@@ -343,6 +343,12 @@ class Order(db.Model):
     buh_posted_at = db.Column(db.DateTime, nullable=True)  # бухгалтер пометила отгрузку проведённой
     buh_posted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
+    # Закрытие сезона: заказ уходит из рабочего списка, строки и платежи остаются.
+    archived_at = db.Column(db.DateTime, nullable=True)
+    archive_season = db.Column(db.Integer, nullable=True)
+    # Незакрытый заказ, оставленный в работе при закрытии этого сезона.
+    carried_from_year = db.Column(db.Integer, nullable=True)
+
     client = db.relationship('Client', foreign_keys=[client_id])
     billing_client = db.relationship('Client', foreign_keys=[billing_client_id])
     buh_posted_by = db.relationship('User', foreign_keys=[buh_posted_by_id])
@@ -354,6 +360,7 @@ class Order(db.Model):
         db.Index('idx_order_client', 'client_id'),
         db.Index('idx_order_billing_client', 'billing_client_id'),
         db.Index('idx_order_status', 'status'),
+        db.Index('idx_order_archived', 'archived_at'),
     )
 
     @property

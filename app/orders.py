@@ -593,6 +593,198 @@ def _site_request_badges():
     }
 
 
+def _order_open_qty(order):
+    """Сколько штук ещё не отгружено. Отменённый заказ резерв не держит."""
+    if order.status == 'canceled':
+        return 0
+    total = 0
+    for item in order.items or []:
+        total += max(0, int(item.quantity or 0) - int(item.shipped_quantity or 0))
+    return total
+
+
+def _order_closed_for_archive(order):
+    """В архив по умолчанию: отменённые и полностью оплаченные+отгруженные.
+
+    Незакрытые (долг, частичная отгрузка, резерв) остаются на следующий год.
+    """
+    if order.status == 'canceled':
+        return True
+    if order.status == 'ghost' or not order.items:
+        return False
+    if order.payment_status != 'paid':
+        return False
+    # Как зелёные строки списка: оплачен и всё количество отгружено.
+    return all(
+        int(item.shipped_quantity or 0) >= int(item.quantity or 0)
+        for item in order.items
+    )
+
+
+def _season_bounds(year):
+    start = datetime(int(year), 1, 1)
+    end = datetime(int(year) + 1, 1, 1)
+    return start, end
+
+
+def _season_candidate_query(year):
+    from sqlalchemy.orm import joinedload, selectinload
+    start, end = _season_bounds(year)
+    return (
+        Order.query.options(
+            joinedload(Order.client),
+            joinedload(Order.billing_client),
+            selectinload(Order.items),
+            selectinload(Order.payments),
+        )
+        .filter(
+            Order.is_deleted == False,  # noqa: E712
+            Order.status != 'ghost',
+            Order.archived_at.is_(None),
+            Order.date >= start,
+            Order.date < end,
+        )
+        .order_by(Order.date.desc(), Order.id.desc())
+    )
+
+
+def _apply_orders_visibility(q, mode, archive_year=None):
+    """Активные — без архива. Архив — только закрытые сезоны. Скрытые — is_deleted.
+
+    mode=season — снимок года: и архив, и ещё рабочие, без скрытых.
+    """
+    if mode == 'season':
+        return q.filter(Order.is_deleted == False)  # noqa: E712
+    if mode == 'archive':
+        q = q.filter(Order.is_deleted == False, Order.archived_at.isnot(None))  # noqa: E712
+        if archive_year:
+            q = q.filter(Order.archive_season == int(archive_year))
+        return q
+    show_hidden = mode in ('hidden', 'trash')
+    q = q.filter(Order.is_deleted == show_hidden)
+    if not show_hidden:
+        q = q.filter(Order.archived_at.is_(None))
+    return q
+
+
+def _unarchive_order(order):
+    season = order.archive_season
+    if season and not order.carried_from_year:
+        order.carried_from_year = season
+    order.archived_at = None
+    order.archive_season = None
+
+
+@bp.route('/orders/season-close', methods=['GET', 'POST'])
+@login_required
+def season_close():
+    """Закрытие сезона: архив убирает заказ из рабочего списка, перенос оставляет."""
+    if current_user.role != 'admin':
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+
+    now_year = msk_now().year
+    try:
+        year = int(request.values.get('year') or now_year)
+    except (TypeError, ValueError):
+        year = now_year
+    if year < 2000 or year > now_year + 1:
+        year = now_year
+
+    if request.method == 'POST':
+        action = request.form.get('action') or 'close'
+        if action == 'restore':
+            ids = []
+            for raw in request.form.getlist('restore_ids'):
+                if str(raw).isdigit():
+                    ids.append(int(raw))
+            restored = 0
+            if ids:
+                rows = Order.query.filter(Order.id.in_(ids), Order.archived_at.isnot(None)).all()
+                for order in rows:
+                    _unarchive_order(order)
+                    restored += 1
+                db.session.commit()
+                log_action(f'Вернул из архива сезона {year}: {restored} заказ(ов)')
+            flash(f'В работу возвращено: {restored}')
+            nxt = (request.form.get('next') or '').strip()
+            if nxt.startswith('/') and not nxt.startswith('//'):
+                return redirect(nxt)
+            return redirect(url_for('orders.season_close', year=year))
+
+        candidates = _season_candidate_query(year).all()
+        archived_n = 0
+        carry_n = 0
+        open_archived = 0
+        for order in candidates:
+            choice = (request.form.get(f'bucket_{order.id}') or '').strip()
+            if choice not in ('archive', 'carry'):
+                choice = 'archive' if _order_closed_for_archive(order) else 'carry'
+            if choice == 'archive':
+                if _order_open_qty(order) > 0:
+                    open_archived += 1
+                order.archived_at = msk_now()
+                order.archive_season = year
+                order.carried_from_year = None
+                archived_n += 1
+            else:
+                order.carried_from_year = year
+                carry_n += 1
+        db.session.commit()
+        log_action(
+            f'Закрыл сезон заказов {year}: архив {archived_n}, на следующий год {carry_n}'
+        )
+        extra = ''
+        if open_archived:
+            extra = f' Незакрытых в архиве: {open_archived} — резерв по ним сохранён.'
+        flash(
+            f'Сезон {year}: в архив {archived_n}, на следующий год {carry_n}. '
+            f'Рабочий список архив больше не загружает.{extra}'
+        )
+        return redirect(url_for('orders.orders_list', mode='active'))
+
+    candidates = _season_candidate_query(year).all()
+    rows = []
+    for order in candidates:
+        open_qty = _order_open_qty(order)
+        closed = _order_closed_for_archive(order)
+        rows.append({
+            'order': order,
+            'closed': closed,
+            'open_qty': open_qty,
+            'default_bucket': 'archive' if closed else 'carry',
+        })
+    from sqlalchemy.orm import joinedload, selectinload
+    archived = (
+        Order.query.options(
+            joinedload(Order.client),
+            joinedload(Order.billing_client),
+            selectinload(Order.items),
+        )
+        .filter(
+            Order.archive_season == year,
+            Order.archived_at.isnot(None),
+            Order.is_deleted == False,  # noqa: E712
+        )
+        .order_by(Order.id.desc())
+        .all()
+    )
+    year_rows = db.session.query(func.extract('year', Order.date)).distinct().all()
+    years = sorted({int(r[0]) for r in year_rows if r[0]}, reverse=True)
+    if now_year not in years:
+        years.insert(0, now_year)
+
+    return render_template(
+        'orders/season_close.html',
+        year=year,
+        years=years,
+        rows=rows,
+        archived=archived,
+        archive_default=sum(1 for r in rows if r['default_bucket'] == 'archive'),
+        carry_default=sum(1 for r in rows if r['default_bucket'] == 'carry'),
+    )
+
+
 @bp.route('/orders', methods=['GET', 'POST'])
 @login_required
 def orders_list():
@@ -614,6 +806,8 @@ def orders_list():
         if v.isdigit():
             f_ids.append(int(v))
     sort = request.args.get('sort', 'date')  # По умолчанию — по дате создания
+    archive_year_raw = (request.args.get('archive_year') or '').strip()
+    archive_year = int(archive_year_raw) if archive_year_raw.isdigit() else None
     
     if request.method == 'POST' and current_user.role == 'admin':
         oid = request.form.get('order_id')
@@ -626,19 +820,23 @@ def orders_list():
             elif act == 'restore':
                 o.is_deleted = False
                 flash('Заказ восстановлен')
+            elif act == 'unarchive':
+                _unarchive_order(o)
+                flash(f'Заказ #{o.id} возвращён в работу')
             elif act == 'purge':
                 # Полное удаление из БД (только для админа)
                 db.session.delete(o)
                 flash('Заказ удален навсегда')
             db.session.commit()
             log_action(f"Спрятал/показал/удалил заказ {o.id}")
-        return redirect(url_for('orders.orders_list', mode=mode))
+        return redirect(url_for('orders.orders_list', mode=mode, archive_year=archive_year))
         
     # Автоматически скрываем старые отмененные заказы (через ~4 месяца)
     cutoff = msk_now() - timedelta(days=120)
     Order.query.filter(
         Order.status == 'canceled',
         Order.is_deleted == False,
+        Order.archived_at.is_(None),
         or_(
             and_(Order.canceled_at != None, Order.canceled_at < cutoff),
             and_(Order.canceled_at == None, Order.date < cutoff)
@@ -648,14 +846,19 @@ def orders_list():
 
     from sqlalchemy.orm import joinedload
 
-    # флаг скрытых (old 'trash')
+    # флаг скрытых (old 'trash') и архива сезона
     show_hidden = mode in ('hidden', 'trash')
-    q = Order.query.options(
-        joinedload(Order.client),
-        joinedload(Order.billing_client),
-        joinedload(Order.items).joinedload(OrderItem.plant),
-        joinedload(Order.items).joinedload(OrderItem.size),
-    ).filter_by(is_deleted=show_hidden)
+    show_archive = mode == 'archive'
+    q = _apply_orders_visibility(
+        Order.query.options(
+            joinedload(Order.client),
+            joinedload(Order.billing_client),
+            joinedload(Order.items).joinedload(OrderItem.plant),
+            joinedload(Order.items).joinedload(OrderItem.size),
+        ),
+        mode,
+        archive_year,
+    )
         
     if f_client:
         cid = int(f_client)
@@ -713,10 +916,11 @@ def orders_list():
     # Берём из той же видимой группы (активные/скрытые), исключаем 'ghost',
     # сортируем по убыванию id, чтобы свежие номера были сверху списка.
     # Имя клиента подтягиваем заранее, чтобы шаблон не делал N+1 запросов.
-    filter_orders_q = (Order.query
-                       .filter(Order.is_deleted == show_hidden,
-                               Order.status != 'ghost')
-                       .order_by(Order.id.desc()))
+    filter_orders_q = _apply_orders_visibility(
+        Order.query.filter(Order.status != 'ghost'),
+        mode,
+        archive_year,
+    ).order_by(Order.id.desc())
     all_orders_for_filter = [
         {
             'id': o.id,
@@ -738,9 +942,11 @@ def orders_list():
                                'start': f_date_start,
                                'end': f_date_end,
                                'ids': f_ids,
+                               'archive_year': archive_year,
                            },
                            sort=sort,
-                           mode=mode)
+                           mode=mode,
+                           show_archive=show_archive)
 
 
 @bp.route('/orders/client_drafts')
@@ -2389,25 +2595,30 @@ def api_stock_availability():
 @bp.route('/api/turnover_years')
 @login_required
 def api_turnover_years():
-    p = request.args.get('plant')
-    f = request.args.get('field')
-    if not p or not f: 
+    p = request.args.get('plant', type=int)
+    s = request.args.get('size', type=int)
+    f = request.args.get('field', type=int)
+    if not p or not s or not f:
         return jsonify(list())
-    
+
     unique_years = set()
-    stocks = db.session.query(StockBalance).filter_by(plant_id=p, field_id=f).all()
-    for st in stocks: 
-        if st.year: unique_years.add(st.year)
-    ghosts = db.session.query(OrderItem).filter_by(plant_id=p, field_id=f).all()
-    for g in ghosts: 
-        if g.year: unique_years.add(g.year)
-    docs_from = db.session.query(DocumentRow).filter_by(plant_id=p, field_from_id=f).all()
-    for d in docs_from: 
-        if d.year: unique_years.add(d.year)
-    docs_to = db.session.query(DocumentRow).filter_by(plant_id=p, field_to_id=f).all()
-    for d in docs_to: 
-        if d.year: unique_years.add(d.year)
-            
+    stocks = db.session.query(StockBalance).filter_by(plant_id=p, size_id=s, field_id=f).all()
+    for st in stocks:
+        if st.year:
+            unique_years.add(st.year)
+    ghosts = db.session.query(OrderItem).filter_by(plant_id=p, size_id=s, field_id=f).all()
+    for g in ghosts:
+        if g.year:
+            unique_years.add(g.year)
+    docs_from = db.session.query(DocumentRow).filter_by(plant_id=p, size_id=s, field_from_id=f).all()
+    for d in docs_from:
+        if d.year:
+            unique_years.add(d.year)
+    docs_to = db.session.query(DocumentRow).filter_by(plant_id=p, size_id=s, field_to_id=f).all()
+    for d in docs_to:
+        if d.year:
+            unique_years.add(d.year)
+
     return jsonify(sorted(list(unique_years)))
 
 @bp.route('/order/<int:order_id>', methods=['GET', 'POST'])
@@ -4121,7 +4332,9 @@ def export_orders():
     # Применяем тот же набор фильтров, что и на странице /orders, плюс
     # фильтр по выбранным номерам. Это гарантирует, что Excel содержит
     # ровно то, что сейчас видно в списке.
-    q = Order.query.filter_by(is_deleted=(mode == 'trash'))
+    archive_year_raw = (request.args.get('archive_year') or '').strip()
+    archive_year = int(archive_year_raw) if archive_year_raw.isdigit() else None
+    q = _apply_orders_visibility(Order.query, mode, archive_year)
     if f_client:
         q = q.filter(Order.client_id == int(f_client))
     if f_status:

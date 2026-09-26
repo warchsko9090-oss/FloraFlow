@@ -236,17 +236,18 @@
                         <span class="dig-day-count">{{ day_list|length }} {{ 'задание' if day_list|length == 1 else 'заданий' }}</span>
                     </div>
 
+                    {% set day_idx = loop.index %}
                     {% for plant_name, items in day_list|groupby('plant_name') %}
                     <div class="card mb-3 shadow-sm border-0">
                         <div class="card-header p-2 bg-white">
                             <button class="btn btn-link w-100 text-start text-decoration-none" type="button"
-                                    data-bs-toggle="collapse" data-bs-target="#plantCollapse{{ loop.parent.index }}_{{ loop.index }}"
-                                    aria-expanded="true" aria-controls="plantCollapse{{ loop.parent.index }}_{{ loop.index }}">
+                                    data-bs-toggle="collapse" data-bs-target="#plantCollapse{{ day_idx }}_{{ loop.index }}"
+                                    aria-expanded="true" aria-controls="plantCollapse{{ day_idx }}_{{ loop.index }}">
                                 <span class="fw-bold">{{ plant_name }}</span>
                                 <span class="small text-muted">({{ items|length }} {{ 'задание' if items|length == 1 else 'заданий' }})</span>
                             </button>
                         </div>
-                        <div id="plantCollapse{{ loop.parent.index }}_{{ loop.index }}" class="collapse show">
+                        <div id="plantCollapse{{ day_idx }}_{{ loop.index }}" class="collapse show">
                             <div class="card-body p-2 bg-light">
                                 {% for t in items %}
                                 <div class="dig-task-card border rounded-3 p-3 mb-3 bg-white shadow-sm">

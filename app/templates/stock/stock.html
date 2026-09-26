@@ -143,22 +143,44 @@
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
     }
-    .stock-mobile-body { border-top: 1px solid #f3f4f6; padding: 4px 0 8px; }
+    .stock-mobile-body { border-top: 1px solid #d7e3d9; padding: 0; }
+    .stock-mtable-head,
     .stock-mobile-row {
         display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 8px;
-        padding: 8px 14px;
-        align-items: start;
+        grid-template-columns: minmax(88px, 1.4fr) repeat(3, minmax(52px, 0.8fr));
         font-size: 13px;
     }
-    .stock-mobile-row + .stock-mobile-row { border-top: 1px solid #f8faf8; }
-    .stock-mobile-row .nums {
+    .stock-mtable.no-price .stock-mtable-head,
+    .stock-mtable.no-price .stock-mobile-row {
+        grid-template-columns: minmax(88px, 1.6fr) repeat(2, minmax(56px, 0.8fr));
+    }
+    .stock-mtable-head {
+        background: #eaf4eb;
+        color: #3d5c44;
+        font-size: 11px;
+        font-weight: 700;
+    }
+    .stock-mtable-head span,
+    .stock-mobile-row > div {
+        padding: 7px 8px;
+        border-right: 1px solid #d7e3d9;
+        border-bottom: 1px solid #e3ece4;
+        min-width: 0;
+    }
+    .stock-mtable-head span:last-child,
+    .stock-mobile-row > div:last-child { border-right: none; }
+    .stock-mobile-row:last-child > div { border-bottom: none; }
+    .stock-mtable-head span:not(:first-child) { text-align: right; }
+    .stock-mobile-row > div:not(:first-child) {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
         text-align: right;
         font-variant-numeric: tabular-nums;
-        white-space: nowrap;
+        font-weight: 700;
     }
-    .stock-mobile-row .nums .free { color: #1B5E20; font-weight: 700; }
+    .stock-mobile-row .free { color: #1B5E20; }
+    .stock-mobile-row .muted { color: #6b7280; font-size: 11px; font-weight: 500; margin-top: 2px; }
     .stock-unit-price { font-weight: 700; color: #111827; font-size: 12px; }
     .field-acc {
         background: #fff;
@@ -207,6 +229,23 @@
     }
     .stock-fields-hint { display: none; }
     @media (min-width: 992px) {
+        .stock-mb-fold {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem 0.75rem;
+            width: 100%;
+        }
+        .stock-mb-fold > summary {
+            display: flex;
+            list-style: none;
+            padding: 0;
+            pointer-events: none;
+        }
+        .stock-mb-fold > summary::-webkit-details-marker { display: none; }
+        .stock-mb-fold > summary::after { display: none; }
+        .stock-mb-fold > summary input { pointer-events: auto; }
+        .stock-mb-fold:not([open]) > :not(summary) { display: block !important; }
         /* display:contents на <details> в Chromium ломает ряд — фильтры встают столбиком */
         .stock-filter-details {
             flex: 1 1 auto;
@@ -235,7 +274,33 @@
             align-items: stretch !important;
             gap: 8px !important;
         }
-        #stockForm > input[name="end_date"],
+        .stock-mb-fold {
+            width: 100%;
+        }
+        .stock-mb-fold > summary {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            list-style: none;
+            cursor: pointer;
+            padding: 0;
+        }
+        .stock-mb-fold > summary::-webkit-details-marker { display: none; }
+        .stock-mb-fold > summary::marker { content: ""; }
+        .stock-mb-fold > summary::after {
+            content: "";
+            width: 8px;
+            height: 8px;
+            flex-shrink: 0;
+            margin-right: 2px;
+            border-right: 2px solid #6c757d;
+            border-bottom: 2px solid #6c757d;
+            transform: rotate(45deg);
+        }
+        .stock-mb-fold[open] > summary::after { transform: rotate(-135deg); margin-top: 4px; }
+        .stock-mb-fold:not([open]) > :not(summary) { display: none !important; }
+
+        #stockForm input[name="end_date"],
         #stockPlantSearch {
             width: 100% !important;
             max-width: none !important;
@@ -737,15 +802,19 @@
     <!-- hx-boost="false": браузер корректно очищает кэш формы -->
     <form class="d-flex align-items-center flex-wrap gap-2 w-100" method="GET" id="stockForm" hx-boost="false">
         <input type="hidden" name="mode" value="{{ report_mode }}">
-        <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm" style="width: auto;">
-        <input type="text" id="stockPlantSearch" class="form-control form-control-sm" style="width:200px"
-               placeholder="Поиск растения…" oninput="stockApplyPlantSearch()">
+        <details id="stockMbFold" class="stock-mb-fold" open>
+        <summary>
+            <input type="text" id="stockPlantSearch" class="form-control form-control-sm" style="width:200px"
+                   placeholder="Поиск растения…" oninput="stockApplyPlantSearch()"
+                   onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()">
+        </summary>
         <details id="stockFilterDetails" class="stock-filter-details" open>
         <summary>
             <span>Фильтры и выгрузка</span>
             <span class="stock-filter-summary-counts" id="stockFilterSummaryCounts" aria-live="polite"></span>
         </summary>
         <div class="stock-filter-body">
+        <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm" style="width: auto;">
 
         <!-- Multi-select как на заказах: список не закрывается, теги скрыты, бейдж = число выбранных -->
         <select name="filter_plant" class="form-select form-select-sm select-search stock-filter-ms"
@@ -804,6 +873,7 @@
             <button type="button" onclick="printKP()" class="btn btn-dark btn-sm"><i class="fas fa-print"></i> Выгрузка тов. остатков</button>
         </div>
         </div>
+        </details>
         </details>
     </form>
 </div>
@@ -1117,11 +1187,18 @@
         <button type="button" class="stock-mobile-header collapsed" data-bs-toggle="collapse" data-bs-target="#mob-stock-{{ unique_id }}">
             <div style="min-width:0">
                 <div class="fw-bold">{{ group.name }}</div>
-                <div class="muted">{{ group.data.rows|map(attribute='fields_str')|join(', ')|truncate(42) }} · {{ group.data.rows|length }} разм.</div>
+                <div class="muted">поля {{ group.data.rows|map(attribute='fields_str')|join(', ')|truncate(36) }} · {{ group.data.rows|length }} разм.</div>
             </div>
             <div class="badge-qty">{{ group.data.totals.free }} шт</div>
         </button>
         <div id="mob-stock-{{ unique_id }}" class="collapse stock-mobile-body">
+            <div class="stock-mtable{% if current_user.role == 'user2' %} no-price{% endif %}">
+            <div class="stock-mtable-head">
+                <span>Размер</span>
+                <span>Своб.</span>
+                <span>Факт</span>
+                {% if current_user.role != 'user2' %}<span>Цена</span>{% endif %}
+            </div>
             {% for row in group.data.rows %}
             <div class="stock-mobile-row"
                  data-plant-id="{{ row.plant_id }}"
@@ -1129,17 +1206,16 @@
                  data-wholesale-price="{{ row.price|round(0)|int }}">
                 <div>
                     <div class="fw-bold">{{ row.size or '—' }}</div>
-                    <div class="muted">{{ row.fields_str }}{% if row.year %} · {{ row.year }}{% endif %}</div>
+                    <div class="muted">поля {{ row.fields_str }}{% if row.year %} · {{ row.year }}{% endif %}</div>
                 </div>
-                <div class="nums">
-                    <div class="free">{{ row.free }} своб.</div>
-                    <div class="muted">факт {{ row.quantity }}</div>
-                    {% if current_user.role != 'user2' %}
-                    <div class="stock-unit-price stock-price-value">{{ row.price|money_int }} ₽</div>
-                    {% endif %}
-                </div>
+                <div class="free">{{ row.free }}</div>
+                <div>{{ row.quantity }}</div>
+                {% if current_user.role != 'user2' %}
+                <div class="stock-unit-price stock-price-value">{{ row.price|money_int }} ₽</div>
+                {% endif %}
             </div>
             {% endfor %}
+            </div>
         </div>
     </div>
     {% endif %}
@@ -1199,8 +1275,10 @@
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         const filterDetails = document.getElementById('stockFilterDetails');
-        if (filterDetails && window.matchMedia('(max-width: 991.98px)').matches) {
-            filterDetails.removeAttribute('open');
+        const mbFold = document.getElementById('stockMbFold');
+        if (window.matchMedia('(max-width: 991.98px)').matches) {
+            if (filterDetails) filterDetails.removeAttribute('open');
+            if (mbFold) mbFold.removeAttribute('open');
             const params = new URLSearchParams(window.location.search);
             if (params.get('mode') === 'inventory') {
                 params.set('mode', 'fields');

@@ -31,6 +31,21 @@
     </div>
     <a href="{{ return_to or url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm"><i class="fas fa-arrow-left"></i> Назад</a>
 </div>
+{% if order.archived_at %}
+<div class="alert alert-secondary d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
+    <span>Заказ в архиве сезона {{ order.archive_season or '—' }}. В рабочем списке его нет, платежи и отчёты на месте.</span>
+    {% if current_user.role == 'admin' %}
+    <form method="POST" action="{{ url_for('orders.season_close', year=order.archive_season or '') }}" class="m-0">
+        <input type="hidden" name="action" value="restore">
+        <input type="hidden" name="restore_ids" value="{{ order.id }}">
+        <input type="hidden" name="next" value="{{ url_for('orders.order_detail', order_id=order.id) }}">
+        <button class="btn btn-sm btn-outline-success">Вернуть в работу</button>
+    </form>
+    {% endif %}
+</div>
+{% elif order.carried_from_year %}
+<div class="alert alert-success py-2 mb-3">Перенесён с сезона {{ order.carried_from_year }} и остаётся в рабочем списке.</div>
+{% endif %}
 
 <!-- БЛОК "СВЯЗАННЫЕ ДОКУМЕНТЫ" (Цепочка) -->
 <style>
@@ -141,6 +156,53 @@
     .seedlings-toggle-quiet .form-check-input:checked {
         background-color: #81c784;
         border-color: #81c784;
+    }
+
+    .order-pay-fold > summary,
+    .order-price-fold > summary {
+        list-style: none;
+        cursor: pointer;
+    }
+    .order-pay-fold > summary::-webkit-details-marker,
+    .order-price-fold > summary::-webkit-details-marker { display: none; }
+    .order-pay-fold > summary::marker,
+    .order-price-fold > summary::marker { content: ""; }
+    @media (max-width: 767.98px) {
+        .order-pay-fold > summary,
+        .order-price-fold > summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .order-price-fold > summary {
+            padding: 0.5rem 1rem;
+            background: #f8fbff;
+            border-bottom: 1px solid #b6d4fe;
+            font-weight: 700;
+            font-size: 0.875rem;
+        }
+        .order-pay-fold > summary::after,
+        .order-price-fold > summary::after {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-right: 2px solid #6c757d;
+            border-bottom: 2px solid #6c757d;
+            transform: rotate(45deg);
+            margin-right: 4px;
+            flex-shrink: 0;
+        }
+        .order-pay-fold[open] > summary::after,
+        .order-price-fold[open] > summary::after { transform: rotate(-135deg); margin-top: 4px; }
+        .order-pay-fold:not([open]) > .card-body { display: none !important; }
+        .order-price-fold:not([open]) > .order-price-bar { display: none !important; }
+    }
+    @media (min-width: 768px) {
+        .order-pay-fold > summary { pointer-events: none; cursor: default; }
+        .order-pay-fold > summary::after,
+        .order-price-fold > summary { display: none !important; }
+        .order-pay-fold:not([open]) > .card-body { display: block !important; }
+        .order-price-fold:not([open]) > .order-price-bar { display: flex !important; }
     }
 </style>
 
@@ -535,7 +597,8 @@
 
         {% if current_user.role != 'user2' %}
         <div class="card mb-3 shadow-sm">
-            <div class="card-header bg-white fw-bold">Платежи</div>
+            <details class="order-pay-fold" id="orderPayDetails" open>
+            <summary class="card-header bg-white fw-bold">Платежи</summary>
             <div class="card-body p-2">
                 <ul class="list-group list-group-flush mb-2 small">
                     {% for p in order.payments %}
@@ -622,9 +685,10 @@
                 {% endif %}
                 {% endif %}
             </div>
+            </details>
         </div>
         {% if order.status != 'canceled' and current_user.role != 'user2' %}
-        <div class="card mb-3 shadow-sm">
+        <div class="card mb-3 shadow-sm d-none d-md-block">
             <div class="card-body p-2">
                 <form method="POST" hx-boost="false">
                     <label class="small fw-bold text-success"><i class="fas fa-project-diagram"></i> Проект</label>
@@ -699,9 +763,13 @@
             </div>
             {% endif %}
             {% if can_use_price_editor %}
-            <div class="px-3 py-2 d-flex flex-wrap align-items-center gap-2 border-bottom"
+            <details class="order-price-fold" id="orderPriceDetails" open>
+            <summary>
+                <span><i class="fas fa-tags me-1 text-primary"></i> Редактор цен</span>
+            </summary>
+            <div class="order-price-bar px-3 py-2 d-flex flex-wrap align-items-center gap-2 border-bottom"
                  style="background:#f8fbff;border-color:#b6d4fe!important;">
-                <span class="small fw-bold text-nowrap me-1">
+                <span class="small fw-bold text-nowrap me-1 d-none d-md-inline">
                     <i class="fas fa-tags me-1 text-primary"></i> Редактор цен
                 </span>
                 <form method="POST" action="{{ url_for('orders.order_apply_prices', order_id=order.id) }}" class="m-0" hx-boost="false"
@@ -720,6 +788,7 @@
                     <i class="fas fa-percent me-1"></i> Скидки и пересчёт
                 </button>
             </div>
+            </details>
             {% endif %}
             <div class="card-body p-0">
                 <form method="POST">
@@ -748,6 +817,31 @@
                             text-align: left;
                         }
                         .table-order-items .td-product::before { content: none; }
+                        .item-fold > summary {
+                            list-style: none;
+                            cursor: pointer;
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                        }
+                        .item-fold > summary::-webkit-details-marker { display: none; }
+                        .item-fold > summary::marker { content: ""; }
+                        .item-fold-main { flex: 1; min-width: 0; }
+                        .item-fold-price { font-weight: 700; white-space: nowrap; }
+                        .item-fold > summary::after {
+                            content: "";
+                            width: 8px; height: 8px; flex-shrink: 0;
+                            border-right: 2px solid #6c757d;
+                            border-bottom: 2px solid #6c757d;
+                            transform: rotate(45deg);
+                        }
+                        .item-fold[open] > summary::after { transform: rotate(-135deg); margin-top: 4px; }
+                        .item-fold-desk { display: none; }
+                        .item-row:has(.item-fold:not([open])) > td:not(.td-product) { display: none !important; }
+                        .item-row:has(.item-fold:not([open])) .td-product {
+                            border-radius: 0.5rem;
+                            border-bottom: none !important;
+                        }
                         .table-order-items .td-truck { order: 2; }
                         .table-order-items .td-truck::before { content: "Отгрузить"; }
                         .table-order-items .td-field { order: 3; }
@@ -792,6 +886,8 @@
                     /* Десктоп — мобильную комбинированную ячейку не показываем */
                     @media (min-width: 768px) {
                         .table-order-items .td-plan-ost-mobile { display: none !important; }
+                        .item-fold > summary { display: none !important; }
+                        .item-fold-desk { display: block !important; }
                     }
                 </style>
                 <div class="table-responsive table-responsive-mobile">
@@ -823,8 +919,21 @@
                                     {% endif %}
                                 </td>
                                 <td class="align-middle td-product" data-label="Товар">
-                                    {{ item.plant.name }} <br> 
-                                    <span class="badge bg-secondary text-light mt-1">{{ item.size.name }}</span>
+                                    <details class="item-fold">
+                                        <summary>
+                                            <span class="item-fold-main">
+                                                <span class="d-block">{{ item.plant.name }}</span>
+                                                <span class="badge bg-secondary text-light mt-1">{{ item.size.name }}</span>
+                                            </span>
+                                            {% if current_user.role != 'user2' %}
+                                            <span class="item-fold-price">{{ item.price|money }}</span>
+                                            {% endif %}
+                                        </summary>
+                                        <div class="item-fold-desk">
+                                            {{ item.plant.name }} <br>
+                                            <span class="badge bg-secondary text-light mt-1">{{ item.size.name }}</span>
+                                        </div>
+                                    </details>
                                     <input type="hidden" name="item_id[]" value="{{ item.id }}">
                                 </td>
                                 <td class="align-middle td-field" data-label="Поле">
@@ -1815,6 +1924,15 @@
 
 {% block scripts %}
 <script>
+    document.addEventListener('DOMContentLoaded', function () {
+        if (window.matchMedia('(max-width: 767.98px)').matches) {
+            ['orderPayDetails', 'orderPriceDetails'].forEach(function (id) {
+                var fold = document.getElementById(id);
+                if (fold) fold.removeAttribute('open');
+            });
+        }
+    });
+
     function showShipModal(itemId, maxQty) {
         document.getElementById('shipItemId').value = itemId;
         document.getElementById('shipQty').value = maxQty;

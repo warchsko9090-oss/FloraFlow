@@ -1115,7 +1115,8 @@
     #networkStatus.syncing { border-color: var(--c-warn); color: #b45309; }
     #networkStatus.online { border-color: var(--c-brand); color: var(--c-brand-dark); }
 
-    @media print { #chatButton, #chatWindow, #networkStatus, .app-sidebar, .app-header, .bottom-nav { display: none !important; } }
+    #toTopBtn { display: none; }
+    @media print { #chatButton, #chatWindow, #networkStatus, #toTopBtn, .app-sidebar, .app-header, .bottom-nav { display: none !important; } }
 
     /* ============================================================
        АДАПТИВ: sidebar исчезает, появляется bottom-nav
@@ -1167,6 +1168,18 @@
         .app-main { padding: 16px 12px calc(var(--bottomnav-h) + 16px); min-width: 0; }
         #networkStatus { bottom: calc(var(--bottomnav-h) + 10px); left: 12px; font-size: 11px; padding: 4px 9px; }
         #chatButton { bottom: calc(var(--bottomnav-h) + 12px) !important; right: 12px !important; width: 52px !important; height: 52px !important; }
+        #toTopBtn {
+            display: flex; align-items: center; justify-content: center;
+            position: fixed; right: 12px; bottom: calc(var(--bottomnav-h) + 74px);
+            z-index: 1040; width: 44px; height: 44px; padding: 0;
+            border-radius: 50%; border: 2px solid #fff;
+            background: #1b5e20; color: #fff;
+            box-shadow: 0 4px 12px rgba(27, 94, 32, 0.28);
+            opacity: 0; pointer-events: none; transform: translateY(8px);
+            transition: opacity .2s ease, transform .2s ease;
+        }
+        #toTopBtn.is-on { opacity: 1; pointer-events: auto; transform: none; }
+        body.chat-open #toTopBtn { visibility: hidden; }
         #chatWindow { bottom: calc(var(--bottomnav-h) + 12px) !important; right: 12px !important; left: 12px !important; width: auto !important; height: 70vh !important; }
     }
     @media (max-width: 420px) {
@@ -1868,6 +1881,10 @@
     <i class="fas fa-wifi"></i> <span id="statusText">В сети</span>
 </div>
 
+<button type="button" id="toTopBtn" class="d-print-none" aria-label="Наверх" title="Наверх">
+    <i class="fas fa-arrow-up"></i>
+</button>
+
 <button id="chatButton" class="btn btn-success rounded-circle shadow-lg d-flex align-items-center justify-content-center d-print-none"
         style="position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; z-index: 1040; border: 2px solid white;"
         onclick="toggleChat()" title="AI-помощник">
@@ -2056,6 +2073,12 @@
         // Восстановить состояние sidebar (свернут/развёрнут) и открытых групп
         // после того как hx-boost подменил body. Иначе после перехода всё сбросится.
         try { window.__restoreNavState && window.__restoreNavState(); } catch(e) {}
+        // Гармошки с open в разметке (чтобы Select2 посчитал ширину) закрываем
+        // на телефоне и после hx-boost: DOMContentLoaded при подмене body не повторяется.
+        if (window.matchMedia('(max-width: 991.98px)').matches) {
+            var ordersFold = document.getElementById('ordersFilterDetails');
+            if (ordersFold) ordersFold.removeAttribute('open');
+        }
     });
 
     // --- SELECT2 INIT (умный поиск: части слов, латиница из data-latin) ---
@@ -2410,6 +2433,7 @@
     function toggleChat() {
         const w = document.getElementById('chatWindow');
         w.style.display = (w.style.display === 'none') ? 'flex' : 'none';
+        document.body.classList.toggle('chat-open', w.style.display === 'flex');
         if(w.style.display === 'flex') {
             const inp = document.getElementById('chatInput'); if(inp) setTimeout(() => inp.focus(), 100);
             const chips = document.getElementById('chatChips');
@@ -2427,6 +2451,15 @@
         } catch(e) {}
     }
     function sendQuery(text) { const inp = document.getElementById('chatInput'); if(inp) { inp.value = text; sendChat(); } }
+
+    (function () {
+        const btn = document.getElementById('toTopBtn');
+        if (!btn) return;
+        const sync = () => btn.classList.toggle('is-on', window.scrollY > 280);
+        window.addEventListener('scroll', sync, { passive: true });
+        btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+        sync();
+    })();
     async function sendChat() {
         const inp = document.getElementById('chatInput');
         if(!inp) return;

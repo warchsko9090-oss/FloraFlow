@@ -1,5 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+    .exp-fold { border: 0; background: transparent; }
+    .exp-fold > summary { display: none; list-style: none; }
+    @media (min-width: 768px) {
+        .exp-fold > summary { display: none !important; pointer-events: none; }
+        .exp-fold > .exp-fold-title,
+        .exp-fold > form { display: block !important; }
+        .exp-filter-fold > form { display: flex !important; }
+        .exp-filter-fold > .page-actions { display: flex !important; }
+    }
+    @media (max-width: 767.98px) {
+        .exp-new-wrap { padding: 10px 12px; }
+        .exp-fold > summary {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 44px;
+            margin: 0;
+            font-weight: 700;
+            color: #1b5e20;
+            cursor: pointer;
+            list-style: none;
+        }
+        .exp-fold > summary::-webkit-details-marker { display: none; }
+        .exp-fold > summary::after {
+            content: "";
+            width: 8px;
+            height: 8px;
+            margin-left: auto;
+            border-right: 2px solid #1b5e20;
+            border-bottom: 2px solid #1b5e20;
+            transform: rotate(45deg);
+            flex: 0 0 auto;
+        }
+        .exp-fold[open] > summary { margin-bottom: 10px; }
+        .exp-fold[open] > summary::after {
+            transform: rotate(-135deg);
+            margin-top: 4px;
+        }
+        .exp-new-fold > .exp-fold-title { display: none !important; }
+        .exp-fold:not([open]) > :not(summary) { display: none !important; }
+        .exp-filter-fold[open] > form { width: 100%; }
+        .exp-filter-fold[open] > form > div,
+        .exp-filter-fold[open] > form .form-control,
+        .exp-filter-fold[open] > form .form-select { max-width: none !important; width: 100%; }
+        .exp-filter-fold[open] > form > div:has(> input),
+        .exp-filter-fold[open] > form > div:has(> select) { flex: 1 1 100%; }
+    }
+</style>
 <div class="page-header">
     <div>
         <div class="page-title">
@@ -36,8 +85,10 @@
 <div class="row">
     <!-- ФОРМА ВВОДА (СЛЕВА) -->
     <div class="col-md-3 border-end">
-        <div class="p-3 bg-light rounded border mb-3">
-            <h6 class="text-success fw-bold mb-3"><i class="fas fa-plus-circle"></i> Новый расход</h6>
+        <div class="p-3 bg-light rounded border mb-3 exp-new-wrap">
+            <details class="exp-fold exp-new-fold" id="expNewFold" {% if prefill_invoice %}data-keep-open="1"{% endif %} open>
+            <summary><span><i class="fas fa-plus-circle"></i> Новый расход</span></summary>
+            <h6 class="exp-fold-title text-success fw-bold mb-3"><i class="fas fa-plus-circle"></i> Новый расход</h6>
             <form method="POST">
                 {% if prefill_invoice %}
                 <input type="hidden" name="invoice_id" value="{{ prefill_invoice.id }}">
@@ -159,6 +210,7 @@
 
                 <button type="submit" class="btn btn-success w-100 shadow-sm fw-bold">Добавить</button>
             </form>
+            </details>
         </div>
 
         <!-- Импорт Расходов -->
@@ -179,6 +231,8 @@
     <!-- ЖУРНАЛ + ФИЛЬТРЫ (СПРАВА) -->
     <div class="col-md-9">
         <div class="filter-panel">
+            <details class="exp-fold exp-filter-fold" id="expFilterFold" open>
+            <summary><span><i class="fas fa-sliders-h me-1"></i> Фильтры</span></summary>
             <form method="GET" class="d-flex gap-2 flex-wrap align-items-center" id="filterForm" hx-boost="false">
                 <div>
                     <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control form-control-sm">
@@ -209,6 +263,7 @@
                 <button onclick="exportExpenses()" class="btn btn-success btn-sm">Excel</button>
                 <button onclick="exportPdf()" class="btn btn-secondary btn-sm">PDF</button>
             </div>
+            </details>
         </div>
 
         <!-- ПК ВЕРСИЯ ТАБЛИЦЫ -->
@@ -794,6 +849,14 @@
 
 {% block scripts %}
 <script>
+    function closeExpenseFolds() {
+        if (!window.matchMedia('(max-width: 767.98px)').matches) return;
+        var neu = document.getElementById('expNewFold');
+        if (neu && !neu.dataset.keepOpen) neu.removeAttribute('open');
+        var flt = document.getElementById('expFilterFold');
+        if (flt) flt.removeAttribute('open');
+    }
+    document.addEventListener('DOMContentLoaded', closeExpenseFolds);
     function toggleTargetPeriod() {
         const empId = document.getElementById('employeeSelect').value;
         const targetDiv = document.getElementById('targetPeriodDiv');

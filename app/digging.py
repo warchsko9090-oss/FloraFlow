@@ -463,29 +463,68 @@ def mobile_index():
 
     # GET: показываем задания диспетчерской на сегодня + просроченные (которые ещё не закрыты).
     # Завтрашние и более поздние задания бригадиру не показываем — чтобы не копал вперёд плана.
-    today_tasks = (DiggingTask.query
-                   .filter(DiggingTask.planned_date <= today_date,
-                           DiggingTask.status != 'done')
-                   .join(OrderItem, DiggingTask.order_item_id == OrderItem.id)
-                   .join(Order, OrderItem.order_id == Order.id)
-                   .filter(Order.is_deleted == False)
-                   .all())
+    today_tasks = (
+        DiggingTask.query.options(
+            joinedload(DiggingTask.item).joinedload(OrderItem.plant),
+            joinedload(DiggingTask.item).joinedload(OrderItem.size),
+            joinedload(DiggingTask.item).joinedload(OrderItem.field),
+            joinedload(DiggingTask.item).joinedload(OrderItem.order).joinedload(Order.client),
+        )
+        .filter(
+            DiggingTask.planned_date <= today_date,
+            DiggingTask.status != 'done',
+            DiggingTask.item.has(OrderItem.order.has(Order.is_deleted == False)),
+        )
+        .all()
+    )
+
+    item_ids = list({t.order_item_id for t in today_tasks if t.item})
+    dug_by_item = {}
+    today_by_item = {}
+    if item_ids:
+        dug_rows = (
+            db.session.query(
+                DiggingLog.order_item_id,
+                func.coalesce(func.sum(DiggingLog.quantity), 0),
+            )
+            .filter(
+                DiggingLog.order_item_id.in_(item_ids),
+                DiggingLog.status != 'rejected',
+            )
+            .group_by(DiggingLog.order_item_id)
+            .all()
+        )
+        dug_by_item = {iid: int(qty or 0) for iid, qty in dug_rows}
+        today_rows = (
+            db.session.query(
+                DiggingLog.order_item_id,
+                func.coalesce(func.sum(DiggingLog.quantity), 0),
+            )
+            .filter(
+                DiggingLog.order_item_id.in_(item_ids),
+                DiggingLog.date == today_date,
+                DiggingLog.status != 'rejected',
+            )
+            .group_by(DiggingLog.order_item_id)
+            .all()
+        )
+        today_by_item = {iid: int(qty or 0) for iid, qty in today_rows}
 
     tasks_view = []
     for t in today_tasks:
         item = t.item
         if not item:
             continue
-        # Если позиция уже закопана полностью (left_to_dig == 0) — нет смысла держать её в форме.
+        # Если позиция уже выкопана полностью — нет смысла держать её в форме.
         ordered = item.quantity or 0
-        dug_total = item.dug_total or 0
+        # Как OrderItem.dug_total: заполненное поле важнее суммы лога.
+        if item.dug_quantity and int(item.dug_quantity) > 0:
+            dug_total = int(item.dug_quantity)
+        else:
+            dug_total = dug_by_item.get(item.id, 0)
         if ordered and dug_total >= ordered:
             continue
-        fact_today = db.session.query(func.sum(DiggingLog.quantity)).filter(
-            DiggingLog.order_item_id == item.id,
-            DiggingLog.date == today_date,
-            DiggingLog.status != 'rejected'
-        ).scalar() or 0
+        fact_today = today_by_item.get(item.id, 0)
         is_overdue = t.planned_date < today_date
         days_overdue = (today_date - t.planned_date).days if is_overdue else 0
         tasks_view.append({
@@ -1130,6 +1169,7 @@ def digging_planning():
     active_orders = Order.query.filter(
         Order.status.in_(['reserved', 'in_progress', 'ready']),
         Order.is_deleted == False,
+        Order.archived_at.is_(None),
     ).order_by(Order.date).all()
     orders_to_plan = []
 

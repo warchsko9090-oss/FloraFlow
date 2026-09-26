@@ -24,6 +24,7 @@ from app.shop_prices import get_shop_price_map, resolve_shop_price, transform_st
 bp = Blueprint('stock', __name__)
 
 RECOUNT_DOC_TYPES = ('field_recount', 'potting_recount')
+RECOUNT_PAGE_SIZE = 15
 
 
 def build_stock_row_price_map(sorted_groups, price_overrides=None):
@@ -51,6 +52,36 @@ def build_stock_row_price_map(sorted_groups, price_overrides=None):
 
 def _is_recount_doc(doc_type):
     return doc_type in RECOUNT_DOC_TYPES
+
+
+def _recount_filtered_ids_query(f_start, f_end, f_plant, f_size, f_field):
+    """Документы пересчёта с теми же фильтрами, что журнал. id+date — для DISTINCT на Postgres."""
+    q = db.session.query(Document.id, Document.date).filter(
+        Document.doc_type.in_(RECOUNT_DOC_TYPES)
+    )
+    if f_start:
+        q = q.filter(func.date(Document.date) >= f_start)
+    if f_end:
+        q = q.filter(func.date(Document.date) <= f_end)
+    if f_plant or f_size or f_field:
+        q = q.join(DocumentRow)
+        if f_plant:
+            q = q.filter(DocumentRow.plant_id == f_plant)
+        if f_size:
+            q = q.filter(DocumentRow.size_id == f_size)
+        if f_field:
+            q = q.filter(DocumentRow.field_to_id == f_field)
+    return q.distinct()
+
+
+def _recount_page_url(page):
+    args = request.args.to_dict(flat=True)
+    args['active_tab'] = 'regrading'
+    if page <= 1:
+        args.pop('recount_page', None)
+    else:
+        args['recount_page'] = page
+    return url_for('stock.documents', **args)
 
 
 def _group_recount_rows(doc):
@@ -2124,25 +2155,69 @@ def documents():
             })
         drafts_data.append({'doc': d, 'rows': rows_data})
 
-    # 4. Карточки пересчета по полю
-    recount_q = Document.query.options(
-        joinedload(Document.rows).joinedload(DocumentRow.plant),
-        joinedload(Document.rows).joinedload(DocumentRow.size),
-        joinedload(Document.rows).joinedload(DocumentRow.field_to),
-    ).filter(Document.doc_type.in_(RECOUNT_DOC_TYPES))
-    if f_start: recount_q = recount_q.filter(func.date(Document.date) >= f_start)
-    if f_end: recount_q = recount_q.filter(func.date(Document.date) <= f_end)
-    if f_plant or f_size or f_field:
-        recount_q = recount_q.join(DocumentRow)
-        if f_plant: recount_q = recount_q.filter(DocumentRow.plant_id == f_plant)
-        if f_size: recount_q = recount_q.filter(DocumentRow.size_id == f_size)
-        if f_field: recount_q = recount_q.filter(DocumentRow.field_to_id == f_field)
-        recount_q = recount_q.distinct()
+    # 4. Карточки пересчета по полю — по RECOUNT_PAGE_SIZE на страницу
+    recount_page = request.args.get('recount_page', type=int) or 1
+    if recount_page < 1:
+        recount_page = 1
     if f_doc_type and f_doc_type not in RECOUNT_DOC_TYPES:
+        recount_total = 0
         recount_docs = []
+        recount_pages = 1
     else:
-        recount_docs = recount_q.order_by(Document.date.desc(), Document.id.desc()).all()
+        id_q = _recount_filtered_ids_query(f_start, f_end, f_plant, f_size, f_field)
+        recount_total = int(
+            db.session.query(func.count()).select_from(id_q.subquery()).scalar() or 0
+        )
+        recount_pages = max(1, (recount_total + RECOUNT_PAGE_SIZE - 1) // RECOUNT_PAGE_SIZE) if recount_total else 1
+        if recount_page > recount_pages:
+            recount_page = recount_pages
+        id_rows = (
+            id_q.order_by(Document.date.desc(), Document.id.desc())
+            .offset((recount_page - 1) * RECOUNT_PAGE_SIZE)
+            .limit(RECOUNT_PAGE_SIZE)
+            .all()
+        )
+        page_ids = [row[0] for row in id_rows]
+        if page_ids:
+            loaded = (
+                Document.query.options(
+                    joinedload(Document.rows).joinedload(DocumentRow.plant),
+                    joinedload(Document.rows).joinedload(DocumentRow.size),
+                    joinedload(Document.rows).joinedload(DocumentRow.field_to),
+                    joinedload(Document.user),
+                )
+                .filter(Document.id.in_(page_ids))
+                .all()
+            )
+            order = {doc_id: i for i, doc_id in enumerate(page_ids)}
+            recount_docs = sorted(loaded, key=lambda d: order.get(d.id, 0))
+        else:
+            recount_docs = []
     recount_cards = [_group_recount_rows(d) for d in recount_docs]
+    page_numbers = list(range(1, recount_pages + 1))
+    if recount_pages > 9:
+        window = {1, recount_pages, recount_page}
+        for delta in (-2, -1, 1, 2):
+            n = recount_page + delta
+            if 1 <= n <= recount_pages:
+                window.add(n)
+        page_numbers = sorted(window)
+    recount_from = ((recount_page - 1) * RECOUNT_PAGE_SIZE + 1) if recount_total else 0
+    recount_to = min(recount_page * RECOUNT_PAGE_SIZE, recount_total)
+    recount_pager = {
+        'page': recount_page,
+        'pages': recount_pages,
+        'total': recount_total,
+        'per_page': RECOUNT_PAGE_SIZE,
+        'from': recount_from,
+        'to': recount_to,
+        'prev_url': _recount_page_url(recount_page - 1) if recount_page > 1 else None,
+        'next_url': _recount_page_url(recount_page + 1) if recount_page < recount_pages else None,
+        'numbers': [
+            {'n': n, 'url': _recount_page_url(n), 'current': n == recount_page}
+            for n in page_numbers
+        ],
+    }
 
     # Документы саженцев (пересадка/товарность/промер/выпад) — для admin edit/delete
     seedling_docs_q = (
@@ -2175,6 +2250,7 @@ def documents():
                            ghost_orders=ghost_orders,
                            drafts_data=drafts_data,
                            recount_cards=recount_cards,
+                           recount_pager=recount_pager,
                            seedling_docs=seedling_docs,
                            current_year=msk_now().year,
                            filters=filters,

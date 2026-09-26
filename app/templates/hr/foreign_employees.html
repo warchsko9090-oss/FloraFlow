@@ -1,5 +1,63 @@
 {% extends "base.html" %}
 {% block content %}
+{% macro fe_days(days, late) -%}
+    {%- if days is none -%}
+        -
+    {%- elif days < 0 -%}
+        <span class="badge bg-danger">{{ late }}</span>
+    {%- elif days <= 14 -%}
+        <span class="badge bg-warning text-dark">{{ days }} дн.</span>
+    {%- else -%}
+        <span class="badge bg-success">{{ days }} дн.</span>
+    {%- endif -%}
+{%- endmacro %}
+<style>
+    .fe-card {
+        background: #fff;
+        border: 1px solid #d7e3d9;
+        border-radius: 10px;
+        margin: 0 0 8px;
+        padding: 12px;
+        box-shadow: 0 1px 4px rgba(27, 94, 32, 0.03);
+    }
+    .fe-card .muted { color: #6b7280; font-size: 12px; margin-top: 2px; }
+    .fe-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 14px;
+        margin: 8px 0;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+    }
+    .fe-dates {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 10px;
+    }
+    .fe-dates > div {
+        background: #f7faf7;
+        border: 1px solid #e3ece4;
+        border-radius: 8px;
+        padding: 8px;
+        min-width: 0;
+    }
+    .fe-dates .lbl {
+        display: block;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #5f7163;
+        margin-bottom: 2px;
+    }
+    .fe-dates .when {
+        display: block;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        margin-bottom: 4px;
+    }
+</style>
 <div class="page-header">
     <div>
         <div class="page-title">
@@ -21,7 +79,34 @@
 </div>
 
 <div class="card section-card p-3">
-    <div class="table-responsive">
+    <div class="d-lg-none">
+        {% for row in rows %}
+        <div class="fe-card">
+            <div class="fw-bold">{{ row.profile.full_name if row.profile else row.employee.name }}</div>
+            {% if row.profile and row.profile.full_name and row.profile.full_name != row.employee.name %}
+            <div class="muted">{{ row.employee.name }}</div>
+            {% endif %}
+            <div class="fe-meta">
+                <span>{{ row.profile.phone if row.profile and row.profile.phone else '—' }}</span>
+                <span>дом {{ row.profile.registration_address|house_number if row.profile else '—' }}</span>
+            </div>
+            <div class="fe-dates">
+                <div>
+                    <span class="lbl">Патент</span>
+                    <span class="when">{{ row.period.end_date.strftime('%d.%m.%Y') if row.period else '—' }}</span>
+                    {{ fe_days(row.days_left, 'Просрочен') }}
+                </div>
+                <div>
+                    <span class="lbl">Регистрация</span>
+                    <span class="when">{{ row.profile.registration_end_date.strftime('%d.%m.%Y') if row.profile and row.profile.registration_end_date else '—' }}</span>
+                    {{ fe_days(row.reg_days_left, 'Просрочена') }}
+                </div>
+            </div>
+            <a href="{{ url_for('hr.foreign_employee_card', employee_id=row.employee.id) }}" class="btn btn-sm btn-primary w-100">Открыть карточку</a>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="table-responsive d-none d-lg-block">
         <table class="table table-sm align-middle">
             <thead>
                 <tr>

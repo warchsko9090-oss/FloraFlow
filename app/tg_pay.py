@@ -33,6 +33,7 @@ from app.utils import msk_now, msk_today
 from app.telegram import (
     _get_bot_token, send_chat_message, send_chat_message_id, send_chat_document,
     download_bot_file, default_miniapp_url, pin_chat_message, unpin_chat_message,
+    edit_chat_message, delete_chat_message,
 )
 from app.invoice_files import (
     invoice_bytes, receipt_bytes, has_file as invoice_has_file, has_receipt as invoice_has_receipt,
@@ -892,35 +893,143 @@ def _pin_recipients() -> list[User]:
     )
 
 
+def _plan_remaining(inv: PaymentInvoice) -> Decimal:
+    """Сколько ещё висит в закрепе: план минус уже оплаченный факт."""
+    planned = Decimal(str(inv.planned_amount or 0))
+    fact = Decimal(str(_fact_amount(inv)))
+    left = (planned - fact).quantize(Decimal('0.01'))
+    if left <= Decimal('0.009'):
+        return Decimal('0')
+    return left
+
+
+def _week_plan_pin_items(week_start: date) -> list[dict]:
+    """Строки закрепа: оплаченные и закрытые не входят, частичная — только остаток."""
+    items = []
+    for inv in _week_plan_rows(week_start):
+        left = _plan_remaining(inv)
+        if left <= 0:
+            continue
+        items.append({
+            'id': inv.id,
+            'summary': _purpose(inv),
+            'planned_amount': float(left),
+            'payment_type': 'cash' if (inv.payment_type or '') == 'cash' else 'cashless',
+        })
+    return items
+
+
+def plan_week_for_pin(inv: PaymentInvoice | None) -> date | None:
+    """Неделя плана, чей закреп надо пересобрать после оплаты или удаления."""
+    if inv is None:
+        return None
+    if (getattr(inv, 'kind', None) or '') == 'plan':
+        return inv.week_start
+    plan_id = getattr(inv, 'plan_id', None)
+    if not plan_id:
+        return None
+    plan = getattr(inv, 'plan', None)
+    if plan is None:
+        plan = PaymentInvoice.query.get(plan_id)
+    if not plan or (plan.kind or '') != 'plan':
+        return None
+    return plan.week_start
+
+
+def _replace_week_plan_message(chat_id: str, message_id, text: str):
+    """Снимает старый закреп и шлёт новый, если правку Telegram не принял."""
+    try:
+        unpin_chat_message(chat_id, message_id)
+    except Exception:
+        current_app.logger.exception('unpin week plan chat=%s mid=%s', chat_id, message_id)
+    delete_chat_message(chat_id, message_id)
+    ok, mid = send_chat_message_id(chat_id, text)
+    if not ok or not mid:
+        return False, mid, None
+    _pok, perr = pin_chat_message(chat_id, mid)
+    return True, mid, perr if not _pok else None
+
+
 def _publish_week_plan_pin(week_start: date, items: list[dict]) -> dict:
-    """Шлёт и закрепляет план в личках админа и руководителя."""
+    """Правит уже закреплённый план. Новое сообщение — только если правки нет."""
     text = _format_week_plan_message(week_start, items)
-    old = _load_week_pin_map(week_start)
-    for chat_id, mid in list(old.items()):
-        try:
-            unpin_chat_message(chat_id, mid)
-        except Exception:
-            current_app.logger.exception('unpin week plan chat=%s mid=%s', chat_id, mid)
+    old = {str(k): v for k, v in _load_week_pin_map(week_start).items()}
+    chat_ids: list[str] = []
+    for user in _pin_recipients():
+        chat_id = str(user.telegram_id)
+        if chat_id not in chat_ids:
+            chat_ids.append(chat_id)
+    for chat_id in old:
+        if chat_id not in chat_ids:
+            chat_ids.append(chat_id)
 
     mapping = {}
     errors = []
-    for user in _pin_recipients():
-        chat_id = str(user.telegram_id)
-        ok, mid = send_chat_message_id(chat_id, text)
-        if not ok or not mid:
-            errors.append(f'{user.username}:{mid}')
+    edited = 0
+    replaced = 0
+    for chat_id in chat_ids:
+        mid = old.get(chat_id)
+        if mid:
+            ok, err = edit_chat_message(chat_id, mid, text)
+            if ok:
+                mapping[chat_id] = mid
+                edited += 1
+                continue
+            current_app.logger.info(
+                'week plan edit failed chat=%s mid=%s: %s', chat_id, mid, err,
+            )
+            ok, new_mid, pin_err = _replace_week_plan_message(chat_id, mid, text)
+            if not ok or not new_mid:
+                errors.append(f'{chat_id}:{new_mid}')
+                continue
+            if pin_err:
+                errors.append(f'{chat_id}:pin:{pin_err}')
+            mapping[chat_id] = new_mid
+            replaced += 1
             continue
-        pok, perr = pin_chat_message(chat_id, mid)
+        ok, new_mid = send_chat_message_id(chat_id, text)
+        if not ok or not new_mid:
+            errors.append(f'{chat_id}:{new_mid}')
+            continue
+        pok, perr = pin_chat_message(chat_id, new_mid)
         if not pok:
-            errors.append(f'{user.username}:pin:{perr}')
-        mapping[chat_id] = mid
+            errors.append(f'{chat_id}:pin:{perr}')
+        mapping[chat_id] = new_mid
+        replaced += 1
 
     _save_week_pin_map(week_start, mapping)
     return {
         'pinned_to': len(mapping),
+        'edited': edited,
+        'replaced': replaced,
         'errors': errors,
         'text_preview': text,
     }
+
+
+def refresh_week_plan_pin(week_start: date | None) -> dict | None:
+    """Пересобирает закреп из базы. Без уже висящего закрепа новое сообщение не шлёт."""
+    if not week_start:
+        return None
+    if not _load_week_pin_map(week_start):
+        return None
+    info = _publish_week_plan_pin(week_start, _week_plan_pin_items(week_start))
+    db.session.commit()
+    return info
+
+
+def refresh_week_plan_pins(invoices) -> None:
+    """Обновляет закрепы недель, к которым относятся эти счета."""
+    weeks: list[date] = []
+    for inv in invoices or []:
+        week = plan_week_for_pin(inv)
+        if week and week not in weeks:
+            weeks.append(week)
+    for week in weeks:
+        try:
+            refresh_week_plan_pin(week)
+        except Exception:
+            current_app.logger.exception('refresh week plan pin week=%s', week)
 
 
 def _parse_money(value) -> Decimal:
@@ -1728,7 +1837,8 @@ def api_week_plan_save(user: User):
             continue
         facts = list(getattr(inv, 'fact_invoices', None) or [])
         if facts or (invoice_has_file(inv) and float(inv.amount or 0) > 0):
-            # Уже есть исполнение — не трогаем строку, в закрепе её не будет.
+            # Исполнение уже есть — строку учёта не удаляем.
+            # В закрепе останется только неоплаченный остаток.
             continue
         err = delete_unpaid_invoice(inv)
         if err:
@@ -1737,9 +1847,9 @@ def api_week_plan_save(user: User):
     db.session.commit()
 
     do_pin = body.get('pin', True)
-    pin_info = {'pinned_to': 0, 'errors': []}
-    if do_pin:
-        pin_info = _publish_week_plan_pin(week, normalized)
+    pin_info = {'pinned_to': 0, 'edited': 0, 'replaced': 0, 'errors': []}
+    if do_pin or _load_week_pin_map(week):
+        pin_info = _publish_week_plan_pin(week, _week_plan_pin_items(week))
         db.session.commit()
 
     rows = _week_plan_rows(week)
@@ -1812,10 +1922,16 @@ def api_discard(user: User, inv_id: int):
         pass
     else:
         return jsonify({'error': 'forbidden'}), 403
+    pin_week = plan_week_for_pin(inv)
     err = delete_unpaid_invoice(inv)
     if err:
         return jsonify({'error': 'locked', 'hint': err}), 400
     db.session.commit()
+    if pin_week:
+        try:
+            refresh_week_plan_pin(pin_week)
+        except Exception:
+            current_app.logger.exception('refresh week plan pin after discard')
     return jsonify({'ok': True})
 
 
@@ -1904,6 +2020,10 @@ def api_mark_paid(user: User, inv_id: int):
             notify_invoice_paid_chat(fact)
         except Exception:
             current_app.logger.exception('notify plan partial paid chat')
+        try:
+            refresh_week_plan_pin(inv.week_start)
+        except Exception:
+            current_app.logger.exception('refresh week plan pin after partial pay')
 
         left = float(planned - new_fact_total) if planned > new_fact_total else 0.0
         return jsonify({
@@ -1943,6 +2063,10 @@ def api_mark_paid(user: User, inv_id: int):
         notify_invoice_paid_chat(inv)
     except Exception:
         current_app.logger.exception('notify invoice paid chat')
+    try:
+        refresh_week_plan_pin(plan_week_for_pin(inv))
+    except Exception:
+        current_app.logger.exception('refresh week plan pin after mark paid')
     return jsonify({'ok': True, 'id': inv.id, 'expense_id': getattr(exp, 'id', None)})
 
 

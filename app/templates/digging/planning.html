@@ -24,9 +24,17 @@
     }
     .sidebar-header {
         padding: 15px;
-        border-bottom: 2px dashed #cbd5e1;
+        border-bottom: none;
         background: #fff;
         border-radius: 12px 12px 0 0;
+        list-style: none;
+    }
+    .planner-sidebar > summary.sidebar-header::-webkit-details-marker { display: none; }
+    .planner-sidebar > summary.sidebar-header::marker { content: ""; }
+    .sidebar-hint {
+        background: #fff;
+        padding: 0 15px 12px;
+        border-bottom: 2px dashed #cbd5e1;
     }
     .sidebar-content {
         padding: 12px;
@@ -344,6 +352,7 @@
         justify-content: space-between;
         gap: 6px;
     }
+    .task-indicator .ti-mob { display: none; }
 
     /*
       Палитра (без пересечений):
@@ -774,11 +783,55 @@
     /* Адаптив для мобилок */
     @media (max-width: 992px) {
         .planner-layout { flex-direction: column; height: auto; }
-        .planner-sidebar { width: 100%; height: 340px; }
+        .planner-sidebar { width: 100%; height: auto; }
+        .planner-sidebar[open] { height: 340px; }
+        .planner-sidebar > .sidebar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .planner-sidebar > .sidebar-header::after {
+            content: "";
+            width: 8px;
+            height: 8px;
+            flex-shrink: 0;
+            border-right: 2px solid #6c757d;
+            border-bottom: 2px solid #6c757d;
+            transform: rotate(45deg);
+        }
+        .planner-sidebar[open] > .sidebar-header::after { transform: rotate(-135deg); margin-top: 4px; }
+        .planner-sidebar:not([open]) > .sidebar-header {
+            border-radius: 12px;
+        }
+        .planner-sidebar:not([open]) > :not(summary) { display: none !important; }
         .planner-main { height: auto; }
-        .week-scroll { --week-h: 116px; max-height: calc(var(--week-h) * 5 + 16px); }
-        .cal-cell { min-height: 96px; }
-        .week-scroll .cal-cell { padding: 4px; font-size: 11px; }
+        .planner-main > p.d-lg-none { font-size: 11px; line-height: 1.3; margin-bottom: 6px; }
+        .week-scroll { --week-h: 72px; max-height: calc(var(--week-h) * 3 + 8px); }
+        .cal-cell { min-height: 0; }
+        .week-scroll .cal-cell { padding: 3px 2px 2px; font-size: 11px; }
+        .cal-day-name { padding: 6px 0; font-size: 11px; }
+        .cal-date { font-size: 12px; margin-bottom: 0; }
+        .cal-date.today { padding: 0 5px; }
+        .cal-date-row { margin-bottom: 1px; }
+        .cal-drag-handle { font-size: 9px; padding: 0 1px; }
+        .cal-clients { display: none !important; }
+        .cal-ship-line { font-size: 10px; margin-top: 1px; }
+        .cal-ship-line .ship-ids { display: none; }
+        .task-indicator {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0;
+            padding: 2px 3px;
+            font-size: 9px;
+            line-height: 1.25;
+            margin-top: 2px;
+        }
+        .task-indicator .ti-desk,
+        .task-indicator .ti-tree { display: none; }
+        .task-indicator .ti-mob { display: inline; }
         #dayPreviewPopup { width: calc(100vw - 32px); }
         .order-card__head, .cal-cell.has-tasks {
             -webkit-touch-callout: none;
@@ -786,6 +839,11 @@
             user-select: none;
         }
         .cal-cell.has-tasks .cal-drag-handle { opacity: 0.9; }
+    }
+    @media (min-width: 992.02px) {
+        .planner-sidebar > .sidebar-header { pointer-events: none; cursor: default; }
+        .planner-sidebar > .sidebar-header::after { display: none !important; }
+        .planner-sidebar:not([open]) > :not(summary) { display: block !important; }
     }
     .digging-drag-ghost {
         position: fixed;
@@ -846,11 +904,13 @@
 <div class="planner-layout">
 
     <!-- ==================== САЙДБАР ==================== -->
-    <div class="planner-sidebar">
-        <div class="sidebar-header">
+    <details class="planner-sidebar" id="unplannedFold" open>
+        <summary class="sidebar-header">
             <h6 class="fw-bold text-primary m-0"><i class="fas fa-inbox me-2"></i>Ждут плана</h6>
-            <div class="small text-muted mt-1 d-none d-lg-block">Разверните состав кликом по шеврону, перетащите карточку на день. Чип с дня — в урну, чтобы снять с плана.</div>
-            <div class="small text-muted mt-1 d-lg-none">Зажмите карточку и перенесите на дату. Чип заказа с дня — в урну.</div>
+        </summary>
+        <div class="sidebar-hint small text-muted">
+            <span class="d-none d-lg-block">Разверните состав кликом по шеврону, перетащите карточку на день. Чип с дня — в урну, чтобы снять с плана.</span>
+            <span class="d-lg-none">Зажмите карточку и перенесите на дату. Чип заказа с дня — в урну.</span>
         </div>
         <div id="diggingTrash"
              class="digging-trash-zone"
@@ -915,7 +975,17 @@
             </div>
             {% endfor %}
         </div>
-    </div>
+    </details>
+    <script>
+        (function () {
+            function closeUnplanned() {
+                var fold = document.getElementById('unplannedFold');
+                if (fold && window.matchMedia('(max-width: 992px)').matches) fold.removeAttribute('open');
+            }
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', closeUnplanned);
+            else closeUnplanned();
+        })();
+    </script>
 
     <!-- ==================== КАЛЕНДАРЬ ==================== -->
     <div class="planner-main">
@@ -931,7 +1001,7 @@
                 <a href="{{ url_for('digging.digging_planning', center=next_center_iso) }}" class="btn btn-sm btn-outline-secondary rounded-circle" title="На 8 недель вперёд"><i class="fas fa-angles-right"></i></a>
             </div>
         </div>
-        <p class="d-lg-none small text-muted px-1 mb-2">Короткое нажатие открывает день. Зажмите день с планом и перетащите на другую дату.</p>
+        <p class="d-lg-none small text-muted px-1 mb-2">Нажатие открывает день. Зажатие ручки у числа переносит план.</p>
 
         <div class="card shadow-sm border-0 flex-grow-1 d-flex flex-column" style="min-height: 0;">
             <!-- Заголовок дней недели — закреплён над лентой -->
@@ -1022,8 +1092,9 @@
 
                             {% if day.tasks_count > 0 %}
                             <div class="task-indicator">
-                                <span><i class="fas fa-clipboard-list me-1"></i>{{ day.tasks_count }} задан.</span>
-                                <span><i class="fas fa-tree me-1"></i>{{ day.total_plants }} шт</span>
+                                <span class="ti-desk"><i class="fas fa-clipboard-list me-1"></i>{{ day.tasks_count }} задан.</span>
+                                <span class="ti-mob">{{ day.tasks_count }} поз.</span>
+                                <span><i class="fas fa-tree me-1 ti-tree"></i>{{ day.total_plants }} шт</span>
                             </div>
                             {% endif %}
                         </div>

@@ -462,6 +462,60 @@ def pin_chat_message(chat_id, message_id, *, disable_notification: bool = True):
         return False, str(exc)
 
 
+def edit_chat_message(chat_id, message_id, text):
+    """Правит текст сообщения бота. «message is not modified» считается успехом."""
+    bot_token = _get_bot_token()
+    if not bot_token or not chat_id or not message_id:
+        return False, "TG creds not configured"
+    url = f"{_tg_root()}/bot{bot_token}/editMessageText"
+    payloads = [
+        {
+            'chat_id': chat_id,
+            'message_id': int(message_id),
+            'text': text,
+            'parse_mode': 'HTML',
+        },
+        {'chat_id': chat_id, 'message_id': int(message_id), 'text': text},
+    ]
+    last_err = 'edit failed'
+    for idx, payload in enumerate(payloads):
+        try:
+            r = _http().post(url, json=payload, timeout=8)
+            if r.ok:
+                return True, 'ok'
+            last_err = r.text or last_err
+            low = last_err.lower()
+            if 'message is not modified' in low:
+                return True, 'ok'
+            if idx == 0 and ('parse' in low or 'entities' in low):
+                continue
+            return False, last_err
+        except Exception as exc:
+            last_err = str(exc)
+    return False, last_err
+
+
+def delete_chat_message(chat_id, message_id):
+    """Удаляет сообщение бота. Нет сообщения — не ошибка для вызывающего кода."""
+    bot_token = _get_bot_token()
+    if not bot_token or not chat_id or not message_id:
+        return False, "TG creds not configured"
+    url = f"{_tg_root()}/bot{bot_token}/deleteMessage"
+    try:
+        r = _http().post(url, json={
+            'chat_id': chat_id,
+            'message_id': int(message_id),
+        }, timeout=8)
+        if r.ok:
+            return True, 'ok'
+        low = (r.text or '').lower()
+        if 'message to delete not found' in low or "message can't be deleted" in low:
+            return True, 'ok'
+        return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+
+
 def unpin_chat_message(chat_id, message_id=None):
     """Снимает закреп. Без message_id — снимает все закрепы чата."""
     bot_token = _get_bot_token()

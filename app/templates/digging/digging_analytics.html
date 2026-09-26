@@ -1,6 +1,57 @@
 {% extends "base.html" %}
 {% block content %}
 
+<style>
+    .dig-ana-fold { border: 0; background: transparent; }
+    .dig-ana-fold > summary { display: none; list-style: none; }
+    .dig-chart-wrap { height: 380px; }
+    @media (min-width: 992px) {
+        .dig-ana-fold > summary { display: none !important; pointer-events: none; }
+        .dig-ana-fold > form { display: flex !important; }
+    }
+    @media (max-width: 991.98px) {
+        .dig-ana-filter { padding: 0 12px; }
+        .dig-ana-fold > summary {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 44px;
+            padding: 10px 0;
+            font-weight: 700;
+            color: #1b5e20;
+            cursor: pointer;
+            list-style: none;
+        }
+        .dig-ana-fold > summary::-webkit-details-marker { display: none; }
+        .dig-ana-range {
+            margin-left: auto;
+            font-size: 13px;
+            font-weight: 600;
+            color: #5f7163;
+            white-space: nowrap;
+        }
+        .dig-ana-fold > summary::after {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-right: 2px solid #1b5e20;
+            border-bottom: 2px solid #1b5e20;
+            transform: rotate(45deg);
+            flex: 0 0 auto;
+            margin-right: 4px;
+        }
+        .dig-ana-fold[open] > summary::after {
+            transform: rotate(-135deg);
+            margin-top: 4px;
+        }
+        .dig-ana-fold:not([open]) > form { display: none !important; }
+        .dig-ana-fold[open] > form { padding-bottom: 12px; }
+        .dig-chart-head { padding: 10px 12px; }
+        .dig-chart-title { white-space: nowrap; }
+        .dig-chart-wrap { height: 300px; }
+    }
+</style>
+
 <div class="page-header">
     <div>
         <div class="page-title">
@@ -16,7 +67,14 @@
     </div>
 </div>
 
-<div class="filter-panel">
+<div class="filter-panel dig-ana-filter">
+    <details class="dig-ana-fold" id="digAnaFilter">
+    <summary>
+        <span><i class="fas fa-sliders-h me-1"></i> Период</span>
+        {% if start_date and end_date %}
+        <span class="dig-ana-range">{{ start_date.strftime('%d.%m') }} — {{ end_date.strftime('%d.%m.%Y') }}</span>
+        {% endif %}
+    </summary>
     <form method="GET" class="row g-2 align-items-end" hx-boost="false">
         <div class="col-md-3">
             <label class="form-label fw-bold small text-muted text-uppercase">С</label>
@@ -36,6 +94,7 @@
             </div>
         </div>
     </form>
+    </details>
 </div>
 
 <!-- Карточки сводки -->
@@ -94,15 +153,18 @@
 
 <!-- График -->
 <div class="card shadow-sm mb-4">
-    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
-        <span><i class="fas fa-chart-area me-2 text-success"></i> КПД по дням</span>
-        <div class="small text-muted">Нажмите на легенду сверху, чтобы показать/скрыть линии</div>
+    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center dig-chart-head">
+        <span class="dig-chart-title"><i class="fas fa-chart-area me-2 text-success"></i> КПД по дням</span>
+        <div class="small text-muted d-none d-lg-block">Нажмите на легенду сверху, чтобы показать/скрыть линии</div>
     </div>
     <div class="card-body">
-        <div style="height: 380px;">
+        <div class="dig-chart-wrap">
             <canvas id="prodChart"></canvas>
         </div>
-        <div class="text-center mt-2 text-muted small fst-italic">
+        <div class="text-center mt-2 text-muted small d-lg-none">
+            Слева <span style="color:#1b5e20">сотрудники</span>, справа <span style="color:#1565c0">выкопано</span>. КПД — в карточках выше.
+        </div>
+        <div class="text-center mt-2 text-muted small fst-italic d-none d-lg-block">
             Легенда: <span style="color:#28a745">зелёная</span> — сотрудники, <span style="color:#36a2eb">синяя</span> — вырытые растения,
             <span style="color:#7b1fa2">фиолетовая</span> — КПД (растений на 1 работника), остальные — разбивка по видам.
         </div>
@@ -154,9 +216,19 @@
         var dug = cfg.dug;
         var efficiency = cfg.efficiency || [];
         var plantSeries = cfg.plantSeries || [];
+        plantSeries.forEach(function (s) { s._plant = true; });
+        var mobile = window.matchMedia('(max-width: 991.98px)').matches;
+        var pointR = mobile ? 2 : 4;
         var existing = Chart.getChart(canvas);
         if (existing) existing.destroy();
         var ctx = canvas.getContext('2d');
+        function axisTicks() {
+            return {
+                font: { size: mobile ? 10 : 12 },
+                maxTicksLimit: mobile ? 4 : 8,
+                padding: mobile ? 2 : 4
+            };
+        }
         new Chart(ctx, {
             type: 'bar',
             data: {
@@ -179,7 +251,7 @@
                         backgroundColor: 'rgba(40, 167, 69, 0.3)',
                         borderWidth: 2,
                         tension: 0.2,
-                        pointRadius: 4,
+                        pointRadius: pointR,
                         yAxisID: 'y',
                         order: 1
                     },
@@ -192,9 +264,10 @@
                         borderWidth: 2.5,
                         borderDash: [6, 4],
                         tension: 0.25,
-                        pointRadius: 4,
+                        pointRadius: pointR,
                         pointStyle: 'rectRot',
                         pointBackgroundColor: 'rgba(123, 31, 162, 1)',
+                        hidden: mobile,
                         yAxisID: 'y2',
                         spanGaps: false,
                         order: 0
@@ -210,10 +283,18 @@
                 },
                 plugins: {
                     legend: {
-                        position: 'top',
+                        position: mobile ? 'bottom' : 'top',
                         labels: {
-                            boxWidth: 12,
-                            padding: 12
+                            boxWidth: mobile ? 10 : 12,
+                            padding: mobile ? 8 : 12,
+                            font: { size: mobile ? 11 : 12 },
+                            filter: function (item, chartData) {
+                                if (!mobile) return true;
+                                var sets = (chartData && chartData.datasets) || (chartData && chartData.data && chartData.data.datasets) || [];
+                                var ds = sets[item.datasetIndex];
+                                if (!ds || ds._plant || ds.yAxisID === 'y2') return false;
+                                return true;
+                            }
                         }
                     },
                     tooltip: {
@@ -222,14 +303,23 @@
                     }
                 },
                 scales: {
+                    x: {
+                        ticks: {
+                            font: { size: mobile ? 10 : 12 },
+                            maxRotation: 0,
+                            autoSkip: true,
+                            maxTicksLimit: mobile ? 5 : 12
+                        }
+                    },
                     y: {
                         type: 'linear',
                         display: true,
                         position: 'left',
                         title: {
-                            display: true,
+                            display: !mobile,
                             text: 'Сотрудников'
                         },
+                        ticks: Object.assign(axisTicks(), mobile ? { color: '#1b5e20' } : {}),
                         beginAtZero: true
                     },
                     y1: {
@@ -237,9 +327,10 @@
                         display: true,
                         position: 'right',
                         title: {
-                            display: true,
+                            display: !mobile,
                             text: 'Выкопано (шт)'
                         },
+                        ticks: Object.assign(axisTicks(), mobile ? { color: '#1565c0' } : {}),
                         grid: {
                             drawOnChartArea: false
                         },
@@ -247,16 +338,14 @@
                     },
                     y2: {
                         type: 'linear',
-                        display: true,
+                        display: !mobile,
                         position: 'right',
                         title: {
-                            display: true,
+                            display: !mobile,
                             text: 'КПД (шт/чел)',
                             color: '#7b1fa2'
                         },
-                        ticks: {
-                            color: '#7b1fa2'
-                        },
+                        ticks: Object.assign(axisTicks(), { color: '#7b1fa2' }),
                         grid: {
                             drawOnChartArea: false
                         },
@@ -273,6 +362,10 @@
         mountDiggingChart();
     }
     document.body.addEventListener('htmx:afterSwap', mountDiggingChart);
+    var digChartMq = window.matchMedia('(max-width: 991.98px)');
+    if (digChartMq.addEventListener) {
+        digChartMq.addEventListener('change', mountDiggingChart);
+    }
 })();
 </script>
 {% endblock %}

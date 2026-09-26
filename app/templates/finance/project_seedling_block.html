@@ -68,12 +68,25 @@
             padding: 2px 0;
             border-top: 1px dashed #eee;
         }
+        @media (max-width: 991.98px) {
+            .seed-hub-flow { display: none; }
+            #pottingHubTabs > .nav-item:not(:has(> [data-bs-target="#seedTabYard"])) {
+                display: none !important;
+            }
+            #seedlingPipelineBlock .tab-content > .tab-pane:not(#seedTabYard) {
+                display: none !important;
+            }
+            #seedTabYard.tab-pane {
+                display: block !important;
+                opacity: 1;
+            }
+        }
     </style>
     <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
         <div>
             <span class="fw-bold">Посадка / саженцы</span>
             <div class="text-muted small">
-                Пересадка → товарность → промер → выпад.
+                <span class="seed-hub-flow">Пересадка → товарность → промер → выпад.</span>
                 {% if yard.field_label %}Склад: <b>{{ yard.field_label }}</b>.{% endif %}
             </div>
         </div>
@@ -215,6 +228,79 @@
                     #seedYardTable .yard-rotate-icon { transition: transform .2s; display: inline-block; }
                     #seedYardTable .yard-detail-row td { font-size: 12.5px; }
                     #seedYardFilters .dropdown-menu { max-height: 280px; overflow-y: auto; min-width: 220px; }
+                    .yard-mobile-card {
+                        background: #fff;
+                        border: 1px solid #d7e3d9;
+                        border-radius: 10px;
+                        margin: 0 0 8px;
+                        overflow: hidden;
+                        box-shadow: 0 1px 4px rgba(27, 94, 32, 0.03);
+                    }
+                    .yard-mobile-header {
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        gap: 10px;
+                        padding: 12px 14px;
+                        cursor: pointer;
+                        width: 100%;
+                        border: 0;
+                        background: #fff;
+                        text-align: left;
+                    }
+                    .yard-mobile-header .fw-bold { overflow-wrap: anywhere; }
+                    .yard-mobile-header .muted { color: #6b7280; font-size: 12px; margin-top: 2px; }
+                    .yard-mobile-header .badge-qty {
+                        background: #E8F5E9;
+                        color: #1B5E20;
+                        font-weight: 700;
+                        border-radius: 6px;
+                        padding: 4px 10px;
+                        white-space: nowrap;
+                        font-variant-numeric: tabular-nums;
+                    }
+                    .yard-mobile-body { border-top: 1px solid #d7e3d9; padding: 0; }
+                    .yard-mtable-head,
+                    .yard-mobile-row {
+                        display: grid;
+                        grid-template-columns: minmax(88px, 1.4fr) repeat(3, minmax(52px, 0.8fr));
+                        font-size: 13px;
+                    }
+                    .yard-mtable-head {
+                        background: #eaf4eb;
+                        color: #3d5c44;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+                    .yard-mtable-head span,
+                    .yard-mobile-row > div {
+                        padding: 7px 8px;
+                        border-right: 1px solid #d7e3d9;
+                        border-bottom: 1px solid #e3ece4;
+                        min-width: 0;
+                    }
+                    .yard-mtable-head span:last-child,
+                    .yard-mobile-row > div:last-child { border-right: none; }
+                    .yard-mobile-row:last-child > div { border-bottom: none; }
+                    .yard-mtable-head span:not(:first-child) { text-align: right; }
+                    .yard-mobile-row > div:not(:first-child) {
+                        display: flex;
+                        align-items: center;
+                        justify-content: flex-end;
+                        text-align: right;
+                        font-variant-numeric: tabular-nums;
+                        font-weight: 700;
+                    }
+                    .yard-mobile-row .free { color: #1B5E20; }
+                    .yard-mobile-row .free.text-danger { color: #b91c1c; }
+                    .yard-mobile-row .muted { color: #6b7280; font-size: 11px; font-weight: 500; margin-top: 2px; }
+                    .yard-mobile-row .yard-price { font-weight: 700; color: #111827; font-size: 12px; }
+                    @media (max-width: 991.98px) {
+                        #seedYardFilters { gap: 8px; }
+                        #seedYardSearch { width: 100% !important; flex: 1 1 100%; min-height: 40px; }
+                        #seedYardFilters .dropdown { flex: 1 1 0; }
+                        #seedYardFilters .dropdown > .btn { width: 100%; min-height: 40px; }
+                    }
                 </style>
                 <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
                     <div class="small text-muted">Поле: <b>{{ yard.field_label or 'не задано' }}</b></div>
@@ -281,7 +367,50 @@
                     </button>
                 </div>
 
-                <div class="table-responsive">
+                <div class="d-lg-none">
+                    {% for g in yard.groups %}
+                    {% set yard_uid = loop.index %}
+                    <div class="yard-mobile-card" data-plant-name="{{ g.plant_name|e }}">
+                        <button type="button" class="yard-mobile-header collapsed" data-bs-toggle="collapse" data-bs-target="#yard-mob-{{ yard_uid }}">
+                            <div style="min-width:0">
+                                <div class="fw-bold">{{ g.plant_name }}</div>
+                                <div class="muted yard-mob-meta">{{ g.rows|length }} поз.{% if g.totals.reserved %} · рез. {{ g.totals.reserved }}{% endif %}</div>
+                            </div>
+                            <div class="badge-qty yard-mob-free">{{ g.totals.free }} шт</div>
+                        </button>
+                        <div id="yard-mob-{{ yard_uid }}" class="collapse yard-mobile-body">
+                            <div class="yard-mtable">
+                                <div class="yard-mtable-head">
+                                    <span>Позиция</span>
+                                    <span>Своб.</span>
+                                    <span>Факт</span>
+                                    <span>Цена</span>
+                                </div>
+                                {% for r in g.rows %}
+                                <div class="yard-mobile-row"
+                                     data-stage="{{ r.stage }}"
+                                     data-container="{{ r.container }}"
+                                     data-year="{{ r.year }}"
+                                     data-qty="{{ r.qty }}"
+                                     data-reserved="{{ r.reserved }}"
+                                     data-free="{{ r.free }}"
+                                     data-sum="{{ r.sum|round(2) }}">
+                                    <div>
+                                        <div class="fw-bold">{{ r.label }}</div>
+                                        <div class="muted">{{ r.stage_ui or r.stage or '—' }} · {{ r.year }}{% if r.reserved %} · рез. {{ r.reserved }}{% endif %}</div>
+                                    </div>
+                                    <div class="free {% if r.free < 0 %}text-danger{% endif %}">{{ r.free }}</div>
+                                    <div>{{ r.qty }}</div>
+                                    <div class="yard-price">{% if r.price %}{{ r.price|money_int }}{% else %}—{% endif %}</div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="table-responsive d-none d-lg-block">
                     <table class="table table-sm table-hover table-1c bg-white mb-0" id="seedYardTable" style="font-size:13px;">
                         <thead class="table-light">
                             <tr>
@@ -1177,7 +1306,12 @@
         nEl.value = String(pick);
     }
 
+    function seedHubMobile() {
+        return window.matchMedia('(max-width: 991.98px)').matches;
+    }
+
     function seedActivateTab(tabId) {
+        if (seedHubMobile()) tabId = 'seedTabYard';
         if (!tabId) return;
         const btn = document.querySelector('#pottingHubTabs [data-bs-target="#' + tabId + '"]');
         if (!btn) return;
@@ -1261,6 +1395,7 @@
         const tabs = document.getElementById('pottingHubTabs');
         if (tabs) {
             tabs.addEventListener('shown.bs.tab', function(ev) {
+                if (seedHubMobile()) return;
                 const target = ev.target && ev.target.getAttribute('data-bs-target');
                 if (target && target.startsWith('#')) seedRememberTab(target.slice(1));
             });
@@ -1321,6 +1456,7 @@
         setTimeout(function() {
             seedEnsureEmptyRows();
             seedDiebackPeriodSync();
+            if (seedHubMobile()) seedActivateTab('seedTabYard');
         }, 0);
     }
 
@@ -1361,10 +1497,18 @@
             if (el.style.display === 'none') return;
             bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).show();
         });
+        document.querySelectorAll('.yard-mobile-body.collapse:not(.show)').forEach(el => {
+            const card = el.closest('.yard-mobile-card');
+            if (card && card.style.display === 'none') return;
+            bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).show();
+        });
     };
 
     window.seedYardCollapseAll = function() {
         document.querySelectorAll('#seedYardTable .yard-detail-row.collapse.show').forEach(el => {
+            bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).hide();
+        });
+        document.querySelectorAll('.yard-mobile-body.collapse.show').forEach(el => {
             bootstrap.Collapse.getOrCreateInstance(el, { toggle: false }).hide();
         });
     };
@@ -1419,6 +1563,36 @@
                 footRes += visibleRes;
                 footFree += visibleFree;
                 footSum += visibleSum;
+            }
+        });
+
+        document.querySelectorAll('.yard-mobile-card').forEach(card => {
+            const plant = (card.getAttribute('data-plant-name') || '').toLowerCase();
+            const plantOk = !q || plant.includes(q);
+            const rows = card.querySelectorAll('.yard-mobile-row');
+            let visibleRes = 0, visibleFree = 0, anyVisible = false;
+            rows.forEach(row => {
+                const st = row.getAttribute('data-stage') || '';
+                const ct = row.getAttribute('data-container') || '';
+                const yr = row.getAttribute('data-year') || '';
+                const stageOk = stages.all || stages.values.has(st);
+                const contOk = containers.all || containers.values.has(ct);
+                const yearOk = years.all || years.values.has(yr);
+                const ok = plantOk && stageOk && contOk && yearOk && !stages.none && !containers.none && !years.none;
+                row.style.display = ok ? '' : 'none';
+                if (ok) {
+                    anyVisible = true;
+                    visibleRes += parseInt(row.getAttribute('data-reserved') || '0', 10) || 0;
+                    visibleFree += parseInt(row.getAttribute('data-free') || '0', 10) || 0;
+                }
+            });
+            card.style.display = anyVisible ? '' : 'none';
+            if (anyVisible) {
+                const n = Array.from(rows).filter(r => r.style.display !== 'none').length;
+                const meta = card.querySelector('.yard-mob-meta');
+                const badge = card.querySelector('.yard-mob-free');
+                if (meta) meta.textContent = n + ' поз.' + (visibleRes ? ' · рез. ' + visibleRes : '');
+                if (badge) badge.textContent = visibleFree + ' шт';
             }
         });
 

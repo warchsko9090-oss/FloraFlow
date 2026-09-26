@@ -17,6 +17,9 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('"order"', 'buh_exclude', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
     ('"order"', 'buh_posted_at', 'TIMESTAMP', 'DATETIME'),
     ('"order"', 'buh_posted_by_id', 'INTEGER', 'INTEGER'),
+    ('"order"', 'archived_at', 'TIMESTAMP', 'DATETIME'),
+    ('"order"', 'archive_season', 'INTEGER', 'INTEGER'),
+    ('"order"', 'carried_from_year', 'INTEGER', 'INTEGER'),
     ('employee', 'official_budget_item_id', 'INTEGER', 'INTEGER'),
     ('employee', 'unofficial_budget_item_id', 'INTEGER', 'INTEGER'),
     ('payment', 'payment_type', "VARCHAR(20) DEFAULT 'cashless'", "VARCHAR(20) DEFAULT 'cashless'"),
@@ -126,6 +129,7 @@ _LEGACY_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_order_created_by ON "order" (created_by_user_id)',
     'CREATE INDEX IF NOT EXISTS idx_order_billing_client ON "order" (billing_client_id)',
     'CREATE INDEX IF NOT EXISTS idx_order_buh_posted ON "order" (buh_posted_at)',
+    'CREATE INDEX IF NOT EXISTS idx_order_archived ON "order" (archived_at)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_dedup ON tg_task (dedup_key)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_source ON tg_task (source)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_status_deadline ON tg_task (status, deadline)',
@@ -232,6 +236,16 @@ def _publish_invoice_drafts(logger=None) -> None:
 
 
 _CHANGELOG_RELEASES = (
+    {
+        'version': 'v1.4.2',
+        'date': '2026-09-26',
+        'content': (
+            'Сделано:\n'
+            'Админ может закрыть сезон заказов: оплаченные и полностью отгруженные уходят в архив и пропадают из рабочего списка. Незакрытые остаются на следующий год с пометкой переноса — резерв по ним сохраняется.\n'
+            'Перед закрытием состав можно поправить по каждому заказу. Архив открывается из списка заказов, заказ можно вернуть в работу.\n'
+            'Платежи, отгрузки, счета и годовые отчёты не удаляются: рабочий список просто перестаёт загружать архив.'
+        ),
+    },
     {
         'version': 'v1.4.1',
         'date': '2026-09-25',
