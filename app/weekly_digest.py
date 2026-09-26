@@ -2,32 +2,35 @@
 
 По понедельникам с 10:00 МСК — итоги **прошлой недели** (пн–вс).
 
-Сравнение **сезонное** (данные с 2023 года, питомник март–декабрь):
-  • в сезоне — «ожидание» = медиана **той же недели сезона** в прошлых годах
-    (неделя 1 сезона = первая пн–вс, начиная с 1 марта);
-  • зимой (янв–фев) — отгрузки/заказы/выкопка не сравниваются;
-    поступления и расходы — vs та же ISO-неделя прошлых зим.
+План берётся оттуда же, откуда его смотрят в отчётах, а не из «средней недели»:
+  • расходы — доля месячного бюджета (BudgetPlan) на дни этой недели;
+  • поступления — факт недели; план cashflow показывается суммой месяца,
+    а не разрезанной на неделю (в плане часто один крупный месяц, не темп);
+  • выкопка — план календаря (DiggingTask) против факта (DiggingLog);
+  • отгрузки и новые заказы — только факт: отдельного плана на них нет.
 
-Карточка на дашборде — каждую неделю. Порог `anomaly_ytd_threshold_pct`
-только для подсветки существенных отклонений.
+Порог `anomaly_ytd_threshold_pct` подсвечивает отклонение расходов от доли
+бюджета и недобор выкопки относительно календаря.
 """
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import traceback
 from datetime import datetime, timedelta, date
 
 from flask import current_app
-from sqlalchemy import func, and_
+from sqlalchemy import func
 
 from app.models import (
     db, User, TgTask, WeeklyDigest, AppSetting,
     Order, OrderItem, Payment, Expense,
     DiggingTask, DiggingLog, Document, DocumentRow,
+    BudgetPlan, CashflowPlan,
 )
-from app.utils import msk_now, msk_today
+from app.utils import msk_now, msk_today, MONTH_NAMES
 from app.anomaly_engine import ANOMALY_ACTION_TYPE
 from app.groq_util import groq_model_text
 
@@ -38,30 +41,8 @@ DIGEST_TRIGGER_HOUR = 10
 ANOMALY_THRESHOLD_KEY = 'anomaly_ytd_threshold_pct'
 ANOMALY_THRESHOLD_DEFAULT = 30.0
 
-HISTORY_FIRST_YEAR = 2023
-SEASON_START_MONTH = 3
-SEASON_END_MONTH = 12
-
 _MIN_MONEY_BASELINE = 5_000.0
-_MIN_COUNT_BASELINE = 0.5
-
-_BAD_WHEN_UP = {'expenses'}
-
-_WINTER_SKIP_METRICS = frozenset({
-    'ship_money', 'ship_qty',
-    'new_orders_count', 'new_orders_total',
-    'digging_fact',
-})
-
-_ANOMALY_METRICS = [
-    ('cash_in', 'Поступления', 'money'),
-    ('expenses', 'Расходы', 'money'),
-    ('ship_money', 'Отгрузки, ₽', 'money'),
-    ('ship_qty', 'Отгрузки, шт', 'count'),
-    ('new_orders_count', 'Новые заказы, шт', 'count'),
-    ('new_orders_total', 'Новые заказы, ₽', 'money'),
-    ('digging_fact', 'Выкопка, шт', 'count'),
-]
+_MIN_DIG_PLAN = 10
 
 
 def get_anomaly_threshold_pct():
@@ -131,87 +112,130 @@ def _delta_pct(cur, base):
         return None
 
 
-def _median(values):
-    if not values:
-        return 0.0
-    s = sorted(float(v) for v in values)
-    n = len(s)
-    mid = n // 2
-    if n % 2:
-        return s[mid]
-    return (s[mid - 1] + s[mid]) / 2.0
-
-
-def _pct_if_reliable(cur, base, kind):
-    if kind == 'money' and float(base or 0) < _MIN_MONEY_BASELINE:
-        return None
-    if kind == 'count' and float(base or 0) < _MIN_COUNT_BASELINE:
+def _pct_if_reliable(cur, base):
+    if float(base or 0) < _MIN_MONEY_BASELINE:
         return None
     return _delta_pct(cur, base)
 
 
-def _week_in_season(monday):
-    return SEASON_START_MONTH <= monday.month <= SEASON_END_MONTH
-
-
-def _season_anchor_monday(year):
-    """Первый понедельник на или после 1 марта."""
-    d = date(year, SEASON_START_MONTH, 1)
-    while d.weekday() != 0:
+def _years_touched(monday, sunday):
+    years = set()
+    d = monday
+    while d <= sunday:
+        years.add(d.year)
         d += timedelta(days=1)
-    return d
+    return years
 
 
-def _season_week_index(monday):
-    """Номер недели сезона (0-based) от якоря 1 марта."""
-    if not _week_in_season(monday):
-        return None
-    anchor = _season_anchor_monday(monday.year)
-    if monday < anchor:
-        return None
-    return (monday - anchor).days // 7
+def _budget_by_month(years):
+    if not years:
+        return {}
+    rows = db.session.query(
+        BudgetPlan.year, BudgetPlan.month, func.sum(BudgetPlan.amount),
+    ).filter(BudgetPlan.year.in_(years)).group_by(
+        BudgetPlan.year, BudgetPlan.month,
+    ).all()
+    return {(int(y), int(m)): _safe_float(a) for y, m, a in rows}
 
 
-def _season_week_monday(year, week_index):
-    return _season_anchor_monday(year) + timedelta(weeks=week_index)
+def _cashflow_by_month(years):
+    if not years:
+        return {}
+    rows = db.session.query(
+        CashflowPlan.year, CashflowPlan.month, CashflowPlan.amount,
+    ).filter(CashflowPlan.year.in_(years)).all()
+    return {(int(y), int(m)): _safe_float(a) for y, m, a in rows}
 
 
-def _iso_week_monday_in_year(calendar_year, iso_week):
-    """Понедельник ISO-недели `iso_week` в календарном году (для зимы)."""
-    try:
-        return date.fromisocalendar(calendar_year, iso_week, 1)
-    except ValueError:
-        for w in (iso_week - 1, 52, 53):
-            if w < 1:
-                continue
-            try:
-                return date.fromisocalendar(calendar_year, w, 1)
-            except ValueError:
-                continue
-    return None
+def _week_budget_share(monday, sunday, plans):
+    """Сколько месячного бюджета приходится на дни этой недели."""
+    total = 0.0
+    has_plan = False
+    d = monday
+    while d <= sunday:
+        amount = plans.get((d.year, d.month), 0.0)
+        if amount > 0:
+            has_plan = True
+            dim = calendar.monthrange(d.year, d.month)[1]
+            total += amount / dim
+        d += timedelta(days=1)
+    return round(total, 2), has_plan
 
 
-def _shipment_rows(start, end):
-    return db.session.query(
-        func.date(Document.date).label('d'),
-        (OrderItem.price * DocumentRow.quantity).label('money'),
-        DocumentRow.quantity.label('qty'),
-    ).select_from(Document).join(
-        Order, Document.order_id == Order.id
-    ).join(
-        DocumentRow, DocumentRow.document_id == Document.id
-    ).join(
-        OrderItem, and_(
-            OrderItem.order_id == Document.order_id,
-            OrderItem.plant_id == DocumentRow.plant_id,
-            OrderItem.size_id == DocumentRow.size_id,
-            OrderItem.field_id == DocumentRow.field_from_id,
+def _cashflow_month_progress(monday, sunday, plans):
+    """План cashflow — сумма месяца из отчёта, плюс факт с 1-го по конец недели.
+
+    Недельную «норму» из этой суммы не делаем: в плане часто один-два
+    крупных месяца, и деление на 7 дней рисует несуществующий темп.
+    """
+    seen = []
+    d = monday
+    while d <= sunday:
+        key = (d.year, d.month)
+        if key not in seen:
+            seen.append(key)
+        d += timedelta(days=1)
+    lines = []
+    for year, month in seen:
+        plan = plans.get((year, month), 0.0)
+        if plan <= 0:
+            continue
+        start = date(year, month, 1)
+        month_end = date(year, month, calendar.monthrange(year, month)[1])
+        end = sunday if sunday < month_end else month_end
+        fact = _safe_float(
+            db.session.query(func.coalesce(func.sum(Payment.amount), 0))
+            .filter(
+                Payment.date >= start,
+                Payment.date <= end,
+                Payment.cash_inflow_filter(),
+            ).scalar() or 0
         )
-    ).filter(
+        lines.append({
+            'year': year,
+            'month': month,
+            'label': f'{MONTH_NAMES.get(month, month)} {year}',
+            'plan': round(plan, 2),
+            'fact_to_date': round(fact, 2),
+        })
+    return lines
+
+
+def _shipment_totals(start, end):
+    """Отгрузки недели: одна цена на строку документа, без размножения джойном."""
+    rows = db.session.query(
+        Document.order_id,
+        DocumentRow.plant_id,
+        DocumentRow.size_id,
+        DocumentRow.field_from_id,
+        DocumentRow.year,
+        DocumentRow.quantity,
+    ).join(Document, DocumentRow.document_id == Document.id).filter(
         Document.doc_type == 'shipment',
+        Document.order_id.isnot(None),
         func.date(Document.date) >= start,
         func.date(Document.date) <= end,
     ).all()
+    if not rows:
+        return 0.0, 0
+    order_ids = {r.order_id for r in rows}
+    items = OrderItem.query.filter(OrderItem.order_id.in_(order_ids)).all()
+    exact = {}
+    loose = {}
+    for it in items:
+        exact[(it.order_id, it.plant_id, it.size_id, it.field_id, it.year)] = it
+        loose.setdefault((it.order_id, it.plant_id, it.size_id, it.field_id), it)
+    money = 0.0
+    qty = 0
+    for r in rows:
+        it = exact.get((r.order_id, r.plant_id, r.size_id, r.field_from_id, r.year))
+        if it is None:
+            it = loose.get((r.order_id, r.plant_id, r.size_id, r.field_from_id))
+        q = int(_safe_float(r.quantity))
+        price = _safe_float(it.price) if it is not None else 0.0
+        qty += q
+        money += price * q
+    return round(money, 2), qty
 
 
 def _collect_week_metrics(monday, sunday):
@@ -228,11 +252,7 @@ def _collect_week_metrics(monday, sunday):
         .filter(Expense.date >= monday, Expense.date <= sunday).scalar() or 0
     )
 
-    ship_money = 0.0
-    ship_qty = 0
-    for row in _shipment_rows(monday, sunday):
-        ship_money += _safe_float(row.money)
-        ship_qty += int(_safe_float(row.qty))
+    ship_money, ship_qty = _shipment_totals(monday, sunday)
 
     new_orders_q = Order.query.filter(
         Order.is_deleted.is_(False),
@@ -244,18 +264,31 @@ def _collect_week_metrics(monday, sunday):
     new_orders_total = sum(_safe_float(o.total_sum) for o in new_orders_q)
 
     planned = int(db.session.query(func.coalesce(func.sum(DiggingTask.planned_qty), 0))
-                  .filter(DiggingTask.planned_date >= monday,
-                          DiggingTask.planned_date <= sunday).scalar() or 0)
+                  .join(OrderItem, DiggingTask.order_item_id == OrderItem.id)
+                  .join(Order, OrderItem.order_id == Order.id)
+                  .filter(
+                      DiggingTask.planned_date >= monday,
+                      DiggingTask.planned_date <= sunday,
+                      Order.is_deleted.is_(False),
+                      Order.status != 'canceled',
+                  ).scalar() or 0)
     dig_fact = int(db.session.query(func.coalesce(func.sum(DiggingLog.quantity), 0))
                    .filter(DiggingLog.date >= monday,
                            DiggingLog.date <= sunday,
                            DiggingLog.status != 'rejected').scalar() or 0)
+
+    years = _years_touched(monday, sunday)
+    expense_plan, expense_plan_set = _week_budget_share(monday, sunday, _budget_by_month(years))
+    cash_months = _cashflow_month_progress(monday, sunday, _cashflow_by_month(years))
 
     return {
         'monday': monday.isoformat(),
         'sunday': sunday.isoformat(),
         'cash_in': round(cash_in, 2),
         'expenses': round(expenses, 2),
+        'expense_plan': expense_plan,
+        'expense_plan_set': expense_plan_set,
+        'cash_months': cash_months,
         'ship_money': round(ship_money, 2),
         'ship_qty': ship_qty,
         'new_orders_count': new_orders_count,
@@ -266,112 +299,41 @@ def _collect_week_metrics(monday, sunday):
     }
 
 
-def _collect_seasonal_baseline(report_monday):
-    """Ожидание на неделю = медиана той же недели сезона / ISO-недели в 2023…прошлый год."""
-    report_year = report_monday.year
-    in_season = _week_in_season(report_monday)
-    years_pool = [y for y in range(HISTORY_FIRST_YEAR, report_year)]
+def _compute_plan_gaps(metrics, threshold_pct):
+    """Только там, где план в программе реально задан: бюджет и календарь выкопки."""
+    gaps = []
+    exp = float(metrics.get('expenses') or 0)
+    exp_plan = float(metrics.get('expense_plan') or 0)
+    if metrics.get('expense_plan_set'):
+        pct = _pct_if_reliable(exp, exp_plan)
+        if pct is not None and abs(pct) >= threshold_pct:
+            gaps.append({
+                'key': 'expenses',
+                'label': 'Расходы',
+                'current': exp,
+                'baseline': exp_plan,
+                'delta_pct': pct,
+                'direction': 'down' if pct < 0 else 'up',
+                'is_negative': pct > 0,
+                'note': 'к доле бюджета на эти дни',
+            })
 
-    metric_keys = [k for k, _, _ in _ANOMALY_METRICS] + ['digging_planned']
-    historical = {k: [] for k in metric_keys}
-    skip_compare = set()
-    used_years = []
-
-    meta = {
-        'baseline_type': 'seasonal_median',
-        'history_first_year': HISTORY_FIRST_YEAR,
-        'in_season': in_season,
-        'winter_mode': not in_season,
-        'comparison_years': [],
-        'season_week_human': None,
-        'iso_week': None,
-        'comparison_label': '',
-    }
-
-    if not years_pool:
-        baseline = {k: 0 for k in metric_keys}
-        baseline['_meta'] = meta
-        baseline['_skip_compare'] = list(_WINTER_SKIP_METRICS) if not in_season else []
-        return baseline
-
-    if in_season:
-        swi = _season_week_index(report_monday)
-        meta['season_week_human'] = (swi + 1) if swi is not None else None
-        if swi is not None:
-            for y in years_pool:
-                mon = _season_week_monday(y, swi)
-                if mon.month > SEASON_END_MONTH:
-                    continue
-                sun = mon + timedelta(days=6)
-                m = _collect_week_metrics(mon, sun)
-                for k in metric_keys:
-                    historical[k].append(m.get(k, 0))
-                used_years.append(y)
-        years_label = ', '.join(str(y) for y in used_years) or '—'
-        meta['comparison_label'] = (
-            f'медиана недели {meta["season_week_human"]} сезона '
-            f'({years_label})'
-        )
-    else:
-        skip_compare = set(_WINTER_SKIP_METRICS)
-        iso_week = report_monday.isocalendar()[1]
-        meta['iso_week'] = iso_week
-        for y in years_pool:
-            mon = _iso_week_monday_in_year(y, iso_week)
-            if not mon:
-                continue
-            sun = mon + timedelta(days=6)
-            m = _collect_week_metrics(mon, sun)
-            for k in ('cash_in', 'expenses'):
-                historical[k].append(m.get(k, 0))
-            used_years.append(y)
-        years_label = ', '.join(str(y) for y in used_years) or '—'
-        meta['comparison_label'] = (
-            f'медиана ISO-нед. {iso_week} зимы ({years_label}); '
-            f'отгрузки и заказы — вне сезона'
-        )
-
-    meta['comparison_years'] = used_years
-
-    baseline = {}
-    for k in metric_keys:
-        if k in skip_compare:
-            baseline[k] = 0
-        elif historical[k]:
-            val = _median(historical[k])
-            baseline[k] = round(val, 2) if k not in ('ship_qty', 'new_orders_count', 'digging_fact', 'digging_planned') else round(val, 1)
-        else:
-            baseline[k] = 0
-
-    baseline['_meta'] = meta
-    baseline['_skip_compare'] = list(skip_compare)
-    return baseline
-
-
-def _compute_anomalies_vs_baseline(metrics, baseline, threshold_pct):
-    skip = set(baseline.get('_skip_compare') or [])
-    anomalies = []
-    for key, label, kind in _ANOMALY_METRICS:
-        if key in skip:
-            continue
-        cur = float(metrics.get(key, 0) or 0)
-        base = float(baseline.get(key, 0) or 0)
-        pct = _pct_if_reliable(cur, base, kind)
-        if pct is None or abs(pct) < threshold_pct:
-            continue
-        bad_when_up = key in _BAD_WHEN_UP
-        is_negative = (pct > 0) if bad_when_up else (pct < 0)
-        anomalies.append({
-            'key': key,
-            'label': label,
-            'current': cur,
-            'baseline': base,
-            'delta_pct': pct,
-            'direction': 'down' if pct < 0 else 'up',
-            'severity': 'warning' if is_negative else 'info',
-            'is_negative': is_negative,
-        })
-    return anomalies
+    planned = int(metrics.get('digging_planned') or 0)
+    fact = int(metrics.get('digging_fact') or 0)
+    if planned >= _MIN_DIG_PLAN:
+        pct = _delta_pct(fact, planned)
+        if pct is not None and pct <= -threshold_pct:
+            gaps.append({
+                'key': 'digging',
+                'label': 'Выкопка',
+                'current': fact,
+                'baseline': planned,
+                'delta_pct': pct,
+                'direction': 'down',
+                'is_negative': True,
+                'note': 'к плану календаря',
+            })
+    return gaps
 
 
 def _collect_anomaly_flow(monday, sunday):
@@ -418,47 +380,41 @@ def _collect_anomaly_flow(monday, sunday):
     }
 
 
-def _render_template_digest(metrics, baseline, deviations, anomalies,
-                            last_digest_at, threshold_pct):
-    skip = set(baseline.get('_skip_compare') or [])
 
-    def _fmt_qty(x):
-        try:
-            return f'{int(round(float(x)))}'
-        except Exception:
-            return str(x)
+def _unique_cards(cards):
+    seen = set()
+    out = []
+    for card in cards or []:
+        title = (card.get('title') or '').strip()
+        if title in seen:
+            continue
+        seen.add(title)
+        out.append(card)
+    return out
 
-    def _row(label, key, kind):
-        cur = float(metrics.get(key, 0) or 0)
-        if key in skip:
-            fmt = _money if kind == 'money' else _fmt_qty
-            return (
-                f'<tr class="text-muted">'
-                f'<td>{label}</td>'
-                f'<td class="text-end fw-semibold">{fmt(cur)}</td>'
-                f'<td class="text-end" colspan="2"><span class="small">вне сезона</span></td>'
-                f'</tr>'
-            )
-        base = float(baseline.get(key, 0) or 0)
-        pct = _pct_if_reliable(cur, base, kind)
-        delta_html = ''
-        is_warn = False
-        if pct is not None:
-            bad_when_up = key in _BAD_WHEN_UP
-            is_bad = (pct > 0) if bad_when_up else (pct < 0)
-            is_warn = is_bad and abs(pct) >= threshold_pct
-            color = 'text-danger fw-bold' if is_warn else ('text-muted' if is_bad else 'text-success')
-            arrow = '▲' if pct > 0 else ('▼' if pct < 0 else '•')
-            delta_html = f'<span class="{color} ms-1">{arrow} {pct:+.0f}%</span>'
-        elif base > 0:
-            delta_html = '<span class="text-muted ms-1">—</span>'
-        row_cls = ' class="table-warning"' if is_warn else ''
-        fmt = _money if kind == 'money' else _fmt_qty
+
+def _fmt_qty(x):
+    try:
+        return f'{int(round(float(x)))}'
+    except Exception:
+        return str(x)
+
+
+def _render_template_digest(metrics, deviations, anomalies, last_digest_at, threshold_pct):
+    def _delta(pct, bad):
+        if pct is None:
+            return '<span class="text-muted">—</span>'
+        color = 'text-danger fw-bold' if bad else ('text-success' if pct != 0 else 'text-muted')
+        arrow = '▲' if pct > 0 else ('▼' if pct < 0 else '•')
+        return f'<span class="{color}">{arrow} {pct:+.0f}%</span>'
+
+    def _tr(label, fact, plan, delta_html, warn=False):
+        cls = ' class="table-warning"' if warn else ''
         return (
-            f'<tr{row_cls}>'
+            f'<tr{cls}>'
             f'<td>{label}</td>'
-            f'<td class="text-end fw-semibold">{fmt(cur)}</td>'
-            f'<td class="text-end text-muted">{fmt(base)}</td>'
+            f'<td class="text-end fw-semibold">{fact}</td>'
+            f'<td class="text-end text-muted">{plan}</td>'
             f'<td class="text-end">{delta_html}</td>'
             f'</tr>'
         )
@@ -470,9 +426,6 @@ def _render_template_digest(metrics, baseline, deviations, anomalies,
     except Exception:
         period_str = f'{metrics.get("monday")} – {metrics.get("sunday")}'
 
-    meta = baseline.get('_meta') or {}
-    cmp_label = meta.get('comparison_label') or 'нет данных за прошлые годы'
-
     last_line = ''
     if last_digest_at:
         last_line = (
@@ -480,48 +433,47 @@ def _render_template_digest(metrics, baseline, deviations, anomalies,
             f'{last_digest_at.strftime("%d.%m.%Y %H:%M")}</div>'
         )
 
+    cash = float(metrics.get('cash_in') or 0)
+    exp = float(metrics.get('expenses') or 0)
+    exp_plan = float(metrics.get('expense_plan') or 0)
+    exp_set = bool(metrics.get('expense_plan_set'))
+    exp_pct = _pct_if_reliable(exp, exp_plan) if exp_set else None
+    exp_bad = bool(exp_pct is not None and exp_pct > 0 and abs(exp_pct) >= threshold_pct)
+
     planned = int(metrics.get('digging_planned') or 0)
     dug = int(metrics.get('digging_fact') or 0)
-    dig_diff = dug - planned
+    dig_pct = _delta_pct(dug, planned) if planned >= _MIN_DIG_PLAN else None
+    dig_bad = bool(dig_pct is not None and dig_pct < 0 and abs(dig_pct) >= threshold_pct)
     if planned > 0:
-        dig_pct = round(dug * 100.0 / planned)
-        dig_plan_line = (
-            f'<div class="small text-muted mb-2">'
-            f'Выкопка за неделю: план <b>{planned}</b> шт · факт <b>{dug}</b> шт '
-            f'(<span class="{"text-success" if dig_diff >= 0 else "text-danger"}">'
-            f'{dig_diff:+d} шт, {dig_pct}% плана</span>)'
-            f'</div>'
-        )
-    elif dug > 0:
-        dig_plan_line = (
-            f'<div class="small text-muted mb-2">'
-            f'Выкопка за неделю: <b>{dug}</b> шт (план не ставился)'
-            f'</div>'
-        )
+        dig_plan_cell = f'{planned} шт'
+        diff = dug - planned
+        color = 'text-danger fw-bold' if dig_bad else ('text-success' if diff > 0 else 'text-muted')
+        dig_delta = f'<span class="{color}">{diff:+d} шт</span>'
     else:
-        dig_plan_line = ''
+        dig_plan_cell = 'не ставился'
+        dig_delta = '<span class="text-muted">—</span>'
 
-    winter_note = ''
-    if meta.get('winter_mode'):
-        winter_note = (
-            '<div class="small alert alert-light border py-1 px-2 mb-2">'
-            '<i class="fas fa-snowflake me-1 text-muted"></i> '
-            'Зимний период: отгрузки и заказы не сравниваем с прошлыми годами.'
-            '</div>'
-        )
+    ship = (
+        f'{_money(metrics.get("ship_money") or 0)}'
+        f' · {_fmt_qty(metrics.get("ship_qty") or 0)} шт'
+    )
+    orders = (
+        f'{_fmt_qty(metrics.get("new_orders_count") or 0)}'
+        f' · {_money(metrics.get("new_orders_total") or 0)}'
+    )
 
     parts = ['<div class="digest-body">']
     parts.append(f'<div class="fw-bold mb-1">Неделя {period_str}</div>')
     parts.append(
-        f'<div class="small text-muted mb-2">'
-        f'<b>Ожидание</b> — {cmp_label} (с {HISTORY_FIRST_YEAR} г.). '
-        f'Сезон: март–декабрь. Подсветка при Δ ≥ {threshold_pct:.0f}%.'
-        f'</div>'
+        '<div class="small text-muted mb-2">'
+        'Расходы сравниваются с долей месячного бюджета на эти дни. '
+        'Выкопка — с планом календаря. '
+        'Поступления: факт недели; план cashflow, если он задан, показан суммой месяца, '
+        'а не «нормой на неделю». '
+        f'Подсветка при отклонении от {threshold_pct:.0f}%.'
+        '</div>'
     )
-    parts.append(winter_note)
     parts.append(last_line)
-    parts.append(dig_plan_line)
-
     parts.append(
         '<table class="table table-sm table-borderless mb-2 digest-metrics-table" '
         'style="font-size:12.5px;">'
@@ -529,51 +481,73 @@ def _render_template_digest(metrics, baseline, deviations, anomalies,
     parts.append(
         '<thead><tr class="text-muted small">'
         '<th>Показатель</th>'
-        '<th class="text-end">Неделя</th>'
-        '<th class="text-end">Ожидание</th>'
+        '<th class="text-end">Факт</th>'
+        '<th class="text-end">План</th>'
         '<th class="text-end">Δ</th>'
         '</tr></thead><tbody>'
     )
-    for key, label, kind in _ANOMALY_METRICS:
-        parts.append(_row(label, key, kind))
+    parts.append(_tr('Поступления', _money(cash), '—', '<span class="text-muted">—</span>'))
+    if exp_set:
+        parts.append(_tr(
+            'Расходы', _money(exp), _money(exp_plan), _delta(exp_pct, exp_bad), exp_bad,
+        ))
+    else:
+        parts.append(_tr(
+            'Расходы', _money(exp), 'бюджет не задан', '<span class="text-muted">—</span>',
+        ))
+    parts.append(_tr(
+        'Выкопка, шт', f'{dug} шт', dig_plan_cell, dig_delta, dig_bad,
+    ))
+    parts.append(_tr('Отгрузки', ship, '—', '<span class="text-muted">—</span>'))
+    parts.append(_tr('Новые заказы', orders, '—', '<span class="text-muted">—</span>'))
     parts.append('</tbody></table>')
+
+    for row in metrics.get('cash_months') or []:
+        parts.append(
+            '<div class="small text-muted mb-1">'
+            f'План cashflow на {row["label"]}: <b>{_money(row["plan"])}</b>, '
+            f'с начала месяца пришло <b>{_money(row["fact_to_date"])}</b>.'
+            '</div>'
+        )
 
     bad = [a for a in deviations if a.get('is_negative')]
     good = [a for a in deviations if not a.get('is_negative')]
     if bad:
-        parts.append(
-            f'<div class="small mb-1 text-danger fw-bold">'
-            f'Ниже ожидания ({len(bad)}):</div><ul class="small mb-2">'
-        )
+        parts.append('<ul class="small mb-2 text-danger">')
         for a in bad:
             parts.append(
-                f'<li><b>{a["label"]}</b>: {a["delta_pct"]:+.0f}% к прошлым годам</li>'
+                f'<li><b>{a["label"]}</b>: {a["delta_pct"]:+.0f}% {a.get("note") or ""}</li>'
             )
         parts.append('</ul>')
     if good:
         parts.append(
-            '<div class="small text-success mb-2">Выше ожидания: '
-            + ', '.join(f'{a["label"]} ({a["delta_pct"]:+.0f}%)' for a in good)
+            '<div class="small text-success mb-2">'
+            + ', '.join(
+                f'{a["label"]} {a["delta_pct"]:+.0f}% {a.get("note") or ""}'.strip()
+                for a in good
+            )
             + '</div>'
         )
-    if not bad and not good and not meta.get('winter_mode'):
+    if not bad and not good:
         parts.append(
-            '<div class="small text-muted mb-2">В пределах обычного для этой недели сезона.</div>'
+            '<div class="small text-muted mb-2">'
+            'К бюджету и календарю выкопки заметных отклонений нет.'
+            '</div>'
         )
 
-    new_n = len(anomalies.get('new') or [])
-    ongoing_n = len(anomalies.get('ongoing') or [])
-    resolved_n = len(anomalies.get('resolved') or [])
-    if new_n or ongoing_n or resolved_n:
+    new_cards = _unique_cards(anomalies.get('new'))
+    ongoing_cards = _unique_cards(anomalies.get('ongoing'))
+    resolved_cards = _unique_cards(anomalies.get('resolved'))
+    if new_cards or ongoing_cards or resolved_cards:
         parts.append(
-            f'<div class="small mb-1"><b>Карточки-аномалии:</b> '
-            f'<span class="text-danger">+{new_n}</span> · '
-            f'<span class="text-warning">{ongoing_n} открыты</span> · '
-            f'<span class="text-success">{resolved_n} закрыто</span></div>'
+            f'<div class="small mb-1"><b>Карточки:</b> '
+            f'<span class="text-danger">+{len(new_cards)}</span> · '
+            f'<span class="text-warning">{len(ongoing_cards)} открыты</span> · '
+            f'<span class="text-success">{len(resolved_cards)} закрыто</span></div>'
         )
-        if ongoing_n:
+        if ongoing_cards:
             parts.append('<ul class="small mb-2">')
-            for a in (anomalies.get('ongoing') or [])[:5]:
+            for a in ongoing_cards[:5]:
                 parts.append(
                     f'<li>{a["title"]} '
                     f'<span class="text-muted">({a["days_active"]} дн)</span></li>'
@@ -588,22 +562,28 @@ def _render_template_digest(metrics, baseline, deviations, anomalies,
     return '\n'.join(parts)
 
 
-def _render_llm_intro(metrics, baseline, deviations, anomalies, threshold_pct):
+def _render_llm_intro(metrics, deviations):
     api_key = os.environ.get('GROQ_API_KEY')
     if not api_key:
         return ''
     try:
         from groq import Groq
         client = Groq(api_key=api_key)
-        baseline_clean = {k: v for k, v in baseline.items() if not str(k).startswith('_')}
-        meta = baseline.get('_meta') or {}
+        brief = {
+            'поступления': metrics.get('cash_in'),
+            'расходы': metrics.get('expenses'),
+            'доля_бюджета': metrics.get('expense_plan'),
+            'выкопка_факт': metrics.get('digging_fact'),
+            'выкопка_план': metrics.get('digging_planned'),
+            'отгрузки': metrics.get('ship_money'),
+            'новые_заказы': metrics.get('new_orders_total'),
+            'cashflow_месяц': metrics.get('cash_months'),
+        }
         prompt = (
-            'Ты — аналитик питомника (сезон март–декабрь). Одно-два предложения на русском: '
-            'как прошла неделя vs ожидание по прошлым годам (с 2023). '
-            f'Контекст: {meta.get("comparison_label", "")}. '
-            'Без вступлений.\n\n'
-            f'Неделя: {json.dumps(metrics, ensure_ascii=False, default=str)}\n'
-            f'Ожидание: {json.dumps(baseline_clean, ensure_ascii=False, default=str)}\n'
+            'Ты — аналитик питомника. Одно-два предложения на русском по итогам недели. '
+            'План расходов — доля месячного бюджета, план выкопки — календарь. '
+            'Не выдумывай годовую норму и не дели план cashflow на неделю. Без вступлений.\n\n'
+            f'Цифры: {json.dumps(brief, ensure_ascii=False, default=str)}\n'
             f'Отклонения: {json.dumps(deviations, ensure_ascii=False, default=str)}'
         )
         resp = client.chat.completions.create(
@@ -632,8 +612,7 @@ def build_digest_for_user(user, today):
     monday, sunday = _last_week_bounds(today)
     threshold_pct = get_anomaly_threshold_pct()
     metrics = _collect_week_metrics(monday, sunday)
-    baseline = _collect_seasonal_baseline(monday)
-    deviations = _compute_anomalies_vs_baseline(metrics, baseline, threshold_pct)
+    deviations = _compute_plan_gaps(metrics, threshold_pct)
     anomalies = _collect_anomaly_flow(monday, sunday)
 
     last_digest = (
@@ -643,9 +622,9 @@ def build_digest_for_user(user, today):
     )
     last_digest_at = last_digest.created_at if last_digest else None
 
-    intro_html = _render_llm_intro(metrics, baseline, deviations, anomalies, threshold_pct)
+    intro_html = _render_llm_intro(metrics, deviations)
     table_html = _render_template_digest(
-        metrics, baseline, deviations, anomalies, last_digest_at, threshold_pct
+        metrics, deviations, anomalies, last_digest_at, threshold_pct
     )
     content_html = (intro_html or '') + table_html
 
@@ -655,7 +634,6 @@ def build_digest_for_user(user, today):
         content_html=content_html,
         summary_json=json.dumps({
             'metrics': metrics,
-            'baseline': baseline,
             'deviations': deviations,
             'anomalies': anomalies,
             'threshold_pct': threshold_pct,
@@ -667,7 +645,7 @@ def build_digest_for_user(user, today):
     severity = 'warning' if n_bad else 'info'
     title = f'Дайджест {monday.strftime("%d.%m")}–{sunday.strftime("%d.%m")}'
     if n_bad:
-        title += f' · {n_bad} ниже ожидания'
+        title += f' · {n_bad} к плану'
 
     dedup_key = f'digest:{this_monday.isoformat()}:user={user.id}'
     if TgTask.query.filter_by(dedup_key=dedup_key).first() is None:

@@ -3,6 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    {% if request.endpoint == 'main.index' and request.args.get('dash') != '1' %}
+    <script>
+    if (window.matchMedia('(max-width: 991.98px)').matches) {
+        location.replace({{ url_for('orders.orders_list')|tojson }});
+    }
+    </script>
+    {% endif %}
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="{{ url_for('main.manifest') }}">
     <meta name="theme-color" content="#16a34a">
@@ -1214,7 +1221,7 @@
             {# ---------- ГЛАВНОЕ ---------- #}
             <div class="sidebar-group-title">Главное</div>
 
-            <a class="sidebar-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index') }}">
+            <a class="sidebar-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index', dash=1) }}">
                 <span class="sl-icon"><i class="fas fa-gauge-high"></i></span>
                 <span class="sl-label">Дашборд</span>
                 {% if dashboard_counts and (dashboard_counts.today or dashboard_counts.overdue) %}
@@ -1629,7 +1636,7 @@
         </button>
 
         <div class="app-header-actions">
-            <a href="{{ url_for('main.index') }}" class="header-icon-btn" title="Дашборд — задачи и уведомления">
+            <a href="{{ url_for('main.index', dash=1) }}" class="header-icon-btn" title="Дашборд — задачи и уведомления">
                 <i class="fas fa-bell"></i>
                 {% if dashboard_counts and (dashboard_counts.today or dashboard_counts.overdue) %}
                 <span class="dash-badge" aria-label="Задачи: {{ dashboard_counts.today }} на сегодня, {{ dashboard_counts.overdue }} просрочено">
@@ -1685,7 +1692,7 @@
 {# ---------- BOTTOM NAV (mobile) ---------- #}
 <nav class="bottom-nav" aria-label="Главная навигация">
     <div class="bottom-nav-inner">
-            <a class="bn-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index') }}">
+            <a class="bn-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index', dash=1) }}">
             <i class="fas fa-gauge-high"></i><span>Дашборд</span>
             {% if dashboard_counts and (dashboard_counts.today or dashboard_counts.overdue) %}
             <span class="dash-badge" aria-label="Задачи: {{ dashboard_counts.today }} на сегодня, {{ dashboard_counts.overdue }} просрочено">
@@ -1727,7 +1734,7 @@
     <div class="drawer-body">
                 <div class="drawer-group">
             <div class="drawer-group-title">Главное</div>
-            <a class="drawer-link" href="{{ url_for('main.index') }}"><i class="fas fa-gauge-high"></i> Дашборд</a>
+            <a class="drawer-link" href="{{ url_for('main.index', dash=1) }}"><i class="fas fa-gauge-high"></i> Дашборд</a>
             <a class="drawer-link" href="{{ url_for('orders.orders_list') }}"><i class="fas fa-shopping-basket"></i> Заказы</a>
         </div>
 

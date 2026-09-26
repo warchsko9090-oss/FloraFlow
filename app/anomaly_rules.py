@@ -276,11 +276,17 @@ def detect_digging_weekly_balance(today):
     prev_monday = prev_sunday - timedelta(days=6)
 
     # Планы за ту неделю
-    plan_q = db.session.query(func.coalesce(func.sum(DiggingTask.planned_qty), 0)).filter(
-        DiggingTask.planned_date >= prev_monday,
-        DiggingTask.planned_date <= prev_sunday,
+    planned = int(
+        db.session.query(func.coalesce(func.sum(DiggingTask.planned_qty), 0))
+        .join(OrderItem, DiggingTask.order_item_id == OrderItem.id)
+        .join(Order, OrderItem.order_id == Order.id)
+        .filter(
+            DiggingTask.planned_date >= prev_monday,
+            DiggingTask.planned_date <= prev_sunday,
+            Order.is_deleted.is_(False),
+            Order.status != 'canceled',
+        ).scalar() or 0
     )
-    planned = int(plan_q.scalar() or 0)
 
     fact_q = db.session.query(func.coalesce(func.sum(DiggingLog.quantity), 0)).filter(
         DiggingLog.date >= prev_monday,
