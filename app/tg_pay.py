@@ -120,12 +120,14 @@ def _start_greeting(sender, tg_id) -> str:
         lines.append(f'Вы: {tg_id} → {user.username} ({user.role})')
         if _can_pay_app(user) and _can_sale_role(user):
             lines.append('Оплата — счета поставщикам. Выставить счёт — клиенту.')
+            if _is_admin(user):
+                lines.append('Касса — наличные по сотрудникам.')
         elif _can_sale_role(user):
             lines.append('Выставить счёт клиенту.')
         elif _is_accountant(user):
             lines.append('Отгрузки: счета и состав для УПД.')
         elif _can_edit(user):
-            lines.append('Черновики и планы по счетам поставщиков.')
+            lines.append('Черновики, планы и касса по наличным.')
         elif _can_pay_app(user):
             lines.append('Оплата счетов поставщикам.')
         else:
@@ -136,7 +138,9 @@ def _start_greeting(sender, tg_id) -> str:
         lines.append(f'TG_USER_ID_MAP={tg_id}:admin')
         lines.append('Примеры: 111:admin,222:executive,333:shop_manager')
     lines.append('')
-    if _can_pay_app(user) and _can_sale_role(user):
+    if _is_admin(user):
+        lines.append('Кнопки внизу чата: Оплата, Выставить счёт и Касса.')
+    elif _can_pay_app(user) and _can_sale_role(user):
         lines.append('Кнопки внизу чата: Оплата и Выставить счёт.')
     elif _can_sale_role(user):
         lines.append('Кнопка внизу чата: Выставить счёт.')
@@ -161,10 +165,18 @@ def _apps_reply_keyboard(user: User | None) -> dict | None:
         if sale_url.startswith('https://'):
             label = 'Отгрузки' if _is_accountant(user) else 'Выставить счёт'
             row.append({'text': label, 'web_app': {'url': sale_url}})
-    if not row:
+    rows = []
+    if row:
+        rows.append(row)
+    if _is_admin(user) and pay_url.startswith('https://'):
+        rows.append([{
+            'text': 'Касса',
+            'web_app': {'url': pay_url.rstrip('/') + '/cash'},
+        }])
+    if not rows:
         return None
     return {
-        'keyboard': [row],
+        'keyboard': rows,
         'resize_keyboard': True,
         'is_persistent': True,
     }
@@ -981,6 +993,7 @@ def _publish_week_plan_pin(week_start: date, items: list[dict]) -> dict:
             ok, new_mid, pin_err = _replace_week_plan_message(chat_id, mid, text)
             if not ok or not new_mid:
                 errors.append(f'{chat_id}:{new_mid}')
+                mapping[chat_id] = mid
                 continue
             if pin_err:
                 errors.append(f'{chat_id}:pin:{pin_err}')
@@ -1007,14 +1020,29 @@ def _publish_week_plan_pin(week_start: date, items: list[dict]) -> dict:
     }
 
 
+def _as_pin_week(value) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        value = value.date()
+    if not isinstance(value, date):
+        return None
+    return _monday(value)
+
+
 def refresh_week_plan_pin(week_start: date | None) -> dict | None:
     """Пересобирает закреп из базы. Без уже висящего закрепа новое сообщение не шлёт."""
+    week_start = _as_pin_week(week_start)
     if not week_start:
         return None
+    db.session.expire_all()
     if not _load_week_pin_map(week_start):
+        current_app.logger.warning('week plan pin refresh skipped, no map for %s', week_start)
         return None
     info = _publish_week_plan_pin(week_start, _week_plan_pin_items(week_start))
     db.session.commit()
+    if info.get('errors'):
+        current_app.logger.warning('week plan pin refresh %s errors %s', week_start, info['errors'])
     return info
 
 
@@ -1037,12 +1065,19 @@ def _parse_money(value) -> Decimal:
 
 
 def _fact_amount(inv: PaymentInvoice) -> float:
-    kids = list(getattr(inv, 'fact_invoices', None) or [])
-    kid_sum = float(sum((k.amount or 0) for k in kids))
-    if (inv.kind or 'invoice') == 'plan':
-        own = float(inv.amount or 0) if invoice_has_file(inv) else 0.0
-        return own + kid_sum
-    return float(inv.amount or 0)
+    """Факт по плану — сумма дочерних оплат из базы, не из кэша связи.
+
+    Иначе закреп, собранный в том же запросе, что и оплата, видит старый список
+    и сообщение в Telegram не меняется.
+    """
+    if (inv.kind or 'invoice') != 'plan':
+        return float(inv.amount or 0)
+    from sqlalchemy import func
+    kid_sum = db.session.query(func.coalesce(func.sum(PaymentInvoice.amount), 0)).filter(
+        PaymentInvoice.plan_id == inv.id,
+    ).scalar()
+    own = float(inv.amount or 0) if invoice_has_file(inv) else 0.0
+    return own + float(kid_sum or 0)
 
 
 def _pay_amount(inv: PaymentInvoice) -> float:
@@ -1182,6 +1217,7 @@ def _store_upload(data: bytes, original_name: str) -> str:
 
 @bp.route('')
 @bp.route('/')
+@bp.route('/cash')
 def index():
     html = render_template('tg_pay/index.html')
     resp = make_response(html)

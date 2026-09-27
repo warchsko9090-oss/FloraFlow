@@ -535,3 +535,35 @@ h1 {
 .row.is-pressed, .row:active {
     filter: brightness(0.93);
 }
+
+.cash-bal {
+    font-size: clamp(28px, 8vw, 40px);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    margin-top: 10px;
+}
+.cash-sign {
+    font-size: 13px;
+    color: var(--mute);
+    margin: 2px 0 8px;
+}
+.amt.cash-plus, .cash-bal.cash-plus { color: #1f7a45; }
+.amt.cash-minus, .cash-bal.cash-minus { color: #a33b32; }
+.cash-del {
+    width: auto;
+    margin-top: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+button.row.cash-plan {
+    width: 100%;
+    border: 0;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+}
+.row.cash-picked {
+    box-shadow: inset 4px 0 0 #1f7a45;
+}

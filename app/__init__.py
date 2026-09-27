@@ -127,6 +127,8 @@ def create_app():
     app.register_blueprint(finance.bp)
     from . import tg_pay
     app.register_blueprint(tg_pay.bp)
+    from . import cash_desk
+    app.register_blueprint(cash_desk.bp)
     from . import tg_sale
     app.register_blueprint(tg_sale.bp)
     app.register_blueprint(hr.bp)

@@ -2009,3 +2009,42 @@ class SaleInvoiceLine(db.Model):
 
     plant = db.relationship('Plant')
     size = db.relationship('Size')
+
+
+class CashHolder(db.Model):
+    """Человек кассы. В табель (Employee) не попадает.
+
+    employee_id — необязательная привязка к уже существующему сотруднику табеля.
+    """
+    __tablename__ = 'cash_holder'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False)
+    employee_id = db.Column(
+        db.Integer, db.ForeignKey('employee.id', ondelete='SET NULL'), nullable=True, index=True,
+    )
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    employee = db.relationship('Employee', foreign_keys=[employee_id])
+    moves = db.relationship('CashMove', backref='holder', cascade='all, delete-orphan')
+
+
+class CashMove(db.Model):
+    """Движение кассы по человеку.
+
+    receipt — чековый приход: плюс, касса должна ему.
+    payout — поступление ДС ему по плану или быстрому расходу: минус, он должен кассе.
+    """
+    __tablename__ = 'cash_move'
+
+    id = db.Column(db.Integer, primary_key=True)
+    holder_id = db.Column(db.Integer, db.ForeignKey('cash_holder.id'), nullable=False, index=True)
+    kind = db.Column(db.String(20), nullable=False)  # receipt | payout
+    amount = db.Column(db.Numeric(12, 2), nullable=False)
+    move_date = db.Column(db.Date, nullable=False)
+    source_kind = db.Column(db.String(20), nullable=True)  # plan | quick
+    source_id = db.Column(db.Integer, nullable=True)
+    note = db.Column(db.String(300), nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)

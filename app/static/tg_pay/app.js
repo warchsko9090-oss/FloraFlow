@@ -103,6 +103,16 @@
       if (!me.can_inbox) return renderList();
       return renderInbox();
     }
+    if (parts[0] === 'cash') {
+      if (!me.can_edit) return renderList();
+      if (!parts[1]) return renderCashList();
+      if (parts[1] === 'new') return renderCashForm(null);
+      const id = +parts[1];
+      if (parts[2] === 'edit') return renderCashForm(id);
+      if (parts[2] === 'receipt') return renderCashReceipt(id);
+      if (parts[2] === 'in') return renderCashPayout(id);
+      return renderCashPerson(id);
+    }
     return renderList();
   }
 
@@ -119,6 +129,9 @@
   }
 
   async function boot() {
+    if (/\/tg\/pay\/cash\/?$/.test(location.pathname)) {
+      history.replaceState(null, '', '/tg/pay/' + (location.search || '') + '#/cash');
+    }
     try {
       if (window.FFTg && window.FFTg.bootAuth) {
         me = await window.FFTg.bootAuth('/tg/pay/api/auth');
@@ -272,6 +285,9 @@
     `;
     if (me.can_edit || me.role === 'executive') {
       html += `<a class="week-plan-link" href="#/week-plan/full">План недели →</a>`;
+    }
+    if (me.can_edit) {
+      html += `<a class="week-plan-link" href="#/cash">Касса →</a>`;
     }
     if (me.can_inbox && data.inbox_count) {
       html += `<a class="inbox-banner" href="#/inbox">Входящие из чата · ${data.inbox_count}</a>`;
@@ -1093,6 +1109,378 @@
     } finally {
       view.classList.remove('busy');
     }
+  }
+
+  function todayISO() {
+    const d = new Date();
+    const z = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate());
+  }
+
+  function ruDate(iso) {
+    if (!iso) return '';
+    const p = String(iso).slice(0, 10).split('-');
+    if (p.length !== 3) return iso;
+    return p[2] + '.' + p[1] + '.' + p[0];
+  }
+
+  function cashWord(balance) {
+    const n = Number(balance) || 0;
+    if (n > 0.004) return 'мы должны ему';
+    if (n < -0.004) return 'он должен кассе';
+    return 'расчётов нет';
+  }
+
+  function cashTone(balance) {
+    const n = Number(balance) || 0;
+    if (n > 0.004) return 'cash-plus';
+    if (n < -0.004) return 'cash-minus';
+    return '';
+  }
+
+  async function renderCashList() {
+    setTitle('Касса');
+    const hidden = (location.hash || '').includes('hidden=1');
+    const data = await api('/tg/pay/api/cash/holders' + (hidden ? '?hidden=1' : ''));
+    const rows = data.holders || [];
+    let html = `
+      <button class="back" type="button" id="goBack">${hidden ? '← к кассе' : '← к счетам'}</button>
+      <p class="hint" style="margin-top:0">Наличные по сотрудникам. В табель не записываются. Плюс — мы должны, минус — он должен кассе.</p>
+    `;
+    if (!hidden) {
+      html += `<button class="btn btn-ink" type="button" id="addHolder">Новый сотрудник</button>`;
+    }
+    if (!rows.length) {
+      html += `<div class="empty"><h2>${hidden ? 'Скрытых нет' : 'Пока пусто'}</h2><p>${hidden ? '' : 'Добавьте сотрудника, которому выдаёте наличные или принимаете чеки.'}</p></div>`;
+    } else {
+      html += '<div class="list">';
+      for (const row of rows) {
+        html += `<a class="row" href="#/cash/${row.id}">
+          <div>
+            <div class="name">${esc(row.name)}</div>
+            <div class="sub">${esc(cashWord(row.balance))}${row.employee_name ? ' · табель: ' + esc(row.employee_name) : ''}</div>
+          </div>
+          <div class="amt ${cashTone(row.balance)}">${money(row.balance)}</div>
+        </a>`;
+      }
+      html += '</div>';
+    }
+    if (!hidden && data.hidden_count) {
+      html += `<a class="week-plan-link" href="#/cash?hidden=1">Скрытые · ${data.hidden_count}</a>`;
+    }
+    view.innerHTML = html;
+    document.getElementById('goBack').onclick = () => {
+      location.hash = hidden ? '#/cash' : '#/';
+    };
+    const add = document.getElementById('addHolder');
+    if (add) add.onclick = () => { location.hash = '#/cash/new'; };
+  }
+
+  async function renderCashForm(id) {
+    setTitle(id ? 'Сотрудник' : 'Новый сотрудник');
+    const [people, current] = await Promise.all([
+      api('/tg/pay/api/cash/employees'),
+      id ? api('/tg/pay/api/cash/holders/' + id) : Promise.resolve(null),
+    ]);
+    const holder = current && current.holder;
+    const options = ['<option value="">Не привязан</option>'].concat(
+      (people.employees || []).map((emp) =>
+        `<option value="${emp.id}"${holder && String(holder.employee_id) === String(emp.id) ? ' selected' : ''}>${esc(emp.name)}</option>`
+      )
+    ).join('');
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← назад</button>
+      <div class="card">
+        <p class="hint" style="margin-top:0">В табель не попадает. Привязка к действующему сотруднику понадобится позже и сейчас ничего в табеле не меняет.</p>
+        <div class="field"><label>Имя</label>
+          <input id="cName" type="text" value="${esc(holder ? holder.name : '')}" placeholder="Имя" autofocus></div>
+        <div class="field"><label>Сотрудник табеля</label>
+          <select id="cEmp">${options}</select></div>
+        <button class="btn btn-ink" type="button" id="cSave">${id ? 'Сохранить' : 'Создать'}</button>
+        ${id ? '<button class="btn btn-ghost" type="button" id="cDel">Удалить</button>' : ''}
+        <p class="hint" id="cStatus"></p>
+      </div>
+    `;
+    document.getElementById('goBack').onclick = () => {
+      location.hash = id ? '#/cash/' + id : '#/cash';
+    };
+    document.getElementById('cSave').onclick = async () => {
+      const status = document.getElementById('cStatus');
+      const body = {
+        name: document.getElementById('cName').value,
+        employee_id: document.getElementById('cEmp').value,
+      };
+      status.textContent = '';
+      try {
+        const saved = id
+          ? await api('/tg/pay/api/cash/holders/' + id, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+          : await api('/tg/pay/api/cash/holders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+        location.hash = '#/cash/' + (id || saved.holder.id);
+      } catch (e) {
+        status.textContent = e.message || 'Не сохранилось';
+      }
+    };
+    const del = document.getElementById('cDel');
+    if (del) {
+      del.onclick = async () => {
+        if (!confirm('Удалить сотрудника из кассы?')) return;
+        try {
+          await api('/tg/pay/api/cash/holders/' + id, { method: 'DELETE' });
+          location.hash = '#/cash';
+        } catch (e) {
+          const msg = e.message || '';
+          if (msg.includes('Скрыть') && confirm(msg)) {
+            await api('/tg/pay/api/cash/holders/' + id, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ is_active: false }),
+            });
+            location.hash = '#/cash';
+            return;
+          }
+          alert(msg || 'Не удалось удалить');
+        }
+      };
+    }
+  }
+
+  async function renderCashPerson(id) {
+    setTitle('Касса');
+    const data = await api('/tg/pay/api/cash/holders/' + id);
+    const holder = data.holder;
+    const moves = data.moves || [];
+    let html = `
+      <button class="back" type="button" id="goBack">← к кассе</button>
+      <div class="card">
+        <div class="name">${esc(holder.name)}</div>
+        ${holder.employee_name ? `<div class="sub">Табель: ${esc(holder.employee_name)}</div>` : ''}
+        <div class="cash-bal ${cashTone(holder.balance)}">${money(holder.balance)}</div>
+        <div class="cash-sign">${esc(cashWord(holder.balance))}</div>
+        <button class="btn btn-ink" type="button" id="cReceipt">Чековый приход</button>
+        <button class="btn btn-brass" type="button" id="cIn">Поступление ДС</button>
+        <button class="btn btn-ghost" type="button" id="cEdit">Изменить</button>
+      </div>
+    `;
+    if (moves.length) {
+      html += '<div class="sec">Движения</div><div class="list">';
+      for (const move of moves) {
+        html += `<div class="row">
+          <div>
+            <div class="name">${esc(move.title)}</div>
+            <div class="sub">${esc(ruDate(move.date))}</div>
+          </div>
+          <div>
+            <div class="amt ${cashTone(move.signed)}">${money(move.signed)}</div>
+            <button class="btn btn-ghost cash-del" type="button" data-id="${move.id}">Удалить</button>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    view.innerHTML = html;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/cash'; };
+    document.getElementById('cReceipt').onclick = () => { location.hash = '#/cash/' + id + '/receipt'; };
+    document.getElementById('cIn').onclick = () => { location.hash = '#/cash/' + id + '/in'; };
+    document.getElementById('cEdit').onclick = () => { location.hash = '#/cash/' + id + '/edit'; };
+    view.querySelectorAll('.cash-del').forEach((btn) => {
+      btn.onclick = async () => {
+        if (!confirm('Удалить эту запись? Остаток пересчитается.')) return;
+        try {
+          await api('/tg/pay/api/cash/moves/' + btn.dataset.id, { method: 'DELETE' });
+          await renderCashPerson(id);
+        } catch (e) {
+          alert(e.message || 'Не удалось удалить');
+        }
+      };
+    });
+  }
+
+  async function renderCashReceipt(id) {
+    setTitle('Чековый приход');
+    await ensureBudgetItems();
+    const week = await api('/tg/pay/api/cash/week-plans');
+    const plans = week.plans || [];
+    let mode = 'article';
+    let planId = '';
+
+    function draw() {
+      const prevAmount = (document.getElementById('cAmount') || {}).value || '';
+      const prevDate = (document.getElementById('cDate') || {}).value || todayISO();
+      const prevBudget = (document.getElementById('cBudget') || {}).value || '';
+      let plansHtml = '';
+      if (mode === 'plan') {
+        if (!plans.length) {
+          plansHtml = '<p class="hint">В плане этой недели нет открытых строк.</p>';
+        } else {
+          plansHtml = '<div class="sec">План недели</div><div class="list">';
+          for (const row of plans) {
+            const picked = String(row.id) === String(planId) ? ' cash-picked' : '';
+            const kind = row.payment_type === 'cash' ? 'нал' : 'безнал';
+            const article = row.budget_name || 'нет статьи';
+            plansHtml += `<button type="button" class="row cash-plan${picked}" data-plan="${row.id}">
+              <div>
+                <div class="name">${esc(row.title)}</div>
+                <div class="sub">${esc(article)} · ${kind} · осталось ${money(row.left)}</div>
+              </div>
+            </button>`;
+          }
+          plansHtml += '</div>';
+        }
+      }
+      view.innerHTML = `
+        <button class="back" type="button" id="goBack">← назад</button>
+        <div class="card">
+          <p class="hint" style="margin-top:0">Плюс к остатку: касса должна сотруднику. В чат и в базу уходит нал.</p>
+          <div class="pay-toggle" id="cMode">
+            <button type="button" class="pay-opt" data-v="article" aria-pressed="${mode === 'article' ? 'true' : 'false'}">Новая статья</button>
+            <button type="button" class="pay-opt" data-v="plan" aria-pressed="${mode === 'plan' ? 'true' : 'false'}">Из плана</button>
+          </div>
+          <div class="field"><label>Сумма, ₽</label>
+            <input id="cAmount" inputmode="decimal" placeholder="0" value="${esc(prevAmount)}"></div>
+          <div class="field"><label>Дата</label>
+            <input id="cDate" type="date" value="${esc(prevDate)}"></div>
+          ${mode === 'article'
+            ? `<div class="field"><label>Статья</label>${budgetPickerHtml('cBudget', prevBudget)}</div>`
+            : ''}
+          <button class="btn btn-ink" type="button" id="cSave">Провести</button>
+          <p class="hint" id="cStatus"></p>
+        </div>
+        ${mode === 'plan' ? plansHtml : ''}
+      `;
+      document.getElementById('goBack').onclick = () => { location.hash = '#/cash/' + id; };
+      view.querySelectorAll('#cMode .pay-opt').forEach((btn) => {
+        btn.onclick = () => {
+          mode = btn.dataset.v;
+          if (mode !== 'plan') planId = '';
+          draw();
+        };
+      });
+      if (mode === 'article') bindBudgetPickers(view);
+      view.querySelectorAll('[data-plan]').forEach((btn) => {
+        btn.onclick = () => {
+          planId = btn.dataset.plan;
+          const picked = plans.find((p) => String(p.id) === String(planId));
+          draw();
+          if (picked) {
+            const input = document.getElementById('cAmount');
+            if (input) input.value = String(picked.left).replace('.', ',');
+          }
+        };
+      });
+      document.getElementById('cSave').onclick = async () => {
+        const status = document.getElementById('cStatus');
+        status.textContent = '';
+        const payload = {
+          amount: document.getElementById('cAmount').value,
+          date: document.getElementById('cDate').value,
+          mode: mode,
+        };
+        if (mode === 'plan') {
+          if (!planId) {
+            status.textContent = 'Выберите строку плана';
+            return;
+          }
+          const picked = plans.find((p) => String(p.id) === String(planId));
+          if (picked && !picked.budget_item_id) {
+            status.textContent = 'У этой строки нет статьи бюджета';
+            return;
+          }
+          payload.plan_id = planId;
+        } else {
+          const budgetId = (document.getElementById('cBudget') || {}).value;
+          if (!budgetId) {
+            status.textContent = 'Выберите статью';
+            return;
+          }
+          payload.budget_item_id = budgetId;
+        }
+        try {
+          await api('/tg/pay/api/cash/holders/' + id + '/receipt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          location.hash = '#/cash/' + id;
+        } catch (e) {
+          status.textContent = e.message || 'Не сохранилось';
+        }
+      };
+    }
+
+    draw();
+  }
+
+  async function renderCashPayout(id) {
+    setTitle('Поступление ДС');
+    const picked = (location.hash.split('src=')[1] || '').split('&')[0];
+    const data = await api('/tg/pay/api/cash/sources');
+    const sources = data.sources || [];
+    const current = sources.find((src) => (src.kind + ':' + src.id) === decodeURIComponent(picked));
+    if (!current) {
+      let html = `
+        <button class="back" type="button" id="goBack">← назад</button>
+        <p class="hint" style="margin-top:0">Только наличный план недели или быстрый расход, по которому деньги ещё не выданы целиком. Сумма уменьшит долг кассы.</p>
+      `;
+      if (!sources.length) {
+        html += '<div class="empty"><h2>Нет расходов</h2><p>В приложении оплат нет наличных планов и быстрых расходов с остатком.</p></div>';
+      } else {
+        html += '<div class="list">';
+        for (const src of sources) {
+          html += `<a class="row" href="#/cash/${id}/in?src=${src.kind}:${src.id}">
+            <div>
+              <div class="name">${esc(src.title)}</div>
+              <div class="sub">${esc(src.label)}${src.date ? ' · ' + esc(ruDate(src.date)) : ''} · осталось ${money(src.left)} из ${money(src.amount)}</div>
+            </div>
+          </a>`;
+        }
+        html += '</div>';
+      }
+      view.innerHTML = html;
+      document.getElementById('goBack').onclick = () => { location.hash = '#/cash/' + id; };
+      return;
+    }
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← к расходам</button>
+      <div class="card">
+        <div class="name">${esc(current.title)}</div>
+        <div class="sub">${esc(current.label)} · осталось ${money(current.left)}</div>
+        <p class="hint">Минус к остатку: сотрудник должен кассе. Больше остатка по расходу провести нельзя.</p>
+        <div class="field"><label>Сумма, ₽</label>
+          <input id="cAmount" inputmode="decimal" value="${String(current.left).replace('.', ',')}"></div>
+        <div class="field"><label>Дата</label>
+          <input id="cDate" type="date" value="${todayISO()}"></div>
+        <button class="btn btn-ink" type="button" id="cSave">Провести</button>
+        <p class="hint" id="cStatus"></p>
+      </div>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/cash/' + id + '/in'; };
+    document.getElementById('cSave').onclick = async () => {
+      const status = document.getElementById('cStatus');
+      status.textContent = '';
+      try {
+        await api('/tg/pay/api/cash/holders/' + id + '/payout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: document.getElementById('cAmount').value,
+            date: document.getElementById('cDate').value,
+            source_kind: current.kind,
+            source_id: current.id,
+          }),
+        });
+        location.hash = '#/cash/' + id;
+      } catch (e) {
+        status.textContent = e.message || 'Не сохранилось';
+      }
+    };
   }
 
   function esc(s) {
