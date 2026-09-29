@@ -249,13 +249,19 @@
     .cal-date-row { margin-bottom: 5px; }
     .cal-dots { display: none; }
     .cal-dot {
-        width: 7px;
-        height: 7px;
+        width: 10px;
+        height: 10px;
         border-radius: 50%;
         flex-shrink: 0;
     }
-    .cal-dot.dig { background: #3b82f6; }
-    .cal-dot.ship { background: #e11d48; }
+    .cal-dot.dig {
+        background: #1d4ed8;
+        box-shadow: 0 0 0 1.5px rgba(29, 78, 216, 0.28);
+    }
+    .cal-dot.ship {
+        background: #e11d48;
+        box-shadow: 0 0 0 1.5px rgba(225, 29, 72, 0.32);
+    }
     #dayPreviewPopup .pop-close {
         display: none;
         border: 0;
@@ -802,30 +808,7 @@
     /* Адаптив для мобилок */
     @media (max-width: 992px) {
         .planner-layout { flex-direction: column; height: auto; }
-        .planner-sidebar { width: 100%; height: auto; }
-        .planner-sidebar[open] { height: 340px; }
-        .planner-sidebar > .sidebar-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-            cursor: pointer;
-            width: 100%;
-        }
-        .planner-sidebar > .sidebar-header::after {
-            content: "";
-            width: 8px;
-            height: 8px;
-            flex-shrink: 0;
-            border-right: 2px solid #6c757d;
-            border-bottom: 2px solid #6c757d;
-            transform: rotate(45deg);
-        }
-        .planner-sidebar[open] > .sidebar-header::after { transform: rotate(-135deg); margin-top: 4px; }
-        .planner-sidebar:not([open]) > .sidebar-header {
-            border-radius: 12px;
-        }
-        .planner-sidebar:not([open]) > :not(summary) { display: none !important; }
+        .planner-sidebar { display: none !important; }
         .planner-main { height: auto; }
         .planner-main > p.d-lg-none { font-size: 11px; line-height: 1.3; margin-bottom: 6px; }
         .week-scroll { --week-h: 72px; max-height: calc(var(--week-h) * 3 + 8px); }
@@ -842,11 +825,18 @@
         .digging-trash-zone { display: none !important; }
         .cal-dots {
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
-            gap: 5px;
-            margin-top: auto;
-            min-height: 10px;
+            gap: 4px;
+            margin-top: 4px;
+            width: 100%;
+        }
+        .cal-dots-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 3px;
+            max-width: 100%;
         }
         .cal-cell.has-shipments:not(.crew-off):not(.brigadier-off),
         .cal-cell.has-shipments:not(.has-tasks):not(.crew-off):not(.brigadier-off) {
@@ -855,12 +845,12 @@
         .cal-cell.is-today-cell { background: #ecfdf5; }
         .cal-legend-swatch.dig,
         .cal-legend-swatch.ship {
-            width: 8px;
-            height: 8px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             border: none;
         }
-        .cal-legend-swatch.dig { background: #3b82f6; }
+        .cal-legend-swatch.dig { background: #1d4ed8; }
         .cal-legend-swatch.ship { background: #e11d48; }
         #dayPreviewPopup { width: calc(100vw - 24px); pointer-events: auto; }
         #dayPreviewPopup .pop-close { display: inline-flex; }
@@ -1032,7 +1022,7 @@
                 <a href="{{ url_for('digging.digging_planning', center=next_center_iso) }}" class="btn btn-sm btn-outline-secondary rounded-circle" title="На 8 недель вперёд"><i class="fas fa-angles-right"></i></a>
             </div>
         </div>
-        <p class="d-lg-none small text-muted px-1 mb-2">Синяя точка — выкопка, малиновая — отгрузка. Нажатие показывает состав дня.</p>
+        <p class="d-lg-none small text-muted px-1 mb-2">Синяя точка — заказ на выкопку, малиновая — отгрузка. Нажатие показывает состав дня.</p>
 
         <div class="card shadow-sm border-0 flex-grow-1 d-flex flex-column" style="min-height: 0;">
             <!-- Заголовок дней недели — закреплён над лентой -->
@@ -1092,8 +1082,18 @@
                                 {% endif %}
                             </div>
                             <div class="cal-dots" aria-hidden="true">
-                                {% if day.tasks_count > 0 %}<span class="cal-dot dig"></span>{% endif %}
-                                {% if day.shipments_count > 0 %}<span class="cal-dot ship"></span>{% endif %}
+                                {% if day.clients_summary %}
+                                <div class="cal-dots-row">
+                                    {% for c in day.clients_summary[:6] %}<span class="cal-dot dig"></span>{% endfor %}
+                                </div>
+                                {% elif day.tasks_count > 0 %}
+                                <div class="cal-dots-row"><span class="cal-dot dig"></span></div>
+                                {% endif %}
+                                {% if day.shipments %}
+                                <div class="cal-dots-row">
+                                    {% for s in day.shipments[:3] %}<span class="cal-dot ship"></span>{% endfor %}
+                                </div>
+                                {% endif %}
                             </div>
 
                             {% if day.shipments_count > 0 %}
