@@ -247,6 +247,25 @@
         background: rgba(16, 185, 129, 0.12);
     }
     .cal-date-row { margin-bottom: 5px; }
+    .cal-dots { display: none; }
+    .cal-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .cal-dot.dig { background: #3b82f6; }
+    .cal-dot.ship { background: #e11d48; }
+    #dayPreviewPopup .pop-close {
+        display: none;
+        border: 0;
+        background: transparent;
+        color: #64748b;
+        font-size: 16px;
+        line-height: 1;
+        padding: 0 0 0 8px;
+        cursor: pointer;
+    }
 
     .cal-date {
         font-weight: bold;
@@ -816,23 +835,35 @@
         .cal-date { font-size: 12px; margin-bottom: 0; }
         .cal-date.today { padding: 0 5px; }
         .cal-date-row { margin-bottom: 1px; }
-        .cal-drag-handle { font-size: 9px; padding: 0 1px; }
-        .cal-clients { display: none !important; }
-        .cal-ship-line { font-size: 10px; margin-top: 1px; }
-        .cal-ship-line .ship-ids { display: none; }
-        .task-indicator {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 0;
-            padding: 2px 3px;
-            font-size: 9px;
-            line-height: 1.25;
-            margin-top: 2px;
+        .cal-drag-handle,
+        .cal-clients,
+        .cal-ship-line,
+        .task-indicator,
+        .digging-trash-zone { display: none !important; }
+        .cal-dots {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 5px;
+            margin-top: auto;
+            min-height: 10px;
         }
-        .task-indicator .ti-desk,
-        .task-indicator .ti-tree { display: none; }
-        .task-indicator .ti-mob { display: inline; }
-        #dayPreviewPopup { width: calc(100vw - 32px); }
+        .cal-cell.has-shipments:not(.crew-off):not(.brigadier-off),
+        .cal-cell.has-shipments:not(.has-tasks):not(.crew-off):not(.brigadier-off) {
+            background: #fff;
+        }
+        .cal-cell.is-today-cell { background: #ecfdf5; }
+        .cal-legend-swatch.dig,
+        .cal-legend-swatch.ship {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: none;
+        }
+        .cal-legend-swatch.dig { background: #3b82f6; }
+        .cal-legend-swatch.ship { background: #e11d48; }
+        #dayPreviewPopup { width: calc(100vw - 24px); pointer-events: auto; }
+        #dayPreviewPopup .pop-close { display: inline-flex; }
         .order-card__head, .cal-cell.has-tasks {
             -webkit-touch-callout: none;
             -webkit-user-drag: none;
@@ -910,7 +941,7 @@
         </summary>
         <div class="sidebar-hint small text-muted">
             <span class="d-none d-lg-block">Разверните состав кликом по шеврону, перетащите карточку на день. Чип с дня — в урну, чтобы снять с плана.</span>
-            <span class="d-lg-none">Зажмите карточку и перенесите на дату. Чип заказа с дня — в урну.</span>
+            <span class="d-lg-none">На телефоне план только смотрим: точка в дне — выкопка или отгрузка.</span>
         </div>
         <div id="diggingTrash"
              class="digging-trash-zone"
@@ -1001,7 +1032,7 @@
                 <a href="{{ url_for('digging.digging_planning', center=next_center_iso) }}" class="btn btn-sm btn-outline-secondary rounded-circle" title="На 8 недель вперёд"><i class="fas fa-angles-right"></i></a>
             </div>
         </div>
-        <p class="d-lg-none small text-muted px-1 mb-2">Нажатие открывает день. Зажатие ручки у числа переносит план.</p>
+        <p class="d-lg-none small text-muted px-1 mb-2">Синяя точка — выкопка, малиновая — отгрузка. Нажатие показывает состав дня.</p>
 
         <div class="card shadow-sm border-0 flex-grow-1 d-flex flex-column" style="min-height: 0;">
             <!-- Заголовок дней недели — закреплён над лентой -->
@@ -1059,6 +1090,10 @@
                                     <i class="fas fa-grip-vertical"></i>
                                 </span>
                                 {% endif %}
+                            </div>
+                            <div class="cal-dots" aria-hidden="true">
+                                {% if day.tasks_count > 0 %}<span class="cal-dot dig"></span>{% endif %}
+                                {% if day.shipments_count > 0 %}<span class="cal-dot ship"></span>{% endif %}
                             </div>
 
                             {% if day.shipments_count > 0 %}
@@ -1272,7 +1307,12 @@
         // Drag & Drop — прокидываем в window, чтобы inline-атрибуты
         // ondragstart/ondrop в шаблоне могли их найти после hx-swap.
         // ============================================================
+        function plannerMobile() {
+            return window.matchMedia('(max-width: 992px)').matches;
+        }
+
         window.diggingDrag = function (ev) {
+            if (plannerMobile()) { ev.preventDefault(); return; }
             const card = ev.currentTarget.closest('.order-card');
             const orderId = (card && card.dataset.orderId) || ev.currentTarget.dataset.orderId;
             if (!orderId) return;
@@ -1283,6 +1323,7 @@
 
         // Чип заказа внутри дня — снимаем только этот заказ с плана (в урну).
         window.diggingChipDragStart = function (ev, dateStr, orderId) {
+            if (plannerMobile()) { ev.preventDefault(); return; }
             ev.stopPropagation();
             if (ev.dataTransfer) {
                 ev.dataTransfer.setData('unplan_order_id', String(orderId));
@@ -1298,6 +1339,7 @@
         };
 
         window.diggingDayDragStart = function (ev, dateStr) {
+            if (plannerMobile()) { ev.preventDefault(); return; }
             // Если тянут чип — день не двигаем.
             if (ev.target && ev.target.closest && ev.target.closest('.cal-client-chip')) {
                 return;
@@ -1326,6 +1368,7 @@
         window.diggingDrop = function (ev, dateStr) {
             ev.preventDefault();
             ev.stopPropagation();
+            if (plannerMobile()) return;
             const moveDate = ev.dataTransfer.getData('move_date');
             const orderId = ev.dataTransfer.getData('order_id');
             applyDiggingDrop(dateStr, moveDate, orderId);
@@ -1346,6 +1389,7 @@
         window.diggingTrashDrop = function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
+            if (plannerMobile()) return;
             const zone = document.getElementById('diggingTrash');
             if (zone) zone.classList.remove('is-drag-over');
             const orderId = ev.dataTransfer.getData('unplan_order_id');
@@ -1443,6 +1487,11 @@
             }
             if (paintKind) {
                 toggleDayMark(dateStr, paintKind);
+                return;
+            }
+            if (plannerMobile()) {
+                const cell = document.querySelector('.cal-cell[data-date="' + dateStr + '"]');
+                if (cell) showMobilePreview(cell);
                 return;
             }
             // Если сейчас открыт попап превью — пусть не перекрывает модалку.
@@ -1592,6 +1641,7 @@
             }
 
             function onDown(ev) {
+                if (plannerMobile()) return;
                 if (ev.pointerType === 'mouse') return;
                 if (ev.button != null && ev.button !== 0) return;
                 if (ev.target.closest('.js-toggle-order')) return;
@@ -1812,6 +1862,8 @@
             const dateStr = cell.getAttribute('data-date') || '';
             const crewOff = cell.getAttribute('data-crew-off') === '1';
             const brigadierOff = cell.getAttribute('data-brigadier-off') === '1';
+            const mobile = plannerMobile();
+            const closeBtn = '<button type="button" class="pop-close" aria-label="Закрыть">&times;</button>';
             const totalQty = groups.reduce((a, g) => a + (g.total_qty || 0), 0);
             const totalTasks = groups.reduce((a, g) => a + (g.tasks_count || 0), 0);
 
@@ -1835,11 +1887,13 @@
             ` : '';
 
             if (!groups.length && !ships.length) {
-                const emptyHint = (crewOff || brigadierOff)
-                    ? '<div class="pop-hint">Кликните на день для деталей.</div>'
-                    : '<div class="pop-hint">Перетащите сюда заказ, чтобы назначить выкопку.</div>';
+                const emptyHint = mobile
+                    ? ''
+                    : ((crewOff || brigadierOff)
+                        ? '<div class="pop-hint">Кликните на день для деталей.</div>'
+                        : '<div class="pop-hint">Перетащите сюда заказ, чтобы назначить выкопку.</div>');
                 popup.innerHTML = `
-                    <h6>${escapeHtml(dateStr)} <span class="pop-badge" style="background:#94a3b8;">пусто</span></h6>
+                    <h6>${escapeHtml(dateStr)} <span class="pop-badge" style="background:#94a3b8;">пусто</span>${closeBtn}</h6>
                     ${offsHtml}
                     <div style="color:#64748b;">На эту дату план выкопки не составлен.</div>
                     ${emptyHint}
@@ -1850,11 +1904,11 @@
             if (!groups.length && ships.length) {
                 popup.innerHTML = `
                     <h6>${escapeHtml(dateStr)}
-                        <span class="pop-badge" style="background:#e11d48;">отгрузка</span>
+                        <span class="pop-badge" style="background:#e11d48;">отгрузка</span>${closeBtn}
                     </h6>
                     ${offsHtml}
                     ${shipsHtml}
-                    <div class="pop-hint">Кликните — детали и снятие даты.</div>
+                    ${mobile ? '' : '<div class="pop-hint">Кликните — детали и снятие даты.</div>'}
                 `;
                 return;
             }
@@ -1889,14 +1943,38 @@
 
             popup.innerHTML = `
                 <h6>${escapeHtml(dateStr)}
-                    <span class="pop-badge">${escapeHtml(totalTasks)} поз · ${escapeHtml(totalQty)} шт</span>
+                    <span class="pop-badge">${escapeHtml(totalTasks)} поз · ${escapeHtml(totalQty)} шт</span>${closeBtn}
                 </h6>
                 ${offsHtml}
                 ${shipsHtml}
                 ${ships.length ? '<div class="pop-dig-title">Выкопка</div>' : ''}
                 ${groupsHtml}
-                <div class="pop-hint">Кликните на день, чтобы открыть план.</div>
+                ${mobile ? '' : '<div class="pop-hint">Кликните на день, чтобы открыть план.</div>'}
             `;
+        }
+
+        function showMobilePreview(cell) {
+            if (activeCell === cell && popup.classList.contains('open')) {
+                hidePreview();
+                return;
+            }
+            activeCell = cell;
+            renderPreview(cell);
+            popup.classList.add('open');
+            popup.setAttribute('aria-hidden', 'false');
+            const rect = cell.getBoundingClientRect();
+            const popupRect = popup.getBoundingClientRect();
+            let x = rect.left + (rect.width - popupRect.width) / 2;
+            let y = rect.bottom + 8;
+            const maxX = window.innerWidth - popupRect.width - 8;
+            if (x > maxX) x = maxX;
+            if (x < 8) x = 8;
+            if (y + popupRect.height > window.innerHeight - 70) {
+                const above = rect.top - popupRect.height - 8;
+                y = above >= 8 ? above : Math.max(8, window.innerHeight - popupRect.height - 78);
+            }
+            popup.style.left = x + 'px';
+            popup.style.top = y + 'px';
         }
 
         function positionPopup(evClientX, evClientY) {
@@ -1936,6 +2014,7 @@
         // Hover — показываем попап через паузу (чтобы не мигал при быстром
         // сканировании мышью).
         document.addEventListener('mouseover', function (ev) {
+            if (plannerMobile()) return;
             const cell = ev.target.closest('.cal-cell');
             if (!cell) return;
             if (hoverTimer) clearTimeout(hoverTimer);
@@ -1944,6 +2023,7 @@
             }, 350);
         });
         document.addEventListener('mousemove', function (ev) {
+            if (plannerMobile()) return;
             if (activeCell && popup.classList.contains('open')) {
                 positionPopup(ev.clientX, ev.clientY);
             }
@@ -1960,6 +2040,7 @@
         // Long-press на touch-устройствах или mousedown с задержкой — показываем
         // попап даже без hover (для планшетов и когда пользователь «удерживает»).
         document.addEventListener('mousedown', function (ev) {
+            if (plannerMobile()) return;
             if (ev.button !== 0) return;
             if (ev.sourceCapabilities && ev.sourceCapabilities.firesTouchEvents) return;
             const cell = ev.target.closest('.cal-cell');
@@ -1998,6 +2079,23 @@
             if (ev.key === 'Escape') hidePreview();
         });
         window.addEventListener('scroll', hidePreview, { passive: true });
+        const weekScrollEl = document.getElementById('weekScroll');
+        if (weekScrollEl) {
+            weekScrollEl.addEventListener('scroll', function () {
+                if (plannerMobile()) hidePreview();
+            }, { passive: true });
+        }
+        document.addEventListener('click', function (ev) {
+            if (!plannerMobile() || !popup.classList.contains('open')) return;
+            if (ev.target.closest('.pop-close')) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                hidePreview();
+                return;
+            }
+            if (ev.target.closest('#dayPreviewPopup') || ev.target.closest('.cal-cell')) return;
+            hidePreview();
+        });
 
         // Экспорт hidePreview в window — чтобы diggingOpenDay мог закрыть попап.
         window.__diggingHidePreview = hidePreview;
