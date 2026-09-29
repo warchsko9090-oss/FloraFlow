@@ -2025,6 +2025,8 @@ class CashHolder(db.Model):
         db.Integer, db.ForeignKey('employee.id', ondelete='SET NULL'), nullable=True, index=True,
     )
     is_active = db.Column(db.Boolean, default=True, nullable=False)
+    # Стартовое сальдо. Плюс — мы должны ему, минус — он должен кассе.
+    opening_balance = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     created_at = db.Column(db.DateTime, default=datetime.now)
 
     employee = db.relationship('Employee', foreign_keys=[employee_id])
@@ -2034,8 +2036,8 @@ class CashHolder(db.Model):
 class CashMove(db.Model):
     """Движение кассы по человеку.
 
-    receipt — чековый приход: плюс, касса должна ему.
-    payout — поступление ДС ему по плану или быстрому расходу: минус, он должен кассе.
+    receipt — расход сотрудника: плюс, только внутри кассы.
+    payout — поступление ДС (пополнение его кассы): минус, пишется в чат и в базу.
     """
     __tablename__ = 'cash_move'
 

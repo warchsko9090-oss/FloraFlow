@@ -1600,6 +1600,12 @@
                 <span class="sl-icon"><i class="fas fa-users-cog"></i></span>
                 <span class="sl-label">Пользователи</span>
             </a>
+            {% if current_user.role == 'admin' %}
+            <a class="sidebar-link {% if request.endpoint == 'tg_apps.index' %}active{% endif %}" href="{{ url_for('tg_apps.index', tab='cash') }}">
+                <span class="sl-icon"><i class="fab fa-telegram"></i></span>
+                <span class="sl-label">Приложения Telegram</span>
+            </a>
+            {% endif %}
             <a class="sidebar-link {% if request.endpoint == 'chat.manage' %}active{% endif %}" href="{{ url_for('chat.manage') }}">
                 <span class="sl-icon"><i class="fas fa-robot"></i></span>
                 <span class="sl-label">AI-помощник</span>
@@ -1843,6 +1849,9 @@
             {% if current_user.role in ['admin', 'executive', 'shop_manager'] %}
             <a class="drawer-link" href="{{ url_for('directory.archive') }}"><i class="fas fa-archive"></i> Архив файлов</a>
             <a class="drawer-link" href="{{ url_for('auth.users_manage') }}"><i class="fas fa-users-cog"></i> Пользователи</a>
+            {% if current_user.role == 'admin' %}
+            <a class="drawer-link" href="{{ url_for('tg_apps.index', tab='cash') }}"><i class="fab fa-telegram"></i> Приложения Telegram</a>
+            {% endif %}
             <a class="drawer-link" href="{{ url_for('chat.manage') }}"><i class="fas fa-robot"></i> AI-помощник</a>
             <a class="drawer-link" href="{{ url_for('stock.logs') }}"><i class="fas fa-clipboard-list"></i> Логи системы</a>
             {% endif %}

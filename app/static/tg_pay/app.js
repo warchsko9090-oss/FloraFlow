@@ -1293,7 +1293,7 @@
         ${holder.employee_name ? `<div class="sub">Табель: ${esc(holder.employee_name)}</div>` : ''}
         <div class="cash-bal ${cashTone(holder.balance)}">${money(holder.balance)}</div>
         <div class="cash-sign">${esc(cashWord(holder.balance))}</div>
-        <button class="btn btn-ink" type="button" id="cReceipt">Чековый приход</button>
+        <button class="btn btn-ink" type="button" id="cReceipt">Расход</button>
         <button class="btn btn-brass" type="button" id="cIn">Поступление ДС</button>
         <button class="btn btn-ghost" type="button" id="cEdit">Изменить</button>
       </div>
@@ -1308,7 +1308,7 @@
           </div>
           <div>
             <div class="amt ${cashTone(move.signed)}">${money(move.signed)}</div>
-            <button class="btn btn-ghost cash-del" type="button" data-id="${move.id}">Удалить</button>
+            <button class="btn btn-ghost cash-del" type="button" data-id="${move.id}" data-posted="${move.posted ? '1' : '0'}">Удалить</button>
           </div>
         </div>`;
       }
@@ -1321,7 +1321,11 @@
     document.getElementById('cEdit').onclick = () => { location.hash = '#/cash/' + id + '/edit'; };
     view.querySelectorAll('.cash-del').forEach((btn) => {
       btn.onclick = async () => {
-        if (!confirm('Удалить эту запись? Остаток пересчитается.')) return;
+        const posted = btn.dataset.posted === '1';
+        const ask = posted
+          ? 'Удалить поступление? Оно уйдёт из кассы и из расходов.'
+          : 'Удалить этот расход? Он есть только в кассе.';
+        if (!confirm(ask)) return;
         try {
           await api('/tg/pay/api/cash/moves/' + btn.dataset.id, { method: 'DELETE' });
           await renderCashPerson(id);
@@ -1333,7 +1337,44 @@
   }
 
   async function renderCashReceipt(id) {
-    setTitle('Чековый приход');
+    setTitle('Расход');
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← назад</button>
+      <div class="card">
+        <p class="hint" style="margin-top:0">Расход сотрудника. Пишется только в кассу, в чат и в базу не уходит.</p>
+        <div class="field"><label>Сумма, ₽</label>
+          <input id="cAmount" inputmode="decimal" placeholder="0"></div>
+        <div class="field"><label>Дата</label>
+          <input id="cDate" type="date" value="${todayISO()}"></div>
+        <div class="field"><label>На что</label>
+          <input id="cPurpose" placeholder="например, бензин"></div>
+        <button class="btn btn-ink" type="button" id="cSave">Записать</button>
+        <p class="hint" id="cStatus"></p>
+      </div>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/cash/' + id; };
+    document.getElementById('cSave').onclick = async () => {
+      const status = document.getElementById('cStatus');
+      status.textContent = '';
+      try {
+        await api('/tg/pay/api/cash/holders/' + id + '/receipt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: document.getElementById('cAmount').value,
+            date: document.getElementById('cDate').value,
+            purpose: document.getElementById('cPurpose').value,
+          }),
+        });
+        location.hash = '#/cash/' + id;
+      } catch (e) {
+        status.textContent = e.message || 'Не сохранилось';
+      }
+    };
+  }
+
+  async function renderCashPayout(id) {
+    setTitle('Поступление ДС');
     await ensureBudgetItems();
     const week = await api('/tg/pay/api/cash/week-plans');
     const plans = week.plans || [];
@@ -1367,7 +1408,7 @@
       view.innerHTML = `
         <button class="back" type="button" id="goBack">← назад</button>
         <div class="card">
-          <p class="hint" style="margin-top:0">Плюс к остатку: касса должна сотруднику. В чат и в базу уходит нал.</p>
+          <p class="hint" style="margin-top:0">Пополняем кассу сотрудника. Нал уходит в чат расходов и в базу. Остаток уменьшается: он должен кассе.</p>
           <div class="pay-toggle" id="cMode">
             <button type="button" class="pay-opt" data-v="article" aria-pressed="${mode === 'article' ? 'true' : 'false'}">Новая статья</button>
             <button type="button" class="pay-opt" data-v="plan" aria-pressed="${mode === 'plan' ? 'true' : 'false'}">Из плана</button>
@@ -1432,7 +1473,7 @@
           payload.budget_item_id = budgetId;
         }
         try {
-          await api('/tg/pay/api/cash/holders/' + id + '/receipt', {
+          await api('/tg/pay/api/cash/holders/' + id + '/payout', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -1445,71 +1486,6 @@
     }
 
     draw();
-  }
-
-  async function renderCashPayout(id) {
-    setTitle('Поступление ДС');
-    const picked = (location.hash.split('src=')[1] || '').split('&')[0];
-    const data = await api('/tg/pay/api/cash/sources');
-    const sources = data.sources || [];
-    const current = sources.find((src) => (src.kind + ':' + src.id) === decodeURIComponent(picked));
-    if (!current) {
-      let html = `
-        <button class="back" type="button" id="goBack">← назад</button>
-        <p class="hint" style="margin-top:0">Только наличный план недели или быстрый расход, по которому деньги ещё не выданы целиком. Сумма уменьшит долг кассы.</p>
-      `;
-      if (!sources.length) {
-        html += '<div class="empty"><h2>Нет расходов</h2><p>В приложении оплат нет наличных планов и быстрых расходов с остатком.</p></div>';
-      } else {
-        html += '<div class="list">';
-        for (const src of sources) {
-          html += `<a class="row" href="#/cash/${id}/in?src=${src.kind}:${src.id}">
-            <div>
-              <div class="name">${esc(src.title)}</div>
-              <div class="sub">${esc(src.label)}${src.date ? ' · ' + esc(ruDate(src.date)) : ''} · осталось ${money(src.left)} из ${money(src.amount)}</div>
-            </div>
-          </a>`;
-        }
-        html += '</div>';
-      }
-      view.innerHTML = html;
-      document.getElementById('goBack').onclick = () => { location.hash = '#/cash/' + id; };
-      return;
-    }
-    view.innerHTML = `
-      <button class="back" type="button" id="goBack">← к расходам</button>
-      <div class="card">
-        <div class="name">${esc(current.title)}</div>
-        <div class="sub">${esc(current.label)} · осталось ${money(current.left)}</div>
-        <p class="hint">Минус к остатку: сотрудник должен кассе. Больше остатка по расходу провести нельзя.</p>
-        <div class="field"><label>Сумма, ₽</label>
-          <input id="cAmount" inputmode="decimal" value="${String(current.left).replace('.', ',')}"></div>
-        <div class="field"><label>Дата</label>
-          <input id="cDate" type="date" value="${todayISO()}"></div>
-        <button class="btn btn-ink" type="button" id="cSave">Провести</button>
-        <p class="hint" id="cStatus"></p>
-      </div>
-    `;
-    document.getElementById('goBack').onclick = () => { location.hash = '#/cash/' + id + '/in'; };
-    document.getElementById('cSave').onclick = async () => {
-      const status = document.getElementById('cStatus');
-      status.textContent = '';
-      try {
-        await api('/tg/pay/api/cash/holders/' + id + '/payout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            amount: document.getElementById('cAmount').value,
-            date: document.getElementById('cDate').value,
-            source_kind: current.kind,
-            source_id: current.id,
-          }),
-        });
-        location.hash = '#/cash/' + id;
-      } catch (e) {
-        status.textContent = e.message || 'Не сохранилось';
-      }
-    };
   }
 
   function esc(s) {

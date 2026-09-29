@@ -1,7 +1,8 @@
 """Касса в Mini App оплат: наличные по людям, отдельно от табеля.
 
-Плюс — касса должна человеку (чековый приход).
-Минус — человек должен кассе (поступление ДС по плану или быстрому расходу).
+Плюс — расход сотрудника, живёт только в кассе.
+Минус — поступление ДС: мы пополняем его кассу, это уходит в чат и в базу.
+Стартовое сальдо задаётся в админке приложений основной программы.
 """
 from __future__ import annotations
 
@@ -78,7 +79,11 @@ def _balances() -> dict[int, Decimal]:
         case((CashMove.kind == 'receipt', CashMove.amount), else_=-CashMove.amount)
     ), 0)
     rows = db.session.query(CashMove.holder_id, signed).group_by(CashMove.holder_id).all()
-    return {holder_id: Decimal(str(total or 0)) for holder_id, total in rows}
+    totals = {holder_id: Decimal(str(total or 0)) for holder_id, total in rows}
+    for holder in CashHolder.query.all():
+        opening = Decimal(str(holder.opening_balance or 0))
+        totals[holder.id] = opening + totals.get(holder.id, Decimal('0'))
+    return totals
 
 
 def _allocated(source_kind: str) -> dict[int, Decimal]:
@@ -171,13 +176,6 @@ def _source_rows():
         })
     items.sort(key=lambda item: item['date'], reverse=True)
     return items[:40]
-
-
-def _one_source(kind: str, source_id: int):
-    for item in _source_rows():
-        if item['kind'] == kind and item['id'] == source_id:
-            return item
-    return None
 
 
 def _holder_json(holder: CashHolder, balance: Decimal) -> dict:
@@ -279,7 +277,7 @@ def holder_detail(user, holder_id: int):
     for move in moves:
         signed = move.amount if move.kind == 'receipt' else -move.amount
         if move.kind == 'receipt':
-            title = move.note or 'Чековый приход'
+            title = move.note or 'Расход'
         else:
             title = move.note or 'Поступление ДС'
         payload.append({
@@ -289,6 +287,7 @@ def holder_detail(user, holder_id: int):
             'signed': _num(signed),
             'date': move.move_date.isoformat() if move.move_date else '',
             'title': title,
+            'posted': move.source_kind == 'invoice',
         })
     return jsonify({'holder': _holder_json(holder, balance), 'moves': payload})
 
@@ -353,7 +352,7 @@ def _real_budget(item: BudgetItem | None) -> BudgetItem | None:
     return item
 
 
-def _finish_cash_receipt(holder: CashHolder, user, amount: Decimal, day, inv: PaymentInvoice, note: str):
+def _book_cash_topup(holder: CashHolder, user, amount: Decimal, day, inv: PaymentInvoice, note: str):
     from app.invoice_files import ensure_expense_for_paid_invoice, notify_invoice_paid_chat
 
     expense = ensure_expense_for_paid_invoice(inv)
@@ -368,7 +367,7 @@ def _finish_cash_receipt(holder: CashHolder, user, amount: Decimal, day, inv: Pa
 
     move = CashMove(
         holder_id=holder.id,
-        kind='receipt',
+        kind='payout',
         amount=amount,
         move_date=day,
         source_kind='invoice',
@@ -433,6 +432,55 @@ def week_plans(user):
 @bp.route('/api/cash/holders/<int:holder_id>/receipt', methods=['POST'])
 @require_user
 def add_receipt(user, holder_id: int):
+    """Расход сотрудника: только запись в кассе, без чата и без базы расходов."""
+    denied = _deny(user)
+    if denied:
+        return denied
+    holder = _holder_or_404(holder_id)
+    if not holder:
+        return jsonify({'error': 'Сотрудник не найден'}), 404
+    body = request.get_json(silent=True) or {}
+    purpose = str(body.get('purpose') or '').strip()
+    if not purpose:
+        return jsonify({'error': 'Напишите, на что расход'}), 400
+    try:
+        amount = _amount(body.get('amount'))
+        day = _date(body.get('date'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    move = CashMove(
+        holder_id=holder.id,
+        kind='receipt',
+        amount=amount,
+        move_date=day,
+        source_kind='spend',
+        note=purpose[:300],
+        created_by_user_id=user.id,
+        created_at=msk_now(),
+    )
+    db.session.add(move)
+    db.session.commit()
+    return jsonify({'ok': True, 'id': move.id})
+
+
+@bp.route('/api/cash/sources')
+@require_user
+def sources(user):
+    denied = _deny(user)
+    if denied:
+        return denied
+    rows = _source_rows()
+    return jsonify({'sources': [{
+        **item,
+        'amount': _num(item['amount']),
+        'left': _num(item['left']),
+    } for item in rows]})
+
+
+@bp.route('/api/cash/holders/<int:holder_id>/payout', methods=['POST'])
+@require_user
+def add_payout(user, holder_id: int):
+    """Поступление ДС: пополнение кассы сотрудника, уходит в чат и в базу расходов."""
     denied = _deny(user)
     if denied:
         return denied
@@ -487,7 +535,7 @@ def add_receipt(user, holder_id: int):
         already = Decimal(str(plan.planned_amount or 0)) - left
         if Decimal(str(plan.planned_amount or 0)) > 0 and already + amount + Decimal('0.009') >= Decimal(str(plan.planned_amount or 0)):
             plan.status = 'paid'
-        move, expense = _finish_cash_receipt(holder, user, amount, day, inv, purpose)
+        move, expense = _book_cash_topup(holder, user, amount, day, inv, purpose)
     else:
         try:
             budget_id = int(body.get('budget_item_id'))
@@ -496,7 +544,7 @@ def add_receipt(user, holder_id: int):
         item = _real_budget(BudgetItem.query.get(budget_id))
         if item is None:
             return jsonify({'error': 'Выберите статью'}), 400
-        article = (item.name or 'Расход').strip()[:180]
+        article = (item.name or 'Поступление').strip()[:180]
         inv = PaymentInvoice(
             filename=stamp,
             original_name=article[:255],
@@ -514,7 +562,7 @@ def add_receipt(user, holder_id: int):
         )
         db.session.add(inv)
         db.session.flush()
-        move, expense = _finish_cash_receipt(holder, user, amount, day, inv, article)
+        move, expense = _book_cash_topup(holder, user, amount, day, inv, article)
 
     return jsonify({
         'ok': True,
@@ -522,63 +570,6 @@ def add_receipt(user, holder_id: int):
         'invoice_id': inv.id,
         'expense_id': expense.id,
     })
-
-
-@bp.route('/api/cash/sources')
-@require_user
-def sources(user):
-    denied = _deny(user)
-    if denied:
-        return denied
-    rows = _source_rows()
-    return jsonify({'sources': [{
-        **item,
-        'amount': _num(item['amount']),
-        'left': _num(item['left']),
-    } for item in rows]})
-
-
-@bp.route('/api/cash/holders/<int:holder_id>/payout', methods=['POST'])
-@require_user
-def add_payout(user, holder_id: int):
-    denied = _deny(user)
-    if denied:
-        return denied
-    holder = _holder_or_404(holder_id)
-    if not holder:
-        return jsonify({'error': 'Сотрудник не найден'}), 404
-    body = request.get_json(silent=True) or {}
-    kind = body.get('source_kind')
-    if kind not in ('plan', 'quick'):
-        return jsonify({'error': 'Выберите расход из приложения оплат'}), 400
-    try:
-        source_id = int(body.get('source_id'))
-        amount = _amount(body.get('amount'))
-        day = _date(body.get('date'))
-    except (TypeError, ValueError) as exc:
-        text = str(exc)
-        if not text.startswith(('Укажите', 'Проверьте')):
-            text = 'Проверьте сумму и расход'
-        return jsonify({'error': text}), 400
-    source = _one_source(kind, source_id)
-    if not source:
-        return jsonify({'error': 'Этот расход уже полностью выдан или не наличный'}), 400
-    if amount > source['left'] + Decimal('0.009'):
-        return jsonify({'error': 'Сумма больше остатка по этому расходу'}), 400
-    move = CashMove(
-        holder_id=holder.id,
-        kind='payout',
-        amount=amount,
-        move_date=day,
-        source_kind=kind,
-        source_id=source_id,
-        note=source['title'][:300],
-        created_by_user_id=user.id,
-        created_at=msk_now(),
-    )
-    db.session.add(move)
-    db.session.commit()
-    return jsonify({'ok': True, 'id': move.id})
 
 
 @bp.route('/api/cash/moves/<int:move_id>', methods=['DELETE'])
@@ -591,7 +582,7 @@ def delete_move(user, move_id: int):
     if not move:
         return jsonify({'error': 'Запись не найдена'}), 404
     week = None
-    if move.kind == 'receipt' and move.source_kind == 'invoice' and move.source_id:
+    if move.source_kind == 'invoice' and move.source_id:
         inv = PaymentInvoice.query.get(move.source_id)
         if inv is not None and (inv.source or '') == 'cash':
             plan = PaymentInvoice.query.get(inv.plan_id) if inv.plan_id else None

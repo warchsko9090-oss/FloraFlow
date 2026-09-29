@@ -96,6 +96,7 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('payment_invoice', 'created_by_user_id', 'INTEGER', 'INTEGER'),
     ('chat_expense_message', 'matched_invoice_id', 'INTEGER', 'INTEGER'),
     ('"user"', 'telegram_id', 'BIGINT', 'INTEGER'),
+    ('cash_holder', 'opening_balance', 'NUMERIC(12, 2) DEFAULT 0', 'NUMERIC(12,2) DEFAULT 0'),
     ('document', 'project_id', 'INTEGER', 'INTEGER'),
     ('document', 'supplier_id', 'INTEGER', 'INTEGER'),
     ('document_row', 'purchase_price', 'NUMERIC(10, 2)', 'NUMERIC(10,2)'),
