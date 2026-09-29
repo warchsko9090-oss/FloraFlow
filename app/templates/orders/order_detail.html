@@ -919,7 +919,11 @@
                                     {% endif %}
                                 </td>
                                 <td class="align-middle td-product" data-label="Товар">
-                                    <details class="item-fold">
+                                    <div class="d-none d-md-block">
+                                        {{ item.plant.name }} <br>
+                                        <span class="badge bg-secondary text-light mt-1">{{ item.size.name }}</span>
+                                    </div>
+                                    <details class="item-fold d-md-none">
                                         <summary>
                                             <span class="item-fold-main">
                                                 <span class="d-block">{{ item.plant.name }}</span>
@@ -929,10 +933,6 @@
                                             <span class="item-fold-price">{{ item.price|money }}</span>
                                             {% endif %}
                                         </summary>
-                                        <div class="item-fold-desk">
-                                            {{ item.plant.name }} <br>
-                                            <span class="badge bg-secondary text-light mt-1">{{ item.size.name }}</span>
-                                        </div>
                                     </details>
                                     <input type="hidden" name="item_id[]" value="{{ item.id }}">
                                 </td>
@@ -1192,7 +1192,7 @@
 <div class="modal fade" id="splitItemModal" tabindex="-1">
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
-      <form method="POST" id="splitItemForm">
+      <form method="POST" id="splitItemForm" action="{{ url_for('orders.order_detail', order_id=order.id) }}" hx-boost="false">
         <input type="hidden" name="split_item" value="1">
         <input type="hidden" name="item_id" id="splitSourceItemId">
         <input type="hidden" name="return_to" value="{{ return_to or '' }}">
@@ -1359,14 +1359,15 @@
             yearSel.innerHTML = '';
 
             if (batches.length === 0) {
+                const keep = prevYear || (SPLIT_STATE && SPLIT_STATE.year) || new Date().getFullYear();
                 const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'нет партий';
+                opt.value = String(keep);
+                opt.textContent = String(keep);
                 yearSel.appendChild(opt);
-                yearSel.disabled = true;
-                row.dataset.invalid = '1';
-                hint.textContent = 'Нет партий с положительным остатком';
-                hint.className = 'split-year-hint small text-danger mt-1';
+                yearSel.disabled = false;
+                row.dataset.invalid = '';
+                hint.textContent = 'На этом поле нет свободного остатка. Сохранение проверит партию.';
+                hint.className = 'split-year-hint small text-warning mt-1';
                 recalcSplit();
                 return;
             }
@@ -1384,14 +1385,13 @@
             });
 
             row.dataset.invalid = '';
+            yearSel.disabled = false;
 
             if (batches.length === 1) {
-                yearSel.disabled = true;
                 const b = batches[0];
                 hint.textContent = `Единственная партия ${b.year}, свободно ${b.free} шт`;
                 hint.className = 'split-year-hint small text-success mt-1';
             } else {
-                yearSel.disabled = false;
                 hint.textContent = `Доступно ${batches.length} партий — выберите подходящий год`;
                 hint.className = 'split-year-hint small text-info mt-1';
             }
@@ -1516,6 +1516,15 @@
     };
 
     function bindSplitListeners() {
+        const splitForm = document.getElementById('splitItemForm');
+        if (splitForm && !splitForm.dataset.bound) {
+            splitForm.addEventListener('submit', () => {
+                splitForm.querySelectorAll('.split-year').forEach((sel) => {
+                    sel.disabled = false;
+                });
+            });
+            splitForm.dataset.bound = '1';
+        }
         const addBtn = document.getElementById('splitAddPartBtn');
         if (addBtn && !addBtn.dataset.bound) {
             addBtn.addEventListener('click', () => addEmptyPart());

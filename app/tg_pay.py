@@ -1097,13 +1097,22 @@ def _invoice_path(inv: PaymentInvoice) -> str | None:
 
 
 def _invoice_with_file(inv: PaymentInvoice) -> PaymentInvoice:
-    """Карточка плана может не держать PDF — он на привязанном факте."""
+    """Карточка плана может не держать PDF — он на привязанном факте.
+
+    Связь fact_invoices в том же запросе бывает пустой, хотя строки в базе уже есть.
+    """
     if invoice_has_file(inv):
         return inv
-    for kid in (getattr(inv, 'fact_invoices', None) or []):
+    kids = (
+        PaymentInvoice.query
+        .filter(PaymentInvoice.plan_id == inv.id)
+        .order_by(PaymentInvoice.id.desc())
+        .all()
+    )
+    for kid in kids:
         if invoice_has_file(kid):
             return kid
-    plan = getattr(inv, 'plan', None)
+    plan = PaymentInvoice.query.get(inv.plan_id) if inv.plan_id else None
     if plan is not None and invoice_has_file(plan):
         return plan
     return inv
@@ -1114,6 +1123,7 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
     planned = float(inv.planned_amount) if inv.planned_amount is not None else None
     fact = _fact_amount(inv)
     linked = next(iter(getattr(inv, 'fact_invoices', None) or []), None)
+    file_src = _invoice_with_file(inv)
     data = {
         'id': inv.id,
         'summary': _purpose(inv),
@@ -1135,9 +1145,9 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
         ),
         'budget_item_id': inv.budget_item_id,
         'has_budget': bool(inv.budget_item_id and (not item or item.code != 'UNASSIGNED')),
-        'original_name': inv.original_name,
+        'original_name': (file_src.original_name if file_src is not inv else inv.original_name),
         'source': inv.source or 'web',
-        'has_file': invoice_has_file(inv) or bool(linked and invoice_has_file(linked)),
+        'has_file': invoice_has_file(file_src),
         'created_by_user_id': inv.created_by_user_id,
     }
     if detail:
@@ -1452,6 +1462,11 @@ def api_send_pdf(user: User, inv_id: int):
     if not data:
         return jsonify({'ok': False, 'error': 'file_missing'})
     chat_id = current_telegram_id()
+    if not chat_id and getattr(user, 'telegram_id', None):
+        try:
+            chat_id = int(user.telegram_id)
+        except (TypeError, ValueError):
+            chat_id = None
     if not chat_id:
         return jsonify({'ok': False, 'error': 'no_telegram_id'})
     ok, err = send_chat_document(

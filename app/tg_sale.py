@@ -712,11 +712,9 @@ def create_sale_invoice_from_order(
     apply_client_to_invoice(inv, order.invoice_client)
     _copy_order_items_to_sale_invoice(inv, order)
     allocate_sale_doc_number(inv)
-    # Order.invoice_number — старый «общий счёт» для группировки дерева; не трогаем,
-    # если уже заполнен (иначе каждый новый Mini App № перезапишет группировку).
-    if not (order.invoice_number or '').strip():
-        order.invoice_number = str(sale_public_number(inv))
-        order.invoice_date = (inv.approved_at or now).date()
+    # В редакторе заказа номер и дата — всегда последний выставленный счёт.
+    order.invoice_number = str(sale_public_number(inv))
+    order.invoice_date = (inv.approved_at or now).date()
     blob = _store_pdf(inv)
     if not blob:
         raise ValueError('pdf_failed')
@@ -819,8 +817,8 @@ def create_custom_sale_invoice(
     db.session.flush()
     inv.amount = _line_sum(inv.lines)
     allocate_sale_doc_number(inv)
-    # Группировка «общий счёт» — только если ещё пусто; сумму заказа не меняем.
-    if order is not None and not (order.invoice_number or '').strip():
+    # Номер и дата в заказе — последний созданный счёт. Сумму заказа не меняем.
+    if order is not None:
         order.invoice_number = str(sale_public_number(inv))
         order.invoice_date = (inv.approved_at or now).date()
 

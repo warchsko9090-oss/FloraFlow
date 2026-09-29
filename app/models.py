@@ -856,7 +856,8 @@ class PaymentInvoice(db.Model):
     
     filename = db.Column(db.String(255), nullable=False)
     original_name = db.Column(db.String(255), nullable=False)
-    file_blob = db.Column(db.LargeBinary)
+    # Не тащить PDF в каждый список счетов: байты читаются только при скачивании.
+    file_blob = deferred(db.Column(db.LargeBinary))
 
     # Одна строка «за что платим» — то, что видит казначей в списке Mini App.
     summary = db.Column(db.String(500))

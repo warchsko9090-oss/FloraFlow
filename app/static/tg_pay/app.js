@@ -463,13 +463,14 @@
       ${isPlan ? `<p class="hint">План ${money(planned)} · оплачено ${money(factPaid)} · остаток ${money(remaining)}</p>` : ''}
       ${!inv.has_budget && can ? '<div class="warn-box">⚠ Статья бюджета не выбрана — укажите её ниже, иначе расход уйдёт «к разнесению».</div>' : ''}`;
 
+    const fileBtns = inv.has_file
+      ? `<button class="btn btn-brass" type="button" id="btnDownload">Скачать файл</button>
+         <button class="btn btn-quiet" type="button" id="btnOpen">Счёт в чат</button>`
+      : '';
     let editPanel = '';
     if (can) {
-      const chatBtn = (isPlan && inv.has_file)
-        ? '<button class="btn btn-brass" type="button" id="btnOpen">Счёт в чат</button>'
-        : '';
       editPanel = `
-        ${chatBtn}
+        ${fileBtns}
         <button class="btn btn-quiet" type="button" id="btnMore">Ещё</button>
         <div id="editPanel" hidden>
           <div class="field"><label>Назначение</label>
@@ -507,8 +508,8 @@
             : ''}
         </div>
       `;
-    } else if (isPlan && inv.has_file) {
-      editPanel = '<button class="btn btn-brass" type="button" id="btnOpen">Счёт в чат</button>';
+    } else if (inv.has_file) {
+      editPanel = fileBtns;
     }
 
     let payPanel = '';
@@ -541,6 +542,8 @@
     if (can) bindBudgetPickers(view);
     const openBtn = document.getElementById('btnOpen');
     if (openBtn) openBtn.onclick = () => openInvoice(inv);
+    const dlBtn = document.getElementById('btnDownload');
+    if (dlBtn) dlBtn.onclick = () => downloadInvoiceFile(inv);
     const recBtn = document.getElementById('btnReceipt');
     if (recBtn) recBtn.onclick = () => openReceipt(inv);
     const more = document.getElementById('btnMore');
@@ -701,6 +704,31 @@
     alert(sendErrorText(sent, isReceipt ? 'Квитанция не найдена.' : 'У этого счёта нет PDF.'));
   }
 
+  async function downloadInvoiceFile(inv) {
+    try {
+      if (!window.FFTg || !window.FFTg.fetchBlob) {
+        alert('Не удалось скачать файл.');
+        return;
+      }
+      const blob = await window.FFTg.fetchBlob('/tg/pay/api/invoices/' + inv.id + '/file');
+      let name = (inv.original_name || 'invoice.pdf').split(/[/\\]/).pop() || 'invoice.pdf';
+      if (!/\.(pdf|png|jpe?g|webp|bmp)$/i.test(name)) name = 'invoice.pdf';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+      haptic('medium');
+    } catch (e) {
+      alert(e.message || 'Не удалось скачать файл.');
+    }
+  }
+
   async function openInvoice(inv) {
     try {
       await sendFileToChat(inv, 'file');
@@ -770,8 +798,9 @@
           </div>
         </div>
         <div class="field"><label>Файл (необязательно)</label>
-          <label class="file-btn" for="qFile">Прикрепить фото или PDF</label>
-          <input id="qFile" type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp" hidden>
+          <label class="file-btn">Прикрепить фото или PDF
+            <input id="qFile" class="file-proxy" type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp">
+          </label>
           <p class="hint" id="qFileName" style="margin-top:6px"></p>
         </div>
         <button class="btn btn-ink" type="button" id="btnQuick">Отправить</button>

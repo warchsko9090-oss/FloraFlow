@@ -1257,12 +1257,11 @@ def sale_invoice_link_order(inv_id):
     if inv.status != 'approved':
         inv.status = 'approved'
         inv.approved_at = inv.approved_at or msk_now()
-    if not (order.invoice_number or '').strip():
-        order.invoice_number = str(sale_public_number(inv))
-        order.invoice_date = (inv.approved_at or msk_now()).date()
+    order.invoice_number = str(sale_public_number(inv))
+    order.invoice_date = (inv.approved_at or inv.created_at or msk_now()).date()
     db.session.commit()
     log_action(f'Привязал счёт №{sale_public_number(inv)} к заказу #{order.id}')
-    flash(f'Счёт привязан к заказу №{order.id}. Поля копки в заказе не менялись.')
+    flash(f'Счёт привязан к заказу №{order.id}. Номер и дата счёта в заказе — этот счёт.')
     return redirect(url_for('orders.order_detail', order_id=order.id))
 
 
@@ -1886,16 +1885,15 @@ def order_link_sale_invoices(order_id):
         linked += 1
         log_action(f"Привязал счёт №{sale_public_number(inv)} к заказу #{o.id}")
     if linked:
-        if not (o.invoice_number or '').strip():
-            first = (
-                SaleInvoice.query
-                .filter(SaleInvoice.order_id == o.id, SaleInvoice.status != 'discarded')
-                .order_by(SaleInvoice.id.asc())
-                .first()
-            )
-            if first:
-                o.invoice_number = str(sale_public_number(first))
-                o.invoice_date = (first.approved_at or first.created_at or msk_now()).date()
+        latest = (
+            SaleInvoice.query
+            .filter(SaleInvoice.order_id == o.id, SaleInvoice.status != 'discarded')
+            .order_by(SaleInvoice.id.desc())
+            .first()
+        )
+        if latest:
+            o.invoice_number = str(sale_public_number(latest))
+            o.invoice_date = (latest.approved_at or latest.created_at or msk_now()).date()
         db.session.commit()
         flash(f'Привязано счетов: {linked}' + (f', пропущено: {skipped}' if skipped else ''))
     else:

@@ -31,8 +31,20 @@ def invoice_bytes(inv: PaymentInvoice) -> bytes | None:
 
 
 def has_file(inv: PaymentInvoice) -> bool:
-    if getattr(inv, 'file_blob', None):
-        return True
+    """Есть PDF, не загружая сам файл в список счетов."""
+    from sqlalchemy import func
+    from sqlalchemy.orm import attributes
+
+    state = attributes.instance_state(inv)
+    if 'file_blob' not in state.unloaded:
+        if inv.file_blob:
+            return True
+    elif inv.id:
+        n = db.session.query(func.length(PaymentInvoice.file_blob)).filter(
+            PaymentInvoice.id == inv.id
+        ).scalar()
+        if n:
+            return True
     return bool(disk_path(inv))
 
 
