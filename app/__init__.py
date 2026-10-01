@@ -133,6 +133,8 @@ def create_app():
     app.register_blueprint(tg_admin.bp)
     from . import tg_sale
     app.register_blueprint(tg_sale.bp)
+    from . import tg_hub
+    app.register_blueprint(tg_hub.bp)
     app.register_blueprint(hr.bp)
     app.register_blueprint(crm.bp)
     app.register_blueprint(chat.bp)

@@ -244,7 +244,7 @@ def _maybe_test_prefix(chat_type):
     return f"🧪 <b>[TEST · {chat_type}]</b>\n"
 
 
-def send_message(text, chat_type="hr"):
+def send_message(text, chat_type="hr", reply_markup=None):
     """Send a text message to Telegram.
     Returns (True, 'ok') or (False, error_description).
     """
@@ -255,12 +255,15 @@ def send_message(text, chat_type="hr"):
 
     payload_text = _maybe_test_prefix(chat_type) + text
     url = f"{_tg_root()}/bot{bot_token}/sendMessage"
+    body = {
+        'chat_id': chat_id,
+        'text': payload_text,
+        'parse_mode': 'HTML',
+    }
+    if reply_markup:
+        body['reply_markup'] = reply_markup
     try:
-        r = _http().post(url, json={
-            'chat_id': chat_id,
-            'text': payload_text,
-            'parse_mode': 'HTML'
-        }, timeout=8)
+        r = _http().post(url, json=body, timeout=8)
         if not r.ok:
             return False, r.text
     except Exception as exc:
@@ -293,23 +296,29 @@ def send_photo(photo_path, caption="", chat_type="hr"):
     return True, "ok"
 
 
-def send_photo_bytes(file_bytes, filename='photo.jpg', caption='', chat_type='hr'):
-    """Фото из памяти в групповой чат (например подтверждение оплаты в расходы)."""
+def send_photo_bytes(file_bytes, filename='photo.jpg', caption='', chat_type='hr', reply_markup=None, chat_id=None):
+    """Фото из памяти в групповой чат (например подтверждение оплаты в расходы).
+
+    chat_id, если передан, идёт напрямую и не смотрит TG_TEST_CHAT_ID.
+    """
     bot_token = _get_bot_token()
-    chat_id = _get_chat_id(chat_type)
+    chat_id = str(chat_id).strip() if chat_id else _get_chat_id(chat_type)
     if not bot_token or not chat_id or not file_bytes:
         return False, "TG creds not configured"
     payload_caption = (_maybe_test_prefix(chat_type) + caption) if caption or _is_test_mode() else caption
     url = f"{_tg_root()}/bot{bot_token}/sendPhoto"
     name = filename or 'photo.jpg'
     try:
+        form = {
+            'chat_id': chat_id,
+            'caption': payload_caption,
+            'parse_mode': 'HTML',
+        }
+        if reply_markup:
+            form['reply_markup'] = json.dumps(reply_markup, ensure_ascii=False)
         r = _http().post(
             url,
-            data={
-                'chat_id': chat_id,
-                'caption': payload_caption,
-                'parse_mode': 'HTML',
-            },
+            data=form,
             files={'photo': (name, io.BytesIO(file_bytes))},
             timeout=30,
         )
@@ -318,6 +327,41 @@ def send_photo_bytes(file_bytes, filename='photo.jpg', caption='', chat_type='hr
     except Exception as exc:
         return False, str(exc)
     return True, "ok"
+
+def edit_chat_photo(chat_id, message_id, file_bytes, caption='', reply_markup=None):
+    """Меняет картинку и подпись того же сообщения. Кнопки остаются под ним."""
+    bot_token = _get_bot_token()
+    if not bot_token or not chat_id or not message_id or not file_bytes:
+        return False, "TG creds not configured"
+    media = {
+        'type': 'photo',
+        'media': 'attach://photo',
+        'caption': caption or '',
+        'parse_mode': 'HTML',
+    }
+    form = {
+        'chat_id': chat_id,
+        'message_id': int(message_id),
+        'media': json.dumps(media, ensure_ascii=False),
+    }
+    if reply_markup:
+        form['reply_markup'] = json.dumps(reply_markup, ensure_ascii=False)
+    try:
+        r = _http().post(
+            f"{_tg_root()}/bot{bot_token}/editMessageMedia",
+            data=form,
+            files={'photo': ('plan.png', io.BytesIO(file_bytes))},
+            timeout=30,
+        )
+        if r.ok:
+            return True, 'ok'
+        low = (r.text or '').lower()
+        if 'message is not modified' in low:
+            return True, 'ok'
+        return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+
 
 def set_reaction(chat_id, message_id, emoji='✅'):
     """Ставит реакцию бота на конкретное сообщение через Bot API
@@ -462,21 +506,44 @@ def pin_chat_message(chat_id, message_id, *, disable_notification: bool = True):
         return False, str(exc)
 
 
-def edit_chat_message(chat_id, message_id, text):
+def answer_callback_query(callback_id, text=None):
+    """Снимает «часики» с кнопки под сообщением."""
+    bot_token = _get_bot_token()
+    if not bot_token or not callback_id:
+        return False, "TG creds not configured"
+    payload = {'callback_query_id': callback_id}
+    if text:
+        payload['text'] = str(text)[:180]
+    try:
+        r = _http().post(
+            f"{_tg_root()}/bot{bot_token}/answerCallbackQuery",
+            json=payload,
+            timeout=8,
+        )
+        if r.ok:
+            return True, "ok"
+        return False, r.text
+    except Exception as exc:
+        return False, str(exc)
+
+
+def edit_chat_message(chat_id, message_id, text, reply_markup=None):
     """Правит текст сообщения бота. «message is not modified» считается успехом."""
     bot_token = _get_bot_token()
     if not bot_token or not chat_id or not message_id:
         return False, "TG creds not configured"
     url = f"{_tg_root()}/bot{bot_token}/editMessageText"
-    payloads = [
-        {
-            'chat_id': chat_id,
-            'message_id': int(message_id),
-            'text': text,
-            'parse_mode': 'HTML',
-        },
-        {'chat_id': chat_id, 'message_id': int(message_id), 'text': text},
-    ]
+    rich = {
+        'chat_id': chat_id,
+        'message_id': int(message_id),
+        'text': text,
+        'parse_mode': 'HTML',
+    }
+    plain = {'chat_id': chat_id, 'message_id': int(message_id), 'text': text}
+    if reply_markup:
+        rich['reply_markup'] = reply_markup
+        plain['reply_markup'] = reply_markup
+    payloads = [rich, plain]
     last_err = 'edit failed'
     for idx, payload in enumerate(payloads):
         try:
@@ -708,10 +775,13 @@ def get_webhook_info():
         return {'ok': False, 'error': str(exc)}
 
 
-def set_pay_menu_button(url=None, chat_id=None, text='Счета'):
-    """Кнопка меню бота → Mini App. chat_id — только для этого пользователя."""
+def set_pay_menu_button(url=None, chat_id=None, text='Меню'):
+    """Синяя кнопка бота → главное меню Mini App. chat_id — только этому чату."""
     bot_token = _get_bot_token()
-    url = miniapp_web_url((url or default_miniapp_url() or '').rstrip('/'))
+    if not url:
+        from app.tg_hub import public_hub_url
+        url = public_hub_url() or default_miniapp_url()
+    url = miniapp_web_url((url or '').rstrip('/'))
     if not bot_token or not url.startswith('https://'):
         return False, 'skip'
     payload = {

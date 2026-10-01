@@ -1056,6 +1056,71 @@ from sqlalchemy import func
 from app.models import DiggingTask, Order, OrderItem
 from app.utils import msk_today, MONTH_NAMES
 
+def _can_send_dig_plan(user) -> bool:
+    from app.dig_plan_chat import _can_send
+    return _can_send(user)
+
+
+@bp.route('/digging/plan-chat', methods=['GET', 'POST'])
+@login_required
+def dig_plan_chat_preview():
+    """Прогон сообщения в чат продаж: те же текст и кнопки, без мини-приложения."""
+    if not _can_send_dig_plan(current_user):
+        return redirect(url_for('main.index'))
+    from app.dig_plan_chat import render, send_week
+    notice = ''
+    if request.method == 'POST':
+        ok, err = send_week()
+        from app.dig_plan_chat import plan_chat_id
+        if ok and plan_chat_id():
+            notice = 'Картинка ушла в тестовый чат из TG_DIG_PLAN_CHAT_ID. День открывается кнопкой под ней.'
+        elif ok:
+            notice = 'Картинка ушла в чат продаж. День открывается кнопкой под ней.'
+        else:
+            notice = 'В чат не отправилось: нет токена бота или чат не задан. Ниже тот же вид.'
+    mode = 'day' if request.args.get('day') else 'week'
+    anchor = None
+    raw_week = (request.args.get('week') or '').strip()
+    if raw_week:
+        try:
+            from datetime import date as date_cls
+            anchor = date_cls.fromisoformat(raw_week)
+        except ValueError:
+            anchor = None
+    text, markup, start, end, selected, _png = render(mode, request.args.get('day'), anchor=anchor)
+    return render_template(
+        'digging/plan_chat_preview.html',
+        text=text,
+        rows=markup.get('inline_keyboard') or [],
+        notice=notice,
+        start=start,
+        end=end,
+        selected=(selected.isoformat() if selected else ''),
+    )
+
+
+@bp.route('/digging/plan-chat.png')
+@login_required
+def dig_plan_chat_image():
+    if not _can_send_dig_plan(current_user):
+        return redirect(url_for('main.index'))
+    from datetime import date as date_cls
+    from flask import Response
+    from app.dig_plan_chat import render
+    anchor = None
+    raw_week = (request.args.get('week') or '').strip()
+    if raw_week:
+        try:
+            anchor = date_cls.fromisoformat(raw_week)
+        except ValueError:
+            anchor = None
+    mode = 'day' if request.args.get('day') else 'week'
+    _text, _markup, _start, _end, _sel, png = render(mode, request.args.get('day'), anchor=anchor)
+    resp = Response(png, mimetype='image/png')
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
 @bp.route('/digging/planning', methods=['GET', 'POST'])
 @login_required
 def digging_planning():

@@ -41,6 +41,29 @@
     throw new Error('Нет входа');
   }
 
+  function loadingCard(text) {
+    return `<div class="loader" role="status" aria-live="polite"><div class="loader-spin"></div><p>${esc(text)}</p></div>`;
+  }
+
+  async function apiTimed(path, opts, ms) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms || 20000);
+    try {
+      return await api(path, Object.assign({}, opts || {}, { signal: ctrl.signal }));
+    } catch (e) {
+      const name = (e && e.name) || '';
+      const msg = String((e && e.message) || '');
+      if (name === 'AbortError' || /abort/i.test(msg)) {
+        const err = new Error('Долго нет ответа. Повтор сейчас не создаст второй расход.');
+        err.timeout = true;
+        throw err;
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   function haptic(kind) {
     try { const tg = tgApp(); tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind || 'light'); } catch (_) {}
   }
@@ -87,12 +110,13 @@
   }
 
   function route() {
+    view.classList.remove('busy');
     const hash = (location.hash || '#/').replace(/^#/, '');
     const path = hash.split('?')[0];
     const parts = path.split('/').filter(Boolean);
     if (parts[0] === 'inv' && parts[1]) return renderDetail(+parts[1]);
     if (parts[0] === 'new') return renderNew();
-    if (parts[0] === 'quick') return renderQuickExpense();
+    if (parts[0] === 'quick') return renderQuickExpense(parts[1] ? +parts[1] : null);
     if (parts[0] === 'week-plan') {
       if (parts[1] === 'full') return renderWeekPlan();
       if (parts[1] === 'line') return renderPlan();
@@ -297,7 +321,7 @@
         + `<div class="list">${drafts.map(rowHtml).join('')}</div></details>`;
     }
     if (!shown.length && !drafts.length) {
-      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План недели, счёт или выписка — кнопка +.' : (me.role === 'executive' ? 'Быстрый расход — кнопка +, или скиньте файл боту.' : 'Неоплаченных счетов нет.')}</p></div>`;
+      html += `<div class="empty"><h2>Пусто</h2><p>${me.can_edit ? 'План недели, счёт или выписка — кнопка +.' : (me.role === 'executive' ? 'Быстрая оплата — кнопка +, или скиньте файл боту: форма откроется сразу.' : 'Неоплаченных счетов нет.')}</p></div>`;
     } else if (shown.length) {
       html += '<div class="list">' + shown.map(rowHtml).join('') + '</div>';
     }
@@ -463,14 +487,16 @@
       ${isPlan ? `<p class="hint">План ${money(planned)} · оплачено ${money(factPaid)} · остаток ${money(remaining)}</p>` : ''}
       ${!inv.has_budget && can ? '<div class="warn-box">⚠ Статья бюджета не выбрана — укажите её ниже, иначе расход уйдёт «к разнесению».</div>' : ''}`;
 
-    const fileBtns = inv.has_file
-      ? `<button class="btn btn-brass" type="button" id="btnDownload">Скачать файл</button>
-         <button class="btn btn-quiet" type="button" id="btnOpen">Счёт в чат</button>`
+    const downloadBtn = inv.has_file
+      ? `<button class="btn btn-brass" type="button" id="btnDownload">Скачать счёт</button>`
+      : '';
+    const chatBtn = inv.has_file && (can || isPlan)
+      ? `<button class="btn btn-quiet" type="button" id="btnOpen">Счёт в чат</button>`
       : '';
     let editPanel = '';
     if (can) {
       editPanel = `
-        ${fileBtns}
+        ${chatBtn}
         <button class="btn btn-quiet" type="button" id="btnMore">Ещё</button>
         <div id="editPanel" hidden>
           <div class="field"><label>Назначение</label>
@@ -508,8 +534,8 @@
             : ''}
         </div>
       `;
-    } else if (inv.has_file) {
-      editPanel = fileBtns;
+    } else if (!can && isPlan) {
+      editPanel = chatBtn;
     }
 
     let payPanel = '';
@@ -533,6 +559,7 @@
       <div class="card">
         <div class="amount-xl">${money(shownAmt)}</div>
         ${payHint}
+        ${downloadBtn}
         ${payPanel}
         ${editPanel}
         ${isPlan ? '' : lines}
@@ -777,38 +804,54 @@
     document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
   }
 
-  async function renderQuickExpense() {
+  async function renderQuickExpense(holdId) {
     if (!(me.can_edit || me.role === 'executive')) {
       location.hash = '#/';
       return;
     }
-    setTitle('Быстрый расход');
+    setTitle('Быстрая оплата');
+    view.innerHTML = loadingCard(holdId ? 'Открываем быструю оплату…' : 'Загружаем форму…');
+    let pre = null;
+    if (holdId) {
+      try {
+        pre = await apiTimed('/tg/pay/api/quick-hold/' + holdId, {}, 20000);
+      } catch (e) {
+        view.innerHTML = `<div class="empty"><h2>Форма не открылась</h2><p>${esc(e.message || 'Не удалось загрузить файл')}</p><button class="btn btn-ink" type="button" id="goEmpty">Пустая форма</button></div>`;
+        const go = document.getElementById('goEmpty');
+        if (go) go.onclick = () => { location.hash = '#/quick'; };
+        return;
+      }
+    }
+    const amountVal = pre && Number(pre.amount) > 0 ? String(pre.amount) : '';
+    const summaryVal = pre ? String(pre.summary || '') : '';
+    const startType = pre && pre.payment_type === 'cash' ? 'cash' : 'cashless';
+    const heldName = pre && pre.has_file ? (pre.filename || 'файл из чата') : '';
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
-      <div class="card">
+      <div class="card" id="quickCard">
         <p class="hint" style="margin:0 0 12px">Админ получит уведомление и разнесёт по статье бюджета.</p>
         <div class="field"><label>Сумма, ₽</label>
-          <input id="qAmount" inputmode="decimal" placeholder="0" autofocus></div>
+          <input id="qAmount" inputmode="decimal" placeholder="0" value="${esc(amountVal)}" autofocus></div>
         <div class="field"><label>Назначение</label>
-          <input id="qSummary" type="text" placeholder="топливо, сетка, ЧОП…"></div>
+          <input id="qSummary" type="text" placeholder="топливо, сетка, ЧОП…" value="${esc(summaryVal)}"></div>
         <div class="field"><label>Оплата</label>
           <div class="pay-toggle" id="qType">
-            <button type="button" class="pay-opt" data-v="cashless" aria-pressed="true">Безнал</button>
-            <button type="button" class="pay-opt" data-v="cash" aria-pressed="false">Нал</button>
+            <button type="button" class="pay-opt" data-v="cashless" aria-pressed="${startType === 'cashless' ? 'true' : 'false'}">Безнал</button>
+            <button type="button" class="pay-opt" data-v="cash" aria-pressed="${startType === 'cash' ? 'true' : 'false'}">Нал</button>
           </div>
         </div>
-        <div class="field"><label>Файл (необязательно)</label>
+        <div class="field"><label>Файл${heldName ? '' : ' (необязательно)'}</label>
           <label class="file-btn">Прикрепить фото или PDF
             <input id="qFile" class="file-proxy" type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp">
           </label>
-          <p class="hint" id="qFileName" style="margin-top:6px"></p>
+          <p class="hint" id="qFileName" style="margin-top:6px">${heldName ? esc('Из чата: ' + heldName) : ''}</p>
         </div>
         <button class="btn btn-ink" type="button" id="btnQuick">Отправить</button>
-        <p class="hint" id="qStatus"></p>
+        <div id="qStatus"></div>
       </div>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
-    let ptype = 'cashless';
+    let ptype = startType;
     view.querySelectorAll('#qType .pay-opt').forEach((btn) => {
       btn.onclick = () => {
         ptype = btn.dataset.v;
@@ -821,37 +864,41 @@
     const fileName = document.getElementById('qFileName');
     fileInput.onchange = () => {
       const f = fileInput.files && fileInput.files[0];
-      fileName.textContent = f ? f.name : '';
+      fileName.textContent = f ? f.name : (heldName ? ('Из чата: ' + heldName) : '');
     };
-    document.getElementById('btnQuick').onclick = async () => {
+    const sendBtn = document.getElementById('btnQuick');
+    sendBtn.onclick = async () => {
+      if (sendBtn.disabled) return;
       const status = document.getElementById('qStatus');
       const amount = (document.getElementById('qAmount') || {}).value;
       const summary = (document.getElementById('qSummary') || {}).value;
       if (!String(amount || '').trim() || !String(summary || '').trim()) {
-        status.textContent = 'Укажите сумму и назначение.';
+        status.innerHTML = '<p class="hint">Укажите сумму и назначение.</p>';
         return;
       }
       const fd = new FormData();
       fd.append('amount', amount);
       fd.append('summary', summary);
       fd.append('payment_type', ptype);
+      if (holdId) fd.append('hold_id', String(holdId));
       if (fileInput.files && fileInput.files[0]) fd.append('file', fileInput.files[0]);
+      sendBtn.disabled = true;
       view.classList.add('busy');
-      status.textContent = 'Отправляю…';
+      status.innerHTML = loadingCard('Отправляем…');
       try {
-        await api('/tg/pay/api/quick-expense', { method: 'POST', body: fd });
+        await apiTimed('/tg/pay/api/quick-expense', { method: 'POST', body: fd }, 25000);
         haptic('medium');
         try { sessionStorage.setItem('ff_quick_ok', '1'); } catch (_) {}
         location.hash = '#/';
       } catch (e) {
-        status.textContent = e.message || 'Не удалось отправить';
-      } finally {
+        status.innerHTML = `<p class="hint">${esc(e.message || 'Не удалось отправить')}</p>`;
         view.classList.remove('busy');
+        if (!e.timeout) sendBtn.disabled = false;
       }
     };
     setTimeout(() => {
       const el = document.getElementById('qAmount');
-      if (el) el.focus();
+      if (el && !amountVal) el.focus();
     }, 80);
   }
 
@@ -860,10 +907,11 @@
     const ptype = item.payment_type === 'cash' ? 'cash' : 'cashless';
     const locked = item.has_fact ? ' data-locked="1"' : '';
     if (!canEdit) {
-      return `<div class="week-row">
+      const open = id ? ` href="#/inv/${id}"` : '';
+      return `<a class="week-row"${open}>
         <div class="week-row-main"><b>${esc(_fmtPreviewAmt(item.planned_amount))}</b> — ${esc(item.summary || '')}</div>
-        <div class="muted">${ptype === 'cash' ? 'нал' : 'безнал'}${item.budget_name ? ' · ' + esc(item.budget_name) : ' · ⚠ нет статьи'}${item.has_fact ? ' · есть факт' : ''}</div>
-      </div>`;
+        <div class="muted">${ptype === 'cash' ? 'нал' : 'безнал'}${item.budget_name ? ' · ' + esc(item.budget_name) : ' · ⚠ нет статьи'}${item.has_fact ? ' · есть факт' : ''}${id ? ' · открыть' : ''}</div>
+      </a>`;
     }
     return `<div class="week-row" data-idx="${idx}"${locked}>
       <input type="hidden" class="wp-id" value="${id}">

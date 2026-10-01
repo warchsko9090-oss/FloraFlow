@@ -1,6 +1,12 @@
 (() => {
   const view = document.getElementById("view");
 
+  function esc(s) {
+    return String(s || "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
   function startParam() {
     try {
       const tg = window.FFTg && window.FFTg.tgApp && window.FFTg.tgApp();
@@ -13,41 +19,36 @@
 
   function pathFor(apps, prefer) {
     const p = (prefer || "").toLowerCase();
+    if (!p || !apps) return "";
     if ((p === "sale" || p === "client") && apps.sale) return "/tg/sale";
+    if ((p === "buh" || p === "upd") && apps.buh) return "/tg/sale?tab=buh";
+    if (p === "cash" && apps.cash) return "/tg/pay/cash";
     if ((p === "pay" || p === "payment") && apps.pay) return "/tg/pay";
-    if (apps.pay && apps.sale) return "/tg/pay";
-    if (apps.sale) return "/tg/sale";
-    if (apps.pay) return "/tg/pay";
     return "";
   }
 
-  function showChooser(apps) {
-    const rows = [];
-    if (apps.pay) {
-      rows.push(`<a class="tab" href="/tg/pay">Оплата<span>Счета поставщикам</span></a>`);
-    }
-    if (apps.sale) {
-      rows.push(`<a class="tab" href="/tg/sale">Клиентам<span>Выставить счёт</span></a>`);
-    }
+  function showMenu(me) {
+    const tiles = (me && me.tiles) || [];
+    const rows = tiles.map((t) => (
+      `<a class="tab" href="${esc(t.href)}">${esc(t.title)}<span>${esc(t.hint)}</span></a>`
+    )).join("");
     view.innerHTML = `
       <div class="brand">FloraFlow</div>
-      <p class="sub">Выберите раздел. Позже сюда же добавим новые вкладки.</p>
-      <div class="tabs">${rows.join("")}</div>
-      <p class="hint">Открывайте Mini App синей кнопкой меню бота — так Telegram передаёт вход стабильно.</p>
+      <p class="sub">Разделы по вашей роли. Синяя кнопка бота открывает это меню.</p>
+      <div class="tabs">${rows}</div>
     `;
   }
 
   async function boot() {
     const go = (me) => {
-      const apps = (me && me.apps) || {};
-      const prefer = startParam();
-      const dest = pathFor(apps, prefer) || me.default_path || pathFor(apps);
+      const dest = pathFor((me && me.apps) || {}, startParam());
       if (dest) {
         location.replace(dest);
         return;
       }
-      if (apps.pay || apps.sale) {
-        showChooser(apps);
+      const tiles = (me && me.tiles) || [];
+      if (tiles.length) {
+        showMenu(me);
         return;
       }
       view.innerHTML = `<p class="err">Нет доступных разделов для вашей роли.</p>`;

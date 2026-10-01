@@ -837,10 +837,19 @@
                         }
                         .item-fold[open] > summary::after { transform: rotate(-135deg); margin-top: 4px; }
                         .item-fold-desk { display: none; }
-                        .item-row:has(.item-fold:not([open])) > td:not(.td-product) { display: none !important; }
+                        .item-row:has(.item-fold:not([open])) > td:not(.td-product):not(.td-truck) { display: none !important; }
+                        .item-row:has(.item-fold:not([open])) .td-truck:not(:has(.btn)) { display: none !important; }
                         .item-row:has(.item-fold:not([open])) .td-product {
+                            border-radius: 0.5rem 0.5rem 0 0;
+                            border-bottom: 1px solid #dee2e6 !important;
+                        }
+                        .item-row:has(.item-fold:not([open])):not(:has(.td-truck .btn)) .td-product {
                             border-radius: 0.5rem;
                             border-bottom: none !important;
+                        }
+                        .item-row:has(.item-fold:not([open])) .td-truck:has(.btn) {
+                            border-bottom: none !important;
+                            border-radius: 0 0 0.5rem 0.5rem;
                         }
                         .table-order-items .td-truck { order: 2; }
                         .table-order-items .td-truck::before { content: "Отгрузить"; }

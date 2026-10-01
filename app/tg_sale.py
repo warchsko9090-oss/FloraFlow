@@ -118,9 +118,9 @@ def _sale_me_payload(user: User, *, is_dev: bool = False) -> dict:
         'can_firms': _can_firms(user),
         'can_edit_firms': _can_firms(user),
         'can_delete_approved': role == 'admin',
-        # Бухгалтер — только вкладка УПД; админ — и счета, и вкладка УПД.
+        # Бухгалтер — только вкладка УПД. Админ и руководитель — счета и УПД.
         'accountant_only': accountant,
-        'can_buh': accountant or role == 'admin',
+        'can_buh': accountant or role in ('admin', 'executive'),
         'dev': is_dev,
     }
 
@@ -143,8 +143,13 @@ def require_sale(fn):
     return wrapped
 
 
+def _can_buh(user: User | None) -> bool:
+    role = (user.role or '') if user else ''
+    return role in ('accountant', 'admin', 'executive')
+
+
 def require_buh(fn):
-    """Вкладка УПД: бухгалтер. Админ — чтобы проверить локально."""
+    """Вкладка УПД: бухгалтер, руководитель и админ."""
     @wraps(fn)
     def wrapped(*args, **kwargs):
         user, _dev, pending = resolve_user()
@@ -156,8 +161,8 @@ def require_buh(fn):
                     'username': (pending.get('username') or ''),
                 }), 403
             return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
-        if not _is_accountant(user) and (user.role or '') != 'admin':
-            return jsonify({'error': 'forbidden', 'hint': 'Только бухгалтер'}), 403
+        if not _can_buh(user):
+            return jsonify({'error': 'forbidden', 'hint': 'Только бухгалтер или руководитель'}), 403
         return fn(user, *args, **kwargs)
     return wrapped
 
@@ -2221,6 +2226,59 @@ def _buh_allowed_invoice(inv_id: int) -> SaleInvoice | None:
     return inv
 
 
+def _buh_search_tokens(q_text: str) -> list[str]:
+    """Куски запроса: без регистра, ё/е и латинских двойников."""
+    folded = _fold_client_query(q_text)
+    tokens = []
+    for raw in folded.split():
+        word = re.sub(r'[^a-zа-я0-9]+', '', raw)
+        if word:
+            tokens.append(word)
+    return tokens
+
+
+def _buh_order_search_parts(order: Order, extra: dict | None = None) -> tuple[str, str]:
+    """Текст (имена) и номера отдельно: цифра не должна цеплять размер 160."""
+    extra = extra or {}
+    names = [order.client.name if order.client else '', extra.get('text') or '']
+    for it in order.items or []:
+        if it.plant and it.plant.name:
+            names.append(it.plant.name)
+        if it.size and it.size.name:
+            names.append(it.size.name)
+    numbers = [
+        str(order.id or ''),
+        order.invoice_number or '',
+        extra.get('nums') or '',
+    ]
+    text = re.sub(r'[^a-zа-я0-9]+', ' ', _fold_client_query(' '.join(names)))
+    nums = re.sub(r'[^0-9]+', ' ', ' '.join(numbers))
+    return text, nums
+
+
+def _buh_invoice_search_map(order_ids: list[int]) -> dict[int, dict]:
+    if not order_ids:
+        return {}
+    rows = (
+        SaleInvoice.query
+        .filter(
+            SaleInvoice.order_id.in_(order_ids),
+            SaleInvoice.status != 'discarded',
+        )
+        .all()
+    )
+    grouped: dict[int, dict] = {}
+    for inv in rows:
+        bucket = grouped.setdefault(inv.order_id, {'nums': [], 'text': []})
+        bucket['nums'].append(str(sale_public_number(inv)))
+        if inv.buyer_name:
+            bucket['text'].append(inv.buyer_name)
+    return {
+        oid: {'nums': ' '.join(parts['nums']), 'text': ' '.join(parts['text'])}
+        for oid, parts in grouped.items()
+    }
+
+
 def _buh_orders_query(scope: str = 'active'):
     """Базовый запрос отгруженных заказов для экрана бухгалтера."""
     q = (
@@ -2256,19 +2314,25 @@ def api_buh_orders(_user: User):
     if direction not in ('asc', 'desc'):
         direction = 'desc'
 
-    q = _buh_orders_query(scope)
-    if q_text:
-        like = f'%{q_text}%'
-        id_filters = [
-            Client.name.ilike(like),
-            Order.invoice_number.ilike(like),
-            cast(Order.id, String).ilike(like),
-        ]
-        if q_text.isdigit():
-            id_filters.append(Order.id == int(q_text))
-        q = q.outerjoin(Client, Order.client_id == Client.id).filter(or_(*id_filters))
-
-    orders = q.all()
+    orders = _buh_orders_query(scope).all()
+    tokens = _buh_search_tokens(q_text)
+    if tokens:
+        extras = _buh_invoice_search_map([o.id for o in orders])
+        matched = []
+        for order in orders:
+            text, nums = _buh_order_search_parts(order, extras.get(order.id))
+            ok = True
+            for tok in tokens:
+                if tok.isdigit():
+                    if tok not in nums:
+                        ok = False
+                        break
+                elif tok not in text:
+                    ok = False
+                    break
+            if ok:
+                matched.append(order)
+        orders = matched
     reverse = direction == 'desc'
     if sort == 'client':
         orders.sort(key=lambda o: ((o.client.name if o.client else '') or '').lower(), reverse=reverse)

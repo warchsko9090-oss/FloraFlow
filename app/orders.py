@@ -38,7 +38,8 @@ def _notify_accountant_shipment(order, sales_msg: str) -> None:
     try:
         from app.telegram import send_chat_message, set_pay_menu_button
         from app.tg_pay import accountant_telegram_ids
-        from app.tg_sale import public_sale_url, sale_public_number
+        from app.tg_hub import public_hub_url
+        from app.tg_sale import sale_public_number
         from app.models import SaleInvoice
     except Exception:
         current_app.logger.exception('accountant notify imports')
@@ -70,15 +71,15 @@ def _notify_accountant_shipment(order, sales_msg: str) -> None:
     else:
         extra = "\n\n📄 <b>Счёт:</b> не указан"
     text = (sales_msg or '') + extra
-    sale_url = ''
+    hub_url = ''
     try:
-        sale_url = public_sale_url()
+        hub_url = public_hub_url()
     except Exception:
-        sale_url = ''
+        hub_url = ''
     for chat_id in ids:
-        if sale_url.startswith('https://'):
+        if hub_url.startswith('https://'):
             try:
-                set_pay_menu_button(url=sale_url, chat_id=chat_id, text='Отгрузки')
+                set_pay_menu_button(url=hub_url, chat_id=chat_id, text='Меню')
             except Exception:
                 current_app.logger.exception('accountant menu button')
         ok, err = send_chat_message(chat_id, text)

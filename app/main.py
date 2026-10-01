@@ -2203,6 +2203,15 @@ def process_telegram_update(data):
     """Один update: webhook POST или getUpdates. Возвращает dict."""
     data = data or {}
 
+    cb = data.get('callback_query')
+    if cb and str(cb.get('data') or '').startswith('dp:'):
+        try:
+            from app.dig_plan_chat import handle_callback
+            handle_callback(cb)
+        except Exception:
+            current_app.logger.exception('dig plan callback')
+        return {'status': 'ok'}
+
     # 1) Извлекаем «сообщение» из любого типа апдейта (обычные, правки, каналы).
     msg = (
         data.get('message')
@@ -2460,8 +2469,8 @@ def telegram_set_webhook():
         menu_ok, menu_msg = False, ''
         try:
             from app.telegram import set_pay_menu_button
-            mini = url.rsplit('/api/telegram/webhook', 1)[0] + '/tg/pay'
-            menu_ok, menu_msg = set_pay_menu_button(mini)
+            mini = url.rsplit('/api/telegram/webhook', 1)[0] + '/tg'
+            menu_ok, menu_msg = set_pay_menu_button(mini, text='Меню')
         except Exception as menu_exc:
             menu_msg = str(menu_exc)
         return jsonify({

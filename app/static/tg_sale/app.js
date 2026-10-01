@@ -1187,7 +1187,7 @@
             </div>`;
         const filters = `
             <div class="buh-filters card">
-                <input id="buhQ" type="search" placeholder="№ заказа, клиент, счёт" value="${esc(state.buhQ || "")}">
+                <input id="buhQ" type="search" placeholder="часть имени, № заказа или счёта" value="${esc(state.buhQ || "")}">
                 <div class="buh-filter-row">
                     <select id="buhSort">
                         <option value="date" ${state.buhSort === "date" ? "selected" : ""}>${isArchive ? "По дате проведения" : "По дате заказа"}</option>
@@ -1473,7 +1473,11 @@
             await waitTelegram();
             if (window.FFTg) state.me = await window.FFTg.handshake("/tg/sale/api/auth");
         }
-        if (state.me && state.me.accountant_only) {
+        const openBuh = state.me && (
+            state.me.accountant_only
+            || (state.me.can_buh && new URLSearchParams(location.search).get("tab") === "buh")
+        );
+        if (openBuh) {
             state.screen = "buh";
             await loadBuh();
             render();

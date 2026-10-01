@@ -27,24 +27,66 @@ def public_hub_url() -> str:
     return miniapp_web_url(url) if url else ''
 
 
+def _role(user: User | None) -> str:
+    return (user.role or '') if user else ''
+
+
 def _apps_for(user: User | None) -> dict:
+    role = _role(user)
     return {
         'pay': bool(user and _can_pay_app(user)),
         'sale': bool(user and _can_sale_role(user)),
+        'buh': role in ('admin', 'executive', 'accountant'),
+        'cash': role == 'admin',
     }
 
 
+def _tiles_for(user: User | None) -> list[dict]:
+    """Плашки главного меню. Пустой список — роли нечего открывать."""
+    apps = _apps_for(user)
+    role = _role(user)
+    tiles = []
+    if apps['pay']:
+        tiles.append({
+            'id': 'pay',
+            'title': 'Оплата' if role in ('admin', 'executive') else 'Счета на оплату',
+            'hint': 'Счета поставщикам',
+            'href': '/tg/pay',
+        })
+    if apps['sale']:
+        tiles.append({
+            'id': 'sale',
+            'title': 'Выставить счёт',
+            'hint': 'Счёт клиенту',
+            'href': '/tg/sale',
+        })
+    if apps['buh']:
+        tiles.append({
+            'id': 'buh',
+            'title': 'Отгрузки',
+            'hint': 'Бухгалтерский экран: счета и состав для УПД',
+            'href': '/tg/sale?tab=buh',
+        })
+    if apps['cash']:
+        tiles.append({
+            'id': 'cash',
+            'title': 'Касса',
+            'hint': 'Наличные по сотрудникам',
+            'href': '/tg/pay/cash',
+        })
+    return tiles
+
+
 def _default_path(apps: dict) -> str:
+    """Только явный startapp. Без параметра остаёмся на меню."""
     start = (request.args.get('startapp') or request.args.get('tab') or '').strip().lower()
     if start in ('sale', 'client', 'выставить') and apps.get('sale'):
         return '/tg/sale'
+    if start in ('buh', 'upd', 'отгрузки') and apps.get('buh'):
+        return '/tg/sale?tab=buh'
+    if start in ('cash', 'касса') and apps.get('cash'):
+        return '/tg/pay/cash'
     if start in ('pay', 'оплата') and apps.get('pay'):
-        return '/tg/pay'
-    if apps.get('pay') and apps.get('sale'):
-        return '/tg/pay'
-    if apps.get('sale'):
-        return '/tg/sale'
-    if apps.get('pay'):
         return '/tg/pay'
     return ''
 
@@ -74,8 +116,8 @@ def api_auth():
             'hint': _auth_fail_hint(),
             'need_login': True,
         }), 401
-    apps = _apps_for(user)
-    if not apps['pay'] and not apps['sale']:
+    tiles = _tiles_for(user)
+    if not tiles:
         return jsonify({
             'error': 'forbidden',
             'hint': 'Нет доступа к Mini App для роли «' + (user.role or '') + '»',
@@ -89,8 +131,9 @@ def api_auth():
         'dev': is_dev,
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
-        'apps': apps,
-        'default_path': _default_path(apps),
+        'apps': _apps_for(user),
+        'tiles': tiles,
+        'default_path': _default_path(_apps_for(user)),
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -111,8 +154,8 @@ def api_login():
     user = User.query.filter(db.func.lower(User.username) == username.lower()).first()
     if not user or not user.check_password(password):
         return jsonify({'error': 'bad_credentials', 'hint': 'Неверный логин или пароль'}), 401
-    apps = _apps_for(user)
-    if not apps['pay'] and not apps['sale']:
+    tiles = _tiles_for(user)
+    if not tiles:
         return jsonify({
             'error': 'forbidden',
             'hint': 'Нет доступа к Mini App для роли «' + (user.role or '') + '»',
@@ -128,8 +171,9 @@ def api_login():
         'telegram_id': session_tg,
         'has_telegram': bool(session_tg),
         'bound': bool(session_tg),
-        'apps': apps,
-        'default_path': _default_path(apps),
+        'apps': _apps_for(user),
+        'tiles': tiles,
+        'default_path': _default_path(_apps_for(user)),
     })
     return set_mini_cookie(resp, user, session_tg)
 
@@ -140,4 +184,10 @@ def go_tab(tab: str):
     tab = (tab or '').strip().lower()
     if tab in ('sale', 'client'):
         return redirect('/tg/sale')
-    return redirect('/tg/pay')
+    if tab in ('buh', 'upd'):
+        return redirect('/tg/sale?tab=buh')
+    if tab == 'cash':
+        return redirect('/tg/pay/cash')
+    if tab == 'pay':
+        return redirect('/tg/pay')
+    return redirect('/tg')

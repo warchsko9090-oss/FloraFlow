@@ -204,6 +204,9 @@
                 </div>
             </div>
             <div class="page-actions">
+                {% if current_user.role in ('admin', 'executive', 'user', 'user2', 'brigadier', 'shop_manager') %}
+                <a href="{{ url_for('digging.dig_plan_chat_preview') }}" class="btn btn-primary btn-sm">План в чат продаж</a>
+                {% endif %}
                 <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm"><i class="fas fa-arrow-left"></i> В меню</a>
             </div>
         </div>

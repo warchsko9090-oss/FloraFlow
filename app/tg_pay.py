@@ -120,6 +120,8 @@ def _start_greeting(sender, tg_id) -> str:
         lines.append(f'Вы: {tg_id} → {user.username} ({user.role})')
         if _can_pay_app(user) and _can_sale_role(user):
             lines.append('Оплата — счета поставщикам. Выставить счёт — клиенту.')
+            if _role(user) in ('admin', 'executive'):
+                lines.append('Отгрузки — бухгалтерский экран.')
             if _is_admin(user):
                 lines.append('Касса — наличные по сотрудникам.')
         elif _can_sale_role(user):
@@ -132,6 +134,7 @@ def _start_greeting(sender, tg_id) -> str:
             lines.append('Оплата счетов поставщикам.')
         else:
             lines.append(f'Роль {user.role}: для Mini App не настроена.')
+        lines.append('Синяя кнопка «Меню» открывает разделы по вашей роли.')
     else:
         lines.append(f'Вы: {tg_id} — не привязан к ERP.')
         lines.append('В Amvera, логин или роль из Пользователей:')
@@ -693,6 +696,10 @@ def _notify_admins_quick_expense(
 
 
 def _notify_watchers(inv: PaymentInvoice, except_user: User | None = None):
+    """Личка админам: загрузили счёт или поставили его в оплату.
+
+    Руководителю не шлём: он оплачивает из приложения и скачивает файл сам.
+    """
     if (inv.status or '') == 'draft':
         return
     purpose = _purpose(inv)
@@ -700,7 +707,7 @@ def _notify_watchers(inv: PaymentInvoice, except_user: User | None = None):
     kind = 'План' if (inv.kind or '') == 'plan' and _fact_amount(inv) <= 0 else 'К оплате'
     ptype = 'нал' if (inv.payment_type or '') == 'cash' else 'безнал'
     text = f"{kind}: {purpose}\n{amount} ₽ · {ptype}"
-    q = User.query.filter(User.telegram_id.isnot(None))
+    q = User.query.filter(User.telegram_id.isnot(None)).filter(User.role != 'executive')
     for u in q.all():
         if except_user is not None and u.id == except_user.id:
             continue
@@ -1315,7 +1322,7 @@ def api_invoices(user: User):
     from sqlalchemy import or_, and_
     from app.invoice_files import invoice_remaining_amount
 
-    q = PaymentInvoice.query.filter(PaymentInvoice.status != 'paid')
+    q = PaymentInvoice.query.filter(~PaymentInvoice.status.in_(['paid', 'quick']))
     if _can_edit(user):
         pass
     elif _can_quick_expense(user):
@@ -2159,6 +2166,27 @@ def api_inbox(user: User):
     return jsonify({'items': [_serialize_inbox(r) for r in rows]})
 
 
+@bp.route('/api/quick-hold/<int:inv_id>')
+@require_user
+def api_quick_hold(user: User, inv_id: int):
+    """Файл из бота, ещё не отправленный: поля для шаблона быстрой оплаты."""
+    if not _can_quick_expense(user):
+        return jsonify({'error': 'forbidden'}), 403
+    inv = PaymentInvoice.query.get_or_404(inv_id)
+    if (inv.status or '') != 'quick':
+        return jsonify({'error': 'not_found'}), 404
+    if not _can_edit(user) and inv.created_by_user_id not in (None, user.id):
+        return jsonify({'error': 'forbidden'}), 403
+    return jsonify({
+        'id': inv.id,
+        'amount': float(inv.amount or 0),
+        'summary': _purpose(inv),
+        'payment_type': 'cash' if (inv.payment_type or '') == 'cash' else 'cashless',
+        'filename': inv.original_name or inv.filename or '',
+        'has_file': invoice_has_file(inv),
+    })
+
+
 @bp.route('/api/quick-expense', methods=['POST'])
 @require_user
 def api_quick_expense(user: User):
@@ -2188,6 +2216,32 @@ def api_quick_expense(user: User):
         if len(file_bytes) > 12 * 1024 * 1024:
             return jsonify({'error': 'file_too_large'}), 400
 
+    hold = None
+    hold_raw = (request.form.get('hold_id') or '').strip()
+    if hold_raw.isdigit() and not file_bytes:
+        hold = PaymentInvoice.query.get(int(hold_raw))
+        if (
+            hold is None
+            or (hold.status or '') != 'quick'
+            or (
+                not _can_edit(user)
+                and hold.created_by_user_id not in (None, user.id)
+            )
+        ):
+            hold = None
+        else:
+            file_bytes = invoice_bytes(hold) or None
+            filename = hold.original_name or hold.filename or filename
+
+    dup = ChatExpenseMessage.query.filter(
+        ChatExpenseMessage.tg_chat_id == f'miniapp:{user.id}',
+        ChatExpenseMessage.parsed_description == summary[:500],
+        ChatExpenseMessage.parsed_amount == amount,
+        ChatExpenseMessage.created_at >= datetime.now() - timedelta(seconds=45),
+    ).order_by(ChatExpenseMessage.id.desc()).first()
+    if dup:
+        return jsonify({'ok': True, 'duplicate': True, 'chat_expense_id': dup.id})
+
     from app.expense_chat import ingest_miniapp_quick_expense
     result = ingest_miniapp_quick_expense(
         user,
@@ -2216,6 +2270,16 @@ def api_quick_expense(user: User):
         )
     except Exception:
         current_app.logger.exception('quick-expense notify admins failed')
+
+    if hold is not None:
+        try:
+            err = delete_unpaid_invoice(hold)
+            if err:
+                current_app.logger.warning('quick hold delete: %s', err)
+            else:
+                db.session.commit()
+        except Exception:
+            current_app.logger.exception('quick hold cleanup')
 
     return jsonify({
         'ok': True,
@@ -2294,16 +2358,15 @@ def handle_private_update(msg: dict) -> bool:
     if text.startswith('/start') or text in ('счета', 'Счета', '/pay'):
         note_telegram_update('start', tg_id)
         user = _user_from_telegram(sender) if sender else None
-        if _can_sale_role(user) or _is_accountant(user):
-            from app.tg_sale import public_sale_url
-            sale_url = public_sale_url()
-            if sale_url.startswith('https://'):
-                try:
-                    from app.telegram import set_pay_menu_button
-                    label = 'Отгрузки' if _is_accountant(user) else 'Счёт'
-                    set_pay_menu_button(url=sale_url, chat_id=chat_id, text=label)
-                except Exception:
-                    current_app.logger.exception('sale menu button')
+        if user:
+            try:
+                from app.tg_hub import public_hub_url
+                from app.telegram import set_pay_menu_button
+                hub_url = public_hub_url()
+                if hub_url.startswith('https://'):
+                    set_pay_menu_button(url=hub_url, chat_id=chat_id, text='Меню')
+            except Exception:
+                current_app.logger.exception('hub menu button')
         markup = _apps_reply_keyboard(user)
         _tg_reply(chat_id, _start_greeting(sender, tg_id), reply_markup=markup)
         return True
@@ -2359,8 +2422,35 @@ def handle_private_update(msg: dict) -> bool:
         return True
 
 
+def _quick_form_markup(inv_id: int):
+    from app.telegram import miniapp_web_url
+    app_url = miniapp_web_url(_public_miniapp_url())
+    if not app_url.startswith('https://'):
+        return None
+    return {
+        'inline_keyboard': [[{
+            'text': 'Быстрая оплата',
+            'web_app': {'url': f'{app_url}#/quick/{inv_id}'},
+        }]]
+    }
+
+
+def _reply_quick_form(chat_id, inv: PaymentInvoice):
+    purpose = _purpose(inv)
+    amount = f"{float(inv.amount or 0):,.0f}".replace(',', ' ')
+    ptype_lbl = 'нал' if (inv.payment_type or '') == 'cash' else 'безнал'
+    _tg_reply(
+        chat_id,
+        f'Быстрая оплата\n'
+        f'<b>{purpose}</b>\n'
+        f'{amount} ₽ · {ptype_lbl}\n\n'
+        f'Файл уже в форме. Проверьте сумму и отправьте.',
+        reply_markup=_quick_form_markup(inv.id),
+    )
+
+
 def _ingest_private_quick_draft(chat_id, sender, tg_id, msg: dict, media: dict) -> bool:
-    """Файл от руководителя в личку бота → черновик с разобранной суммой/статьёй."""
+    """Файл от руководителя в личку → сразу шаблон быстрой оплаты, без черновика."""
     user = _user_from_telegram(sender)
     if not user:
         mapped = _tg_user_id_map().get(str(tg_id), '')
@@ -2413,37 +2503,30 @@ def _ingest_private_quick_draft(chat_id, sender, tg_id, msg: dict, media: dict) 
     if not (parsed.get('summary') or '').strip():
         parsed['summary'] = (name or 'Расход')[:500]
 
+    file_mark = f"tgfile:{(media.get('file_id') or '')[:180]}"
+    if media.get('file_id'):
+        existing = (
+            PaymentInvoice.query.filter_by(
+                created_by_user_id=user.id,
+                status='quick',
+                comment=file_mark,
+            )
+            .order_by(PaymentInvoice.id.desc())
+            .first()
+        )
+        if existing is not None:
+            _reply_quick_form(chat_id, existing)
+            return True
+
     inv = _save_parsed_invoice(
-        save_name, name, parsed, source='tg', status='draft',
+        save_name, name, parsed, source='tg', status='quick',
         created_by=user, payment_type=payment_type,
     )
     attach_file(inv, blob, save_name)
+    if media.get('file_id'):
+        inv.comment = file_mark
     db.session.commit()
-
-    purpose = _purpose(inv)
-    amount = f"{float(inv.amount or 0):,.0f}".replace(',', ' ')
-    budget = inv.item.name if inv.item else 'статья не определена'
-    extra = f"\n{parsed['error']}" if parsed.get('error') else ''
-    from app.telegram import miniapp_web_url
-    app_url = miniapp_web_url(_public_miniapp_url())
-    markup = None
-    if app_url.startswith('https://'):
-        markup = {
-            'inline_keyboard': [[{
-                'text': 'Открыть черновик',
-                'web_app': {'url': f'{app_url}#/inv/{inv.id}'},
-            }]]
-        }
-    ptype_lbl = 'нал' if (inv.payment_type or '') == 'cash' else 'безнал'
-    _tg_reply(
-        chat_id,
-        f'Черновик #{inv.id}\n'
-        f'<b>{purpose}</b>\n'
-        f'{amount} ₽ · {ptype_lbl}\n'
-        f'Статья: {budget}{extra}\n\n'
-        f'Проверьте сумму и отправьте админу в приложении.',
-        reply_markup=markup,
-    )
+    _reply_quick_form(chat_id, inv)
     return True
 
 
@@ -2468,7 +2551,7 @@ def _ingest_private_pdf(chat_id, sender, tg_id, doc) -> bool:
         _tg_reply(chat_id, hint)
         return True
 
-    # Руководитель PDF тоже через быстрый черновик
+    # Руководитель PDF тоже сразу в шаблон быстрой оплаты
     if (user.role or '') == 'executive':
         media = {
             'file_id': doc.get('file_id'),
