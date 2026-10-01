@@ -383,8 +383,9 @@
       Палитра (без пересечений):
       • выкопка — синий чип
       • отгрузка — малиновый чип + лёгкий розовый фон ячейки
-      • выходной бригады — фиолетовая полоска
-      • выходной бригадира — бирюзовая полоска (не оранж, чтобы не путать с отгрузкой)
+      • выходной бригады — розовая полоска и фон
+      • выходной бригадира — жёлтая полоска и фон
+      • выбранный день (сегодня) — зелёная рамка, не цвет выходного
     */
     .cal-cell.has-status {
         padding-top: 0;
@@ -412,10 +413,10 @@
         min-width: 0;
     }
     .cal-status-bar .seg.crew {
-        background: #7c3aed;
+        background: #f472b6;
     }
     .cal-status-bar .seg.brigadier {
-        background: #0d9488;
+        background: #facc15;
     }
 
     /* Фон дня: приоритет выходных, иначе — заливка отгрузки */
@@ -426,13 +427,13 @@
         background: #ffe4e6;
     }
     .cal-cell.crew-off:not(.brigadier-off) {
-        background: #f5f0ff;
+        background: #fce7f3;
     }
     .cal-cell.brigadier-off:not(.crew-off) {
-        background: #ecfdf5;
+        background: #fef9c3;
     }
     .cal-cell.crew-off.brigadier-off {
-        background: linear-gradient(180deg, #f5f0ff 0%, #ecfdf5 100%);
+        background: linear-gradient(180deg, #fce7f3 0%, #fef9c3 100%);
     }
     .cal-cell.is-today-cell {
         box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.45);
@@ -482,14 +483,14 @@
         width: 22px;
         height: 7px;
         border-radius: 2px;
-        background: #7c3aed;
+        background: #f472b6;
         border: none;
     }
     .cal-legend-swatch.brigadier {
         width: 22px;
         height: 7px;
         border-radius: 2px;
-        background: #0d9488;
+        background: #facc15;
         border: none;
     }
     body.paint-crew-off .cal-cell,
@@ -497,14 +498,14 @@
         cursor: crosshair !important;
     }
     .btn-paint.active-crew {
-        background: #7c3aed !important;
-        border-color: #7c3aed !important;
+        background: #f472b6 !important;
+        border-color: #f472b6 !important;
         color: #fff !important;
     }
     .btn-paint.active-brigadier {
-        background: #0d9488 !important;
-        border-color: #0d9488 !important;
-        color: #fff !important;
+        background: #facc15 !important;
+        border-color: #eab308 !important;
+        color: #713f12 !important;
     }
     .cal-ship-line {
         display: flex;
@@ -551,29 +552,29 @@
         line-height: 1.2;
     }
     #dayPreviewPopup .pop-off-chip.crew {
-        background: #f5f0ff;
-        color: #5b21b6;
-        border: 1px solid #c4b5fd;
+        background: #fce7f3;
+        color: #9d174d;
+        border: 1px solid #f9a8d4;
     }
     #dayPreviewPopup .pop-off-chip.crew::before {
         content: '';
         width: 8px;
         height: 8px;
         border-radius: 2px;
-        background: #7c3aed;
+        background: #f472b6;
         flex-shrink: 0;
     }
     #dayPreviewPopup .pop-off-chip.brigadier {
-        background: #ecfdf5;
-        color: #115e59;
-        border: 1px solid #99f6e4;
+        background: #fef9c3;
+        color: #854d0e;
+        border: 1px solid #fde047;
     }
     #dayPreviewPopup .pop-off-chip.brigadier::before {
         content: '';
         width: 8px;
         height: 8px;
         border-radius: 2px;
-        background: #0d9488;
+        background: #facc15;
         flex-shrink: 0;
     }
     #dayPreviewPopup .pop-ship {
@@ -802,8 +803,8 @@
         box-shadow: 0 1px 2px rgba(0,0,0,0.08);
     }
 
-    /* Клетка «сегодня» — мягкая подсветка фона */
-    .cal-cell.is-today-cell { background: #ecfdf5; }
+    /* Клетка «сегодня» — зелёная подсветка, если это не выходной */
+    .cal-cell.is-today-cell:not(.crew-off):not(.brigadier-off) { background: #ecfdf5; }
 
     /* Адаптив для мобилок */
     @media (max-width: 992px) {
@@ -842,7 +843,12 @@
         .cal-cell.has-shipments:not(.has-tasks):not(.crew-off):not(.brigadier-off) {
             background: #fff;
         }
-        .cal-cell.is-today-cell { background: #ecfdf5; }
+        .cal-cell.is-today-cell:not(.crew-off):not(.brigadier-off) { background: #ecfdf5; }
+        .cal-cell.crew-off:not(.brigadier-off) { background: #fce7f3; }
+        .cal-cell.brigadier-off:not(.crew-off) { background: #fef9c3; }
+        .cal-cell.crew-off.brigadier-off {
+            background: linear-gradient(180deg, #fce7f3 0%, #fef9c3 100%);
+        }
         .cal-legend-swatch.dig,
         .cal-legend-swatch.ship {
             width: 10px;

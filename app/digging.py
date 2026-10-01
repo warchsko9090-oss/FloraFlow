@@ -1501,12 +1501,12 @@ def _render_day_details_html(target_date):
         chips = []
         if crew_off:
             chips.append(
-                '<span class="badge rounded-pill px-3 py-2" style="background:#7c3aed;color:#fff;">'
+                '<span class="badge rounded-pill px-3 py-2" style="background:#f472b6;color:#fff;">'
                 'Выходной бригады</span>'
             )
         if brigadier_off:
             chips.append(
-                '<span class="badge rounded-pill px-3 py-2" style="background:#ea580c;color:#fff;">'
+                '<span class="badge rounded-pill px-3 py-2" style="background:#facc15;color:#713f12;">'
                 'Выходной бригадира</span>'
             )
         chips_html = ' '.join(chips) if chips else '<span class="text-muted small">Выходных нет</span>'
@@ -1527,8 +1527,8 @@ def _render_day_details_html(target_date):
                 """
             toggles = f"""
             <div class="d-flex flex-wrap gap-2 mt-2">
-                {_toggle_btn(DiggingCalendarMark.KIND_CREW_OFF, crew_off, 'бригада', '#7c3aed')}
-                {_toggle_btn(DiggingCalendarMark.KIND_BRIGADIER_OFF, brigadier_off, 'бригадир', '#ea580c')}
+                {_toggle_btn(DiggingCalendarMark.KIND_CREW_OFF, crew_off, 'бригада', '#db2777')}
+                {_toggle_btn(DiggingCalendarMark.KIND_BRIGADIER_OFF, brigadier_off, 'бригадир', '#a16207')}
             </div>
             """
         marks_html = f"""

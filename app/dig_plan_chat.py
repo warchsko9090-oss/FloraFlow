@@ -154,59 +154,83 @@ def overview_text(start: date, end: date, by_day: dict) -> str:
     orders = 0
     qty = 0
     ships = 0
+    crew_days = 0
+    brig_days = 0
     day = start
     while day <= end:
-        n, q = _day_bits(by_day[day])
+        bucket = by_day[day]
+        n, q = _day_bits(bucket)
         orders += n
         qty += q
-        ships += len(by_day[day]['ships'])
+        ships += len(bucket['ships'])
+        if bucket['crew_off']:
+            crew_days += 1
+        if bucket['brig_off']:
+            brig_days += 1
         day += timedelta(days=1)
     lines = [
         '<b>План выкопки</b>',
         f'{_fmt_day(start)} — {_fmt_day(end)}',
-        f'Копка: {orders} зак. · {qty} шт',
+        '',
+        '<b>Копка</b>',
+        f'{orders} зак. · {qty} шт' if orders else 'нет',
+        '',
+        '<b>Отгрузка</b>',
+        str(ships) if ships else 'нет',
+        '',
+        '<b>Выходные</b>',
+        f'Бригада: {crew_days} дн.' if crew_days else 'Бригада: нет',
+        f'Бригадир: {brig_days} дн.' if brig_days else 'Бригадир: нет',
+        '',
+        'Нажмите день — состав отдельно по копке и отгрузке.',
     ]
-    if ships:
-        lines.append(f'Отгрузка: {ships}')
-    if not orders and not ships:
-        lines.append('На эти две недели копки и отгрузок в плане нет.')
-    lines.append('Синий — копка, розовый — отгрузка. Нажмите день.')
     return '\n'.join(lines)
 
 
 def day_text(day: date, bucket: dict) -> str:
     n_orders, qty = _day_bits(bucket)
-    lines = [f'<b>{_WD_LONG[day.weekday()]}, {_fmt_day(day)}</b>']
+    lines = [f'<b>{_WD_LONG[day.weekday()]}, {_fmt_day(day)}</b>', '']
+
+    lines.append('<b>Выходные</b>')
     if bucket['crew_off']:
-        lines.append('Выходной рабочей бригады.')
+        lines.append('• Бригада')
     if bucket['brig_off']:
-        lines.append('Выходной бригадира.')
-    if n_orders:
-        lines.append(f'Копка: {n_orders} зак. · {qty} шт')
-    elif not bucket['ships']:
-        lines.append('В плане на этот день пусто.')
+        lines.append('• Бригадир')
+    if not bucket['crew_off'] and not bucket['brig_off']:
+        lines.append('нет')
     lines.append('')
 
+    head = '<b>Копка</b>'
+    if n_orders:
+        head += f' · {n_orders} зак. · {qty} шт'
+    lines.append(head)
     grouped = {}
     for task in bucket['tasks']:
         item = task.item
         order = item.order if item else None
         grouped.setdefault(order.id if order else 0, {'order': order, 'lines': []})
         grouped[order.id if order else 0]['lines'].append(_task_line(task))
+    if not grouped:
+        lines.append('нет')
     for pack in grouped.values():
-        lines.append(f'<b>{escape(_order_label(pack["order"]))}</b>')
+        lines.append(escape(_order_label(pack['order'])))
         for line in pack['lines'][:8]:
             lines.append('• ' + escape(line))
         extra = len(pack['lines']) - 8
         if extra > 0:
             lines.append(f'• ещё {extra}')
-        lines.append('')
+    lines.append('')
 
-    if bucket['ships']:
-        lines.append('<b>Отгрузка</b>')
-        for ship in bucket['ships']:
-            note = f' — {ship.comment.strip()}' if (ship.comment or '').strip() else ''
-            lines.append('• ' + escape(_order_label(ship.order) + note))
+    ships = bucket['ships']
+    ship_head = '<b>Отгрузка</b>'
+    if ships:
+        ship_head += f' · {len(ships)}'
+    lines.append(ship_head)
+    if not ships:
+        lines.append('нет')
+    for ship in ships:
+        note = f' — {ship.comment.strip()}' if (ship.comment or '').strip() else ''
+        lines.append('• ' + escape(_order_label(ship.order) + note))
     return '\n'.join(lines).strip()
 
 
@@ -235,7 +259,7 @@ def render_png(start: date, end: date, by_day: dict, selected: date | None) -> b
     grid_start = start - timedelta(days=start.weekday())
     grid_end = end + timedelta(days=(6 - end.weekday()))
     weeks = ((grid_end - grid_start).days // 7) + 1
-    cell_w, cell_h = 148, 128
+    cell_w, cell_h = 148, 156
     pad, head, dow_h, legend = 28, 78, 28, 46
     width = pad * 2 + cell_w * 7
     height = pad + head + dow_h + cell_h * weeks + legend + pad
@@ -264,13 +288,26 @@ def render_png(start: date, end: date, by_day: dict, selected: date | None) -> b
             y = y0 + dow_h + w * cell_h
             in_range = start <= day <= end
             bucket = by_day.get(day) if in_range else None
-            fill = '#FFFFFF' if in_range else '#EFEBE1'
+            crew = bool(bucket and bucket['crew_off'])
+            brig = bool(bucket and bucket['brig_off'])
+            if crew and brig:
+                fill = '#fce7f3'
+            elif crew:
+                fill = '#fce7f3'
+            elif brig:
+                fill = '#fef9c3'
+            elif in_range:
+                fill = '#FFFFFF'
+            else:
+                fill = '#EFEBE1'
             outline = '#1f7a3a' if day == selected else '#d7e3d9'
             width_px = 3 if day == selected else 1
-            draw.rounded_rectangle(
-                (x + 4, y + 4, x + cell_w - 6, y + cell_h - 8),
-                radius=10, fill=fill, outline=outline, width=width_px,
-            )
+            box = (x + 4, y + 4, x + cell_w - 6, y + cell_h - 8)
+            draw.rounded_rectangle(box, radius=10, fill=fill, outline=outline, width=width_px)
+            if crew and brig:
+                mid = (box[1] + box[3]) // 2
+                draw.rectangle((box[0] + 8, mid, box[2] - 8, box[3] - 12), fill='#fef9c3')
+                draw.rounded_rectangle(box, radius=10, outline=outline, width=width_px)
             if not in_range:
                 day += timedelta(days=1)
                 continue
@@ -290,8 +327,12 @@ def render_png(start: date, end: date, by_day: dict, selected: date | None) -> b
             if bucket['ships']:
                 draw.ellipse((x + 14, yy + 4, x + 26, yy + 16), fill='#e11d48')
                 draw.text((x + 32, yy), f'отгрузка {len(bucket["ships"])}', font=tiny_f, fill='#e11d48')
-            elif bucket['crew_off'] or bucket['brig_off']:
-                draw.text((x + 14, yy), 'выходной', font=tiny_f, fill='#9aa396')
+                yy += 20
+            if bucket['crew_off']:
+                draw.text((x + 14, yy), 'бригада', font=tiny_f, fill='#be185d')
+                yy += 16
+            if bucket['brig_off']:
+                draw.text((x + 14, yy), 'бригадир', font=tiny_f, fill='#a16207')
             day += timedelta(days=1)
 
     ly = height - pad - 28
@@ -299,6 +340,10 @@ def render_png(start: date, end: date, by_day: dict, selected: date | None) -> b
     draw.text((pad + 26, ly - 1), 'копка', font=small_f, fill='#111814')
     draw.ellipse((pad + 110, ly + 2, pad + 126, ly + 18), fill='#e11d48')
     draw.text((pad + 134, ly - 1), 'отгрузка', font=small_f, fill='#111814')
+    draw.rounded_rectangle((pad + 250, ly, pad + 268, ly + 18), radius=4, fill='#f472b6')
+    draw.text((pad + 276, ly - 1), 'бригада', font=small_f, fill='#111814')
+    draw.rounded_rectangle((pad + 390, ly, pad + 408, ly + 18), radius=4, fill='#facc15')
+    draw.text((pad + 416, ly - 1), 'бригадир', font=small_f, fill='#111814')
 
     buf = BytesIO()
     img.save(buf, format='PNG', optimize=True)
