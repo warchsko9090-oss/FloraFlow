@@ -382,7 +382,7 @@
     /*
       Палитра (без пересечений):
       • выкопка — синий чип
-      • отгрузка — малиновый чип + лёгкий розовый фон ячейки
+      • отгрузка — малиновая строка с номером, клетка не закрашивается
       • выходной бригады — розовая полоска и фон
       • выходной бригадира — жёлтая полоска и фон
       • выбранный день (сегодня) — зелёная рамка, не цвет выходного
@@ -419,13 +419,7 @@
         background: #facc15;
     }
 
-    /* Фон дня: приоритет выходных, иначе — заливка отгрузки */
-    .cal-cell.has-shipments:not(.crew-off):not(.brigadier-off) {
-        background: #fff1f2;
-    }
-    .cal-cell.has-shipments:not(.has-tasks):not(.crew-off):not(.brigadier-off) {
-        background: #ffe4e6;
-    }
+    /* Фон дня — только выходные. Отгрузка живёт в строке с номером. */
     .cal-cell.crew-off:not(.brigadier-off) {
         background: #fce7f3;
     }
@@ -475,9 +469,8 @@
         width: 22px;
         height: 12px;
         border-radius: 3px;
-        background: #fecdd3;
-        border-color: #fb7185;
-        border-left: 3px solid #e11d48;
+        background: #e11d48;
+        border: none;
     }
     .cal-legend-swatch.crew {
         width: 22px;
@@ -513,21 +506,20 @@
         gap: 4px;
         margin-top: 4px;
         padding: 3px 5px;
-        background: #fecdd3;
-        color: #9f1239;
+        background: #e11d48;
+        color: #fff;
         border-radius: 5px;
         font-size: 10px;
         font-weight: 700;
         line-height: 1.2;
         overflow: hidden;
         white-space: nowrap;
-        border: 1px solid #fda4af;
-        border-left: 3px solid #e11d48;
+        border: none;
     }
     .cal-ship-line i {
         flex-shrink: 0;
         font-size: 10px;
-        color: #e11d48;
+        color: #fff;
     }
     .cal-ship-line .ship-ids {
         overflow: hidden;
@@ -839,8 +831,7 @@
             gap: 3px;
             max-width: 100%;
         }
-        .cal-cell.has-shipments:not(.crew-off):not(.brigadier-off),
-        .cal-cell.has-shipments:not(.has-tasks):not(.crew-off):not(.brigadier-off) {
+        .cal-cell.has-shipments:not(.crew-off):not(.brigadier-off) {
             background: #fff;
         }
         .cal-cell.is-today-cell:not(.crew-off):not(.brigadier-off) { background: #ecfdf5; }

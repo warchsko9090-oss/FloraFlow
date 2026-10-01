@@ -100,6 +100,36 @@ def _order_label(order) -> str:
     return f'№{order.id}' + (f' · {name}' if name else '')
 
 
+def _public_base() -> str:
+    """Адрес сайта, чтобы ссылка из Telegram открывала заказ, а не относительный путь."""
+    env = (os.environ.get('APP_BASE_URL') or '').strip().rstrip('/')
+    if env:
+        return env
+    try:
+        from app.telegram import default_miniapp_url
+        mini = default_miniapp_url()
+    except Exception:
+        mini = ''
+    if mini.startswith('https://'):
+        return mini.split('/tg/', 1)[0].rstrip('/')
+    try:
+        from flask import has_request_context, request
+        if has_request_context():
+            return request.url_root.rstrip('/')
+    except Exception:
+        pass
+    return ''
+
+
+def _order_link(order) -> str:
+    label = escape(_order_label(order))
+    order_id = getattr(order, 'id', None)
+    if not order_id:
+        return label
+    href = escape(f'{_public_base()}/order/{order_id}', quote=True)
+    return f'<a href="{href}">{label}</a>'
+
+
 def _task_line(task: DiggingTask) -> str:
     item = task.item
     plant = item.plant.name if item and item.plant and item.plant.name else 'растение'
@@ -213,7 +243,7 @@ def day_text(day: date, bucket: dict) -> str:
     if not grouped:
         lines.append('нет')
     for pack in grouped.values():
-        lines.append(escape(_order_label(pack['order'])))
+        lines.append(_order_link(pack['order']))
         for line in pack['lines'][:8]:
             lines.append('• ' + escape(line))
         extra = len(pack['lines']) - 8
@@ -230,7 +260,7 @@ def day_text(day: date, bucket: dict) -> str:
         lines.append('нет')
     for ship in ships:
         note = f' — {ship.comment.strip()}' if (ship.comment or '').strip() else ''
-        lines.append('• ' + escape(_order_label(ship.order) + note))
+        lines.append('• ' + _order_link(ship.order) + escape(note))
     return '\n'.join(lines).strip()
 
 
@@ -325,9 +355,13 @@ def render_png(start: date, end: date, by_day: dict, selected: date | None) -> b
                 draw.text((x + 14, yy + 28), f'{qty} шт', font=tiny_f, fill='#1d4ed8')
                 yy += 48
             if bucket['ships']:
-                draw.ellipse((x + 14, yy + 4, x + 26, yy + 16), fill='#e11d48')
-                draw.text((x + 32, yy), f'отгрузка {len(bucket["ships"])}', font=tiny_f, fill='#e11d48')
-                yy += 20
+                ship_label = f'отгрузка {len(bucket["ships"])}'
+                draw.rounded_rectangle(
+                    (x + 12, yy, x + 20 + 7 * len(ship_label), yy + 20),
+                    radius=5, fill='#e11d48',
+                )
+                draw.text((x + 16, yy + 2), ship_label, font=tiny_f, fill='#ffffff')
+                yy += 24
             if bucket['crew_off']:
                 draw.text((x + 14, yy), 'бригада', font=tiny_f, fill='#be185d')
                 yy += 16
@@ -366,7 +400,11 @@ def render(mode: str, raw_date: str | None, anchor: date | None = None):
     else:
         text = overview_text(start, end, by_day)
     if len(text) > 1000:
-        text = text[:990].rstrip() + '…'
+        text = text[:999]
+        open_tag = text.rfind('<')
+        if open_tag > text.rfind('>'):
+            text = text[:open_tag]
+        text = text.rstrip() + '…'
     png = render_png(start, end, by_day, selected)
     return text, keyboard(start, end, by_day, selected=selected), start, end, selected, png
 
