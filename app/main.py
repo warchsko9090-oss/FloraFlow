@@ -2458,7 +2458,10 @@ def telegram_set_webhook():
 
     payload = {
         'url': url,
-        'allowed_updates': ['message', 'edited_message', 'channel_post', 'edited_channel_post'],
+        'allowed_updates': [
+            'message', 'edited_message', 'channel_post', 'edited_channel_post',
+            'callback_query',
+        ],
         'drop_pending_updates': False,
     }
     secret = (request.values.get('secret') or '').strip()

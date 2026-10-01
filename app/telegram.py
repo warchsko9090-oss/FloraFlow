@@ -704,6 +704,7 @@ def ensure_webhook(url=None):
                 'allowed_updates': [
                     'message', 'edited_message',
                     'channel_post', 'edited_channel_post',
+                    'callback_query',
                 ],
                 'drop_pending_updates': False,
             },
@@ -743,10 +744,11 @@ def get_updates(offset=None, timeout=25):
         return []
     params = {
         'timeout': timeout,
-        'allowed_updates': [
+        'allowed_updates': json.dumps([
             'message', 'edited_message',
             'channel_post', 'edited_channel_post',
-        ],
+            'callback_query',
+        ]),
     }
     if offset:
         params['offset'] = offset

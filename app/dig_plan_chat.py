@@ -376,8 +376,10 @@ def handle_callback(cb: dict) -> None:
     try:
         text, markup, _s, _e, _sel, png = render(mode, raw, anchor=anchor)
         if chat_id and message_id:
-            ok, _err = edit_chat_photo(chat_id, message_id, png, caption=text, reply_markup=markup)
+            ok, err = edit_chat_photo(chat_id, message_id, png, caption=text, reply_markup=markup)
             if not ok:
+                from flask import current_app
+                current_app.logger.warning('dig plan edit photo: %s', err)
                 edit_chat_message(chat_id, message_id, text, reply_markup=markup)
     except Exception:
         db.session.rollback()
