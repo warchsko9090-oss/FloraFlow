@@ -63,7 +63,10 @@ def _load(start: date, end: date):
     )
     ships = (
         ShipmentPlan.query
-        .options(joinedload(ShipmentPlan.order).joinedload(Order.client))
+        .options(
+            joinedload(ShipmentPlan.order).joinedload(Order.client),
+            joinedload(ShipmentPlan.order).joinedload(Order.items),
+        )
         .filter(ShipmentPlan.planned_date >= start, ShipmentPlan.planned_date <= end)
         .all()
     )
@@ -94,6 +97,38 @@ def _load(start: date, end: date):
         elif mark.kind == DiggingCalendarMark.KIND_BRIGADIER_OFF:
             bucket['brig_off'] = True
     return by_day
+
+
+def _order_plants(order) -> int:
+    if not order:
+        return 0
+    return sum(int(it.quantity or 0) for it in (order.items or []))
+
+
+def _day_cards(bucket: dict) -> tuple[list, list]:
+    """Строки клетки: номер заказа и штуки на копку, отдельно на отгрузку."""
+    digging = {}
+    for task in bucket['tasks']:
+        item = task.item
+        order = item.order if item else None
+        if not order:
+            continue
+        row = digging.setdefault(order.id, {
+            'order_id': order.id,
+            'client': (order.client.name if order.client else '') or '',
+            'qty': 0,
+        })
+        row['qty'] += int(task.planned_qty or 0)
+    ships = []
+    for ship in bucket['ships']:
+        order = ship.order
+        ships.append({
+            'order_id': order.id if order else 0,
+            'client': (order.client.name if order and order.client else '') or '',
+            'qty': _order_plants(order),
+        })
+    dig_rows = sorted(digging.values(), key=lambda row: (-row['qty'], row['order_id']))
+    return dig_rows, ships
 
 
 def _order_label(order) -> str:
@@ -294,7 +329,16 @@ def render_png(start: date, end: date, by_day: dict, selected: date | None) -> b
     grid_start = start - timedelta(days=start.weekday())
     grid_end = end + timedelta(days=(6 - end.weekday()))
     weeks = ((grid_end - grid_start).days // 7) + 1
-    cell_w, cell_h = 148, 156
+    cell_w = 168
+    busiest = 1
+    probe = grid_start
+    while probe <= grid_end:
+        bucket = by_day.get(probe)
+        if bucket:
+            dig_rows, ship_rows = _day_cards(bucket)
+            busiest = max(busiest, len(dig_rows) + len(ship_rows))
+        probe += timedelta(days=1)
+    cell_h = 58 + busiest * 24 + 12
     pad, head, dow_h, legend = 28, 78, 28, 46
     width = pad * 2 + cell_w * 7
     height = pad + head + dow_h + cell_h * weeks + legend + pad
@@ -351,27 +395,29 @@ def render_png(start: date, end: date, by_day: dict, selected: date | None) -> b
             if day == today:
                 draw.rounded_rectangle((x + 52, y + 18, x + 118, y + 38), radius=6, fill='#eaf4eb')
                 draw.text((x + 58, y + 20), 'сегодня', font=tiny_f, fill='#1f7a3a')
-            n_orders, qty = _day_bits(bucket)
-            yy = y + 52
-            if n_orders:
-                label = f'{n_orders} зак'
-                draw.rounded_rectangle((x + 12, yy, x + 12 + 18 + 8 * len(label), yy + 24), radius=6, fill='#1d4ed8')
-                draw.text((x + 20, yy + 3), label, font=small_f, fill='#ffffff')
-                draw.text((x + 14, yy + 28), f'{qty} шт', font=tiny_f, fill='#1d4ed8')
-                yy += 48
-            if bucket['ships']:
-                ship_label = f'отгрузка {len(bucket["ships"])}'
+            dig_rows, ship_rows = _day_cards(bucket)
+            yy = y + 48
+
+            def _chip(row, fill, qty_fill, text_fill):
+                nonlocal yy
+                label = f"#{row['order_id']}"
+                if row.get('client'):
+                    label += ' ' + row['client']
+                qty_s = str(row['qty'])
+                draw.rounded_rectangle((x + 8, yy, x + cell_w - 12, yy + 20), radius=4, fill=fill)
+                draw.text((x + 12, yy + 2), label[:18], font=tiny_f, fill=text_fill)
+                qty_w = 8 + 7 * len(qty_s)
                 draw.rounded_rectangle(
-                    (x + 12, yy, x + 20 + 7 * len(ship_label), yy + 20),
-                    radius=5, fill='#e11d48',
+                    (x + cell_w - 16 - qty_w, yy + 2, x + cell_w - 16, yy + 18),
+                    radius=3, fill=qty_fill,
                 )
-                draw.text((x + 16, yy + 2), ship_label, font=tiny_f, fill='#ffffff')
+                draw.text((x + cell_w - 14 - qty_w, yy + 2), qty_s, font=tiny_f, fill='#111814')
                 yy += 24
-            if bucket['crew_off']:
-                draw.text((x + 14, yy), 'бригада', font=tiny_f, fill='#be185d')
-                yy += 16
-            if bucket['brig_off']:
-                draw.text((x + 14, yy), 'бригадир', font=tiny_f, fill='#a16207')
+
+            for row in dig_rows:
+                _chip(row, '#dbeafe', '#eff6ff', '#1e3a8a')
+            for row in ship_rows:
+                _chip(row, '#e11d48', '#ffffff', '#ffffff')
             day += timedelta(days=1)
 
     ly = height - pad - 28
@@ -531,6 +577,20 @@ def _screenshot_html(html: str, height: int) -> bytes:
         shutil.rmtree(folder, ignore_errors=True)
 
 
+def _shot_height(weeks: list) -> int:
+    """Высота окна браузера: строка растёт от числа заказов на копку и отгрузку."""
+    height = 140
+    for week in weeks:
+        chips = 1
+        for day in week['days']:
+            if not day.get('in_range'):
+                continue
+            n = len(day.get('clients_summary') or []) + len(day.get('shipments') or [])
+            chips = max(chips, n)
+        height += 56 + chips * 24 + 16
+    return height + 48
+
+
 def render_plan_shot() -> bytes:
     """PNG календаря: сегодня и 15 дней вперёд, дни по колонкам недели.
 
@@ -540,7 +600,7 @@ def render_plan_shot() -> bytes:
     from flask import render_template
     start, end = horizon()
     weeks = _horizon_weeks(start, end)
-    height = 120 + len(weeks) * 160 + 40
+    height = _shot_height(weeks)
     html = render_template(
         'digging/plan_shot.html',
         weeks=weeks,

@@ -25,7 +25,7 @@
         background: #fbbf24; color: #78350f; padding: 2px 10px; border-radius: 999px;
         font-weight: 800; font-size: 12px; letter-spacing: 0.5px; text-transform: uppercase;
     }
-    .cal-week-row { height: 152px; margin-bottom: 4px; }
+    .cal-week-row { min-height: 120px; height: auto; margin-bottom: 4px; }
     .cal-week-row:last-child { margin-bottom: 0; }
     .cal-week-row.is-current-week { outline: 2px solid #10b981; outline-offset: -2px; }
     .cal-cell {
@@ -46,23 +46,17 @@
     .cal-cell.out-of-range .cal-date { color: #cbd5e1; font-weight: 600; }
     .cal-date { font-weight: bold; color: #334155; font-size: 14px; }
     .cal-date.today { color: #fff; background: #10b981; padding: 2px 8px; border-radius: 12px; display: inline-block; }
-    .cal-ship-line {
-        display: flex; align-items: center; gap: 4px; margin-top: 4px; padding: 3px 5px;
-        background: #e11d48; color: #fff; border-radius: 5px; font-size: 10px; font-weight: 700;
-        line-height: 1.2; overflow: hidden; white-space: nowrap;
-    }
-    .cal-ship-line svg { flex-shrink: 0; }
-    .cal-ship-line .ship-ids { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-    .cal-clients { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; overflow: hidden; }
+    .cal-clients { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
     .cal-client-chip {
         display: flex; justify-content: space-between; align-items: center; gap: 6px;
         background: #eff6ff; color: #1e3a8a; border-radius: 4px; padding: 2px 6px;
-        font-size: 10.5px; font-weight: 600; line-height: 1.2; min-height: 16px;
+        font-size: 11px; font-weight: 600; line-height: 1.2; min-height: 18px;
         overflow: hidden; border-left: 3px solid #3b82f6;
     }
+    .cal-ship-chip { background: #e11d48; color: #fff; border-left-color: #9f1239; }
     .chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-grow: 1; }
-    .chip-qty { color: #0f172a; background: #dbeafe; border-radius: 3px; padding: 1px 4px; font-size: 9px; }
-    .cal-clients-more { font-size: 10px; color: #64748b; text-align: center; font-style: italic; margin-top: 2px; }
+    .chip-qty { color: #0f172a; background: #dbeafe; border-radius: 3px; padding: 1px 4px; font-size: 10px; flex-shrink: 0; }
+    .cal-ship-chip .chip-qty { color: #9f1239; background: #fff; }
     .task-indicator {
         background: #E8F5E9; border: 1px solid #C8E6C9; color: #1B5E20; border-radius: 6px;
         padding: 4px 6px; font-size: 11px; font-weight: bold; margin-top: auto;
@@ -94,26 +88,18 @@
                 </div>
                 {% endif %}
                 <div class="cal-date {% if day.in_range and day.is_today %}today{% endif %}">{{ day.day }}</div>
-                {% if day.in_range and day.shipments_count > 0 %}
-                <div class="cal-ship-line">
-                    <svg viewBox="0 0 640 512" width="12" height="12" aria-hidden="true"><path fill="#fff" d="M48 0C21.5 0 0 21.5 0 48V368c0 26.5 21.5 48 48 48H64c0 53 43 96 96 96s96-43 96-96H384c0 53 43 96 96 96s96-43 96-96h32c17.7 0 32-14.3 32-32s-14.3-32-32-32V288 256 237.3c0-17-6.7-33.3-18.7-45.3L512 128c-12-12-28.3-18.7-45.3-18.7H416V48c0-26.5-21.5-48-48-48H48zM416 160h50.7L544 237.3V256H416V160zM160 464a48 48 0 1 1 0-96 48 48 0 1 1 0 96zm368-48a48 48 0 1 1 -96 0 48 48 0 1 1 96 0z"/></svg>
-                    <span class="ship-ids">{% for s in day.shipments[:2] %}#{{ s.order_id }}{% if not loop.last %}, {% endif %}{% endfor %}{% if day.shipments|length > 2 %}…{% endif %}</span>
+                {% if day.in_range and day.shipments %}
+                <div class="cal-clients">
+                    {% for s in day.shipments %}
+                    <div class="cal-client-chip cal-ship-chip"><span class="chip-name">#{{ s.order_id }} {{ s.client }}</span><span class="chip-qty">{{ s.qty }}</span></div>
+                    {% endfor %}
                 </div>
                 {% endif %}
                 {% if day.in_range and day.clients_summary %}
                 <div class="cal-clients">
-                    {% for c in day.clients_summary[:3] %}
-                    <div class="cal-client-chip"><span class="chip-name">{{ c.client }}</span><span class="chip-qty">{{ c.qty }}</span></div>
+                    {% for c in day.clients_summary %}
+                    <div class="cal-client-chip"><span class="chip-name">#{{ c.order_id }} {{ c.client }}</span><span class="chip-qty">{{ c.qty }}</span></div>
                     {% endfor %}
-                    {% if day.clients_summary|length > 3 %}
-                    <div class="cal-clients-more">+ ещё {{ day.clients_summary|length - 3 }}</div>
-                    {% endif %}
-                </div>
-                {% endif %}
-                {% if day.in_range and day.tasks_count > 0 %}
-                <div class="task-indicator">
-                    <span>{{ day.tasks_count }} задан.</span>
-                    <span>{{ day.total_plants }} шт</span>
                 </div>
                 {% endif %}
             </div>

@@ -328,12 +328,22 @@
         min-width: 0;
         flex-grow: 1;
     }
+    .cal-ship-chip {
+        background: #e11d48;
+        color: #fff;
+        border-left-color: #9f1239;
+        cursor: default;
+    }
     .cal-client-chip .chip-qty {
         color: #0f172a;
         background: #dbeafe;
         border-radius: 3px;
         padding: 1px 4px;
         font-size: 9px;
+    }
+    .cal-ship-chip .chip-qty {
+        color: #9f1239;
+        background: #fff;
     }
     .digging-trash-zone {
         margin: 0 12px 10px;
@@ -813,6 +823,7 @@
         .cal-date-row { margin-bottom: 1px; }
         .cal-drag-handle,
         .cal-clients,
+        .cal-ships,
         .cal-ship-line,
         .task-indicator,
         .digging-trash-zone { display: none !important; }
@@ -1095,11 +1106,16 @@
                             </div>
 
                             {% if day.shipments_count > 0 %}
-                            <div class="cal-ship-line" title="{% for s in day.shipments %}Отгрузка #{{ s.order_id }} — {{ s.client }}{% if not loop.last %}; {% endif %}{% endfor %}">
-                                <i class="fas fa-truck"></i>
-                                <span class="ship-ids">
-                                    {% for s in day.shipments[:2] %}#{{ s.order_id }}{% if not loop.last %}, {% endif %}{% endfor %}{% if day.shipments|length > 2 %}…{% endif %}
-                                </span>
+                            <div class="cal-clients cal-ships">
+                                {% for s in day.shipments[:3] %}
+                                <div class="cal-client-chip cal-ship-chip" title="Отгрузка #{{ s.order_id }} — {{ s.client }} · {{ s.qty }} шт">
+                                    <span class="chip-name">#{{ s.order_id }} {{ s.client }}</span>
+                                    <span class="chip-qty">{{ s.qty }}</span>
+                                </div>
+                                {% endfor %}
+                                {% if day.shipments|length > 3 %}
+                                <div class="cal-clients-more">+ ещё {{ day.shipments|length - 3 }}</div>
+                                {% endif %}
                             </div>
                             {% endif %}
 
@@ -1107,13 +1123,13 @@
                             <div class="cal-clients">
                                 {% for c in day.clients_summary[:3] %}
                                 <div class="cal-client-chip"
-                                     title="{{ c.client }} — {{ c.qty }} шт · перетащите в урну, чтобы снять с плана"
+                                     title="Заказ #{{ c.order_id }} — {{ c.client }} · {{ c.qty }} шт · перетащите в урну, чтобы снять с плана"
                                      draggable="true"
                                      data-order-id="{{ c.order_id }}"
                                      data-from-date="{{ day.date_str }}"
                                      ondragstart="diggingChipDragStart(event, '{{ day.date_str }}', {{ c.order_id }})"
                                      onclick="event.stopPropagation()">
-                                    <span class="chip-name">{{ c.client }}</span>
+                                    <span class="chip-name">#{{ c.order_id }} {{ c.client }}</span>
                                     <span class="chip-qty">{{ c.qty }}</span>
                                 </div>
                                 {% endfor %}

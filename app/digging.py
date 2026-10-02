@@ -1112,6 +1112,7 @@ def build_planning_weeks(center_monday, weeks_before=8, weeks_after=8):
     ).all()
     ship_plans = (
         ShipmentPlan.query
+        .options(joinedload(ShipmentPlan.order).joinedload(Order.items))
         .filter(
             ShipmentPlan.planned_date >= first_monday,
             ShipmentPlan.planned_date <= last_sunday,
@@ -1125,10 +1126,12 @@ def build_planning_weeks(center_monday, weeks_before=8, weeks_after=8):
             continue
         if (o.status or '') in ('shipped', 'canceled', 'ghost'):
             continue
+        plant_qty = sum(int(it.quantity or 0) for it in (o.items or []))
         ships_by_date.setdefault(sp.planned_date, []).append({
             'id': sp.id,
             'order_id': o.id,
             'client': o.client.name if o.client else '—',
+            'qty': plant_qty,
             'comment': sp.comment or '',
         })
     for dkey in ships_by_date:
