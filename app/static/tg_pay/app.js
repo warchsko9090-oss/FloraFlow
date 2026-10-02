@@ -45,6 +45,27 @@
     return `<div class="loader" role="status" aria-live="polite"><div class="loader-spin"></div><p>${esc(text)}</p></div>`;
   }
 
+  function lockScreen(text) {
+    let el = document.getElementById('screenLock');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'screenLock';
+      el.className = 'screen-lock';
+      el.setAttribute('role', 'alertdialog');
+      el.setAttribute('aria-modal', 'true');
+      document.body.appendChild(el);
+    }
+    el.innerHTML = loadingCard(text || 'Загрузка…');
+    el.hidden = false;
+    view.classList.add('busy');
+  }
+
+  function unlockScreen() {
+    const el = document.getElementById('screenLock');
+    if (el) el.hidden = true;
+    view.classList.remove('busy');
+  }
+
   async function apiTimed(path, opts, ms) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ms || 20000);
@@ -527,9 +548,14 @@
           <button class="btn btn-quiet" type="button" id="btnSave">Сохранить правки</button>
           ${inv.has_receipt ? '<button class="btn btn-quiet" type="button" id="btnReceipt">Квитанция в чат</button>' : ''}
           ${(inv.status !== 'paid')
-            ? `<div class="field"><label>${inv.has_file ? 'Заменить PDF' : 'Прикрепить PDF'}</label>
-                <input id="fAttach" type="file" accept="application/pdf,image/*"></div>
-              <button class="btn btn-quiet" type="button" id="btnAttach">${inv.has_file ? 'Заменить файл' : 'Прикрепить файл'}</button>
+            ? `<div class="field"><label>${inv.has_file ? 'Замена счёта' : 'Загрузка счёта'}</label>
+                ${inv.has_file
+                  ? `<p class="file-loaded">Загружен: ${esc(inv.original_name || 'счёт')}</p>`
+                  : '<p class="hint" style="margin-top:0">Файла ещё нет.</p>'}
+                <label class="file-btn">${inv.has_file ? 'Заменить файл' : 'Загрузить PDF или фото'}
+                  <input id="fAttach" class="file-proxy" type="file" accept="application/pdf,image/*,.pdf,.jpg,.jpeg,.png,.webp,.heic" data-replace="${inv.has_file ? '1' : '0'}">
+                </label>
+              </div>
               <button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>`
             : ''}
         </div>
@@ -568,9 +594,9 @@
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
     if (can) bindBudgetPickers(view);
     const openBtn = document.getElementById('btnOpen');
-    if (openBtn) openBtn.onclick = () => openInvoice(inv);
+    if (openBtn) openBtn.onclick = () => withBtn(openBtn, 'Отправляю…', () => openInvoice(inv));
     const dlBtn = document.getElementById('btnDownload');
-    if (dlBtn) dlBtn.onclick = () => downloadInvoiceFile(inv);
+    if (dlBtn) dlBtn.onclick = () => withBtn(dlBtn, 'Скачиваю…', () => downloadInvoiceFile(inv));
     const recBtn = document.getElementById('btnReceipt');
     if (recBtn) recBtn.onclick = () => openReceipt(inv);
     const more = document.getElementById('btnMore');
@@ -589,8 +615,19 @@
     }
     const save = document.getElementById('btnSave');
     if (save) save.onclick = () => saveInv(inv.id, false);
-    const attach = document.getElementById('btnAttach');
-    if (attach) attach.onclick = () => attachPdf(inv.id);
+    const attach = document.getElementById('fAttach');
+    if (attach) {
+      attach.onchange = () => {
+        if (attach.files && attach.files[0]) attachPdf(inv.id);
+      };
+    }
+    try {
+      if (sessionStorage.getItem('ff_inv_edit') === String(inv.id) && panel) {
+        sessionStorage.removeItem('ff_inv_edit');
+        panel.removeAttribute('hidden');
+        if (more) more.textContent = 'Скрыть';
+      }
+    } catch (_) {}
     const paid = document.getElementById('btnPaid');
     if (paid) paid.onclick = () => markPaid(inv.id, isPlan);
     const drop = document.getElementById('btnDrop');
@@ -718,6 +755,42 @@
     if (tg && tg.close) setTimeout(() => tg.close(), 400);
   }
 
+  function safeFileName(inv) {
+    let name = (inv.original_name || 'invoice.pdf').split(/[/\\]/).pop() || 'invoice.pdf';
+    if (!/\.(pdf|png|jpe?g|webp|bmp)$/i.test(name)) name = 'invoice.pdf';
+    return name;
+  }
+
+  function tgDownloadFile(tg, url, fileName) {
+    return new Promise((resolve, reject) => {
+      if (!tg || typeof tg.downloadFile !== 'function') {
+        reject(new Error('no-download-file'));
+        return;
+      }
+      try {
+        tg.downloadFile({ url: url, file_name: fileName }, (accepted) => {
+          if (accepted === false) reject(new Error('cancelled'));
+          else resolve();
+        });
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  async function withBtn(btn, label, fn) {
+    if (!btn || btn.disabled) return;
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = label;
+    try {
+      await fn();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  }
+
   async function sendFileToChat(inv, kind) {
     const isReceipt = kind === 'receipt';
     const sent = await api('/tg/pay/api/invoices/' + inv.id + '/send-pdf', {
@@ -731,25 +804,44 @@
     alert(sendErrorText(sent, isReceipt ? 'Квитанция не найдена.' : 'У этого счёта нет PDF.'));
   }
 
+  async function downloadViaBlob(inv, name) {
+    if (!window.FFTg || !window.FFTg.fetchBlob) {
+      throw new Error('Не удалось скачать файл.');
+    }
+    const blob = await window.FFTg.fetchBlob('/tg/pay/api/invoices/' + inv.id + '/file');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 20000);
+  }
+
   async function downloadInvoiceFile(inv) {
-    try {
-      if (!window.FFTg || !window.FFTg.fetchBlob) {
-        alert('Не удалось скачать файл.');
-        return;
+    const name = safeFileName(inv);
+    const tg = tgApp();
+    if (location.protocol === 'https:' && tg && typeof tg.downloadFile === 'function') {
+      try {
+        const ticket = await api('/tg/pay/api/invoices/' + inv.id + '/download-ticket', {
+          method: 'POST',
+          body: '{}',
+        });
+        if (ticket && ticket.token) {
+          const fileUrl = new URL('/tg/pay/api/invoices/' + inv.id + '/file', location.origin);
+          fileUrl.searchParams.set('t', ticket.token);
+          await tgDownloadFile(tg, fileUrl.href, (ticket.name || name).split(/[/\\]/).pop() || name);
+          haptic('medium');
+          return;
+        }
+      } catch (e) {
+        if (e && e.message === 'cancelled') return;
       }
-      const blob = await window.FFTg.fetchBlob('/tg/pay/api/invoices/' + inv.id + '/file');
-      let name = (inv.original_name || 'invoice.pdf').split(/[/\\]/).pop() || 'invoice.pdf';
-      if (!/\.(pdf|png|jpe?g|webp|bmp)$/i.test(name)) name = 'invoice.pdf';
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = name;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    }
+    try {
+      await downloadViaBlob(inv, name);
       haptic('medium');
     } catch (e) {
       alert(e.message || 'Не удалось скачать файл.');
@@ -1102,21 +1194,27 @@
 
   async function attachPdf(invId) {
     const input = document.getElementById('fAttach');
-    if (!input || !input.files || !input.files[0]) {
-      alert('Выберите PDF или фото.');
+    const file = input && input.files && input.files[0];
+    if (!file) {
+      alert('Выберите PDF или фото счёта.');
       return;
     }
+    const replacing = input.dataset.replace === '1';
     const fd = new FormData();
-    fd.append('file', input.files[0]);
-    view.classList.add('busy');
+    const fallback = file.type === 'application/pdf' ? 'invoice.pdf' : 'invoice.jpg';
+    const name = (file.name && !/^(blob|file|image)$/i.test(file.name)) ? file.name : fallback;
+    fd.append('file', file, name);
+    lockScreen(replacing ? 'Заменяем счёт…' : 'Загружаем счёт…');
     try {
       const inv = await api('/tg/pay/api/invoices/' + invId + '/attach', { method: 'POST', body: fd });
       haptic('medium');
-      location.hash = '#/inv/' + inv.id;
+      try { sessionStorage.setItem('ff_inv_edit', String((inv && inv.id) || invId)); } catch (_) {}
+      await renderDetail((inv && inv.id) || invId);
     } catch (e) {
-      alert(e.message);
+      alert(e.message || 'Не удалось загрузить счёт.');
+      if (input) input.value = '';
     } finally {
-      view.classList.remove('busy');
+      unlockScreen();
     }
   }
 

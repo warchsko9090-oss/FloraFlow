@@ -48,6 +48,8 @@ _DEV_COOKIE = 'tg_pay_as'
 _MINI_COOKIE = 'tg_mini'
 _MINI_SALT = 'tg-mini-v1'
 _MINI_MAX_AGE = 7 * 24 * 3600
+_FILE_SALT = 'tg-pay-file-v1'
+_FILE_TOKEN_MAX_AGE = 10 * 60
 _LAST_TG_FILE = '/data/tg_last_update.json'
 
 
@@ -476,6 +478,31 @@ def _mini_signer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(current_app.secret_key, salt=_MINI_SALT)
 
 
+def _file_signer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(current_app.secret_key, salt=_FILE_SALT)
+
+
+def _user_from_file_token(inv_id: int):
+    """Короткая ссылка для скачивания клиентом Telegram: у него нет cookie мини-приложения.
+
+    None — токена нет, идём обычной авторизацией.
+    False — токен есть, но он просрочен или чужой.
+    """
+    token = (request.args.get('t') or '').strip()
+    if not token:
+        return None
+    try:
+        data = _file_signer().loads(token, max_age=_FILE_TOKEN_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return False
+    if int(data.get('inv') or 0) != int(inv_id):
+        return False
+    user = User.query.get(int(data.get('uid') or 0))
+    if not user or not _can_pay_app(user):
+        return False
+    return user
+
+
 def _mini_cookie_secure() -> bool:
     return bool(os.environ.get('AMVERA') or os.path.isdir('/data') or request.is_secure)
 
@@ -614,6 +641,17 @@ def resolve_user() -> tuple[User | None, bool, dict | None]:
                 return user, False, None
             pending = tg_user
             break
+    if _dev_mode():
+        as_role = (
+            request.args.get('as')
+            or request.headers.get('X-Tg-Pay-As')
+            or request.headers.get('X-Tg-Sale-As')
+            or request.cookies.get(_DEV_COOKIE)
+            or request.cookies.get('tg_sale_as')
+            or ''
+        )
+        if as_role in ('admin', 'payer', 'shop_manager', 'accountant'):
+            return _dev_user(as_role), True, None
     cookie_tg = _telegram_id_from_mini_cookie()
     if cookie_tg and not pending:
         mapped = _user_from_telegram({'id': cookie_tg})
@@ -1217,6 +1255,50 @@ def _save_parsed_invoice(
     return inv
 
 
+_MIME_EXT = {
+    'application/pdf': '.pdf',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/pjpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/bmp': '.bmp',
+    'image/heic': '.heic',
+    'image/heif': '.heic',
+    'image/tiff': '.tiff',
+    'image/tif': '.tiff',
+}
+
+
+def _read_incoming_file(file):
+    """Байты и имя. В Telegram имя часто пустое или «blob» — тогда смотрим тип и сигнатуру."""
+    if file is None:
+        return None, None, 'no_file'
+    data = file.read()
+    if not data:
+        return None, None, 'empty'
+    raw_name = (getattr(file, 'filename', None) or '').strip().replace('\\', '/').split('/')[-1]
+    if raw_name.lower() in ('', 'blob', 'file', 'image', 'undefined'):
+        raw_name = ''
+    mime = (getattr(file, 'mimetype', None) or '').split(';', 1)[0].strip().lower()
+    ext = os.path.splitext(raw_name)[1].lower() if raw_name else ''
+    if ext not in _ALLOWED_EXT:
+        mime_ext = _MIME_EXT.get(mime, '')
+        if mime_ext in _ALLOWED_EXT:
+            stem = os.path.splitext(raw_name)[0] if raw_name else 'invoice'
+            raw_name = (stem or 'invoice') + mime_ext
+            ext = mime_ext
+        elif data[:5] == b'%PDF-':
+            stem = os.path.splitext(raw_name)[0] if raw_name else 'invoice'
+            raw_name = (stem or 'invoice') + '.pdf'
+            ext = '.pdf'
+        else:
+            return None, None, 'bad_type'
+    if not raw_name:
+        raw_name = 'invoice' + ext
+    return data, raw_name[:255], None
+
+
 def _store_upload(data: bytes, original_name: str) -> str:
     safe = secure_filename(original_name) or 'invoice.pdf'
     save_name = f"inv_{int(msk_now().timestamp())}_{safe}"
@@ -1420,15 +1502,43 @@ def api_invoice(user: User, inv_id: int):
 
 
 @bp.route('/api/invoices/<int:inv_id>/file')
-@require_user
-def api_invoice_file(user: User, inv_id: int):
+def api_invoice_file(inv_id: int):
+    token_user = _user_from_file_token(inv_id)
+    if token_user is False:
+        return jsonify({'error': 'unauthorized', 'hint': 'link_expired'}), 401
+    if token_user:
+        user = token_user
+    else:
+        user, _dev, pending = resolve_user()
+        if not user:
+            if pending:
+                return jsonify({'error': 'not_linked'}), 403
+            return jsonify({'error': 'unauthorized', 'hint': _auth_fail_hint()}), 401
+        if not _can_pay_app(user):
+            return jsonify({'error': 'forbidden'}), 403
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if not _can_see_invoice(user, inv):
         return jsonify({'error': 'not_found'}), 404
-    resp = flask_send(_invoice_with_file(inv), as_attachment=False)
+    resp = flask_send(_invoice_with_file(inv), as_attachment=True)
     if resp is None:
         return jsonify({'error': 'file_missing'}), 404
+    resp.headers['Cache-Control'] = 'private, no-store'
     return resp
+
+
+@bp.route('/api/invoices/<int:inv_id>/download-ticket', methods=['POST'])
+@require_user
+def api_download_ticket(user: User, inv_id: int):
+    """Ссылка, которую Telegram качает сам, без cookie веб-приложения."""
+    inv = PaymentInvoice.query.get_or_404(inv_id)
+    if not _can_see_invoice(user, inv):
+        return jsonify({'error': 'not_found'}), 404
+    src = _invoice_with_file(inv)
+    if not invoice_bytes(src):
+        return jsonify({'ok': False, 'error': 'file_missing'})
+    name = src.original_name or src.filename or 'invoice.pdf'
+    token = _file_signer().dumps({'inv': int(inv.id), 'uid': int(user.id)})
+    return jsonify({'ok': True, 'token': token, 'name': name})
 
 
 @bp.route('/api/invoices/<int:inv_id>/receipt')
@@ -1569,16 +1679,13 @@ def api_upload(user: User):
     if not _can_edit(user):
         return jsonify({'error': 'forbidden'}), 403
     file = request.files.get('file')
-    if not file or not file.filename:
-        return jsonify({'error': 'no_file'}), 400
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in _ALLOWED_EXT:
-        return jsonify({'error': 'bad_type', 'hint': 'Нужен PDF (или фото счёта)'}), 400
-    data = file.read()
-    if not data:
-        return jsonify({'error': 'empty'}), 400
-    save_name, path = _store_upload(data, file.filename)
-    parsed = parse_invoice_file(path, file.filename)
+    data, original_name, file_err = _read_incoming_file(file)
+    if file_err == 'bad_type':
+        return jsonify({'error': 'bad_type', 'hint': 'Нужен PDF или фото счёта'}), 400
+    if file_err:
+        return jsonify({'error': file_err, 'hint': 'Файл не дошёл. Выберите его ещё раз.'}), 400
+    save_name, path = _store_upload(data, original_name)
+    parsed = parse_invoice_file(path, original_name)
     plan_id = request.form.get('plan_id') or request.args.get('plan_id')
     plan = PaymentInvoice.query.get(int(plan_id)) if plan_id else None
     if plan and (plan.kind or '') == 'plan':
@@ -1593,13 +1700,21 @@ def api_upload(user: User):
         if parsed.get('summary') and not (plan.summary or '').strip():
             plan.summary = parsed['summary'][:500]
         plan.line_items = json.dumps(parsed.get('lines') or [], ensure_ascii=False)
-        plan.original_name = file.filename[:255]
-        db.session.commit()
-        _notify_watchers(plan, except_user=user)
+        plan.original_name = original_name[:255]
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('invoice upload commit')
+            return jsonify({'error': 'save_failed', 'hint': 'Не удалось сохранить счёт. Попробуйте ещё раз.'}), 500
+        try:
+            _notify_watchers(plan, except_user=user)
+        except Exception:
+            current_app.logger.exception('invoice upload notify')
         payload = serialize_invoice(plan, detail=True)
         payload['parse_error'] = parsed.get('error')
         return jsonify(payload)
-    inv = _save_parsed_invoice(save_name, file.filename, parsed, source='miniapp')
+    inv = _save_parsed_invoice(save_name, original_name, parsed, source='miniapp')
     attach_file(inv, data, save_name)
     if plan_id:
         try:
@@ -1609,8 +1724,16 @@ def api_upload(user: User):
     ptype = (request.form.get('payment_type') or '').strip()
     if ptype in ('cash', 'cashless'):
         inv.payment_type = ptype
-    db.session.commit()
-    _notify_watchers(inv, except_user=user)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('invoice upload commit')
+        return jsonify({'error': 'save_failed', 'hint': 'Не удалось сохранить счёт. Попробуйте ещё раз.'}), 500
+    try:
+        _notify_watchers(inv, except_user=user)
+    except Exception:
+        current_app.logger.exception('invoice upload notify')
     payload = serialize_invoice(inv, detail=True)
     payload['parse_error'] = parsed.get('error')
     return jsonify(payload)
@@ -1932,18 +2055,15 @@ def api_attach_file(user: User, inv_id: int):
         return jsonify({'error': 'forbidden'}), 403
     inv = PaymentInvoice.query.get_or_404(inv_id)
     if inv.status == 'paid':
-        return jsonify({'error': 'locked'}), 400
+        return jsonify({'error': 'locked', 'hint': 'Счёт уже оплачен — файл не меняется.'}), 400
     file = request.files.get('file')
-    if not file or not file.filename:
-        return jsonify({'error': 'no_file'}), 400
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in _ALLOWED_EXT:
-        return jsonify({'error': 'bad_type', 'hint': 'Нужен PDF (или фото счёта)'}), 400
-    data = file.read()
-    if not data:
-        return jsonify({'error': 'empty'}), 400
-    save_name, path = _store_upload(data, file.filename)
-    parsed = parse_invoice_file(path, file.filename)
+    data, original_name, file_err = _read_incoming_file(file)
+    if file_err == 'bad_type':
+        return jsonify({'error': 'bad_type', 'hint': 'Нужен PDF или фото счёта'}), 400
+    if file_err:
+        return jsonify({'error': file_err, 'hint': 'Файл не дошёл. Выберите его ещё раз.'}), 400
+    save_name, path = _store_upload(data, original_name)
+    parsed = parse_invoice_file(path, original_name)
     attach_file(inv, data, save_name)
     amount = parsed.get('amount') or Decimal('0')
     if not isinstance(amount, Decimal):
@@ -1958,9 +2078,17 @@ def api_attach_file(user: User, inv_id: int):
         inv.comment = inv.summary
     if parsed.get('lines'):
         inv.line_items = json.dumps(parsed.get('lines') or [], ensure_ascii=False)
-    inv.original_name = (file.filename or inv.original_name or 'invoice.pdf')[:255]
-    db.session.commit()
-    _notify_watchers(inv, except_user=user)
+    inv.original_name = original_name[:255]
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('invoice attach commit')
+        return jsonify({'error': 'save_failed', 'hint': 'Не удалось сохранить счёт. Попробуйте ещё раз.'}), 500
+    try:
+        _notify_watchers(inv, except_user=user)
+    except Exception:
+        current_app.logger.exception('invoice attach notify')
     payload = serialize_invoice(inv, detail=True)
     payload['parse_error'] = parsed.get('error')
     return jsonify(payload)

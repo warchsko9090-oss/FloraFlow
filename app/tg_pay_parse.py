@@ -84,7 +84,7 @@ def _groq_purpose(text: str, lines: list[dict], fallback: str) -> tuple[str, Dec
     except ImportError:
         return fallback, None
     try:
-        client = Groq(api_key=api_key)
+        client = Groq(api_key=api_key, timeout=12.0)
         payload = {
             'text': text[:6000],
             'lines': lines[:40],
@@ -111,8 +111,8 @@ def _groq_purpose(text: str, lines: list[dict], fallback: str) -> tuple[str, Dec
         summary = (data.get('summary') or fallback).strip()[:500]
         amount = _money(data.get('amount'))
         return summary or fallback, amount
-    except Exception:
-        log.exception('tg_pay groq purpose failed')
+    except Exception as exc:
+        log.warning('tg_pay groq purpose skipped: %s', exc)
         return fallback, None
 
 

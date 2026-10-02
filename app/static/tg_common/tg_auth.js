@@ -192,6 +192,9 @@
     if (data && data.hint === "bad_signature") {
       return "Подпись Telegram не принята. Закройте мини-приложение и откройте его кнопкой в боте.";
     }
+    if (data && data.hint && data.error && /^(bad_type|no_file|empty|locked|save_failed)$/.test(String(data.error))) {
+      return data.hint;
+    }
     return (data && (data.error || data.hint)) || "Нет входа. Откройте Mini App из бота.";
   }
 
@@ -247,8 +250,22 @@
     if (initData && initData.length < 4000) {
       headers["X-Telegram-Init-Data"] = initData;
     }
-    const res = await fetch(path, { credentials: "same-origin", headers: headers });
-    if (res.ok) return res.blob();
+    const res = await fetch(path, {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: headers,
+    });
+    if (res.ok) {
+      const type = (res.headers.get("content-type") || "").toLowerCase();
+      if (type.includes("text/html") || type.includes("application/json")) {
+        throw new Error("Сервер отдал не файл. Закройте мини-приложение и откройте его снова из чата с ботом.");
+      }
+      const blob = await res.blob();
+      if (!blob || !blob.size) {
+        throw new Error("Файл пришёл пустым. Нажмите скачивание ещё раз.");
+      }
+      return blob;
+    }
     const data = await res.json().catch(() => ({}));
     if (res.status === 404) {
       throw new Error(
