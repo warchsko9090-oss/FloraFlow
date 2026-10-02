@@ -2,6 +2,7 @@ import os
 import io
 import re
 import json
+import time
 import logging
 import requests
 from urllib.parse import urlsplit
@@ -197,6 +198,28 @@ def _http():
     return _SESSION
 
 
+def _reset_http():
+    """Сбрасывает сессию после обрыва: пул держит мёртвый сокет, и следующий запрос падает так же."""
+    global _SESSION, _SESSION_PROXY
+    sess = _SESSION
+    _SESSION = None
+    _SESSION_PROXY = object()
+    if sess is not None:
+        try:
+            sess.close()
+        except Exception:
+            pass
+
+
+def _transient_tg(exc) -> bool:
+    text = str(exc).lower()
+    return any(part in text for part in (
+        'connection reset', 'connection aborted', 'timed out', 'timeout',
+        'remote end closed', 'broken pipe', 'connection refused',
+        'temporarily unavailable', 'eof occurred',
+    ))
+
+
 CHAT_ROUTES = {
     "hr": ["TG_CHAT_ID_HR", "TG_CHAT_ID"],
     "orders": ["TG_CHAT_ID_ORDERS", "TG_CHAT_ID"],
@@ -209,6 +232,9 @@ CHAT_ROUTES = {
     "expenses": ["TG_CHAT_ID_EXPENSES", "TG_CHAT_ID"],
     # Оператор витрины — личные сообщения при запросе КП с /shop.
     "shop": ["TG_CHAT_ID_SHOP"],
+    # Группа ИТР: пятничная сводка факт/план поступлений ДС.
+    # Без запасного TG_CHAT_ID — если переменная пустая, сообщение никуда не уходит.
+    "itr": ["TG_CHAT_ID_ITR"],
 }
 
 
@@ -346,21 +372,29 @@ def edit_chat_photo(chat_id, message_id, file_bytes, caption='', reply_markup=No
     }
     if reply_markup:
         form['reply_markup'] = json.dumps(reply_markup, ensure_ascii=False)
-    try:
-        r = _http().post(
-            f"{_tg_root()}/bot{bot_token}/editMessageMedia",
-            data=form,
-            files={'photo': ('plan.png', io.BytesIO(file_bytes))},
-            timeout=30,
-        )
-        if r.ok:
-            return True, 'ok'
-        low = (r.text or '').lower()
-        if 'message is not modified' in low:
-            return True, 'ok'
-        return False, r.text
-    except Exception as exc:
-        return False, str(exc)
+    last = 'edit failed'
+    for attempt in range(3):
+        try:
+            r = _http().post(
+                f"{_tg_root()}/bot{bot_token}/editMessageMedia",
+                data=form,
+                files={'photo': ('plan.png', io.BytesIO(file_bytes))},
+                headers={'Connection': 'close'},
+                timeout=25,
+            )
+            if r.ok:
+                return True, 'ok'
+            low = (r.text or '').lower()
+            if 'message is not modified' in low:
+                return True, 'ok'
+            return False, r.text
+        except Exception as exc:
+            last = str(exc)
+            _reset_http()
+            if not _transient_tg(exc) or attempt >= 2:
+                return False, last
+            time.sleep(0.6 * (attempt + 1))
+    return False, last
 
 
 def set_reaction(chat_id, message_id, emoji='✅'):
@@ -610,30 +644,35 @@ def send_chat_document(chat_id, path=None, filename=None, caption='', file_bytes
         return False, "TG creds not configured"
     url = f"{_tg_root()}/bot{bot_token}/sendDocument"
     name = filename or (os.path.basename(path) if path else 'invoice.pdf')
-    try:
-        if file_bytes is not None:
-            files = {'document': (name, io.BytesIO(file_bytes))}
+    if file_bytes is None and not path:
+        return False, "no file"
+    payload = file_bytes
+    if payload is None:
+        try:
+            with open(path, 'rb') as fh:
+                payload = fh.read()
+        except Exception as exc:
+            return False, str(exc)
+    last = 'send failed'
+    for attempt in range(3):
+        try:
             r = _http().post(
                 url,
                 data={'chat_id': chat_id, 'caption': caption or ''},
-                files=files,
-                timeout=30,
+                files={'document': (name, io.BytesIO(payload))},
+                headers={'Connection': 'close'},
+                timeout=25,
             )
-        else:
-            if not path:
-                return False, "no file"
-            with open(path, 'rb') as f:
-                r = _http().post(
-                    url,
-                    data={'chat_id': chat_id, 'caption': caption or ''},
-                    files={'document': (name, f)},
-                    timeout=30,
-                )
-        if not r.ok:
+            if r.ok:
+                return True, 'ok'
             return False, r.text
-    except Exception as exc:
-        return False, str(exc)
-    return True, "ok"
+        except Exception as exc:
+            last = str(exc)
+            _reset_http()
+            if not _transient_tg(exc) or attempt >= 2:
+                return False, last
+            time.sleep(0.6 * (attempt + 1))
+    return False, last
 
 
 def send_document(filename=None, caption='', file_bytes=None, path=None, chat_type='orders'):

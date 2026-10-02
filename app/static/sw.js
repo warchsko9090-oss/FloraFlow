@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v69'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
+const CACHE_VERSION = 'v70'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
 
@@ -67,7 +67,8 @@ self.addEventListener('fetch', (event) => {
     if (event.request.method !== 'GET' || 
         url.pathname.startsWith('/chat/') || 
         url.pathname.startsWith('/admin/') || 
-        url.pathname.startsWith('/shop')) {
+        url.pathname.startsWith('/shop') ||
+        url.pathname.startsWith('/tg/')) {
         return;
     }
 
@@ -140,6 +141,7 @@ self.addEventListener('fetch', (event) => {
                     if (acceptHeader && acceptHeader.includes('text/html')) {
                         return caches.match('/offline');
                     }
+                    return new Response('', { status: 503, statusText: 'offline' });
                 });
             })
     );

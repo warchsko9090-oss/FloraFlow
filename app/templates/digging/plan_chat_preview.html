@@ -1,81 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-    .tg-stage { max-width: 520px; margin: 0 auto; }
+    .tg-stage { max-width: 1100px; margin: 0 auto; }
     .tg-cal {
         width: 100%;
         height: auto;
         border-radius: 12px;
         display: block;
-        margin-bottom: 8px;
-        animation: tg-in 0.28s ease;
-    }
-    .tg-bubble {
-        background: #fff;
         border: 1px solid #d7e3d9;
-        border-radius: 12px 12px 12px 4px;
-        padding: 12px 14px;
-        box-shadow: 0 8px 24px rgba(17, 24, 20, 0.06);
-        white-space: pre-wrap;
-        font-size: 15px;
-        line-height: 1.45;
-        animation: tg-in 0.28s ease;
+        background: #fff;
     }
-    .tg-bubble a {
-        color: #1d4ed8;
-        font-weight: 700;
-        text-decoration: underline;
-    }
-    @keyframes tg-in {
-        from { opacity: 0; transform: translateY(8px); }
-        to { opacity: 1; transform: none; }
-    }
-    .tg-keys { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-    .tg-row { display: flex; gap: 6px; }
-    .tg-key {
-        flex: 1;
-        text-align: center;
-        background: #e8f0ff;
-        color: #1d4ed8;
-        border-radius: 8px;
-        padding: 8px 4px;
-        font-size: 13px;
-        font-weight: 700;
-        text-decoration: none;
-    }
-    .tg-key:hover { background: #dbe7ff; color: #1d4ed8; }
 </style>
 <div class="tg-stage" hx-boost="false">
     <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
         <div>
-            <h4 class="fw-bold m-0">Сообщение в чат продаж</h4>
-            <div class="text-muted small">Картинка на сегодня и 2 недели. Кнопка дня меняет это же сообщение.</div>
+            <h4 class="fw-bold m-0">Снимок плана в чат продаж</h4>
+            <div class="text-muted small">С сегодняшнего дня и на 15 дней вперёд. Дни стоят по колонкам недели, без подписи.</div>
         </div>
         <a href="{{ url_for('digging.digging_planning') }}" class="btn btn-outline-secondary btn-sm">К плану</a>
     </div>
     {% if notice %}
     <div class="alert alert-secondary">{{ notice }}</div>
     {% endif %}
-    <img class="tg-cal" alt="Календарь выкопки на две недели"
-         src="{{ url_for('digging.dig_plan_chat_image', week=start.isoformat(), day=selected) }}">
-    <div class="tg-bubble">{{ text|safe }}</div>
-    <div class="tg-keys">
-        {% for row in rows %}
-        <div class="tg-row">
-            {% for key in row %}
-            {% set parts = key.callback_data.split(':') %}
-            {% if parts[1] == 'd' %}
-            <a class="tg-key" href="{{ url_for('digging.dig_plan_chat_preview', week=parts[3], day=parts[2]) }}">{{ key.text }}</a>
-            {% else %}
-            <a class="tg-key" href="{{ url_for('digging.dig_plan_chat_preview', week=parts[2]) }}">{{ key.text }}</a>
-            {% endif %}
-            {% endfor %}
-        </div>
-        {% endfor %}
-    </div>
+    <img class="tg-cal" alt="План выкопки"
+         src="{{ url_for('digging.dig_plan_chat_image') }}">
     <form method="post" class="mt-3" hx-boost="false">
         <button class="btn btn-primary" type="submit">Отправить в чат продаж</button>
     </form>
-    <p class="text-muted small mt-2 mb-0">В Telegram нажатие не открывает новую страницу: бот подменяет текст сообщения. Здесь кнопки делают то же самое для проверки.</p>
 </div>
 {% endblock %}

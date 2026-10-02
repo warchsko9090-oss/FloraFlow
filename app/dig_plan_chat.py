@@ -1,13 +1,18 @@
-"""План выкопки обычным сообщением в чат продаж.
+"""Снимок плана выкопки в чат продаж.
 
-Не мини-приложение: под сообщением кнопки дней. Нажатие правит это же
-сообщение и показывает, что копают и что отгружают в выбранный день.
+Картинка — календарь плана на сегодня и 15 дней вперёд: клиенты, количества,
+отгрузки и выходные. Дни стоят по колонкам недели. Без подписи и без кнопок.
 """
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import tempfile
 from datetime import date, timedelta
 from html import escape
+from io import BytesIO
+from pathlib import Path
 
 from sqlalchemy.orm import joinedload
 
@@ -27,7 +32,7 @@ _MONTHS = (
 )
 
 
-# Сегодня и ещё 14 дней — две недели вперёд, включая сегодняшний.
+# Сегодня и ещё 14 дней: 15 календарных дней вперёд, считая сегодняшний.
 HORIZON_DAYS = 15
 
 
@@ -418,17 +423,144 @@ def plan_chat_id() -> str:
     return (os.environ.get('TG_DIG_PLAN_CHAT_ID') or '').strip()
 
 
+def _range_label(start: date, end: date) -> str:
+    if start.year == end.year and start.month == end.month:
+        return f'{start.day}–{end.day} {_MONTHS[start.month]} {start.year}'
+    if start.year == end.year:
+        return f'{start.day} {_MONTHS[start.month]} — {end.day} {_MONTHS[end.month]} {start.year}'
+    return f'{_fmt_day(start)} {start.year} — {_fmt_day(end)} {end.year}'
+
+
+def _horizon_weeks(start: date, end: date) -> list:
+    """Три недели сетки: колонки пн–вс, данные только с сегодня на 15 дней."""
+    from app.digging import build_planning_weeks
+    center = start - timedelta(days=start.weekday())
+    weeks = build_planning_weeks(center, weeks_before=0, weeks_after=2)
+    out = []
+    for week in weeks:
+        row = dict(week)
+        days = []
+        for day in week['days']:
+            cell = dict(day)
+            cell['in_range'] = start <= day['date_obj'] <= end
+            days.append(cell)
+        row['days'] = days
+        out.append(row)
+    return out
+
+
+def _browser_exe() -> str:
+    env = (os.environ.get('PLAN_SHOT_BROWSER') or '').strip()
+    pf = os.environ.get('PROGRAMFILES', r'C:\Program Files')
+    pfx = os.environ.get('PROGRAMFILES(X86)', r'C:\Program Files (x86)')
+    local = os.environ.get('LOCALAPPDATA', '')
+    candidates = [
+        env,
+        os.path.join(pf, r'Microsoft\Edge\Application\msedge.exe'),
+        os.path.join(pfx, r'Microsoft\Edge\Application\msedge.exe'),
+        os.path.join(pf, r'Google\Chrome\Application\chrome.exe'),
+        os.path.join(local, r'Google\Chrome\Application\chrome.exe'),
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser',
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return ''
+
+
+def _crop_shot(raw: bytes) -> bytes:
+    from PIL import Image
+    im = Image.open(BytesIO(raw)).convert('RGB')
+    w, h = im.size
+    px = im.load()
+
+    def is_margin(x, y):
+        r, g, b = px[x, y]
+        return r > 240 and g < 40 and 140 < b < 200
+
+    def row_margin(y):
+        return all(is_margin(x, y) for x in range(0, w, 4))
+
+    top = 0
+    while top < h and row_margin(top):
+        top += 1
+    bottom = h - 1
+    while bottom > top and row_margin(bottom):
+        bottom -= 1
+    if bottom <= top:
+        raise RuntimeError('Снимок календаря пустой')
+    cropped = im.crop((0, top, w, bottom + 1))
+    buf = BytesIO()
+    cropped.save(buf, format='PNG', optimize=True)
+    return buf.getvalue()
+
+
+def _screenshot_html(html: str, height: int) -> bytes:
+    browser = _browser_exe()
+    if not browser:
+        raise RuntimeError('Не найден Edge или Chrome, чтобы снять календарь')
+    folder = tempfile.mkdtemp(prefix='ff-plan-')
+    try:
+        html_path = os.path.join(folder, 'plan.html')
+        png_path = os.path.join(folder, 'plan.png')
+        with open(html_path, 'w', encoding='utf-8') as handle:
+            handle.write(html)
+        cmd = [
+            browser,
+            '--headless=new',
+            '--disable-gpu',
+            '--hide-scrollbars',
+            '--force-device-scale-factor=1',
+            '--allow-file-access-from-files',
+            f'--window-size=1440,{max(height, 400)}',
+            f'--screenshot={png_path}',
+            Path(html_path).as_uri(),
+        ]
+        subprocess.run(cmd, cwd=folder, timeout=45, check=False, capture_output=True)
+        if not os.path.isfile(png_path):
+            alt = os.path.join(folder, 'screenshot.png')
+            if os.path.isfile(alt):
+                png_path = alt
+            else:
+                raise RuntimeError('Браузер не сохранил снимок календаря')
+        with open(png_path, 'rb') as handle:
+            return _crop_shot(handle.read())
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def render_plan_shot() -> bytes:
+    """PNG календаря: сегодня и 15 дней вперёд, дни по колонкам недели.
+
+    На машине без Edge и Chrome (контейнер Amvera) уходит прежняя картинка
+    того же окна, чтобы чат не остался без плана.
+    """
+    from flask import render_template
+    start, end = horizon()
+    weeks = _horizon_weeks(start, end)
+    height = 120 + len(weeks) * 160 + 40
+    html = render_template(
+        'digging/plan_shot.html',
+        weeks=weeks,
+        range_label=_range_label(start, end),
+    )
+    try:
+        return _screenshot_html(html, height)
+    except RuntimeError as exc:
+        import logging
+        logging.getLogger(__name__).warning('plan shot fallback: %s', exc)
+        return render_png(start, end, _load(start, end), None)
+
+
 def send_week() -> tuple[bool, str]:
     from app.telegram import send_photo_bytes
-    text, markup, _start, _end, _sel, png = render('week', None)
+    png = render_plan_shot()
     target = plan_chat_id()
     if target:
-        return send_photo_bytes(
-            png, filename='plan.png', caption=text, reply_markup=markup, chat_id=target,
-        )
-    return send_photo_bytes(
-        png, filename='plan.png', caption=text, chat_type='digging', reply_markup=markup,
-    )
+        return send_photo_bytes(png, filename='plan.png', caption='', chat_id=target)
+    return send_photo_bytes(png, filename='plan.png', caption='', chat_type='digging')
 
 
 def handle_callback(cb: dict) -> None:
@@ -456,6 +588,8 @@ def handle_callback(cb: dict) -> None:
                 anchor = date.fromisoformat(parts[2])
             except ValueError:
                 anchor = None
+    # Ответить сразу: пока загрузка фото висит, Telegram шлёт тот же тап снова.
+    answer_callback_query(cb_id)
     try:
         text, markup, _s, _e, _sel, png = render(mode, raw, anchor=anchor)
         if chat_id and message_id:
@@ -466,4 +600,3 @@ def handle_callback(cb: dict) -> None:
                 edit_chat_message(chat_id, message_id, text, reply_markup=markup)
     except Exception:
         db.session.rollback()
-    answer_callback_query(cb_id)

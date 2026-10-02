@@ -1067,36 +1067,21 @@ def dig_plan_chat_preview():
     """Прогон сообщения в чат продаж: те же текст и кнопки, без мини-приложения."""
     if not _can_send_dig_plan(current_user):
         return redirect(url_for('main.index'))
-    from app.dig_plan_chat import render, send_week
+    from app.dig_plan_chat import send_week
     notice = ''
     if request.method == 'POST':
-        ok, err = send_week()
+        try:
+            ok, err = send_week()
+        except Exception as exc:
+            ok, err = False, str(exc)
         from app.dig_plan_chat import plan_chat_id
         if ok and plan_chat_id():
-            notice = 'Картинка ушла в тестовый чат из TG_DIG_PLAN_CHAT_ID. День открывается кнопкой под ней.'
+            notice = 'Снимок ушёл в тестовый чат из TG_DIG_PLAN_CHAT_ID.'
         elif ok:
-            notice = 'Картинка ушла в чат продаж. День открывается кнопкой под ней.'
+            notice = 'Снимок ушёл в чат продаж.'
         else:
-            notice = 'В чат не отправилось: нет токена бота или чат не задан. Ниже тот же вид.'
-    mode = 'day' if request.args.get('day') else 'week'
-    anchor = None
-    raw_week = (request.args.get('week') or '').strip()
-    if raw_week:
-        try:
-            from datetime import date as date_cls
-            anchor = date_cls.fromisoformat(raw_week)
-        except ValueError:
-            anchor = None
-    text, markup, start, end, selected, _png = render(mode, request.args.get('day'), anchor=anchor)
-    return render_template(
-        'digging/plan_chat_preview.html',
-        text=text,
-        rows=markup.get('inline_keyboard') or [],
-        notice=notice,
-        start=start,
-        end=end,
-        selected=(selected.isoformat() if selected else ''),
-    )
+            notice = f'В чат не отправилось: {err}'
+    return render_template('digging/plan_chat_preview.html', notice=notice)
 
 
 @bp.route('/digging/plan-chat.png')
@@ -1104,21 +1089,136 @@ def dig_plan_chat_preview():
 def dig_plan_chat_image():
     if not _can_send_dig_plan(current_user):
         return redirect(url_for('main.index'))
-    from datetime import date as date_cls
     from flask import Response
-    from app.dig_plan_chat import render
-    anchor = None
-    raw_week = (request.args.get('week') or '').strip()
-    if raw_week:
-        try:
-            anchor = date_cls.fromisoformat(raw_week)
-        except ValueError:
-            anchor = None
-    mode = 'day' if request.args.get('day') else 'week'
-    _text, _markup, _start, _end, _sel, png = render(mode, request.args.get('day'), anchor=anchor)
+    from app.dig_plan_chat import render_plan_shot
+    try:
+        png = render_plan_shot()
+    except Exception as exc:
+        return Response(str(exc), status=500, mimetype='text/plain; charset=utf-8')
     resp = Response(png, mimetype='image/png')
     resp.headers['Cache-Control'] = 'no-store'
     return resp
+
+
+def build_planning_weeks(center_monday, weeks_before=8, weeks_after=8):
+    """Те же недели, что рисует экран «План выкопки»."""
+    today = msk_today()
+    first_monday = center_monday - timedelta(weeks=weeks_before)
+    last_sunday = center_monday + timedelta(weeks=weeks_after, days=6)
+    tasks = DiggingTask.query.filter(
+        DiggingTask.planned_date >= first_monday,
+        DiggingTask.planned_date <= last_sunday,
+        DiggingTask.status == 'pending',
+    ).all()
+    ship_plans = (
+        ShipmentPlan.query
+        .filter(
+            ShipmentPlan.planned_date >= first_monday,
+            ShipmentPlan.planned_date <= last_sunday,
+        )
+        .all()
+    )
+    ships_by_date = {}
+    for sp in ship_plans:
+        o = sp.order
+        if not o or o.is_deleted:
+            continue
+        if (o.status or '') in ('shipped', 'canceled', 'ghost'):
+            continue
+        ships_by_date.setdefault(sp.planned_date, []).append({
+            'id': sp.id,
+            'order_id': o.id,
+            'client': o.client.name if o.client else '—',
+            'comment': sp.comment or '',
+        })
+    for dkey in ships_by_date:
+        ships_by_date[dkey].sort(key=lambda g: (g['client'].lower(), g['order_id']))
+    day_marks = (
+        DiggingCalendarMark.query
+        .filter(
+            DiggingCalendarMark.planned_date >= first_monday,
+            DiggingCalendarMark.planned_date <= last_sunday,
+        )
+        .all()
+    )
+    marks_by_date = {}
+    for mk in day_marks:
+        marks_by_date.setdefault(mk.planned_date, set()).add(mk.kind)
+
+    weeks_data = []
+    prev_month_label = None
+    total_weeks = weeks_before + 1 + weeks_after
+    for w in range(total_weeks):
+        week_start = first_monday + timedelta(weeks=w)
+        week_end = week_start + timedelta(days=6)
+        days_arr = []
+        for offset in range(7):
+            d = week_start + timedelta(days=offset)
+            day_tasks = [t for t in tasks if t.planned_date == d]
+            orders_map = {}
+            for t in day_tasks:
+                oi = t.item
+                o = oi.order if oi else None
+                if not o:
+                    continue
+                grp = orders_map.setdefault(o.id, {
+                    'order_id': o.id,
+                    'client': o.client.name if o.client else '—',
+                    'total_qty': 0,
+                    'tasks_count': 0,
+                    'items': [],
+                })
+                grp['total_qty'] += t.planned_qty or 0
+                grp['tasks_count'] += 1
+                grp['items'].append({
+                    'plant': oi.plant.name if oi.plant else '—',
+                    'size': oi.size.name if oi.size else '—',
+                    'field': oi.field.name if oi.field else '—',
+                    'qty': t.planned_qty or 0,
+                    'comment': t.comment or '',
+                })
+            orders_groups = sorted(orders_map.values(), key=lambda g: (-g['total_qty'], g['client']))
+            clients_summary = [
+                {'client': g['client'], 'qty': g['total_qty'], 'order_id': g['order_id']}
+                for g in orders_groups
+            ]
+            day_ships = ships_by_date.get(d, [])
+            kinds = marks_by_date.get(d, set())
+            days_arr.append({
+                'date_obj': d,
+                'date_str': d.strftime('%Y-%m-%d'),
+                'day': d.day,
+                'is_today': d == today,
+                'is_weekend': d.weekday() >= 5,
+                'tasks_count': len(day_tasks),
+                'total_plants': sum(t.planned_qty for t in day_tasks),
+                'orders_groups': orders_groups,
+                'clients_summary': clients_summary,
+                'shipments': day_ships,
+                'shipments_count': len(day_ships),
+                'crew_off': DiggingCalendarMark.KIND_CREW_OFF in kinds,
+                'brigadier_off': DiggingCalendarMark.KIND_BRIGADIER_OFF in kinds,
+            })
+        month_changed = False
+        month_label = None
+        m_key = (week_start.year, week_start.month)
+        if prev_month_label != m_key:
+            month_changed = True
+            month_label = f'{MONTH_NAMES.get(week_start.month, "")} {week_start.year}'
+            prev_month_label = m_key
+        weeks_data.append({
+            'index': w,
+            'start': week_start,
+            'end': week_end,
+            'iso_year': week_start.isocalendar()[0],
+            'iso_week': week_start.isocalendar()[1],
+            'days': days_arr,
+            'month_changed': month_changed,
+            'month_label': month_label,
+            'is_current_week': week_start == (today - timedelta(days=today.weekday())),
+            'contains_today': week_start <= today <= week_end,
+        })
+    return weeks_data
 
 
 @bp.route('/digging/planning', methods=['GET', 'POST'])
@@ -1282,128 +1382,7 @@ def digging_planning():
     if center_monday is None:
         center_monday = today - timedelta(days=today.weekday())
 
-    first_monday = center_monday - timedelta(weeks=weeks_before)
-    last_sunday = center_monday + timedelta(weeks=weeks_after, days=6)
-
-    tasks = DiggingTask.query.filter(
-        DiggingTask.planned_date >= first_monday,
-        DiggingTask.planned_date <= last_sunday,
-        DiggingTask.status == 'pending'
-    ).all()
-
-    ship_plans = (
-        ShipmentPlan.query
-        .filter(
-            ShipmentPlan.planned_date >= first_monday,
-            ShipmentPlan.planned_date <= last_sunday,
-        )
-        .all()
-    )
-    ships_by_date: dict = {}
-    for sp in ship_plans:
-        o = sp.order
-        if not o or o.is_deleted:
-            continue
-        if (o.status or '') in ('shipped', 'canceled', 'ghost'):
-            continue
-        ships_by_date.setdefault(sp.planned_date, []).append({
-            'id': sp.id,
-            'order_id': o.id,
-            'client': o.client.name if o.client else '—',
-            'comment': sp.comment or '',
-        })
-    for dkey in ships_by_date:
-        ships_by_date[dkey].sort(key=lambda g: (g['client'].lower(), g['order_id']))
-
-    day_marks = (
-        DiggingCalendarMark.query
-        .filter(
-            DiggingCalendarMark.planned_date >= first_monday,
-            DiggingCalendarMark.planned_date <= last_sunday,
-        )
-        .all()
-    )
-    marks_by_date: dict = {}
-    for mk in day_marks:
-        marks_by_date.setdefault(mk.planned_date, set()).add(mk.kind)
-
-    weeks_data = []
-    prev_month_label = None
-    total_weeks = weeks_before + 1 + weeks_after
-    for w in range(total_weeks):
-        week_start = first_monday + timedelta(weeks=w)
-        week_end = week_start + timedelta(days=6)
-        days_arr = []
-        for offset in range(7):
-            d = week_start + timedelta(days=offset)
-            day_tasks = [t for t in tasks if t.planned_date == d]
-            orders_map = {}
-            for t in day_tasks:
-                oi = t.item
-                o = oi.order if oi else None
-                if not o:
-                    continue
-                grp = orders_map.setdefault(o.id, {
-                    'order_id': o.id,
-                    'client': o.client.name if o.client else '—',
-                    'total_qty': 0,
-                    'tasks_count': 0,
-                    'items': [],
-                })
-                grp['total_qty'] += t.planned_qty or 0
-                grp['tasks_count'] += 1
-                grp['items'].append({
-                    'plant': oi.plant.name if oi.plant else '—',
-                    'size': oi.size.name if oi.size else '—',
-                    'field': oi.field.name if oi.field else '—',
-                    'qty': t.planned_qty or 0,
-                    'comment': t.comment or '',
-                })
-            orders_groups = sorted(orders_map.values(), key=lambda g: (-g['total_qty'], g['client']))
-            clients_summary = [
-                {'client': g['client'], 'qty': g['total_qty'], 'order_id': g['order_id']}
-                for g in orders_groups
-            ]
-            day_ships = ships_by_date.get(d, [])
-            kinds = marks_by_date.get(d, set())
-            days_arr.append({
-                'date_obj': d,
-                'date_str': d.strftime('%Y-%m-%d'),
-                'day': d.day,
-                'is_today': d == today,
-                'is_weekend': d.weekday() >= 5,
-                'tasks_count': len(day_tasks),
-                'total_plants': sum(t.planned_qty for t in day_tasks),
-                'orders_groups': orders_groups,
-                'clients_summary': clients_summary,
-                'shipments': day_ships,
-                'shipments_count': len(day_ships),
-                'crew_off': DiggingCalendarMark.KIND_CREW_OFF in kinds,
-                'brigadier_off': DiggingCalendarMark.KIND_BRIGADIER_OFF in kinds,
-            })
-
-        # Заголовок месяца показываем при первом появлении нового месяца на
-        # понедельнике недели — это и даёт «разделение по месяцам» в ленте.
-        month_changed = False
-        month_label = None
-        m_key = (week_start.year, week_start.month)
-        if prev_month_label != m_key:
-            month_changed = True
-            month_label = f'{MONTH_NAMES.get(week_start.month, "")} {week_start.year}'
-            prev_month_label = m_key
-
-        weeks_data.append({
-            'index': w,
-            'start': week_start,
-            'end': week_end,
-            'iso_year': week_start.isocalendar()[0],
-            'iso_week': week_start.isocalendar()[1],
-            'days': days_arr,
-            'month_changed': month_changed,
-            'month_label': month_label,
-            'is_current_week': week_start == (today - timedelta(days=today.weekday())),
-            'contains_today': week_start <= today <= week_end,
-        })
+    weeks_data = build_planning_weeks(center_monday, weeks_before=weeks_before, weeks_after=weeks_after)
 
     center_index = weeks_before  # позиция центральной недели
 

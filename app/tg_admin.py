@@ -19,7 +19,7 @@ ROLE_LABEL = {
     'shop_manager': 'Менеджер',
     'accountant': 'Бухгалтер',
 }
-TABS = ('pay', 'sale', 'cash')
+TABS = ('pay', 'sale', 'cash', 'itr')
 
 
 def _admin_only():
@@ -111,6 +111,27 @@ def _save_company():
     flash(f'Фирма «{company.short_name}» сохранена', 'success')
 
 
+def _save_itr_carry():
+    from app.itr_cash_report import clear_carry, parse_money, set_carry
+    if (request.form.get('action') or '') == 'clear':
+        clear_carry()
+        flash('Перенос убран. В пятничных сообщениях его больше не будет.', 'success')
+        return
+    try:
+        year = int(request.form.get('year') or 0)
+        month = int(request.form.get('month') or 0)
+        amount = parse_money(request.form.get('amount') or '')
+        flash(set_carry(year, month, amount), 'success')
+    except ValueError as exc:
+        flash(str(exc), 'danger')
+
+
+def _send_itr_now():
+    from app.itr_cash_report import send_itr_cash_report
+    ok, msg = send_itr_cash_report(manual=True)
+    flash(msg, 'success' if ok else 'danger')
+
+
 def _save_opening():
     holder = CashHolder.query.get(request.form.get('holder_id'))
     if not holder:
@@ -141,6 +162,10 @@ def index():
             _save_company()
         elif action == 'opening':
             _save_opening()
+        elif action == 'itr_carry':
+            _save_itr_carry()
+        elif action == 'itr_send':
+            _send_itr_now()
         else:
             flash('Неизвестное действие', 'danger')
         return redirect(url_for('tg_apps.index', tab=tab))
@@ -163,6 +188,16 @@ def index():
     if tab == 'sale':
         for company in SaleCompany.query.order_by(SaleCompany.sort_order, SaleCompany.id).all():
             companies.append(company)
+    itr = None
+    if tab == 'itr':
+        from app.itr_cash_report import carry_admin_state, destination_note, month_snapshot, render_plain
+        snap = month_snapshot()
+        itr = {
+            'preview': render_plain(snap),
+            'dest': destination_note(),
+            'carry': carry_admin_state(),
+            'carry_in_plan': snap.get('carry') or 0,
+        }
     return render_template(
         'apps/telegram.html',
         tab=tab,
@@ -170,4 +205,5 @@ def index():
         sale_users=_users(SALE_ROLES) if tab == 'sale' else [],
         companies=companies,
         holders=holders,
+        itr=itr,
     )

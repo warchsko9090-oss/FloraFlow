@@ -4,6 +4,9 @@
 - скан аномалий;
 - напоминания по патентам (за 7 и 3 дня до окончания).
 
+По пятницам в 9:00 МСК — факт и план поступлений ДС за текущий месяц
+в группу ИТР (переменная TG_CHAT_ID_ITR).
+
 Реализация:
 - APScheduler BackgroundScheduler стартует в каждом воркере gunicorn
   (мы не можем рассчитывать на `preload_app=True`, т.к. с ним SQLite
@@ -110,6 +113,24 @@ def _run_daily_anomaly_scan(app):
         _release_file_lock(lock_path)
 
 
+def _run_friday_itr_cash(app):
+    """Пятница 9:00 МСК: факт/план поступлений ДС за месяц в чат ИТР."""
+    lock_path = os.path.join(_lock_dir(app), '.itr_cash_report.lock')
+    if not _acquire_file_lock(lock_path):
+        _logger.info('friday itr cash report: lock held by another worker, skip')
+        return
+    try:
+        with app.app_context():
+            try:
+                from app.itr_cash_report import send_itr_cash_report
+                ok, msg = send_itr_cash_report(manual=False)
+                _logger.info('friday itr cash report: ok=%s %s', ok, msg)
+            except Exception:
+                _logger.exception('friday itr cash report failed')
+    finally:
+        _release_file_lock(lock_path)
+
+
 def init_scheduler(app):
     """Инициализирует глобальный планировщик. Вызывается из create_app()."""
     global _scheduler
@@ -128,9 +149,11 @@ def init_scheduler(app):
     try:
         # Europe/Moscow = UTC+3, без летнего времени
         trigger = CronTrigger(hour=9, minute=0, timezone='Europe/Moscow')
+        friday = CronTrigger(day_of_week='fri', hour=9, minute=0, timezone='Europe/Moscow')
     except Exception:
         # Фоллбэк — если tzdata/pytz отсутствует, используем UTC 06:00 (= 9:00 МСК)
         trigger = CronTrigger(hour=6, minute=0)
+        friday = CronTrigger(day_of_week='fri', hour=6, minute=0)
 
     sched = BackgroundScheduler(
         daemon=True,
@@ -154,18 +177,27 @@ def init_scheduler(app):
         id='daily_patent_reminders',
         replace_existing=True,
     )
+    sched.add_job(
+        func=_run_friday_itr_cash,
+        args=[app],
+        trigger=friday,
+        id='friday_itr_cash',
+        replace_existing=True,
+    )
     try:
         sched.start()
         _scheduler = sched
         try:
             anomaly_job = sched.get_job('daily_anomaly_scan')
             patent_job = sched.get_job('daily_patent_reminders')
+            itr_job = sched.get_job('friday_itr_cash')
             app.logger.info(
                 'scheduler started (pid=%s), next daily_anomaly_scan at %s, '
-                'next daily_patent_reminders at %s',
+                'next daily_patent_reminders at %s, next friday_itr_cash at %s',
                 os.getpid(),
                 getattr(anomaly_job, 'next_run_time', None),
                 getattr(patent_job, 'next_run_time', None),
+                getattr(itr_job, 'next_run_time', None),
             )
         except Exception:
             app.logger.info('scheduler started (pid=%s)', os.getpid())

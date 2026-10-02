@@ -2037,6 +2037,7 @@ def _tg_allowed_chat_ids():
         'TG_CHAT_ID_ORDERS',
         'TG_CHAT_ID_PATENTS',
         'TG_CHAT_ID_EXPENSES',
+        'TG_CHAT_ID_ITR',
     ):
         v = (os.environ.get(key) or '').strip()
         if v:

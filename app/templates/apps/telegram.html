@@ -13,7 +13,7 @@
 </style>
 <div class="apps-wrap">
     <h4 class="mb-2 text-success fw-bold"><i class="fab fa-telegram me-2"></i>Приложения Telegram</h4>
-    <p class="apps-note mb-3">Оплата, выставление счетов и касса. Здесь правятся доступ, фирмы и стартовое сальдо.</p>
+    <p class="apps-note mb-3">Оплата, выставление счетов, касса и пятничная сводка поступлений для группы ИТР.</p>
 
     <ul class="nav nav-pills apps-tabs gap-2 mb-3">
         <li class="nav-item">
@@ -24,6 +24,9 @@
         </li>
         <li class="nav-item">
             <a class="nav-link {% if tab == 'cash' %}active{% endif %}" href="{{ url_for('tg_apps.index', tab='cash') }}">Касса</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {% if tab == 'itr' %}active{% endif %}" href="{{ url_for('tg_apps.index', tab='itr') }}">Поступления</a>
         </li>
     </ul>
 
@@ -179,6 +182,64 @@
                     </tbody>
                 </table>
             </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if tab == 'itr' and itr %}
+    <div class="card apps-card shadow-sm mb-3">
+        <div class="card-body">
+            <p class="apps-note mb-3">
+                По пятницам в 9:00 бот пишет в группу ИТР факт и план поступлений за текущий месяц.
+                Чат — переменная <code>TG_CHAT_ID_ITR</code>. Перенос недовыполнения входит в цифру плана и в кешфлоу не пишется.
+            </p>
+            <form method="post" action="{{ url_for('tg_apps.index', tab='itr') }}" hx-boost="false" class="mb-3">
+                <input type="hidden" name="op" value="itr_carry">
+                <div class="fw-semibold mb-1">Перенос недовыполненного плана</div>
+                <p class="apps-note">Если сентябрь не добрали на 1,2 млн, запишите сумму на октябрь. В чат уйдёт уже план плюс этот перенос, одной цифрой.</p>
+                {% if itr.carry.summary %}
+                <p class="mb-2">{{ itr.carry.summary }}</p>
+                {% endif %}
+                <div class="row g-2 align-items-end">
+                    <div class="col-sm-4">
+                        <label class="form-label" for="itrCarryMonth">В сообщениях за</label>
+                        <select class="form-select" id="itrCarryMonth" name="month">
+                            {% for m in itr.carry.months %}
+                            <option value="{{ m.n }}" {% if m.n == itr.carry.month %}selected{% endif %}>{{ m.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-sm-2">
+                        <label class="form-label" for="itrCarryYear">Год</label>
+                        <input class="form-control" id="itrCarryYear" name="year" inputmode="numeric" value="{{ itr.carry.year }}">
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label" for="itrCarryAmount">Сумма</label>
+                        <input class="form-control" id="itrCarryAmount" name="amount" value="{{ itr.carry.amount_input }}" placeholder="1 200 000 или 1,2 млн">
+                    </div>
+                </div>
+                <div class="d-flex flex-wrap gap-2 mt-3">
+                    <button type="submit" name="action" value="save" class="btn btn-success apps-save">Записать перенос</button>
+                    {% if itr.carry.active %}
+                    <button type="submit" name="action" value="clear" class="btn btn-outline-secondary apps-save">Убрать перенос</button>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+    <div class="card apps-card shadow-sm">
+        <div class="card-body">
+            <div class="alert {% if itr.dest.where == 'missing' or not itr.dest.has_token %}alert-warning{% else %}alert-secondary{% endif %} py-2">
+                {{ itr.dest.hint }}
+            </div>
+            <div class="fw-semibold mb-1">Так уйдёт в пятницу</div>
+            <pre class="bg-light border rounded p-3 mb-3" style="white-space:pre-wrap;">{{ itr.preview }}</pre>
+            <form method="post" action="{{ url_for('tg_apps.index', tab='itr') }}" hx-boost="false">
+                <input type="hidden" name="op" value="itr_send">
+                <button type="submit" class="btn btn-success apps-save">
+                    <i class="fab fa-telegram me-1"></i>Тестовая отправка
+                </button>
+            </form>
         </div>
     </div>
     {% endif %}
