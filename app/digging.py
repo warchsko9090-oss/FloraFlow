@@ -1067,20 +1067,17 @@ def dig_plan_chat_preview():
     """Прогон сообщения в чат продаж: те же текст и кнопки, без мини-приложения."""
     if not _can_send_dig_plan(current_user):
         return redirect(url_for('main.index'))
-    from app.dig_plan_chat import send_week
-    notice = ''
-    if request.method == 'POST':
-        try:
-            ok, err = send_week()
-        except Exception as exc:
-            ok, err = False, str(exc)
-        from app.dig_plan_chat import plan_chat_id
-        if ok and plan_chat_id():
-            notice = 'Снимок ушёл в тестовый чат из TG_DIG_PLAN_CHAT_ID.'
-        elif ok:
-            notice = 'Снимок ушёл в чат продаж.'
-        else:
-            notice = f'В чат не отправилось: {err}'
+        from app.dig_plan_chat import send_week
+        notice = ''
+        if request.method == 'POST':
+            try:
+                ok, err = send_week()
+            except Exception as exc:
+                ok, err = False, str(exc)
+            if ok:
+                notice = 'Снимок ушёл в группу продаж (TG_CHAT_ID_ORDERS).'
+            else:
+                notice = f'В чат не отправилось: {err}'
     return render_template('digging/plan_chat_preview.html', notice=notice)
 
 

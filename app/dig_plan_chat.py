@@ -461,10 +461,9 @@ def render(mode: str, raw_date: str | None, anchor: date | None = None):
 
 
 def plan_chat_id() -> str:
-    """Куда слать картинку плана.
+    """Устарело: раньше подменяло группу продаж личным чатом.
 
-    TG_DIG_PLAN_CHAT_ID — отдельный чат для проверки. Пока переменная задана,
-    группа продаж это сообщение не получает. Пусто — обычный чат отгрузок.
+    Рабочая отправка идёт в TG_CHAT_ID_ORDERS. Эта переменная больше не перехватывает её.
     """
     return (os.environ.get('TG_DIG_PLAN_CHAT_ID') or '').strip()
 
@@ -615,11 +614,9 @@ def render_plan_shot() -> bytes:
 
 
 def send_week() -> tuple[bool, str]:
+    """Картинка в группу продаж: TG_CHAT_ID_ORDERS, иначе TG_CHAT_ID."""
     from app.telegram import send_photo_bytes
     png = render_plan_shot()
-    target = plan_chat_id()
-    if target:
-        return send_photo_bytes(png, filename='plan.png', caption='', chat_id=target)
     return send_photo_bytes(png, filename='plan.png', caption='', chat_type='digging')
 
 

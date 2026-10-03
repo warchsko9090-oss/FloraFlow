@@ -270,6 +270,32 @@ def _maybe_test_prefix(chat_type):
     return f"🧪 <b>[TEST · {chat_type}]</b>\n"
 
 
+def _tg_error_text(detail, chat_id) -> str:
+    """Короткий текст ошибки Telegram без токена, с подсказкой про группу."""
+    raw = str(detail or '')
+    desc = raw
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            desc = str(data.get('description') or raw)
+    except Exception:
+        desc = raw
+    desc = redact_secrets(desc)[:300]
+    low = desc.lower()
+    hint = ''
+    if (
+        'not a member' in low
+        or 'kicked' in low
+        or 'chat not found' in low
+        or "can't initiate" in low
+        or 'bot was blocked' in low
+        or 'have no rights' in low
+    ):
+        hint = f' Бот не может писать в чат {chat_id}: добавьте его в группу.'
+    log.warning('telegram send failed chat=%s: %s', chat_id, desc)
+    return (desc + hint).strip()
+
+
 def send_message(text, chat_type="hr", reply_markup=None):
     """Send a text message to Telegram.
     Returns (True, 'ok') or (False, error_description).
@@ -291,9 +317,9 @@ def send_message(text, chat_type="hr", reply_markup=None):
     try:
         r = _http().post(url, json=body, timeout=8)
         if not r.ok:
-            return False, r.text
+            return False, _tg_error_text(r.text, chat_id)
     except Exception as exc:
-        return False, str(exc)
+        return False, _tg_error_text(exc, chat_id)
     return True, "ok"
 
 
@@ -316,9 +342,9 @@ def send_photo(photo_path, caption="", chat_type="hr"):
                 'parse_mode': 'HTML'
             }, files={'photo': f}, timeout=15)
             if not r.ok:
-                return False, r.text
+                return False, _tg_error_text(r.text, chat_id)
     except Exception as exc:
-        return False, str(exc)
+        return False, _tg_error_text(exc, chat_id)
     return True, "ok"
 
 
@@ -335,11 +361,10 @@ def send_photo_bytes(file_bytes, filename='photo.jpg', caption='', chat_type='hr
     url = f"{_tg_root()}/bot{bot_token}/sendPhoto"
     name = filename or 'photo.jpg'
     try:
-        form = {
-            'chat_id': chat_id,
-            'caption': payload_caption,
-            'parse_mode': 'HTML',
-        }
+        form = {'chat_id': chat_id}
+        if payload_caption:
+            form['caption'] = payload_caption
+            form['parse_mode'] = 'HTML'
         if reply_markup:
             form['reply_markup'] = json.dumps(reply_markup, ensure_ascii=False)
         r = _http().post(
@@ -349,9 +374,9 @@ def send_photo_bytes(file_bytes, filename='photo.jpg', caption='', chat_type='hr
             timeout=30,
         )
         if not r.ok:
-            return False, r.text
+            return False, _tg_error_text(r.text, chat_id)
     except Exception as exc:
-        return False, str(exc)
+        return False, _tg_error_text(exc, chat_id)
     return True, "ok"
 
 def edit_chat_photo(chat_id, message_id, file_bytes, caption='', reply_markup=None):
