@@ -502,7 +502,11 @@
         }
         setTitle("Фирмы");
         const rows = state.allCompanies.length ? state.allCompanies : state.companies;
-        view.innerHTML = `<button class="btn ghost" id="back">← Назад</button>` + rows.map((c) => `
+        view.innerHTML = `
+            <button class="btn ghost" id="back">← Назад</button>
+            <button class="btn gold" id="btnAddFirm" style="margin:10px 0 14px;width:100%">Добавить фирму</button>
+            <p class="muted" style="margin-top:0">Можно завести сколько угодно юрлиц. Пока нет ИНН / р/с / БИК — фирма не попадёт в выбор при счёте.</p>
+            ` + (rows.map((c) => `
             <div class="card">
                 <div class="chip gold">${vatLabel(c.vat_mode)}</div>
                 ${!c.filled ? `<p class="muted" style="margin-top:6px">Не заполнена: нет ИНН / р/с / БИК — в счёте не показывается</p>` : ""}
@@ -532,8 +536,10 @@
                     ${c.has_stamp ? `<button class="btn danger" data-unstamp-co="${c.id}">Убрать</button>` : `<span></span>`}
                 </div>
                 <button class="btn" data-save-co="${c.id}" style="margin-top:10px">Сохранить</button>
-            </div>`).join("");
+            </div>`).join("") || `<p class="muted">Фирм пока нет — нажмите «Добавить фирму».</p>`);
         document.getElementById("back").onclick = () => { state.screen = "list"; render(); };
+        const addBtn = document.getElementById("btnAddFirm");
+        if (addBtn) addBtn.onclick = () => addFirm(addBtn);
         view.querySelectorAll("[data-save-co]").forEach((btn) => {
             btn.onclick = () => saveCompany(Number(btn.dataset.saveCo), btn.closest(".card"));
         });
@@ -543,6 +549,34 @@
         view.querySelectorAll("[data-unstamp-co]").forEach((btn) => {
             btn.onclick = () => clearStamp(Number(btn.dataset.unstampCo), btn);
         });
+    }
+
+    async function addFirm(btn) {
+        const done = armBusy(btn);
+        try {
+            await api("/tg/sale/api/companies", {
+                method: "POST",
+                body: JSON.stringify({ short_name: "Новая фирма", vat_mode: "none", is_active: true }),
+            });
+            haptic("medium");
+            await reload();
+            state.screen = "firms";
+            render();
+            flashToast("Фирма создана — заполните реквизиты и сохраните");
+        } catch (e) {
+            alert((e && e.message) || "Не удалось создать фирму");
+        } finally {
+            done();
+        }
+    }
+
+    function flashToast(msg) {
+        const el = document.getElementById("toast");
+        if (!el) { alert(msg); return; }
+        el.textContent = msg;
+        el.classList.remove("hide");
+        clearTimeout(flashToast._t);
+        flashToast._t = setTimeout(() => el.classList.add("hide"), 2800);
     }
 
     function field(k, l, c) {

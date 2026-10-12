@@ -2437,6 +2437,45 @@ def api_buh_invoice_send_pdf(user: User, inv_id: int):
     return jsonify({'ok': bool(ok), 'error': err if not ok else None})
 
 
+_COMPANY_TEXT_FIELDS = (
+    'short_name', 'legal_name', 'inn', 'kpp', 'ogrn', 'legal_address',
+    'fact_address', 'bank_name', 'bik', 'rs', 'ks', 'director', 'phone',
+)
+_COMPANY_FIELD_LIMITS = {
+    'short_name': 120, 'legal_name': 300, 'inn': 20, 'kpp': 20, 'ogrn': 20,
+    'legal_address': 500, 'fact_address': 500, 'bank_name': 200,
+    'bik': 20, 'rs': 40, 'ks': 40, 'phone': 40, 'director': 200,
+}
+
+
+def _next_company_sort_order() -> int:
+    top = db.session.query(func.max(SaleCompany.sort_order)).scalar()
+    try:
+        return int(top or 0) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _apply_company_payload(c: SaleCompany, body: dict, *, require_short: bool = False) -> str | None:
+    """Пишет поля из JSON/формы. None — ок, иначе текст ошибки."""
+    for field in _COMPANY_TEXT_FIELDS:
+        if field not in body:
+            continue
+        limit = _COMPANY_FIELD_LIMITS.get(field, 500)
+        setattr(c, field, str(body.get(field) or '').strip()[:limit])
+    if body.get('vat_mode') in ('none', 'included_20', 'included_22'):
+        c.vat_mode = 'included_22' if _vat_included(body['vat_mode']) else 'none'
+    if 'is_active' in body:
+        raw = body.get('is_active')
+        c.is_active = raw in (True, 1, '1', 'true', 'True', 'on')
+    short = (c.short_name or '').strip()
+    if require_short and not short:
+        return 'Укажите короткое имя фирмы'
+    if not short:
+        c.short_name = 'Новая фирма'
+    return None
+
+
 @bp.route('/api/companies')
 @require_sale
 def api_companies(user: User):
@@ -2450,6 +2489,29 @@ def api_companies(user: User):
     return jsonify(payload)
 
 
+@bp.route('/api/companies', methods=['POST'])
+@require_sale
+def api_company_create(user: User):
+    """Создать ещё одну фирму для счетов (без лимита на количество)."""
+    if not _can_firms(user):
+        return jsonify({'error': 'forbidden'}), 403
+    body = request.get_json(silent=True) or {}
+    c = SaleCompany(
+        short_name='Новая фирма',
+        legal_name='',
+        inn='',
+        vat_mode='none',
+        is_active=True,
+        sort_order=_next_company_sort_order(),
+    )
+    err = _apply_company_payload(c, body, require_short=False)
+    if err:
+        return jsonify({'error': err}), 400
+    db.session.add(c)
+    db.session.commit()
+    return jsonify(_serialize_company(c)), 201
+
+
 @bp.route('/api/companies/<int:cid>', methods=['POST'])
 @require_sale
 def api_company_save(user: User, cid: int):
@@ -2457,14 +2519,9 @@ def api_company_save(user: User, cid: int):
         return jsonify({'error': 'forbidden'}), 403
     c = SaleCompany.query.get_or_404(cid)
     body = request.get_json(silent=True) or {}
-    for field in (
-        'short_name', 'legal_name', 'inn', 'kpp', 'ogrn', 'legal_address',
-        'fact_address', 'bank_name', 'bik', 'rs', 'ks', 'director', 'phone',
-    ):
-        if field in body:
-            setattr(c, field, str(body.get(field) or '').strip()[:500])
-    if body.get('vat_mode') in ('none', 'included_20', 'included_22'):
-        c.vat_mode = 'included_22' if _vat_included(body['vat_mode']) else 'none'
+    err = _apply_company_payload(c, body, require_short=True)
+    if err:
+        return jsonify({'error': err}), 400
     db.session.commit()
     return jsonify(_serialize_company(c))
 

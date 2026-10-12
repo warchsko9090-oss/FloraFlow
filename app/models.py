@@ -1924,7 +1924,7 @@ class ShopOnRequestLog(db.Model):
 
 
 class SaleCompany(db.Model):
-    """Юрлицо, с которого выставляем счета клиентам (две фирмы: с НДС и без)."""
+    """Юрлицо, с которого выставляем счета клиентам (любое число фирм)."""
     __tablename__ = 'sale_company'
 
     id = db.Column(db.Integer, primary_key=True)

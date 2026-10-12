@@ -88,27 +88,64 @@ def _save_telegram():
     flash(f'Telegram ID для {user.username} сохранён', 'success')
 
 
+_COMPANY_LIMITS = {
+    'short_name': 120, 'legal_name': 300, 'inn': 20, 'kpp': 20, 'ogrn': 20,
+    'legal_address': 500, 'fact_address': 500, 'bank_name': 200,
+    'bik': 20, 'rs': 40, 'ks': 40, 'phone': 40, 'director': 200,
+}
+
+
+def _next_company_sort_order() -> int:
+    from sqlalchemy import func
+    top = db.session.query(func.max(SaleCompany.sort_order)).scalar()
+    try:
+        return int(top or 0) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _fill_company_from_form(company: SaleCompany) -> str | None:
+    for field, limit in _COMPANY_LIMITS.items():
+        setattr(company, field, (request.form.get(field) or '').strip()[:limit])
+    if not company.short_name:
+        return 'Укажите короткое имя фирмы'
+    vat = request.form.get('vat_mode') or 'none'
+    company.vat_mode = 'included_22' if vat == 'included_22' else 'none'
+    company.is_active = request.form.get('is_active') == '1'
+    return None
+
+
 def _save_company():
     company = SaleCompany.query.get(request.form.get('company_id'))
     if not company:
         flash('Фирма не найдена', 'danger')
         return
-    limits = {
-        'short_name': 120, 'legal_name': 300, 'inn': 20, 'kpp': 20, 'ogrn': 20,
-        'legal_address': 500, 'fact_address': 500, 'bank_name': 200,
-        'bik': 20, 'rs': 40, 'ks': 40, 'phone': 40, 'director': 200,
-    }
-    for field, limit in limits.items():
-        setattr(company, field, (request.form.get(field) or '').strip()[:limit])
-    if not company.short_name:
-        flash('Укажите короткое имя фирмы', 'danger')
+    err = _fill_company_from_form(company)
+    if err:
+        flash(err, 'danger')
         return
-    vat = request.form.get('vat_mode') or 'none'
-    company.vat_mode = 'included_22' if vat == 'included_22' else 'none'
-    company.is_active = request.form.get('is_active') == '1'
     db.session.commit()
     log_action(f'Обновил фирму счетов {company.short_name}')
     flash(f'Фирма «{company.short_name}» сохранена', 'success')
+
+
+def _create_company():
+    company = SaleCompany(
+        short_name='',
+        legal_name='',
+        inn='',
+        vat_mode='none',
+        is_active=True,
+        sort_order=_next_company_sort_order(),
+    )
+    err = _fill_company_from_form(company)
+    if err:
+        flash(err, 'danger')
+        return
+    db.session.add(company)
+    db.session.commit()
+    log_action(f'Добавил фирму счетов {company.short_name}')
+    flash(f'Фирма «{company.short_name}» создана', 'success')
 
 
 def _save_itr_carry():
@@ -160,6 +197,8 @@ def index():
             _save_telegram()
         elif action == 'company':
             _save_company()
+        elif action == 'company_create':
+            _create_company()
         elif action == 'opening':
             _save_opening()
         elif action == 'itr_carry':

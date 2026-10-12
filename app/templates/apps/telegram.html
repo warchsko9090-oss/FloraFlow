@@ -69,7 +69,46 @@
     {% endif %}
 
     {% if tab == 'sale' %}
-    <p class="apps-note">Реквизиты фирм, с которых выставляются счета. Печать по-прежнему ставится в самом приложении.</p>
+    <p class="apps-note">Реквизиты фирм, с которых выставляются счета. Можно добавить сколько угодно. Печать ставится в Telegram-приложении.</p>
+
+    <div class="card apps-card shadow-sm mb-3 border-success">
+        <div class="card-body">
+            <form method="post" action="{{ url_for('tg_apps.index', tab='sale') }}" hx-boost="false">
+                <input type="hidden" name="op" value="company_create">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="mb-0">Добавить фирму</h5>
+                </div>
+                <div class="row g-2">
+                    <div class="col-md-4"><label class="form-label">Короткое имя</label><input class="form-control" name="short_name" value="" required placeholder="Например, ООО Ромашка"></div>
+                    <div class="col-md-8"><label class="form-label">Юридическое имя</label><input class="form-control" name="legal_name" value=""></div>
+                    <div class="col-md-3"><label class="form-label">ИНН</label><input class="form-control" name="inn" value=""></div>
+                    <div class="col-md-3"><label class="form-label">КПП</label><input class="form-control" name="kpp" value=""></div>
+                    <div class="col-md-3"><label class="form-label">ОГРН</label><input class="form-control" name="ogrn" value=""></div>
+                    <div class="col-md-3"><label class="form-label">Телефон</label><input class="form-control" name="phone" value=""></div>
+                    <div class="col-12"><label class="form-label">Юридический адрес</label><input class="form-control" name="legal_address" value=""></div>
+                    <div class="col-12"><label class="form-label">Фактический адрес</label><input class="form-control" name="fact_address" value=""></div>
+                    <div class="col-md-6"><label class="form-label">Банк</label><input class="form-control" name="bank_name" value=""></div>
+                    <div class="col-md-2"><label class="form-label">БИК</label><input class="form-control" name="bik" value=""></div>
+                    <div class="col-md-4"><label class="form-label">Р/с</label><input class="form-control" name="rs" value=""></div>
+                    <div class="col-md-4"><label class="form-label">К/с</label><input class="form-control" name="ks" value=""></div>
+                    <div class="col-md-4"><label class="form-label">Руководитель</label><input class="form-control" name="director" value=""></div>
+                    <div class="col-md-4">
+                        <label class="form-label">НДС</label>
+                        <select class="form-select" name="vat_mode">
+                            <option value="none" selected>Без НДС</option>
+                            <option value="included_22">НДС 22% в сумме</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-check mt-3">
+                    <input class="form-check-input" type="checkbox" name="is_active" value="1" id="activeNew" checked>
+                    <label class="form-check-label" for="activeNew">Фирма активна и видна в приложении</label>
+                </div>
+                <button class="btn btn-success mt-3 apps-save" type="submit">Создать фирму</button>
+            </form>
+        </div>
+    </div>
+
     {% for company in companies %}
     <div class="card apps-card shadow-sm mb-3">
         <div class="card-body">
@@ -111,7 +150,7 @@
         </div>
     </div>
     {% else %}
-    <div class="card apps-card shadow-sm mb-3"><div class="card-body text-muted">Фирмы для счетов ещё не заведены.</div></div>
+    <div class="card apps-card shadow-sm mb-3"><div class="card-body text-muted">Пока нет сохранённых фирм — создайте первую формой выше.</div></div>
     {% endfor %}
 
     <div class="card apps-card shadow-sm">
