@@ -67,6 +67,10 @@ def log_action(text):
 
 def get_or_create_stock(plant_id, size_id, field_id, year):
     """Ищет запись остатка, если нет - создает нулевую."""
+    plant_id = int(plant_id)
+    size_id = int(size_id)
+    field_id = int(field_id)
+    year = int(year)
     stock = StockBalance.query.filter_by(plant_id=plant_id, size_id=size_id, field_id=field_id, year=year).first()
     if not stock:
         stock = StockBalance(plant_id=plant_id, size_id=size_id, field_id=field_id, year=year, quantity=0, price=0, purchase_price=0)
@@ -116,6 +120,11 @@ def check_stock_availability(plant_id, size_id, field_id, year, quantity_needed,
     from app.models import Size
     from app.seedlings import allows_order_deficit
 
+    plant_id = int(plant_id)
+    size_id = int(size_id)
+    field_id = int(field_id)
+    year = int(year)
+    quantity_needed = int(quantity_needed)
     _fact, _reserved, free_qty = compute_free(
         plant_id, size_id, field_id, year, exclude_item_id=exclude_item_id
     )

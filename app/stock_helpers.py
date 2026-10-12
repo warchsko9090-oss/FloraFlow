@@ -2,6 +2,16 @@ from sqlalchemy import func, or_
 from app.models import db, Order, OrderItem, StockBalance, Document, DocumentRow
 
 
+def _as_int(value, default=None):
+    """Postgres не сравнивает integer = varchar — приводим form/query ID к int."""
+    if value is None or value == '':
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # Единые правила «активного» заказа для всех расчётов резерва.
 # Меняются только здесь — все функции и все эндпоинты считают одинаково.
 def _active_order_filter():
@@ -22,6 +32,15 @@ def get_reserved_map(plant_id=None, size_id=None, field_id=None, field_ids=None,
     """
     if field_ids is not None and not field_ids:
         return {}
+
+    plant_id = _as_int(plant_id) if plant_id is not None else None
+    size_id = _as_int(size_id) if size_id is not None else None
+    field_id = _as_int(field_id) if field_id is not None else None
+    year = _as_int(year) if year is not None else None
+    exclude_item_id = _as_int(exclude_item_id) if exclude_item_id else None
+    if field_ids is not None:
+        field_ids = [_as_int(x) for x in field_ids]
+        field_ids = [x for x in field_ids if x is not None]
 
     reserved_expr = func.sum(OrderItem.quantity - OrderItem.shipped_quantity)
     q = (
@@ -62,6 +81,11 @@ def compute_reserved(plant_id, size_id, field_id, year, exclude_item_id=None):
     """Сколько штук партии (plant, size, field, year) сейчас зарезервировано
     в активных заказах. Возвращает int.
     """
+    plant_id = _as_int(plant_id)
+    size_id = _as_int(size_id)
+    field_id = _as_int(field_id)
+    year = _as_int(year)
+    exclude_item_id = _as_int(exclude_item_id) if exclude_item_id else None
     q = (
         db.session.query(func.sum(OrderItem.quantity - OrderItem.shipped_quantity))
         .join(Order)
@@ -83,6 +107,10 @@ def compute_free(plant_id, size_id, field_id, year, exclude_item_id=None):
     free_qty может быть отрицательным, если резерв уже превышает факт —
     вызывающий код должен это учесть.
     """
+    plant_id = _as_int(plant_id)
+    size_id = _as_int(size_id)
+    field_id = _as_int(field_id)
+    year = _as_int(year)
     stock = StockBalance.query.filter_by(
         plant_id=plant_id, size_id=size_id, field_id=field_id, year=year
     ).first()
