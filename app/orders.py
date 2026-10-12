@@ -2372,8 +2372,13 @@ def order_create():
 @bp.route('/api/stock_info')
 @login_required
 def api_stock_info():
-    p, s, f = request.args.get('plant'), request.args.get('size'), request.args.get('field')
-    # Добавил проверку на наличие параметров
+    # Query-параметры — строки; Postgres не делает int = varchar (в отличие от SQLite).
+    try:
+        p = int(request.args.get('plant') or 0)
+        s = int(request.args.get('size') or 0)
+        f = int(request.args.get('field') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'batches': []})
     if not p or not s or not f:
         return jsonify({'batches': []})
 
@@ -2550,16 +2555,19 @@ def api_stock_availability():
     """
     Возвращает доступные остатки по всем полям для конкретного Растения и Размера.
     """
-    p_id = request.args.get('plant_id')
-    s_id = request.args.get('size_id')
-    
+    try:
+        p_id = int(request.args.get('plant_id') or 0)
+        s_id = int(request.args.get('size_id') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'items': []})
+
     if not p_id or not s_id:
         return jsonify({'items': []})
-        
+
     stocks = StockBalance.query.filter_by(plant_id=p_id, size_id=s_id).all()
     if not stocks:
         return jsonify({'items': []})
-    
+
     reserved_rows = (
         db.session.query(OrderItem.field_id, OrderItem.year, func.sum(OrderItem.quantity - OrderItem.shipped_quantity))
         .join(Order)
