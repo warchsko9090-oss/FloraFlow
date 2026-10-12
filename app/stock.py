@@ -16,7 +16,7 @@ from app.models import (
     AppSetting, PriceHistory, PriceChangeLog, Order, OrderItem, Client, ActionLog,
     ProjectPottingRecountLine, SeedlingEventLog, StockPurchaseLot,
 )
-from app.utils import log_action, get_or_create_stock, msk_now, natural_key, apply_excel_styles
+from app.utils import log_action, get_or_create_stock, msk_now, natural_key, apply_excel_styles, parse_iso_date
 from app.services import get_unit_cost_for_year
 from app.stock_helpers import get_reserved_map, aggregate_stock_movements
 from app.shop_prices import get_shop_price_map, resolve_shop_price, transform_stock_report_price_mode
@@ -56,6 +56,8 @@ def _is_recount_doc(doc_type):
 
 def _recount_filtered_ids_query(f_start, f_end, f_plant, f_size, f_field):
     """Документы пересчёта с теми же фильтрами, что журнал. id+date — для DISTINCT на Postgres."""
+    f_start = parse_iso_date(f_start)
+    f_end = parse_iso_date(f_end)
     q = db.session.query(Document.id, Document.date).filter(
         Document.doc_type.in_(RECOUNT_DOC_TYPES)
     )
@@ -2046,6 +2048,10 @@ def documents():
         default_start = (msk_now().date() - timedelta(days=183)).isoformat()
         f_start = default_start
         list_date_limited = True
+
+    # Postgres: date(col) >= 'YYYY-MM-DD'::varchar → ошибка; сравниваем с date.
+    f_start = parse_iso_date(f_start)
+    f_end = parse_iso_date(f_end)
 
     # дополнительные умные фильтры
     f_plant = request.args.get('plant_id', type=int)

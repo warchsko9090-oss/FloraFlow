@@ -1,7 +1,7 @@
 import io
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
@@ -28,6 +28,20 @@ def msk_now():
 
 def msk_today():
     return msk_now().date()
+
+
+def parse_iso_date(value):
+    """YYYY-MM-DD (или date/datetime) → date. Postgres не сравнивает date >= varchar."""
+    if value is None or value == '':
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.strptime(str(value).strip()[:10], '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return None
 
 def timelog_date_str(d):
     """YYYY-MM-DD для даты из TimeLog (защита от разных типов SQLite)."""

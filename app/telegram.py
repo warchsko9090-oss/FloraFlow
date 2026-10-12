@@ -740,7 +740,8 @@ def default_miniapp_url():
     if env:
         return env.rstrip('/')
     if os.path.isdir('/data') or os.environ.get('AMVERA'):
-        return 'https://floraflowerp-warchesko.amvera.io/tg/pay'
+        # Miami ERP (ff-m1); старый floraflowerp / amvera.io больше не канон.
+        return 'https://ff-m1-warchesko.mia0.amvera.tech/tg/pay'
     return ''
 
 

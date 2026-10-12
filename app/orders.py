@@ -14,7 +14,7 @@ from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from app.models import db, Order, OrderItem, Client, Plant, Size, Field, Payment, StockBalance, Document, DocumentRow, OrderItemHistory, DiggingLog, ActionLog, User, TgTask
-from app.utils import msk_now, check_stock_availability, get_actual_price, log_action, natural_key, dateru
+from app.utils import msk_now, check_stock_availability, get_actual_price, log_action, natural_key, dateru, parse_iso_date
 from app.shop_prices import order_default_price, resolve_shop_price, get_shop_price_map
 from app.models import Project
 
@@ -794,8 +794,8 @@ def orders_list():
     mode = request.args.get('mode', 'active')
     f_client = request.args.get('filter_client')
     f_status = request.args.get('filter_status')
-    f_date_start = request.args.get('start_date')
-    f_date_end = request.args.get('end_date')
+    f_date_start = parse_iso_date(request.args.get('start_date'))
+    f_date_end = parse_iso_date(request.args.get('end_date'))
     # Multi-select по номерам заказов: пользователь может отметить один или
     # несколько номеров в выпадающем фильтре, и в списке останутся только
     # они. Кнопка «Excel» учитывает этот фильтр и выгружает ровно то,
@@ -4320,8 +4320,8 @@ def export_orders():
     """
     f_client = request.args.get('filter_client')
     f_status = request.args.get('filter_status')
-    f_date_start = request.args.get('start_date')
-    f_date_end = request.args.get('end_date')
+    f_date_start = parse_iso_date(request.args.get('start_date'))
+    f_date_end = parse_iso_date(request.args.get('end_date'))
     mode = request.args.get('mode', 'active')
 
     # Multi-select по номерам заказов из фильтра на /orders. Приходит как
