@@ -2302,6 +2302,18 @@ def process_telegram_update(data):
             _tg_audit({**base_audit, 'stage': 'expense_chat_error', 'error': str(exc)})
         return {'status': 'ok'}
 
+    # 2.6) Чат продаж: логируем ВСЕ сообщения (без @бота) для вечернего LLM-саммари.
+    # Не return — если есть @бот, ниже уйдёт в AI-агента как раньше.
+    try:
+        from app.sales_chat_digest import orders_chat_id, ingest_message as sales_ingest
+        orders_id = orders_chat_id()
+        if orders_id and chat_id == orders_id:
+            sales_result = sales_ingest(msg)
+            _tg_audit({**base_audit, 'stage': 'sales_chat_log', 'result': sales_result})
+    except Exception as exc:
+        current_app.logger.exception('sales_chat_digest.ingest_message failed')
+        _tg_audit({**base_audit, 'stage': 'sales_chat_log_error', 'error': str(exc)})
+
     # 3) Whitelist отправителей (по username).
     allowed_senders = _tg_allowed_senders()
     if not is_private and allowed_senders is not None:
@@ -2344,6 +2356,25 @@ def process_telegram_update(data):
     return {'status': 'ok'}
 
 
+@bp.route('/api/telegram/sales_digest', methods=['POST', 'GET'])
+@login_required
+def telegram_sales_digest_now():
+    """Ручной запуск саммари чата продаж в личку (admin).
+
+    Query: ?force=1 — повторно за сегодня; ?date=YYYY-MM-DD — за день.
+    """
+    if current_user.role != 'admin':
+        return jsonify({'error': 'forbidden'}), 403
+    from app.sales_chat_digest import run_sales_chat_digest
+    from app.utils import parse_iso_date
+    force = (request.args.get('force') or request.form.get('force') or '').lower() in (
+        '1', 'true', 'yes',
+    )
+    day = parse_iso_date(request.args.get('date') or request.form.get('date'))
+    result = run_sales_chat_digest(day=day, force=force, send=True)
+    return jsonify(result)
+
+
 @bp.route('/api/telegram/_debug', methods=['GET'])
 @login_required
 def telegram_debug():
@@ -2354,6 +2385,7 @@ def telegram_debug():
       • stage=chat_not_allowed      — чат не в whitelist
       • stage=sender_not_allowed    — отправитель не в whitelist
       • stage=bot_not_mentioned     — нет @FloraFlovvBot в тексте
+      • stage=sales_chat_log        — сообщение чата продаж записано в лог саммари
       • stage=ai_ok                 — AI отработал, смотри result
       • stage=ai_error              — внутренняя ошибка AI, см. error
 

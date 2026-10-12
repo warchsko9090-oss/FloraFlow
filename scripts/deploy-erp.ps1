@@ -1,9 +1,9 @@
-# Деплой ERP → Amvera FloraFlowERP
-# Запуск из корня репозитория FloraFlow:
-#   .\scripts\deploy-erp.ps1 "описание правок"
+# Deploy ERP -> Amvera ff-m1 (Miami)
+# From FloraFlow repo root:
+#   .\scripts\deploy-erp.ps1 "change description"
 #
-# Важно: Amvera собирает код из git.amvera.ru, НЕ из GitHub.
-# Push только в origin (GitHub) контейнер не обновляет.
+# Miami ff-m1 pulls from git.mia0.amvera.ru (NOT GitHub, NOT git.amvera.ru).
+# Push to origin alone does not update the container.
 
 param(
     [string]$Message = "deploy erp"
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 
-Write-Host "=== FloraFlow ERP ===" -ForegroundColor Cyan
+Write-Host "=== FloraFlow ERP -> ff-m1 ===" -ForegroundColor Cyan
 git status --short
 
 git add -A
@@ -22,18 +22,22 @@ $hasStaged = ($LASTEXITCODE -ne 0)
 if ($hasStaged) {
     git commit -m $Message
 } else {
-    Write-Host "Нечего коммитить — пушим текущий HEAD." -ForegroundColor Yellow
+    Write-Host "Nothing to commit - pushing current HEAD." -ForegroundColor Yellow
 }
 
-# GitHub (бэкап / история)
+# GitHub (backup / history)
 git push origin master
 
-# Amvera (реальный деплой контейнера)
-$amveraUrl = "https://git.amvera.ru/warchesko/floraflowerp"
+# Amvera Miami (real ff-m1 deploy)
+$amveraUrl = "https://git.mia0.amvera.ru/warchesko/ff-m1"
 $hasAmvera = git remote | Select-String -Pattern "^amvera$"
 if (-not $hasAmvera) {
     git remote add amvera $amveraUrl
+} else {
+    git remote set-url amvera $amveraUrl
 }
+
 git push amvera master
 
-Write-Host "OK: push в GitHub + Amvera. Смотрите лог сборки — HEAD должен быть как локальный master." -ForegroundColor Green
+$head = git rev-parse --short HEAD
+Write-Host "OK: pushed GitHub + Amvera ff-m1. Build log HEAD should be $head." -ForegroundColor Green

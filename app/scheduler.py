@@ -4,6 +4,8 @@
 - скан аномалий;
 - напоминания по патентам (за 7 и 3 дня до окончания).
 
+В 20:00 МСК — LLM-саммари чата продаж в личку (TG_SALES_DIGEST_IDS).
+
 По пятницам в 9:00 МСК — факт и план поступлений ДС за текущий месяц
 в группу ИТР (переменная TG_CHAT_ID_ITR).
 
@@ -131,6 +133,24 @@ def _run_friday_itr_cash(app):
         _release_file_lock(lock_path)
 
 
+def _run_sales_chat_digest(app):
+    """20:00 МСК: саммари чата продаж в личку руководителю."""
+    lock_path = os.path.join(_lock_dir(app), '.sales_chat_digest.lock')
+    if not _acquire_file_lock(lock_path, ttl_seconds=7200):
+        _logger.info('sales chat digest: lock held by another worker, skip')
+        return
+    try:
+        with app.app_context():
+            try:
+                from app.sales_chat_digest import run_sales_chat_digest
+                result = run_sales_chat_digest(force=False, send=True)
+                _logger.info('sales chat digest (scheduled): %s', result)
+            except Exception:
+                _logger.exception('sales chat digest (scheduled) failed')
+    finally:
+        _release_file_lock(lock_path)
+
+
 def init_scheduler(app):
     """Инициализирует глобальный планировщик. Вызывается из create_app()."""
     global _scheduler
@@ -150,10 +170,12 @@ def init_scheduler(app):
         # Europe/Moscow = UTC+3, без летнего времени
         trigger = CronTrigger(hour=9, minute=0, timezone='Europe/Moscow')
         friday = CronTrigger(day_of_week='fri', hour=9, minute=0, timezone='Europe/Moscow')
+        evening = CronTrigger(hour=20, minute=0, timezone='Europe/Moscow')
     except Exception:
         # Фоллбэк — если tzdata/pytz отсутствует, используем UTC 06:00 (= 9:00 МСК)
         trigger = CronTrigger(hour=6, minute=0)
         friday = CronTrigger(day_of_week='fri', hour=6, minute=0)
+        evening = CronTrigger(hour=17, minute=0)
 
     sched = BackgroundScheduler(
         daemon=True,
@@ -184,6 +206,13 @@ def init_scheduler(app):
         id='friday_itr_cash',
         replace_existing=True,
     )
+    sched.add_job(
+        func=_run_sales_chat_digest,
+        args=[app],
+        trigger=evening,
+        id='sales_chat_digest',
+        replace_existing=True,
+    )
     try:
         sched.start()
         _scheduler = sched
@@ -191,13 +220,16 @@ def init_scheduler(app):
             anomaly_job = sched.get_job('daily_anomaly_scan')
             patent_job = sched.get_job('daily_patent_reminders')
             itr_job = sched.get_job('friday_itr_cash')
+            digest_job = sched.get_job('sales_chat_digest')
             app.logger.info(
                 'scheduler started (pid=%s), next daily_anomaly_scan at %s, '
-                'next daily_patent_reminders at %s, next friday_itr_cash at %s',
+                'next daily_patent_reminders at %s, next friday_itr_cash at %s, '
+                'next sales_chat_digest at %s',
                 os.getpid(),
                 getattr(anomaly_job, 'next_run_time', None),
                 getattr(patent_job, 'next_run_time', None),
                 getattr(itr_job, 'next_run_time', None),
+                getattr(digest_job, 'next_run_time', None),
             )
         except Exception:
             app.logger.info('scheduler started (pid=%s)', os.getpid())

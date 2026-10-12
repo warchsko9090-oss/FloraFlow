@@ -1342,6 +1342,41 @@ class WeeklyDigest(db.Model):
     )
 
 
+# --- TG-лог чата продаж + вечернее саммари (app/sales_chat_digest.py) ---
+class SalesChatMessage(db.Model):
+    """Сырые сообщения из TG_CHAT_ID_ORDERS для LLM-дайджеста в конце дня."""
+    __tablename__ = 'sales_chat_message'
+
+    id = db.Column(db.Integer, primary_key=True)
+    tg_chat_id = db.Column(db.String(64), nullable=False)
+    tg_message_id = db.Column(db.Integer, nullable=False)
+    tg_date = db.Column(db.DateTime, nullable=True, index=True)  # МСК
+    raw_text = db.Column(db.Text, nullable=False)
+    sender_name = db.Column(db.String(150), nullable=True)
+    sender_tg_id = db.Column(db.String(64), nullable=True)
+    is_bot = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        db.UniqueConstraint('tg_chat_id', 'tg_message_id', name='_sales_chat_msg_uc'),
+        db.Index('idx_sales_chat_tg_date', 'tg_date'),
+    )
+
+
+class SalesChatDigestLog(db.Model):
+    """Идемпотентность вечерней рассылки: один дайджест на календарный день МСК."""
+    __tablename__ = 'sales_chat_digest_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    digest_date = db.Column(db.Date, nullable=False, unique=True)
+    message_count = db.Column(db.Integer, nullable=False, default=0)
+    summary_text = db.Column(db.Text, nullable=True)
+    recipient_ids = db.Column(db.String(500), nullable=True)
+    sent_at = db.Column(db.DateTime, default=datetime.now)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+
 # --- TG-мониторинг чата расходов (app/expense_chat.py) ---
 # Каждое сообщение из чата «Расходы Жемчужниково» сохраняем здесь, чтобы
 # (а) исключить двойную обработку при ретраях webhook,

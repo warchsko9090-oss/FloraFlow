@@ -8,6 +8,8 @@ amvera-knyajestvo.yml
 .env
 .env.*
 !.env.example
+scripts/backup-pg.env
+**/backup-pg.env
 
 # Python
 __pycache__/
