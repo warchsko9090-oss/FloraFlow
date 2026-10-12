@@ -317,6 +317,10 @@ def create_app():
                 db.create_all()
             except Exception as e:
                 app.logger.error(f'db.create_all() упал: {e}')
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
         finally:
             try:
                 if _lock_fh is not None:
@@ -329,13 +333,22 @@ def create_app():
             except Exception:
                 pass
 
-        try:
-            from app.db_migrations import ensure_legacy_schema
-            ensure_legacy_schema(app.logger)
-        except Exception as e:
-            app.logger.warning(f'legacy schema migration skipped: {e}')
+        def _safe_boot_step(label, fn):
+            try:
+                return fn()
+            except Exception as e:
+                app.logger.warning('%s skipped: %s', label, e)
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+                return None
 
-        try:
+        _safe_boot_step('legacy schema migration', lambda: __import__(
+            'app.db_migrations', fromlist=['ensure_legacy_schema']
+        ).ensure_legacy_schema(app.logger))
+
+        def _run_ensure_migrations():
             from app.digging import ensure_digging_table_exists, ensure_payment_file_column
             ensure_digging_table_exists()
             ensure_payment_file_column()
@@ -345,42 +358,49 @@ def create_app():
             ensure_order_item_batch_nullable(app.logger)
             from app.services import ensure_numbered_container_yards
             ensure_numbered_container_yards()
-        except Exception as e:
-            app.logger.warning(f'ensure_* migrations skipped: {e}')
 
-        try:
+        _safe_boot_step('ensure_* migrations', _run_ensure_migrations)
+
+        def _run_sale_backfill():
             from app.tg_sale import backfill_approved_sale_orders
             n = backfill_approved_sale_orders()
             if n:
                 app.logger.info('sale invoices converted to orders: %s', n)
-        except Exception as e:
-            app.logger.warning('sale invoice order backfill skipped: %s', e)
 
-        if not User.query.filter_by(username='admin').first():
-            u = User(username='admin', role='admin')
-            u.set_password('admin')
-            db.session.add(u)
-            if not User.query.filter_by(username='user1').first():
-                u1 = User(username='user1', role='user'); u1.set_password('user1'); db.session.add(u1)
-            if not User.query.filter_by(username='user2').first():
-                u2 = User(username='user2', role='user2'); u2.set_password('user2'); db.session.add(u2)
-            db.session.commit()
+        _safe_boot_step('sale invoice order backfill', _run_sale_backfill)
 
         try:
+            if not User.query.filter_by(username='admin').first():
+                u = User(username='admin', role='admin')
+                u.set_password('admin')
+                db.session.add(u)
+                if not User.query.filter_by(username='user1').first():
+                    u1 = User(username='user1', role='user'); u1.set_password('user1'); db.session.add(u1)
+                if not User.query.filter_by(username='user2').first():
+                    u2 = User(username='user2', role='user2'); u2.set_password('user2'); db.session.add(u2)
+                db.session.commit()
+        except Exception as e:
+            app.logger.error('admin seed failed: %s', e)
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
+        def _seed_shop_contacts():
             from app.shop_contacts import seed_default_shop_contacts
             seed_default_shop_contacts(db.session)
-        except Exception as e:
-            app.logger.warning(f'shop contacts seed skipped: {e}')
 
-        try:
+        _safe_boot_step('shop contacts seed', _seed_shop_contacts)
+
+        def _seed_shop_pages():
             from app.shop_contacts_page import seed_contacts_page_defaults, ensure_contacts_page_columns
             ensure_contacts_page_columns()
             seed_contacts_page_defaults(db.session)
             from app.shop_landing_page import seed_landing_page_defaults, ensure_landing_page_columns
             ensure_landing_page_columns()
             seed_landing_page_defaults(db.session)
-        except Exception as e:
-            app.logger.warning(f'shop contacts page seed skipped: {e}')
+
+        _safe_boot_step('shop contacts page seed', _seed_shop_pages)
 
     try:
         from app.scheduler import init_scheduler
