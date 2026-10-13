@@ -170,6 +170,34 @@ def _build_transcript(rows: list[SalesChatMessage]) -> str:
     return text[-_MAX_TRANSCRIPT_CHARS:]
 
 
+_DIGEST_SYSTEM = (
+    'Ты — помощник руководителя питомника. Пишешь короткую выжимку дня из чата продаж '
+    'в личку: что сделать / что уже решено. Не цитируй переписку целиком.'
+)
+
+_DIGEST_PROMPT = (
+    'Сделай оперативную выжимку на русском по переписке чата продаж за день.\n\n'
+    'Формат — короткие пункты «•», без вступлений и без дословных цитат.\n'
+    'Пиши как поручения/статусы, например:\n'
+    '• Владу — проверить заказ N, провести оплату / сверку\n'
+    '• Отгрузка 14.10 заказ 287 (вечер) — Княжество → Выборгский р-н; '
+    'данные водителя в чате, Алексей принял\n'
+    '• Машина от Сингаевской завтра утром — накладная без цен; подтверждено\n\n'
+    'Блоки (пустые пропускай):\n'
+    '1) Контроль / кому что сделать\n'
+    '2) Отгрузки и логистика (дата/время, заказ, направление; '
+    'паспорт/права/госномер НЕ переписывай — только «данные водителя есть / связались»)\n'
+    '3) Оплаты и деньги\n'
+    '4) Копка / выкопка\n'
+    '5) Хвосты и незакрытое\n\n'
+    'Игнор: болтовня про скачать приложение/логин, стикеры, пустые «[фото]/«[аудио]» '
+    'без смысла, повторы «Принял» без новой информации.\n'
+    'Только факты из текста; не выдумывай; до ~1800 символов.\n\n'
+    'Дата: {day}, сообщений: {message_count}\n\n'
+    'Переписка:\n{transcript}'
+)
+
+
 def _llm_summarize(day: date, transcript: str, message_count: int) -> str:
     api_key = (os.environ.get('GROQ_API_KEY') or '').strip()
     if not api_key:
@@ -178,26 +206,19 @@ def _llm_summarize(day: date, transcript: str, message_count: int) -> str:
     from groq import Groq
     from app.groq_util import groq_model_text
 
-    prompt = (
-        'Ты — помощник руководителя питомника. Ниже переписка чата продаж за один день '
-        '(свободный текст сотрудников и бота).\n'
-        'Сделай краткое саммари на русском для лички руководителя.\n\n'
-        'Структура (пропусти пустые блоки):\n'
-        '1) Копка / выкопка — старт, факт, договорённости\n'
-        '2) Оплаты / деньги — кто, сколько, по какому заказу/клиенту (если сказано)\n'
-        '3) Отгрузки / логистика\n'
-        '4) Заказы / клиенты / срочность\n'
-        '5) Прочее важное и хвосты (незакрытые вопросы)\n\n'
-        'Правила: только факты из переписки, не выдумывай; даты/суммы/имена сохраняй; '
-        'без воды и вступлений; маркеры списка «•»; максимум ~2500 символов.\n\n'
-        f'Дата: {day.isoformat()}, сообщений: {message_count}\n\n'
-        f'Переписка:\n{transcript}'
+    prompt = _DIGEST_PROMPT.format(
+        day=day.isoformat(),
+        message_count=message_count,
+        transcript=transcript,
     )
     try:
         client = Groq(api_key=api_key)
         resp = client.chat.completions.create(
             model=groq_model_text(),
-            messages=[{'role': 'user', 'content': prompt}],
+            messages=[
+                {'role': 'system', 'content': _DIGEST_SYSTEM},
+                {'role': 'user', 'content': prompt},
+            ],
             temperature=0.2,
         )
         text = (resp.choices[0].message.content or '').strip()
@@ -212,14 +233,161 @@ def _llm_summarize(day: date, transcript: str, message_count: int) -> str:
         return _fallback_summary(day, transcript, message_count, reason=str(exc)[:200])
 
 
+def _is_noise_line(body: str) -> bool:
+    b = (body or '').strip().lower()
+    if not b:
+        return True
+    if b in ('[фото]', '[аудио]', '[видео]', '[стикер]', '[документ]', '[фото, аудио]'):
+        return True
+    if b in ('принял', 'принято', 'ок', 'ok', '👍', '☝️'):
+        return True
+    noise_bits = (
+        'скачать приложение', 'под полем «пароль»', 'под полем "пароль"',
+        'новая ссылка', 'старые приложения', 'логин и пароль',
+        'для тупых', 'не будем хламить', 'в личные сообщение', 'в личные сообщения',
+        'читайте внимательно', 'учи как', 'это наша программа',
+    )
+    return any(x in b for x in noise_bits)
+
+
+def _looks_like_id_dump(body: str) -> bool:
+    """Паспорт / ВУ / длинные реквизиты водителя — в выжимку не тащим."""
+    b = (body or '').lower()
+    keys = ('паспорт', 'выдан', 'в/у', 'вод. удостов', 'гос.номер', 'госномер', 'мс')
+    hits = sum(1 for k in keys if k in b)
+    return hits >= 2 or ('паспорт' in b and len(body) > 120)
+
+
+def _is_business_line(body: str) -> bool:
+    b = (body or '').lower()
+    keys = (
+        'заказ', 'отгруз', 'оплат', 'счёт', 'счет', 'накладн', 'машин', 'газел',
+        'погруз', 'выгруз', 'копк', 'выкоп', 'логист', 'достав', 'завтра', 'утро',
+        'вечер', 'час', 'накл', 'без цен', 'княжеств', 'сингаев',
+    )
+    return any(k in b for k in keys)
+
+
+def _shorten_logistics(body: str) -> str:
+    """Оставляет суть отгрузки без паспортных хвостов."""
+    import re
+    text = (body or '').strip()
+    bl = text.lower()
+
+    # Сообщение почти целиком — паспорт/ВУ: не цитируем
+    if _looks_like_id_dump(text) and not any(
+        k in bl for k in ('отгруз', 'заказ', 'погруз', 'выгруз', 'накладн', 'завтра', 'машин')
+    ):
+        # Попробуем вытащить ФИО в начале («Изотов Александр…»)
+        cut_at = len(text)
+        for marker in ('Паспорт', 'паспорт', 'В/У', 'в/у', 'тел:', 'тел ', 'авто:'):
+            idx = text.find(marker)
+            if 0 <= idx < cut_at:
+                cut_at = idx
+        head = text[:cut_at].strip(' ;,')
+        name_m = re.match(
+            r'^([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+){1,3})',
+            head,
+        )
+        name = (name_m.group(1) if name_m else '').strip()
+        if name:
+            return f'Данные водителя в чате ({name})'
+        return 'Данные водителя в чате'
+
+    # обрезка после типичного начала паспортного блока
+    for marker in ('Паспорт', 'паспорт', 'в/у', 'В/У', 'Выдан:', 'выдан:'):
+        idx = text.find(marker)
+        if idx > 30:
+            text = text[:idx].rstrip(' ;,')
+            break
+    text = re.sub(r'\s+', ' ', text).strip()
+    if len(text) > 220:
+        text = text[:217].rstrip() + '…'
+    if _looks_like_id_dump(body) or 'паспорт' in bl:
+        if 'данные водителя' not in text.lower():
+            text = (text + '; данные водителя в чате').strip('; ')
+    return text
+
 def _fallback_summary(day: date, transcript: str, message_count: int, reason: str = '') -> str:
+    """Эвристическая выжимка без LLM — без дословного дампа чата."""
     head = f'Итоги чата продаж за {day.isoformat()} ({message_count} сообщ.)'
     if reason:
-        head += f'\n[авто-выжимка без LLM: {reason}]'
-    # последние ~25 строк как «сырой» хвост
-    lines = transcript.splitlines()
-    tail = lines[-25:] if len(lines) > 25 else lines
-    body = '\n'.join(tail) if tail else '(пусто)'
+        head += f'\n[авто-выжимка без LLM]'
+
+    logistics: list[str] = []
+    money: list[str] = []
+    dig: list[str] = []
+    other: list[str] = []
+    acks: list[str] = []
+
+    for raw in (transcript or '').splitlines():
+        if ':' not in raw:
+            continue
+        # "HH:MM Name: body"
+        try:
+            _time, rest = raw.split(' ', 1)
+            who, body = rest.split(':', 1)
+        except ValueError:
+            continue
+        who = who.strip()
+        body = body.strip()
+        bl = body.lower()
+        if bl in ('принял', 'принято') or bl.startswith('принял'):
+            acks.append(who.split('(')[0].strip() or who)
+            continue
+        if _is_noise_line(body):
+            continue
+        if not _is_business_line(body) and not _looks_like_id_dump(body):
+            continue
+
+        is_log = any(k in bl for k in (
+            'отгруз', 'машин', 'газел', 'погруз', 'выгруз', 'накладн', 'логист',
+            'достав', 'завтра', 'час',
+        )) or _looks_like_id_dump(body)
+        is_pay = any(k in bl for k in ('оплат', 'счёт', 'счет', 'деньг', 'перевод'))
+        is_dig = any(k in bl for k in ('копк', 'выкоп'))
+
+        if is_log:
+            logistics.append(_shorten_logistics(body))
+        elif is_pay:
+            money.append(body[:200])
+        elif is_dig:
+            dig.append(body[:200])
+        else:
+            other.append(body[:200])
+
+    bullets: list[str] = []
+    if logistics:
+        bullets.append('Отгрузки / логистика:')
+        for item in logistics[:8]:
+            bullets.append(f'• {item}')
+        if acks:
+            uniq = []
+            for a in acks:
+                if a and a not in uniq:
+                    uniq.append(a)
+            bullets.append(f'• Подтвердили: {", ".join(uniq[:5])}')
+    if money:
+        bullets.append('Оплаты / деньги:')
+        for item in money[:6]:
+            bullets.append(f'• {item}')
+    if dig:
+        bullets.append('Копка / выкопка:')
+        for item in dig[:6]:
+            bullets.append(f'• {item}')
+    if other:
+        bullets.append('Прочее по заказам:')
+        for item in other[:6]:
+            bullets.append(f'• {item}')
+
+    if not bullets:
+        body = (
+            'За день нет явных операционных пунктов '
+            '(или чат был про доступы/технику без заказов и отгрузок).'
+        )
+    else:
+        body = '\n'.join(bullets)
+
     return f'{head}\n\n{body}'
 
 

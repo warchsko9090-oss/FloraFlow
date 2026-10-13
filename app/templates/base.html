@@ -1555,7 +1555,7 @@
             </div>
             {% endif %}
 
-            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user2', 'brigadier'] %}
+            {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user2', 'brigadier', 'user'] %}
             {# ---------- КОМАНДА ---------- #}
             <div class="sidebar-group-title">Команда</div>
             <div class="sidebar-group {% if request.endpoint and request.endpoint.startswith('hr.') %}open has-active{% endif %}">
@@ -1569,10 +1569,12 @@
                         <span class="sl-icon"><i class="fas fa-users"></i></span>
                         <span class="sl-label">Табель и выплаты</span>
                     </a>
+                    {% if current_user.role != 'user' %}
                     <a class="sidebar-link {% if request.endpoint == 'hr.foreign_employees' %}active{% endif %}" href="{{ url_for('hr.foreign_employees') }}">
                         <span class="sl-icon"><i class="fas fa-passport"></i></span>
                         <span class="sl-label">Иностранные сотрудники</span>
                     </a>
+                    {% endif %}
                 </div>
             </div>
             {% endif %}
@@ -1832,11 +1834,13 @@
         </div>
         {% endif %}
 
-        {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user2', 'brigadier'] %}
+        {% if current_user.role in ['admin', 'executive', 'shop_manager', 'user2', 'brigadier', 'user'] %}
         <div class="drawer-group">
             <div class="drawer-group-title">Команда</div>
             <a class="drawer-link" href="{{ url_for('hr.personnel') }}"><i class="fas fa-users"></i> Табель и выплаты</a>
+            {% if current_user.role != 'user' %}
             <a class="drawer-link" href="{{ url_for('hr.foreign_employees') }}"><i class="fas fa-passport"></i> Иностранные сотрудники</a>
+            {% endif %}
         </div>
         {% endif %}
 

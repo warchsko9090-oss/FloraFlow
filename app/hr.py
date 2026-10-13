@@ -127,10 +127,28 @@ def _build_hours_details(logs):
     return lines, total_people
 
 
+# Доступ к /personnel (табель). 'user' (user1) — только сводная, рабочие+бригадиры.
+HR_PERSONNEL_ROLES = ('admin', 'user2', 'brigadier', 'executive', 'shop_manager', 'user')
+# Иностранные и прочие HR-разделы — без 'user'.
+HR_FULL_ACCESS_ROLES = ('admin', 'user2', 'brigadier', 'executive', 'shop_manager')
+# Сводные цифры для user1: только полевая бригада.
+CREW_EMPLOYEE_ROLES = ('worker', 'brigadier')
+
+
 def _ensure_hr_access():
-    if current_user.role not in ['admin', 'user2', 'executive', 'shop_manager', 'brigadier']:
+    if current_user.role not in HR_FULL_ACCESS_ROLES:
         return False
     return True
+
+
+def _is_personnel_viewer_only():
+    """Только просмотр (без POST): руководитель, магазин, менеджер питомника."""
+    return current_user.role in ('executive', 'shop_manager', 'user')
+
+
+def _is_crew_summary_user():
+    """user1: сводная только по рабочим и бригадирам."""
+    return current_user.role == 'user'
 
 
 def _safe_rel_path(path_abs):
@@ -193,17 +211,20 @@ def _ensure_registration_period_from_profile(employee, profile):
 @bp.route('/personnel', methods=['GET', 'POST'])
 @login_required
 def personnel():
-    # Впустили Руководителя
-    if current_user.role not in['admin', 'user2', 'brigadier', 'executive', 'shop_manager']:
+    if current_user.role not in HR_PERSONNEL_ROLES:
         return redirect(url_for('main.index'))
         
     active_tab = request.args.get('tab', 'summary')
     if active_tab == 'adjustments' and current_user.role != 'admin':
         active_tab = 'summary'
+    # Печать / user1 — только сводная ведомость
+    if request.args.get('export') == 'print' or (
+        _is_crew_summary_user() and active_tab != 'summary'
+    ):
+        active_tab = 'summary'
     
     if request.method == 'POST':
-        # Руководитель может только смотреть
-        if current_user.role in ('executive', 'shop_manager'):
+        if _is_personnel_viewer_only():
             flash('У вас права только на просмотр')
             return redirect(url_for('hr.personnel', tab=active_tab))
             
@@ -658,14 +679,20 @@ def personnel():
     if active_tab == 'summary' and filter_emp_ids:
         emp_query = emp_query.filter(Employee.id.in_(filter_emp_ids))
     
-    # ПРЯЧЕМ МЕНЕДЖЕРОВ ОТ ВСЕХ, КРОМЕ АДМИНА И РУКОВОДИТЕЛЯ
-    if current_user.role not in ['admin', 'executive', 'shop_manager']:
+    # user1: только рабочие и бригадиры; остальные не-боссы — без менеджеров
+    if _is_crew_summary_user():
+        emp_query = emp_query.filter(Employee.role.in_(CREW_EMPLOYEE_ROLES))
+    elif current_user.role not in ['admin', 'executive', 'shop_manager']:
         emp_query = emp_query.filter(Employee.role != 'manager')
         
     employees = emp_query.order_by(Employee.name).all()
     
     # Скрываем их и из выпадающего списка фильтра
-    if current_user.role not in ['admin', 'executive', 'shop_manager']:
+    if _is_crew_summary_user():
+        all_employees_list = Employee.query.filter(
+            Employee.role.in_(CREW_EMPLOYEE_ROLES)
+        ).order_by(Employee.name).all()
+    elif current_user.role not in ['admin', 'executive', 'shop_manager']:
         all_employees_list = Employee.query.filter(Employee.role != 'manager').order_by(Employee.name).all()
     else:
         all_employees_list = Employee.query.order_by(Employee.name).all()
@@ -883,6 +910,20 @@ def personnel():
         wb.save(buf)
         buf.seek(0)
         return send_file(buf, download_name=f'hr_report_{selected_year}_{selected_month}.xlsx', as_attachment=True, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    if request.args.get('export') == 'print':
+        # Альбомный сводный лист для печати (бригадир / все с доступом к сводке)
+        return render_template(
+            'hr/personnel_summary_print.html',
+            data=data,
+            summary=total_summary,
+            year=selected_year,
+            month=selected_month,
+            month_names=MONTH_NAMES,
+            roles=EMPLOYEE_ROLES,
+            filter_emp_ids=filter_emp_ids,
+            today_str=today_str,
+        )
 
     return render_template('hr/personnel.html', 
                            active_tab=active_tab, 
@@ -1311,6 +1352,6 @@ def run_patent_reminders():
 @login_required
 def report_success():
     """Страница успешной отправки отчета (предотвращает повторную отправку при перезагрузке)"""
-    if current_user.role not in['admin', 'user2', 'brigadier', 'executive', 'shop_manager']:
+    if current_user.role not in HR_PERSONNEL_ROLES:
         return redirect(url_for('main.index'))
     return render_template('hr/report_success.html')

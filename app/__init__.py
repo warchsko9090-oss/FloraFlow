@@ -82,6 +82,10 @@ def create_app():
     if db_url:
         if db_url.startswith('postgres://'):
             db_url = 'postgresql://' + db_url[len('postgres://'):]
+        # Bare postgresql://: SQLAlchemy 2.x may default to psycopg (v3).
+        # Pin psycopg2 so shop/ERP boot with psycopg2-binary alone.
+        if db_url.startswith('postgresql://'):
+            db_url = 'postgresql+psycopg2://' + db_url[len('postgresql://'):]
         app.config['SQLALCHEMY_DATABASE_URI'] = db_url
         if os.path.isdir('/data'):
             app.config['UPLOAD_FOLDER'] = '/data'

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Сводная {{ month_names[month] }} {{ year }}</title>
+    <style>
+        :root {
+            --line: #333;
+            --muted: #555;
+            --head: #eaf4eb;
+            --earned: #fff8e1;
+            --debt: #ffebee;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 12px 16px 24px;
+            font-family: "Segoe UI", Arial, sans-serif;
+            color: #111;
+            background: #fff;
+            font-size: 11px;
+        }
+        .toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .toolbar button {
+            border: 1px solid #2d6a4f;
+            background: #2d6a4f;
+            color: #fff;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .toolbar .hint { color: var(--muted); font-size: 12px; }
+        h1 {
+            margin: 0 0 4px;
+            font-size: 16px;
+            font-weight: 700;
+        }
+        .meta {
+            margin: 0 0 10px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+        .totals {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .totals .chip {
+            border: 1px solid #cfd8d0;
+            border-radius: 6px;
+            padding: 4px 8px;
+            background: #f7faf7;
+        }
+        .totals .chip b { display: block; font-size: 12px; }
+        .totals .chip span { color: var(--muted); font-size: 10px; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+        th, td {
+            border: 1px solid var(--line);
+            padding: 3px 4px;
+            vertical-align: middle;
+        }
+        th {
+            background: var(--head);
+            font-weight: 600;
+            text-align: center;
+            font-size: 10px;
+            line-height: 1.2;
+        }
+        td.num { text-align: right; white-space: nowrap; }
+        td.ctr { text-align: center; white-space: nowrap; }
+        td.name { text-align: left; word-wrap: break-word; }
+        td.name .role { color: var(--muted); font-size: 9px; }
+        .col-earned { background: var(--earned); font-weight: 700; }
+        .col-debt { background: var(--debt); font-weight: 700; }
+        .neg { color: #b71c1c; }
+        .pos { color: #1b5e20; }
+        tfoot td {
+            background: #f0f0f0;
+            font-weight: 700;
+        }
+        .note-salary { font-size: 8px; color: var(--muted); font-weight: 400; }
+
+        @page {
+            size: A4 landscape;
+            margin: 8mm;
+        }
+        @media print {
+            .no-print { display: none !important; }
+            body { padding: 0; }
+            th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .col-earned, .col-debt, tfoot td {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar no-print">
+        <button type="button" onclick="window.print()">Печать</button>
+        <button type="button" onclick="window.close()" style="background:#fff;color:#333;border-color:#aaa;">Закрыть</button>
+        <span class="hint">Альбомный лист A4 · диалог печати откроется сразу</span>
+    </div>
+
+    <h1>Сводная ведомость — {{ month_names[month] }} {{ year }}</h1>
+    <p class="meta">
+        Сформировано {{ today_str }}
+        {% if filter_emp_ids %} · фильтр: {{ filter_emp_ids|length }} сотр.{% endif %}
+        · {{ data|length }} строк
+    </p>
+
+    <div class="totals">
+        <div class="chip"><span>Заработано</span><b>{{ summary.earned|money }}</b></div>
+        <div class="chip"><span>Офиц. выплаты</span><b>{{ summary.official|money }}</b></div>
+        <div class="chip"><span>Неофиц. выплаты</span><b>{{ summary.unofficial|money }}</b></div>
+        <div class="chip"><span>Прочее</span><b>{{ summary.other|money }}</b></div>
+        <div class="chip"><span>Выплачено всего</span><b>{{ summary.paid_total|money }}</b></div>
+        <div class="chip"><span>Долг</span><b class="{% if summary.balance > 0 %}neg{% else %}pos{% endif %}">{{ summary.balance|money }}</b></div>
+    </div>
+
+    <table>
+        <colgroup>
+            <col style="width:16%">
+            <col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:7%">
+            <col style="width:10%">
+            <col style="width:9%"><col style="width:9%"><col style="width:9%">
+            <col style="width:10%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th rowspan="2">Сотрудник / Роль</th>
+                <th colspan="5">Отработано часов / дней</th>
+                <th rowspan="2" class="col-earned">Итого<br>заработано</th>
+                <th colspan="3">Выплаты</th>
+                <th rowspan="2" class="col-debt">Долг<br>(остаток)</th>
+            </tr>
+            <tr>
+                <th>Обыч.</th>
+                <th>О.пер.</th>
+                <th>Копка</th>
+                <th>К.пер.</th>
+                <th>Опл.вых</th>
+                <th>Офиц.</th>
+                <th>Неофиц.</th>
+                <th>Прочее</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in data %}
+            <tr>
+                <td class="name">
+                    <strong>{{ row.emp.name }}</strong>
+                    <div class="role">{{ roles.get(row.emp.role, row.emp.role) }}</div>
+                </td>
+                <td class="ctr">{{ row.hours.norm }}</td>
+                <td class="ctr">{{ row.hours.norm_over }}</td>
+                <td class="ctr">{{ row.hours.spec }}</td>
+                <td class="ctr">{{ row.hours.spec_over }}</td>
+                <td class="ctr">
+                    {{ row.paid_day_offs }} дн.
+                    {% if row.paid_day_offs > 0 %}<div class="note-salary">({{ row.paid_day_offs * 10 }} ч)</div>{% endif %}
+                </td>
+                <td class="num col-earned">
+                    {{ row.earned|money }}
+                    {% if row.emp.is_salary %}
+                        <div class="note-salary">(оклад)</div>
+                    {% elif row.emp.role == 'mechanic' %}
+                        <div class="note-salary">({{ row.hours.worked_days }} дн.)</div>
+                    {% endif %}
+                </td>
+                <td class="num">{{ row.paid_official|money }}</td>
+                <td class="num">{{ row.paid_unofficial|money }}</td>
+                <td class="num">{{ row.other_adjust|money }}</td>
+                <td class="num col-debt {% if row.balance > 0 %}neg{% else %}pos{% endif %}">
+                    {{ row.balance|money }}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="11" class="ctr">Нет данных за выбранный период</td></tr>
+            {% endfor %}
+        </tbody>
+        {% if data %}
+        <tfoot>
+            <tr>
+                <td class="name">Итого</td>
+                <td colspan="5"></td>
+                <td class="num col-earned">{{ summary.earned|money }}</td>
+                <td class="num">{{ summary.official|money }}</td>
+                <td class="num">{{ summary.unofficial|money }}</td>
+                <td class="num">{{ summary.other|money }}</td>
+                <td class="num col-debt {% if summary.balance > 0 %}neg{% else %}pos{% endif %}">{{ summary.balance|money }}</td>
+            </tr>
+        </tfoot>
+        {% endif %}
+    </table>
+
+    <script>
+        (function () {
+            function openPrint() {
+                try { window.focus(); } catch (e) {}
+                window.print();
+            }
+            if (document.readyState === 'complete') {
+                setTimeout(openPrint, 50);
+            } else {
+                window.addEventListener('load', function () { setTimeout(openPrint, 50); });
+            }
+        })();
+    </script>
+</body>
+</html>

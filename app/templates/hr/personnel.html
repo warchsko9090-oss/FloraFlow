@@ -53,14 +53,22 @@
     </div>
     
     <div class="page-actions">
+        {% if active_tab == 'summary' %}
+        <a href="{{ url_for('hr.personnel', year=year, month=month, tab='summary', export='print') }}{% for eid in filter_emp_ids %}&employee_id={{ eid }}{% endfor %}"
+           hx-boost="false" target="_blank" rel="noopener"
+           class="btn btn-outline-secondary btn-sm"
+           title="Альбомный сводный лист — сразу диалог печати">
+            <i class="fas fa-print"></i> Печать
+        </a>
+        {% endif %}
         {% if active_tab != 'adjustments' %}
-        <div class="d-none d-md-block">
+        <div class="d-none d-md-inline-block">
             <a href="{{ url_for('hr.personnel', year=year, month=month, tab=active_tab, export='excel') }}{% for eid in filter_emp_ids %}&employee_id={{ eid }}{% endfor %}" hx-boost="false" target="_blank" class="btn btn-success btn-sm"><i class="fas fa-file-excel"></i> Excel</a>
         </div>
         {% endif %}
         {% if current_user.role == 'admin' %}
         <!-- Кнопки только для ПК (на телефоне места нет) -->
-        <div class="d-none d-md-block">
+        <div class="d-none d-md-inline-block">
             <button class="btn btn-danger btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#bulkPayModal"><i class="fas fa-sack-dollar"></i> Котловая ЗП</button>
             <button class="btn btn-warning btn-sm" data-bs-toggle="modal" data-bs-target="#ratesModal"><i class="fas fa-coins"></i> Ставки</button>
             <button class="btn btn-primary btn-sm" onclick="openEmpModal()"><i class="fas fa-user-plus"></i> Сотрудник</button>
@@ -113,12 +121,17 @@
 <!-- ТАБЫ (Адаптивные) -->
 <ul class="nav nav-tabs mb-3 flex-nowrap text-nowrap overflow-auto" style="scrollbar-width: none; -ms-overflow-style: none;">
   <li class="nav-item"><a class="nav-link {% if active_tab == 'summary' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='summary') }}">Сводная ведомость</a></li>
+  {% if current_user.role != 'user' %}
   <li class="nav-item"><a class="nav-link {% if active_tab == 'timesheet' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='timesheet', hidden='1' if show_hidden_emps else None) }}">Табель (Календарь)</a></li>
+  {% endif %}
   {% if current_user.role == 'admin' %}
   <li class="nav-item"><a class="nav-link {% if active_tab == 'adjustments' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='adjustments') }}">Корректировки</a></li>
   <li class="nav-item"><a class="nav-link {% if active_tab == 'settings' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='settings') }}">Настройки (ЗП)</a></li>
   {% endif %}
 </ul>
+{% if current_user.role == 'user' %}
+<div class="alert alert-light border small py-2 mb-3">Сводка только по <strong>рабочим</strong> и <strong>бригадирам</strong>. Просмотр без правок.</div>
+{% endif %}
 
 <!-- ========================================== -->
 <!--           ВКЛАДКА: СВОД                    -->
@@ -222,7 +235,7 @@
                         {{ row.balance|money }}
                     </td>
                     <td class="text-center">
-                        {% if current_user.role not in ['user2', 'brigadier'] %}
+                        {% if current_user.role not in ['user2', 'brigadier', 'user', 'executive', 'shop_manager'] %}
                         <button class="btn btn-success btn-xs me-1" title="Выплатить ЗП" onclick="openPayModal({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}', {{ row.balance }})"><i class="fas fa-wallet"></i></button>
                         <button class="btn btn-outline-secondary btn-xs" onclick="openAdjModal({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}')"><i class="fas fa-sliders-h"></i></button>
                         {% endif %}
@@ -253,7 +266,7 @@
                 <div class="small text-muted">{{ roles[row.emp.role] }}</div>
             </div>
             <div class="d-flex align-items-center gap-1">
-                {% if current_user.role not in ['user2', 'brigadier'] %}
+                {% if current_user.role not in ['user2', 'brigadier', 'user', 'executive', 'shop_manager'] %}
                 <button class="btn btn-success btn-sm rounded-circle" title="Выплатить ЗП" onclick="openPayModal({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}', {{ row.balance }})"><i class="fas fa-wallet"></i></button>
                 <button class="btn btn-outline-secondary btn-sm rounded-circle" onclick="openAdjModal({{ row.emp.id }}, '{{ row.emp.name|replace("'", "\\'") }}')"><i class="fas fa-sliders-h"></i></button>
                 {% endif %}
