@@ -198,39 +198,94 @@ _DIGEST_PROMPT = (
 )
 
 
-def _llm_summarize(day: date, transcript: str, message_count: int) -> str:
-    api_key = (os.environ.get('GROQ_API_KEY') or '').strip()
-    if not api_key:
-        return _fallback_summary(day, transcript, message_count, reason='нет GROQ_API_KEY')
+def _digest_provider_order() -> list[str]:
+    """Порядок LLM для дайджеста.
 
+    SALES_DIGEST_PROVIDER=auto|gemini|groq
+    auto: при наличии GEMINI_API_KEY сначала Gemini (Groq с Miami часто 403),
+    иначе Groq; второй провайдер — запасной.
+    """
+    mode = (os.environ.get('SALES_DIGEST_PROVIDER') or 'auto').strip().lower()
+    has_gemini = bool((os.environ.get('GEMINI_API_KEY') or '').strip())
+    has_groq = bool((os.environ.get('GROQ_API_KEY') or '').strip())
+    if mode == 'gemini':
+        order = ['gemini', 'groq']
+    elif mode == 'groq':
+        order = ['groq', 'gemini']
+    else:
+        # auto
+        order = ['gemini', 'groq'] if has_gemini else ['groq', 'gemini']
+    out = []
+    for name in order:
+        if name == 'gemini' and has_gemini and name not in out:
+            out.append(name)
+        if name == 'groq' and has_groq and name not in out:
+            out.append(name)
+    return out
+
+
+def _summarize_via_groq(prompt: str) -> str:
     from groq import Groq
     from app.groq_util import groq_model_text
 
+    client = Groq(api_key=(os.environ.get('GROQ_API_KEY') or '').strip())
+    resp = client.chat.completions.create(
+        model=groq_model_text(),
+        messages=[
+            {'role': 'system', 'content': _DIGEST_SYSTEM},
+            {'role': 'user', 'content': prompt},
+        ],
+        temperature=0.2,
+    )
+    return (resp.choices[0].message.content or '').strip()
+
+
+def _summarize_via_gemini(prompt: str) -> str:
+    from app.gemini_util import gemini_generate_text
+
+    return gemini_generate_text(
+        prompt=prompt,
+        system=_DIGEST_SYSTEM,
+        temperature=0.2,
+        max_output_tokens=2048,
+        timeout_sec=55.0,
+    )
+
+
+def _llm_summarize(day: date, transcript: str, message_count: int) -> str:
     prompt = _DIGEST_PROMPT.format(
         day=day.isoformat(),
         message_count=message_count,
         transcript=transcript,
     )
-    try:
-        client = Groq(api_key=api_key)
-        resp = client.chat.completions.create(
-            model=groq_model_text(),
-            messages=[
-                {'role': 'system', 'content': _DIGEST_SYSTEM},
-                {'role': 'user', 'content': prompt},
-            ],
-            temperature=0.2,
+    providers = _digest_provider_order()
+    if not providers:
+        return _fallback_summary(
+            day, transcript, message_count,
+            reason='нет GROQ_API_KEY и GEMINI_API_KEY',
         )
-        text = (resp.choices[0].message.content or '').strip()
-        if not text:
-            return _fallback_summary(day, transcript, message_count, reason='пустой ответ LLM')
-        return text
-    except Exception as exc:
+
+    errors: list[str] = []
+    for name in providers:
         try:
-            current_app.logger.exception('sales_chat_digest LLM failed')
-        except Exception:
-            pass
-        return _fallback_summary(day, transcript, message_count, reason=str(exc)[:200])
+            if name == 'gemini':
+                text = _summarize_via_gemini(prompt)
+            else:
+                text = _summarize_via_groq(prompt)
+            if text:
+                return text
+            errors.append(f'{name}: пустой ответ')
+        except Exception as exc:
+            errors.append(f'{name}: {str(exc)[:160]}')
+            try:
+                current_app.logger.exception('sales_chat_digest %s failed', name)
+            except Exception:
+                pass
+
+    return _fallback_summary(
+        day, transcript, message_count,
+        reason='; '.join(errors)[:220] if errors else 'LLM недоступен',
+    )
 
 
 def _is_noise_line(body: str) -> bool:
