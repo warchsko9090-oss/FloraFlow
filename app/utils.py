@@ -201,6 +201,17 @@ PDF_FONT_FILES = (
 
 
 def _pdf_static_dir():
+    """Каталог static со шрифтами PDF.
+
+    У витрины knyajestvo Flask root_path = shop_site/, а static_folder
+    явно указывает на app/static — берём его, иначе DejaVu не находится
+    и /shop/stock.pdf падает с 500.
+    """
+    folder = (current_app.static_folder or '').strip()
+    if folder:
+        path = Path(folder)
+        if path.is_dir():
+            return path
     return Path(current_app.root_path) / 'static'
 
 
