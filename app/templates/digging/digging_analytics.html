@@ -2,53 +2,14 @@
 {% block content %}
 
 <style>
-    .dig-ana-fold { border: 0; background: transparent; }
-    .dig-ana-fold > summary { display: none; list-style: none; }
     .dig-chart-wrap { height: 380px; }
-    @media (min-width: 992px) {
-        .dig-ana-fold > summary { display: none !important; pointer-events: none; }
-        .dig-ana-fold > form { display: flex !important; }
-    }
+    .dig-ana-filter .dig-ana-hint { flex: 1 1 12rem; min-width: 0; }
     @media (max-width: 991.98px) {
-        .dig-ana-filter { padding: 0 12px; }
-        .dig-ana-fold > summary {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            min-height: 44px;
-            padding: 10px 0;
-            font-weight: 700;
-            color: #1b5e20;
-            cursor: pointer;
-            list-style: none;
-        }
-        .dig-ana-fold > summary::-webkit-details-marker { display: none; }
-        .dig-ana-range {
-            margin-left: auto;
-            font-size: 13px;
-            font-weight: 600;
-            color: #5f7163;
-            white-space: nowrap;
-        }
-        .dig-ana-fold > summary::after {
-            content: "";
-            width: 8px;
-            height: 8px;
-            border-right: 2px solid #1b5e20;
-            border-bottom: 2px solid #1b5e20;
-            transform: rotate(45deg);
-            flex: 0 0 auto;
-            margin-right: 4px;
-        }
-        .dig-ana-fold[open] > summary::after {
-            transform: rotate(-135deg);
-            margin-top: 4px;
-        }
-        .dig-ana-fold:not([open]) > form { display: none !important; }
-        .dig-ana-fold[open] > form { padding-bottom: 12px; }
         .dig-chart-head { padding: 10px 12px; }
         .dig-chart-title { white-space: nowrap; }
         .dig-chart-wrap { height: 300px; }
+        .dig-ana-filter .form-control,
+        .dig-ana-filter .btn { min-height: 44px; }
     }
 </style>
 
@@ -68,33 +29,25 @@
 </div>
 
 <div class="filter-panel dig-ana-filter">
-    <details class="dig-ana-fold" id="digAnaFilter">
-    <summary>
-        <span><i class="fas fa-sliders-h me-1"></i> Период</span>
-        {% if start_date and end_date %}
-        <span class="dig-ana-range">{{ start_date.strftime('%d.%m') }} — {{ end_date.strftime('%d.%m.%Y') }}</span>
-        {% endif %}
-    </summary>
-    <form method="GET" class="row g-2 align-items-end" hx-boost="false">
-        <div class="col-md-3">
-            <label class="form-label fw-bold small text-muted text-uppercase">С</label>
-            <input type="date" name="from" class="form-control" value="{{ start_date }}">
+    <form method="GET" class="align-items-end" hx-boost="false">
+        <div>
+            <label class="form-label fw-bold small text-muted text-uppercase mb-1">С</label>
+            <input type="date" name="from" class="form-control" value="{{ start_date }}" required>
         </div>
-        <div class="col-md-3">
-            <label class="form-label fw-bold small text-muted text-uppercase">По</label>
-            <input type="date" name="to" class="form-control" value="{{ end_date }}">
+        <div>
+            <label class="form-label fw-bold small text-muted text-uppercase mb-1">По</label>
+            <input type="date" name="to" class="form-control" value="{{ end_date }}" required>
         </div>
-        <div class="col-md-2">
-            <button class="btn btn-primary w-100"><i class="fas fa-filter me-1"></i> Применить</button>
+        <div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-filter me-1"></i> Применить</button>
         </div>
-        <div class="col-md-4">
-            <div class="small text-muted">
-                График сравнивает: <b>копавших</b> (часы «коп» &gt; 0 в табеле) и <b>сколько растений вырыто</b>.
-                Дополнительно — КПД шт/час копки и разрез по видам.
-            </div>
+        <div class="dig-ana-hint small text-muted">
+            {% if start_date and end_date %}
+            Период: <b>{{ start_date.strftime('%d.%m.%Y') }} — {{ end_date.strftime('%d.%m.%Y') }}</b>.
+            {% endif %}
+            КПД только по часам «коп»; зелёная линия — копавшие, не все из табеля.
         </div>
     </form>
-    </details>
 </div>
 
 <!-- Карточки сводки -->
