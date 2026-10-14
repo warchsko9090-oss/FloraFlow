@@ -916,9 +916,9 @@ def analytics():
         try: end_date = datetime.strptime(date_to, '%Y-%m-%d').date()
         except ValueError: pass
 
-    # 1) Кол-во сотрудников, работавших в день (часы > 1 по любой ставке) — см. timesheet_worker_sets_by_date
-    from app.utils import timesheet_worker_sets_by_date, timelog_date_str
-    worked = timesheet_worker_sets_by_date(start_date, end_date)
+    # 1) Копавшие и часы «коп» из табеля (только hours_spec / hours_spec_over)
+    from app.utils import timesheet_digging_stats_by_date, timelog_date_str
+    dig_stats = timesheet_digging_stats_by_date(start_date, end_date)
 
     # 2) Суммы выкопки по дням (нужны до списка дней на оси X)
     dug = db.session.query(
@@ -932,31 +932,39 @@ def analytics():
 
     dug_map = { (r.date.strftime('%Y-%m-%d') if hasattr(r.date, 'strftime') else str(r.date)): int(r.qty or 0) for r in dug }
 
-    # 3) Список дней на графике: был табель (часы > 1) ИЛИ есть выкопка.
-    # Раньше брали только дни с табелем — при отсутствии подходящего TimeLog график был пустым,
-    # хотя выкопка в журнале есть.
+    # 3) Список дней на графике: были часы копки ИЛИ есть выкопка.
     days = []
     cur = start_date
     while cur <= end_date:
         cur_str = cur.strftime('%Y-%m-%d')
-        has_workers = cur_str in worked and len(worked[cur_str]) > 0
-        if has_workers or cur_str in dug_map:
+        day_stats = dig_stats.get(cur_str) or {}
+        has_diggers = bool(day_stats.get('diggers'))
+        if has_diggers or cur_str in dug_map:
             days.append(cur)
         cur += timedelta(days=1)
 
     labels = [d.strftime('%d.%m') for d in days]
-    workers_per_day = [len(worked.get(timelog_date_str(d), set())) for d in days]
+    diggers_per_day = []
+    dig_hours_per_day = []
+    for d in days:
+        st = dig_stats.get(timelog_date_str(d)) or {}
+        diggers_per_day.append(len(st.get('diggers') or ()))
+        dig_hours_per_day.append(round(float(st.get('dig_hours') or 0), 1))
     dug_per_day = [dug_map.get(d.strftime('%Y-%m-%d'), 0) for d in days]
 
-    # КПД: сколько растений на 1 работника в день.
-    # Если в этот день никто не отмечен в табеле (workers=0) — ставим None,
-    # чтобы линия на графике прервалась и не вводила в заблуждение.
+    # КПД: шт на 1 копавшего и шт на 1 час копки.
+    # Нет копавших / часов копки — None, чтобы линия на графике прервалась.
     efficiency_per_day = []
-    for d_qty, w_qty in zip(dug_per_day, workers_per_day):
-        if w_qty and w_qty > 0:
-            efficiency_per_day.append(round(d_qty / w_qty, 1))
+    efficiency_per_hour = []
+    for d_qty, diggers_n, dig_h in zip(dug_per_day, diggers_per_day, dig_hours_per_day):
+        if diggers_n > 0:
+            efficiency_per_day.append(round(d_qty / diggers_n, 1))
         else:
             efficiency_per_day.append(None)
+        if dig_h > 0:
+            efficiency_per_hour.append(round(d_qty / dig_h, 1))
+        else:
+            efficiency_per_hour.append(None)
 
     # 4) Разбивка по видам растений (без размеров)
     plant_rows = db.session.query(
@@ -1008,34 +1016,38 @@ def analytics():
         reverse=True
     )
 
-    # Итоги: «рабочие дни на графике» — дни с табелем или выкопкой; среднее по выкопке — только по дням, где выкопано > 0
+    # Итоги: дни на графике — с часами копки или выкопкой; среднее по выкопке — только где выкопано > 0
     active_days_count = len(days)
     days_with_digging = sum(1 for q in dug_per_day if q > 0)
     total_dug = sum(dug_per_day)
-    total_workers_days = sum(workers_per_day)
+    total_digger_days = sum(diggers_per_day)
+    total_dig_hours = round(sum(dig_hours_per_day), 1)
 
-    # Средний КПД по дням, где работали люди И была выкопка (обычная арифметическая средняя)
+    # Средний КПД шт/чел по дням, где были копавшие и КПД > 0
     eff_valid = [e for e in efficiency_per_day if e is not None and e > 0]
     avg_efficiency_by_day = round(sum(eff_valid) / len(eff_valid), 1) if eff_valid else 0
-    # Пиковый день
     peak_efficiency = max(eff_valid) if eff_valid else 0
 
     summary = {
         'days': active_days_count,
         'days_with_digging': days_with_digging,
-        'total_workers': total_workers_days,
+        'total_workers': total_digger_days,
+        'total_dig_hours': total_dig_hours,
         'total_dug': total_dug,
         'avg_dug_per_day': int(round(total_dug / days_with_digging)) if days_with_digging > 0 else 0,
-        'avg_dug_per_worker': round(total_dug / total_workers_days, 1) if total_workers_days > 0 else 0,
+        'avg_dug_per_worker': round(total_dug / total_digger_days, 1) if total_digger_days > 0 else 0,
+        'avg_dug_per_dig_hour': round(total_dug / total_dig_hours, 1) if total_dig_hours > 0 else 0,
         'avg_efficiency_by_day': avg_efficiency_by_day,
         'peak_efficiency': peak_efficiency,
     }
 
     chart_data = {
         'labels': labels,
-        'workers': workers_per_day,
+        'workers': diggers_per_day,
+        'digHours': dig_hours_per_day,
         'dug': dug_per_day,
         'efficiency': efficiency_per_day,
+        'efficiencyPerHour': efficiency_per_hour,
         'plantSeries': plant_series,
     }
 

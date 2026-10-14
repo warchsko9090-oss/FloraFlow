@@ -48,7 +48,7 @@ def timelog_date_str(d):
     return d.strftime('%Y-%m-%d') if hasattr(d, 'strftime') else str(d)
 
 def timesheet_worker_sets_by_date(start_date, end_date):
-    """Уникальные employee_id по дням, где сумма часов (все ставки) > 1 — как в аналитике выкопки."""
+    """Уникальные employee_id по дням, где сумма часов (все ставки) > 1."""
     from app.models import TimeLog
     tl = db.session.query(
         TimeLog.date,
@@ -60,6 +60,29 @@ def timesheet_worker_sets_by_date(start_date, end_date):
         if row.hours and row.hours > 1:
             worked.setdefault(timelog_date_str(row.date), set()).add(row.employee_id)
     return worked
+
+def timesheet_digging_stats_by_date(start_date, end_date):
+    """Статистика табеля только по часам копки (hours_spec + hours_spec_over).
+
+    Возвращает dict date_str -> {'diggers': set(employee_id), 'dig_hours': float}.
+    В diggers попадают сотрудники с часами копки > 0 (частичный день тоже считается).
+    """
+    from app.models import TimeLog
+    tl = db.session.query(
+        TimeLog.date,
+        TimeLog.employee_id,
+        (TimeLog.hours_spec + TimeLog.hours_spec_over).label('dig_hours'),
+    ).filter(TimeLog.date >= start_date, TimeLog.date <= end_date).all()
+    stats = {}
+    for row in tl:
+        dig_h = float(row.dig_hours or 0)
+        if dig_h <= 0:
+            continue
+        key = timelog_date_str(row.date)
+        bucket = stats.setdefault(key, {'diggers': set(), 'dig_hours': 0.0})
+        bucket['diggers'].add(row.employee_id)
+        bucket['dig_hours'] += dig_h
+    return stats
 
 def timesheet_workers_count_by_date(start_date, end_date):
     sets = timesheet_worker_sets_by_date(start_date, end_date)

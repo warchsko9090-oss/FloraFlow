@@ -59,7 +59,7 @@
             Аналитика производства (выкопка)
         </div>
         <div class="page-subtitle">
-            Сопоставление количества вырытых растений и отработанных человеко-часов по дням.
+            КПД только по часам «коп» из табеля: кто копал и сколько часов копки, без обычной ставки.
         </div>
     </div>
     <div class="page-actions">
@@ -89,8 +89,8 @@
         </div>
         <div class="col-md-4">
             <div class="small text-muted">
-                График сравнивает: <b>работавшие сотрудники</b> (часы > 1) и <b>сколько растений вырыто</b>.
-                Дополнительно можно показывать/скрывать разрез по видам растений.
+                График сравнивает: <b>копавших</b> (часы «коп» &gt; 0 в табеле) и <b>сколько растений вырыто</b>.
+                Дополнительно — КПД шт/час копки и разрез по видам.
             </div>
         </div>
     </form>
@@ -104,16 +104,16 @@
             <div class="card-body">
                 <h6 class="text-muted small text-uppercase">Рабочих дней</h6>
                 <h3 class="fw-bold mb-0">{{ summary.days }}</h3>
-                <small class="text-muted">на графике (табель или выкопка)</small>
+                <small class="text-muted">на графике (копали или выкопка)</small>
             </div>
         </div>
     </div>
     <div class="col-6 col-md-4 col-xl">
         <div class="card border-0 shadow-sm h-100 border-start border-4 border-success">
             <div class="card-body">
-                <h6 class="text-muted small text-uppercase">Работали</h6>
+                <h6 class="text-muted small text-uppercase">Копали</h6>
                 <h3 class="fw-bold mb-0">{{ summary.total_workers }}</h3>
-                <small class="text-muted">человек-дней</small>
+                <small class="text-muted">человек-дней · {{ summary.total_dig_hours }} ч «коп»</small>
             </div>
         </div>
     </div>
@@ -145,7 +145,10 @@
                     {% endif %}
                 </h6>
                 <h3 class="fw-bold mb-0" style="color:#7b1fa2;">{{ summary.avg_dug_per_worker }}</h3>
-                <small class="text-muted">общий КПД • в среднем по дням: <b>{{ summary.avg_efficiency_by_day }}</b></small>
+                <small class="text-muted">
+                    по копавшим · ср. по дням: <b>{{ summary.avg_efficiency_by_day }}</b>
+                    · <b>{{ summary.avg_dug_per_dig_hour }}</b> шт/час копки
+                </small>
             </div>
         </div>
     </div>
@@ -162,11 +165,11 @@
             <canvas id="prodChart"></canvas>
         </div>
         <div class="text-center mt-2 text-muted small d-lg-none">
-            Слева <span style="color:#1b5e20">сотрудники</span>, справа <span style="color:#1565c0">выкопано</span>. КПД — в карточках выше.
+            Слева <span style="color:#1b5e20">копавшие</span>, справа <span style="color:#1565c0">выкопано</span>. КПД — в карточках выше.
         </div>
         <div class="text-center mt-2 text-muted small fst-italic d-none d-lg-block">
-            Легенда: <span style="color:#28a745">зелёная</span> — сотрудники, <span style="color:#36a2eb">синяя</span> — вырытые растения,
-            <span style="color:#7b1fa2">фиолетовая</span> — КПД (растений на 1 работника), остальные — разбивка по видам.
+            Легенда: <span style="color:#28a745">зелёная</span> — копавшие (часы «коп»), <span style="color:#36a2eb">синяя</span> — вырытые растения,
+            <span style="color:#7b1fa2">фиолетовая</span> — КПД шт/чел, <span style="color:#ad1457">пунктир</span> — КПД шт/час копки.
         </div>
     </div>
 </div>
@@ -215,6 +218,7 @@
         var workers = cfg.workers;
         var dug = cfg.dug;
         var efficiency = cfg.efficiency || [];
+        var efficiencyPerHour = cfg.efficiencyPerHour || [];
         var plantSeries = cfg.plantSeries || [];
         plantSeries.forEach(function (s) { s._plant = true; });
         var mobile = window.matchMedia('(max-width: 991.98px)').matches;
@@ -244,7 +248,7 @@
                         order: 2
                     },
                     {
-                        label: 'Работали (чел.)',
+                        label: 'Копали (чел.)',
                         data: workers,
                         type: 'line',
                         borderColor: 'rgba(40, 167, 69, 1)',
@@ -267,6 +271,23 @@
                         pointRadius: pointR,
                         pointStyle: 'rectRot',
                         pointBackgroundColor: 'rgba(123, 31, 162, 1)',
+                        hidden: mobile,
+                        yAxisID: 'y2',
+                        spanGaps: false,
+                        order: 0
+                    },
+                    {
+                        label: 'КПД (шт/час копки)',
+                        data: efficiencyPerHour,
+                        type: 'line',
+                        borderColor: 'rgba(173, 20, 87, 1)',
+                        backgroundColor: 'rgba(173, 20, 87, 0.12)',
+                        borderWidth: 2,
+                        borderDash: [2, 4],
+                        tension: 0.25,
+                        pointRadius: pointR,
+                        pointStyle: 'triangle',
+                        pointBackgroundColor: 'rgba(173, 20, 87, 1)',
                         hidden: mobile,
                         yAxisID: 'y2',
                         spanGaps: false,
@@ -317,7 +338,7 @@
                         position: 'left',
                         title: {
                             display: !mobile,
-                            text: 'Сотрудников'
+                            text: 'Копавших'
                         },
                         ticks: Object.assign(axisTicks(), mobile ? { color: '#1b5e20' } : {}),
                         beginAtZero: true
@@ -342,7 +363,7 @@
                         position: 'right',
                         title: {
                             display: !mobile,
-                            text: 'КПД (шт/чел)',
+                            text: 'КПД',
                             color: '#7b1fa2'
                         },
                         ticks: Object.assign(axisTicks(), { color: '#7b1fa2' }),
