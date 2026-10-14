@@ -187,7 +187,8 @@
             margin-bottom: 12pt;
             background-color: #FFFFFF;
             border: 1pt solid #B69A6D;
-            page-break-inside: avoid;
+            /* page-break-inside: avoid → KeepTogether; на Amvera/reportlab
+               даёт AttributeError: KeepTogether has no attribute 'draw' */
         }
         .section-bar {
             background-color: #B69A6D;

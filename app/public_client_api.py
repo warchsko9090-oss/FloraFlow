@@ -866,7 +866,9 @@ def public_shop_stock_pdf():
             contact_display_label=contact_display_label,
         )
         filename = f"Прайс Княжество от {end_date.strftime('%d.%m.%Y')}.pdf"
-        pdf_kwargs = dict(page_bg="#FFFFFF", page_margin="0")
+        # Без page_bg: белый фон уже в CSS шаблона. Кастомный beforeDrawPage
+        # на Amvera конфликтует с KeepTogether (нет attribute 'draw').
+        pdf_kwargs = dict(page_margin="0")
 
         if ground_groups and container_groups:
             html_ground = render_template(
