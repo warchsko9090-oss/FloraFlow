@@ -24,14 +24,19 @@ bp = Blueprint('hr', __name__)
 
 from app.telegram import send_message as _tg_send_msg, send_photo as _tg_send_photo, send_photo_album as _tg_send_photo_album
 
+# Ежедневный отчёт бригадира (часы/работы/фото) → чат производства.
+# Патенты и прочие HR-уведомления по-прежнему идут через chat_type="hr".
+_DAILY_REPORT_CHAT = "production"
+
+
 def send_tg_message(text):
-    _tg_send_msg(text, chat_type="hr")
+    _tg_send_msg(text, chat_type=_DAILY_REPORT_CHAT)
 
 def send_tg_photo(photo_path, caption=""):
-    _tg_send_photo(photo_path, caption, chat_type="hr")
+    _tg_send_photo(photo_path, caption, chat_type=_DAILY_REPORT_CHAT)
 
 def send_tg_photo_album(photo_paths):
-    _tg_send_photo_album(photo_paths, chat_type="hr")
+    _tg_send_photo_album(photo_paths, chat_type=_DAILY_REPORT_CHAT)
 # ---------------------------------
 
 

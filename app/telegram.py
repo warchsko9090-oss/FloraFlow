@@ -222,6 +222,8 @@ def _transient_tg(exc) -> bool:
 
 CHAT_ROUTES = {
     "hr": ["TG_CHAT_ID_HR", "TG_CHAT_ID"],
+    # Ежедневный отчёт бригадира (часы / работы / фото) — чат производства.
+    "production": ["TG_CHAT_ID_PRODUCTION", "TG_CHAT_ID"],
     "orders": ["TG_CHAT_ID_ORDERS", "TG_CHAT_ID"],
     # Отчёт по выкопке идёт в ту же группу, что отгрузки (не в производство).
     "digging": ["TG_CHAT_ID_ORDERS", "TG_CHAT_ID"],

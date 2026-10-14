@@ -2034,6 +2034,7 @@ def _tg_allowed_chat_ids():
     for key in (
         'TG_CHAT_ID',
         'TG_CHAT_ID_HR',
+        'TG_CHAT_ID_PRODUCTION',
         'TG_CHAT_ID_ORDERS',
         'TG_CHAT_ID_PATENTS',
         'TG_CHAT_ID_EXPENSES',
