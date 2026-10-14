@@ -254,21 +254,99 @@ CHAT_ROUTES = {
 }
 
 
-def _get_chat_id(chat_type):
-    # 1) Глобальный override для отладки: если задан TG_TEST_CHAT_ID,
-    #    ВСЕ исходящие сообщения уходят в него, минуя CHAT_ROUTES.
-    #    Удобно для локального тестирования: можно прогнать любой сценарий
-    #    (HR/orders/digging/...) в личный чат, не задевая рабочие группы.
-    test_id = _resolve_chat_id("TG_TEST_CHAT_ID")
-    if test_id:
-        return test_id
-
+def resolve_route_chat_id(chat_type, *, ignore_test: bool = False):
+    """Chat id для маршрута. ignore_test=True — не смотреть TG_TEST_CHAT_ID."""
+    if not ignore_test:
+        test_id = _resolve_chat_id("TG_TEST_CHAT_ID")
+        if test_id:
+            return test_id
     keys = CHAT_ROUTES.get(chat_type, ["TG_CHAT_ID"])
     for key in keys:
         val = _resolve_chat_id(key)
         if val:
             return val
     return None
+
+
+def _get_chat_id(chat_type):
+    # 1) Глобальный override для отладки: если задан TG_TEST_CHAT_ID,
+    #    ВСЕ исходящие сообщения уходят в него, минуя CHAT_ROUTES.
+    #    Удобно для локального тестирования: можно прогнать любой сценарий
+    #    (HR/orders/digging/...) в личный чат, не задевая рабочие группы.
+    return resolve_route_chat_id(chat_type, ignore_test=False)
+
+
+# Подписи рабочих чатов для теста маршрутов (порядок = порядок отправки).
+PING_CHAT_LABELS = (
+    ("production", "Производство (часы бригадира)"),
+    ("orders", "Продажи (выкопки, заказы, отгрузки)"),
+    ("hr", "Кадры"),
+    ("expenses", "Расходы"),
+    ("itr", "ИТР (пятничный план продаж)"),
+)
+
+
+def ping_configured_chats():
+    """Тестовое сообщение в каждый рабочий чат (минуя TG_TEST_CHAT_ID).
+
+    Returns list of dicts: chat_type, label, chat_id, ok, detail.
+    """
+    from datetime import datetime
+    try:
+        from app.utils import msk_now
+        stamp = msk_now().strftime("%d.%m.%Y %H:%M МСК")
+    except Exception:
+        stamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+    if not _get_bot_token():
+        return [{
+            "chat_type": "*",
+            "label": "бот",
+            "chat_id": None,
+            "ok": False,
+            "detail": "TG_BOT_TOKEN не задан",
+        }]
+
+    results = []
+    seen_ids = set()
+    for chat_type, label in PING_CHAT_LABELS:
+        chat_id = resolve_route_chat_id(chat_type, ignore_test=True)
+        if not chat_id:
+            results.append({
+                "chat_type": chat_type,
+                "label": label,
+                "chat_id": None,
+                "ok": False,
+                "detail": "chat id не настроен",
+            })
+            continue
+        if chat_id in seen_ids:
+            results.append({
+                "chat_type": chat_type,
+                "label": label,
+                "chat_id": chat_id,
+                "ok": True,
+                "detail": "тот же chat_id уже проверен выше",
+            })
+            continue
+        seen_ids.add(chat_id)
+        text = (
+            f"🧪 <b>Тест маршрута</b>\n"
+            f"<b>{label}</b>\n"
+            f"тип: <code>{chat_type}</code>\n"
+            f"chat_id: <code>{chat_id}</code>\n"
+            f"{stamp}\n"
+            f"Если сообщение в этой группе — маршрут верный."
+        )
+        ok, detail = send_chat_message(chat_id, text)
+        results.append({
+            "chat_type": chat_type,
+            "label": label,
+            "chat_id": chat_id,
+            "ok": bool(ok),
+            "detail": "ok" if ok else str(detail)[:240],
+        })
+    return results
 
 
 def _is_test_mode():

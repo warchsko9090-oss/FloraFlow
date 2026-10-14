@@ -19,7 +19,7 @@ ROLE_LABEL = {
     'shop_manager': 'Менеджер',
     'accountant': 'Бухгалтер',
 }
-TABS = ('pay', 'sale', 'cash', 'itr')
+TABS = ('pay', 'sale', 'cash', 'itr', 'routes')
 
 
 def _admin_only():
@@ -169,6 +169,33 @@ def _send_itr_now():
     flash(msg, 'success' if ok else 'danger')
 
 
+def _ping_all_chats():
+    import json
+    from app.models import db, AppSetting
+    from app.telegram import ping_configured_chats
+    from datetime import datetime
+
+    results = ping_configured_chats()
+    payload = json.dumps(
+        {'at': datetime.utcnow().isoformat() + 'Z', 'results': results},
+        ensure_ascii=False,
+    )
+    out = AppSetting.query.get('tg_ping_last')
+    if out is None:
+        db.session.add(AppSetting(key='tg_ping_last', value=payload))
+    else:
+        out.value = payload
+    db.session.commit()
+    ok_n = sum(1 for r in results if r.get('ok'))
+    lines = [f'Тест чатов: {ok_n}/{len(results)} ок']
+    for r in results:
+        mark = '✓' if r.get('ok') else '✗'
+        lines.append(
+            f"{mark} {r.get('label')} ({r.get('chat_id') or '—'}): {r.get('detail')}"
+        )
+    flash('\n'.join(lines), 'success' if ok_n == len(results) else 'warning')
+
+
 def _save_opening():
     holder = CashHolder.query.get(request.form.get('holder_id'))
     if not holder:
@@ -205,6 +232,9 @@ def index():
             _save_itr_carry()
         elif action == 'itr_send':
             _send_itr_now()
+        elif action == 'ping_chats':
+            _ping_all_chats()
+            return redirect(url_for('tg_apps.index', tab='routes'))
         else:
             flash('Неизвестное действие', 'danger')
         return redirect(url_for('tg_apps.index', tab=tab))
@@ -237,6 +267,30 @@ def index():
             'carry': carry_admin_state(),
             'carry_in_plan': snap.get('carry') or 0,
         }
+    routes = None
+    if tab == 'routes':
+        import json
+        from app.models import AppSetting
+        from app.telegram import PING_CHAT_LABELS, resolve_route_chat_id
+
+        last = AppSetting.query.get('tg_ping_last')
+        last_data = None
+        if last and last.value:
+            try:
+                last_data = json.loads(last.value)
+            except Exception:
+                last_data = None
+        routes = {
+            'items': [
+                {
+                    'chat_type': ct,
+                    'label': label,
+                    'chat_id': resolve_route_chat_id(ct, ignore_test=True),
+                }
+                for ct, label in PING_CHAT_LABELS
+            ],
+            'last': last_data,
+        }
     return render_template(
         'apps/telegram.html',
         tab=tab,
@@ -245,4 +299,5 @@ def index():
         companies=companies,
         holders=holders,
         itr=itr,
+        routes=routes,
     )

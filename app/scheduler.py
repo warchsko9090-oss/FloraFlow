@@ -233,7 +233,54 @@ def init_scheduler(app):
             )
         except Exception:
             app.logger.info('scheduler started (pid=%s)', os.getpid())
+        try:
+            _maybe_run_requested_tg_ping(app)
+        except Exception:
+            app.logger.exception('tg chat ping on boot failed')
     except Exception:
         app.logger.exception('scheduler start failed')
         return None
     return _scheduler
+
+
+def _maybe_run_requested_tg_ping(app):
+    """Если в AppSetting tg_ping_once=1 — шлём тест во все чаты и пишем tg_ping_last."""
+    import json
+    lock_path = os.path.join(_lock_dir(app), '.tg_ping_once.lock')
+    if not _acquire_file_lock(lock_path, ttl_seconds=120):
+        return
+    try:
+        with app.app_context():
+            from app.models import db, AppSetting
+            from app.telegram import ping_configured_chats
+
+            row = AppSetting.query.get('tg_ping_once')
+            if not row or (row.value or '').strip() not in ('1', 'true', 'yes'):
+                return
+            row.value = '0'
+            db.session.commit()
+            results = ping_configured_chats()
+            payload = json.dumps(
+                {'at': datetime.utcnow().isoformat() + 'Z', 'results': results},
+                ensure_ascii=False,
+            )
+            out = AppSetting.query.get('tg_ping_last')
+            if out is None:
+                out = AppSetting(key='tg_ping_last', value=payload)
+                db.session.add(out)
+            else:
+                out.value = payload
+            db.session.commit()
+            ok_n = sum(1 for r in results if r.get('ok'))
+            app.logger.info('tg_ping_once done: %s/%s ok', ok_n, len(results))
+            for r in results:
+                app.logger.info(
+                    'tg_ping %s %s id=%s ok=%s %s',
+                    r.get('chat_type'), r.get('label'), r.get('chat_id'),
+                    r.get('ok'), r.get('detail'),
+                )
+    finally:
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
