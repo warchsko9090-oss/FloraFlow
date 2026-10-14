@@ -2294,7 +2294,8 @@ def process_telegram_update(data):
     # бота и идут НЕ в AI-агента, а в специализированный монитор расходов.
     # Это до шагов 3-5, потому что там фильтр на @FloraFlovvBot и на белый
     # список отправителей (в чате расходов пишут разные сотрудники).
-    expenses_chat_id = (os.environ.get('TG_CHAT_ID_EXPENSES') or '').strip()
+    from app.telegram import _resolve_chat_id
+    expenses_chat_id = _resolve_chat_id('TG_CHAT_ID_EXPENSES') or ''
     if expenses_chat_id and chat_id == expenses_chat_id:
         try:
             from app.expense_chat import ingest_message

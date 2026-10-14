@@ -315,8 +315,9 @@ def example_messages() -> list[dict]:
 
 def destination_note() -> dict:
     """Куда уйдёт сообщение. TG_TEST_CHAT_ID перехватывает все чаты, как и остальные рассылки."""
-    test_id = (os.environ.get('TG_TEST_CHAT_ID') or '').strip()
-    itr_id = (os.environ.get('TG_CHAT_ID_ITR') or '').strip()
+    from app.telegram import _resolve_chat_id
+    test_id = _resolve_chat_id('TG_TEST_CHAT_ID') or ''
+    itr_id = _resolve_chat_id('TG_CHAT_ID_ITR') or ''
     token = bool((os.environ.get('TG_BOT_TOKEN') or '').strip())
     if test_id:
         where = 'test'

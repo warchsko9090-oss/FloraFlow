@@ -29,9 +29,11 @@ _TG_MSG_LIMIT = 3900
 
 
 def orders_chat_id() -> str:
+    from app.telegram import _resolve_chat_id
     return (
-        (os.environ.get('TG_CHAT_ID_ORDERS') or '').strip()
-        or (os.environ.get('TG_CHAT_ID') or '').strip()
+        _resolve_chat_id('TG_CHAT_ID_ORDERS')
+        or _resolve_chat_id('TG_CHAT_ID')
+        or ''
     )
 
 
