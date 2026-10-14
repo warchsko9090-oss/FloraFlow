@@ -38,9 +38,23 @@ def miniapp_web_url(url: str) -> str:
         return url
     return f"{url}{'&' if '?' in url else '?'}v={MINIAPP_CACHE_V}"
 
+# Рабочие чаты FloraFlow (fallback, если переменная не задана на Amvera).
+# Env всегда побеждает; эти id — страховка от пустого маршрута.
+CHAT_ID_DEFAULTS = {
+    "TG_CHAT_ID_PRODUCTION": "-5198757991",  # производство / часы бригадира
+    "TG_CHAT_ID_ORDERS": "-5149442356",      # продажи: выкопки, заказы, отгрузки
+    "TG_CHAT_ID_HR": "-4659407695",          # кадры
+    "TG_CHAT_ID_EXPENSES": "-5133095554",    # расходы
+    "TG_CHAT_ID_ITR": "-5144543515",         # ИТР / пятничный план продаж
+}
+
+
 def _resolve_chat_id(chat_env_key):
-    """Resolve chat ID from environment variable name."""
-    return os.environ.get(chat_env_key, "").strip() or None
+    """Resolve chat ID from environment variable name (else known default)."""
+    val = (os.environ.get(chat_env_key) or "").strip()
+    if val:
+        return val
+    return CHAT_ID_DEFAULTS.get(chat_env_key) or None
 
 
 def _get_bot_token():

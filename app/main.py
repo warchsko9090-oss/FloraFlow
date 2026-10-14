@@ -2028,6 +2028,8 @@ def _tg_env_csv(name):
 
 def _tg_allowed_chat_ids():
     """Whitelist chat_id. Разрешены: явный TG_ALLOWED_CHAT_IDS + все TG_CHAT_ID*."""
+    from app.telegram import _resolve_chat_id
+
     ids = set()
     for v in _tg_env_csv('TG_ALLOWED_CHAT_IDS'):
         ids.add(str(v))
@@ -2040,7 +2042,7 @@ def _tg_allowed_chat_ids():
         'TG_CHAT_ID_EXPENSES',
         'TG_CHAT_ID_ITR',
     ):
-        v = (os.environ.get(key) or '').strip()
+        v = _resolve_chat_id(key)
         if v:
             ids.add(str(v))
     return ids
