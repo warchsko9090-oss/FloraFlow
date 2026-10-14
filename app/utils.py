@@ -204,15 +204,35 @@ def _pdf_static_dir():
     """Каталог static со шрифтами PDF.
 
     У витрины knyajestvo Flask root_path = shop_site/, а static_folder
-    явно указывает на app/static — берём его, иначе DejaVu не находится
-    и /shop/stock.pdf падает с 500.
+    явно указывает на app/static. Ищем папку, где реально лежит DejaVuSans.ttf.
     """
+    root = Path(current_app.root_path)
+    candidates = []
     folder = (current_app.static_folder or '').strip()
     if folder:
-        path = Path(folder)
-        if path.is_dir():
-            return path
-    return Path(current_app.root_path) / 'static'
+        candidates.append(Path(folder))
+    candidates.extend((
+        root / 'static',
+        root.parent / 'app' / 'static',
+        root.parent / 'static',
+    ))
+    seen = set()
+    fallback = None
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.is_dir():
+            continue
+        if fallback is None:
+            fallback = resolved
+        if (resolved / 'DejaVuSans.ttf').is_file():
+            return resolved
+    return fallback or (root / 'static')
 
 
 def _iter_dejavu_font_paths(filename: str):

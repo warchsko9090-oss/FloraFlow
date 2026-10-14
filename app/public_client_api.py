@@ -803,74 +803,110 @@ def get_public_product_stock_report():
     return end_date, _build_site_stock_pdf_groups(catalog_items)
 
 
+@bp.get("/shop/pdf-diag")
+def public_shop_pdf_diag():
+    """Диагностика шрифтов PDF (без rate limit) — путь static и наличие DejaVu."""
+    from flask import current_app, jsonify
+    from pathlib import Path
+    from app.utils import _pdf_static_dir
+
+    pdf_static = _pdf_static_dir()
+    return jsonify({
+        'root_path': current_app.root_path,
+        'static_folder': current_app.static_folder,
+        'pdf_static': str(pdf_static),
+        'dejavu': (Path(pdf_static) / 'DejaVuSans.ttf').is_file(),
+        'utils_fix': 'static_folder_v2',
+    })
+
+
 @bp.route("/shop/stock.pdf")
 @rate_limit("shop_stock_pdf", 15, 3600)
 def public_shop_stock_pdf():
-    end_date, groups = get_public_product_stock_report()
-    groups = transform_stock_report_price_mode(groups, 'retail')
-    ground_groups = []
-    container_groups = []
-    current = None
-    for g in groups:
-        if g.get('is_section'):
-            current = g.get('section_key')
-            continue
-        if current == 'containers':
-            container_groups.append(g)
-        else:
-            ground_groups.append(g)
+    from flask import current_app
 
-    print_settings = {}
-    setting = AppSetting.query.get('print_header_settings')
-    if setting and setting.value:
-        try:
-            print_settings = json.loads(setting.value)
-        except Exception:
-            print_settings = {}
-    promo_photos = [
-        print_settings.get(k) for k in (
-            'promo_photo_1_url', 'promo_photo_2_url', 'promo_photo_3_url',
-        ) if print_settings.get(k)
-    ]
+    try:
+        end_date, groups = get_public_product_stock_report()
+        groups = transform_stock_report_price_mode(groups, 'retail')
+        ground_groups = []
+        container_groups = []
+        current = None
+        for g in groups:
+            if g.get('is_section'):
+                current = g.get('section_key')
+                continue
+            if current == 'containers':
+                container_groups.append(g)
+            else:
+                ground_groups.append(g)
 
-    template_ctx = dict(
-        groups=groups,
-        ground_groups=ground_groups,
-        container_groups=container_groups,
-        promo_photos=promo_photos,
-        print_settings=print_settings,
-        doc_date=end_date,
-        generated_at=msk_now(),
-        fmt=_format_money,
-        shop_contacts=get_shop_contacts_for_site(),
-        contact_display_label=contact_display_label,
-    )
-    filename = f"Прайс Княжество от {end_date.strftime('%d.%m.%Y')}.pdf"
-    pdf_kwargs = dict(page_bg="#FFFFFF", page_margin="0")
+        print_settings = {}
+        setting = AppSetting.query.get('print_header_settings')
+        if setting and setting.value:
+            try:
+                print_settings = json.loads(setting.value)
+            except Exception:
+                print_settings = {}
+        promo_photos = [
+            print_settings.get(k) for k in (
+                'promo_photo_1_url', 'promo_photo_2_url', 'promo_photo_3_url',
+            ) if print_settings.get(k)
+        ]
 
-    if ground_groups and container_groups:
-        html_ground = render_template(
-            "shop_stock_pdf.html",
-            pdf_part="ground",
-            **template_ctx,
+        template_ctx = dict(
+            groups=groups,
+            ground_groups=ground_groups,
+            container_groups=container_groups,
+            promo_photos=promo_photos,
+            print_settings=print_settings,
+            doc_date=end_date,
+            generated_at=msk_now(),
+            fmt=_format_money,
+            shop_contacts=get_shop_contacts_for_site(),
+            contact_display_label=contact_display_label,
         )
-        html_containers = render_template(
-            "shop_stock_pdf.html",
-            pdf_part="containers",
-            **template_ctx,
-        )
+        filename = f"Прайс Княжество от {end_date.strftime('%d.%m.%Y')}.pdf"
+        pdf_kwargs = dict(page_bg="#FFFFFF", page_margin="0")
+
+        if ground_groups and container_groups:
+            html_ground = render_template(
+                "shop_stock_pdf.html",
+                pdf_part="ground",
+                **template_ctx,
+            )
+            html_containers = render_template(
+                "shop_stock_pdf.html",
+                pdf_part="containers",
+                **template_ctx,
+            )
+            return create_pdf_response(
+                "",
+                filename,
+                pdf_parts=[html_ground, html_containers],
+                page_number_part_indexes=(1,),
+                **pdf_kwargs,
+            )
+
+        html = render_template("shop_stock_pdf.html", pdf_part="full", **template_ctx)
         return create_pdf_response(
-            "",
-            filename,
-            pdf_parts=[html_ground, html_containers],
-            page_number_part_indexes=(1,),
-            **pdf_kwargs,
+            html, filename, number_pages=bool(container_groups), **pdf_kwargs,
         )
-
-    html = render_template("shop_stock_pdf.html", pdf_part="full", **template_ctx)
-    return create_pdf_response(
-        html, filename, number_pages=bool(container_groups), **pdf_kwargs,
-    )
+    except Exception as exc:
+        current_app.logger.exception('public_shop_stock_pdf failed')
+        if (request.args.get('diag') or '').strip() == '1':
+            from flask import jsonify
+            from pathlib import Path
+            from app.utils import _pdf_static_dir
+            pdf_static = _pdf_static_dir()
+            return jsonify({
+                'error': str(exc),
+                'type': type(exc).__name__,
+                'root_path': current_app.root_path,
+                'static_folder': current_app.static_folder,
+                'pdf_static': str(pdf_static),
+                'dejavu': (Path(pdf_static) / 'DejaVuSans.ttf').is_file(),
+            }), 500
+        raise
 
 
 @bp.route("/shop/contacts")
