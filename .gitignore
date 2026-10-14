@@ -44,5 +44,8 @@ floraflow.sql
 Thumbs.db
 Desktop.ini
 
-# Временные PDF-тесты
+# Временные PDF-тесты / превью бюджета
 _test_*.pdf
+_budget_preview/
+_tmp_budget_preview.py
+_tmp_*.py

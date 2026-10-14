@@ -4,71 +4,69 @@
     <meta charset="UTF-8">
     <style>
         @page {
-            {% if selected_months|length <= 3 %}
             size: A4 portrait;
-            {% else %}
-            size: A4 landscape;
-            {% endif %}
-            margin: 12mm;
+            margin: 12mm 10mm;
         }
 
-        @font-face {
-            font-family: 'DejaVuSans';
-            src: url('{{ font_path }}');
-        }
-
+        /* Шрифт регистрируется в ReportLab через ensure_dejavu_fonts() — без @font-face url (ломается на Windows). */
         body {
-            font-family: 'DejaVuSans', sans-serif;
-            font-size: {% if selected_months|length <= 3 %}10px{% else %}8px{% endif %};
+            font-family: DejaVuSans, sans-serif;
+            font-size: 9pt;
             color: #222;
+            line-height: 1.25;
         }
 
         h1 {
             background-color: #2E7D32;
             color: #fff;
-            padding: 8px 14px;
+            padding: 8px 12px;
             margin: 0 0 6px 0;
-            font-size: 14px;
+            font-size: 13pt;
             text-align: center;
-            border-radius: 4px;
         }
         h2.subtitle {
             background-color: #E8F5E9;
             color: #1B5E20;
-            padding: 4px 10px;
-            margin: 0 0 12px 0;
-            font-size: 11px;
+            padding: 5px 10px;
+            margin: 0 0 10px 0;
+            font-size: 9pt;
             text-align: center;
-            border-radius: 4px;
+        }
+        h2.section {
+            background-color: #E8F5E9;
+            color: #1B5E20;
+            padding: 5px 10px;
+            margin: 14px 0 8px 0;
+            font-size: 10pt;
+            text-align: left;
         }
 
         table {
             width: 100%;
             border-collapse: collapse;
-            table-layout: fixed;
         }
         th, td {
-            border: 0.5px solid #888;
-            padding: 4px 5px;
-            overflow: hidden;
-            white-space: nowrap;
+            border: 0.5pt solid #888;
+            padding: 3pt 4pt;
+            vertical-align: middle;
         }
         thead th {
             background-color: #C8E6C9;
             text-align: center;
             font-weight: bold;
             color: #1B5E20;
+            font-size: 8pt;
         }
         thead th.group {
             background-color: #FFF59D;
             color: #5d4037;
         }
         td.col-name {
-            white-space: normal;
+            text-align: left;
             word-wrap: break-word;
         }
-        td.text-end { text-align: right; }
-        td.text-center { text-align: center; }
+        td.num { text-align: right; white-space: nowrap; }
+        td.ctr { text-align: center; white-space: nowrap; }
 
         tr.zebra td { background-color: #F1F8E9; }
         tr.total-row td {
@@ -76,13 +74,12 @@
             font-weight: bold;
             color: #5d4037;
         }
-
         td.diff-pos { background-color: #DCEDC8; color: #1B5E20; }
         td.diff-neg { background-color: #FFCDD2; color: #B71C1C; font-weight: bold; }
 
         .footer {
-            margin-top: 12px;
-            font-size: 9px;
+            margin-top: 10px;
+            font-size: 8pt;
             color: #777;
             text-align: right;
         }
@@ -90,7 +87,13 @@
 </head>
 <body>
 
-{% set ns = namespace(rows=0) %}
+{% macro fmt_money(v) -%}
+{{ '{:,.0f}'.format(v|float).replace(',', ' ') }}
+{%- endmacro %}
+
+{% macro fmt_pct(plan, fact) -%}
+{%- if plan -%}{{ '{:.1f}'.format(fact / plan * 100) }}%{%- else %}—{%- endif %}
+{%- endmacro %}
 
 {% if tab == 'cashflow' %}
     <h1>Cashflow {{ year }} · {{ period_label }}</h1>
@@ -99,11 +102,12 @@
     <table>
         <thead>
             <tr>
-                <th style="width: 30px;">№</th>
+                <th style="width: 28px;">№</th>
                 <th>Месяц</th>
-                <th style="width: 22%;">План, ₽</th>
-                <th style="width: 22%;">Факт, ₽</th>
-                <th style="width: 22%;">Δ (Факт − План)</th>
+                <th class="group" style="width: 18%;">План, ₽</th>
+                <th class="group" style="width: 18%;">Факт, ₽</th>
+                <th class="group" style="width: 18%;">Δ (Факт − План)</th>
+                <th class="group" style="width: 12%;">% исп.</th>
             </tr>
         </thead>
         <tbody>
@@ -116,24 +120,27 @@
                 {% set ns_cf.plan = ns_cf.plan + plan_v %}
                 {% set ns_cf.fact = ns_cf.fact + fact_v %}
                 <tr {% if ns_cf.idx % 2 == 0 %}class="zebra"{% endif %}>
-                    <td class="text-center">{{ ns_cf.idx }}</td>
-                    <td>{{ month_names[m] }}</td>
-                    <td class="text-end">{{ '{:,.0f}'.format(plan_v).replace(',', ' ') }}</td>
-                    <td class="text-end">{{ '{:,.0f}'.format(fact_v).replace(',', ' ') }}</td>
-                    <td class="text-end {% if delta < 0 %}diff-neg{% elif delta > 0 %}diff-pos{% endif %}">
-                        {% if delta > 0 %}+{% endif %}{{ '{:,.0f}'.format(delta).replace(',', ' ') }}
+                    <td class="ctr">{{ ns_cf.idx }}</td>
+                    <td class="col-name">{{ month_names[m] }}</td>
+                    <td class="num">{{ fmt_money(plan_v) }}</td>
+                    <td class="num">{{ fmt_money(fact_v) }}</td>
+                    <td class="num {% if delta < 0 %}diff-neg{% elif delta > 0 %}diff-pos{% endif %}">
+                        {% if delta > 0 %}+{% endif %}{{ fmt_money(delta) }}
                     </td>
+                    <td class="ctr">{{ fmt_pct(plan_v, fact_v) }}</td>
                 </tr>
             {% endfor %}
+            {% set d = ns_cf.fact - ns_cf.plan %}
             <tr class="total-row">
-                <td colspan="2" class="text-end">ИТОГО за период ({{ period_label }}):</td>
-                <td class="text-end">{{ '{:,.0f}'.format(ns_cf.plan).replace(',', ' ') }}</td>
-                <td class="text-end">{{ '{:,.0f}'.format(ns_cf.fact).replace(',', ' ') }}</td>
-                {% set d = ns_cf.fact - ns_cf.plan %}
-                <td class="text-end">{% if d > 0 %}+{% endif %}{{ '{:,.0f}'.format(d).replace(',', ' ') }}</td>
+                <td colspan="2" class="num">ИТОГО за период ({{ period_label }}):</td>
+                <td class="num">{{ fmt_money(ns_cf.plan) }}</td>
+                <td class="num">{{ fmt_money(ns_cf.fact) }}</td>
+                <td class="num">{% if d > 0 %}+{% endif %}{{ fmt_money(d) }}</td>
+                <td class="ctr">{{ fmt_pct(ns_cf.plan, ns_cf.fact) }}</td>
             </tr>
         </tbody>
     </table>
+
 {% else %}
     <h1>Бюджет расходов {{ year }} · {{ period_label }}</h1>
     <h2 class="subtitle">Дата выгрузки: {{ generated_at.strftime('%d.%m.%Y %H:%M') }}</h2>
@@ -143,18 +150,16 @@
             <tr>
                 <th style="width: 36px;">Код</th>
                 <th>Статья</th>
-                <th class="group" style="width: 13%;">План, ₽</th>
-                <th class="group" style="width: 13%;">Факт, ₽</th>
-                <th class="group" style="width: 13%;">Откл, ₽</th>
-                <th class="group" style="width: 9%;">% исп.</th>
+                <th class="group" style="width: 15%;">План, ₽</th>
+                <th class="group" style="width: 15%;">Факт, ₽</th>
+                <th class="group" style="width: 14%;">Откл, ₽</th>
+                <th class="group" style="width: 10%;">% исп.</th>
             </tr>
         </thead>
         <tbody>
             {% set ns_b = namespace(idx=0, plan=0, fact=0) %}
             {% for item in items %}
                 {% set row = data[item.id] %}
-                {% set row_plan = 0 %}
-                {% set row_fact = 0 %}
                 {% set ns_r = namespace(plan=0, fact=0) %}
                 {% for m in selected_months %}
                     {% set ns_r.plan = ns_r.plan + (row.months[m].plan or 0)|float %}
@@ -165,79 +170,83 @@
                     {% set ns_b.plan = ns_b.plan + ns_r.plan %}
                     {% set ns_b.fact = ns_b.fact + ns_r.fact %}
                     {% set diff = ns_r.plan - ns_r.fact %}
-                    {% set pct = (ns_r.fact / ns_r.plan * 100) if ns_r.plan else 0 %}
                     <tr {% if ns_b.idx % 2 == 0 %}class="zebra"{% endif %}>
-                        <td class="text-center">{{ item.code }}</td>
+                        <td class="ctr">{{ item.code }}</td>
                         <td class="col-name">{{ item.name }}</td>
-                        <td class="text-end">{{ '{:,.0f}'.format(ns_r.plan).replace(',', ' ') }}</td>
-                        <td class="text-end">{{ '{:,.0f}'.format(ns_r.fact).replace(',', ' ') }}</td>
-                        <td class="text-end {% if diff < 0 %}diff-neg{% elif diff > 0 %}diff-pos{% endif %}">
-                            {% if diff > 0 %}+{% endif %}{{ '{:,.0f}'.format(diff).replace(',', ' ') }}
+                        <td class="num">{{ fmt_money(ns_r.plan) }}</td>
+                        <td class="num">{{ fmt_money(ns_r.fact) }}</td>
+                        <td class="num {% if diff < 0 %}diff-neg{% elif diff > 0 %}diff-pos{% endif %}">
+                            {% if diff > 0 %}+{% endif %}{{ fmt_money(diff) }}
                         </td>
-                        <td class="text-center">
-                            {% if ns_r.plan %}{{ '{:.1f}'.format(pct) }}%{% else %}—{% endif %}
-                        </td>
+                        <td class="ctr">{{ fmt_pct(ns_r.plan, ns_r.fact) }}</td>
                     </tr>
                 {% endif %}
             {% endfor %}
             {% set total_diff = ns_b.plan - ns_b.fact %}
-            {% set total_pct = (ns_b.fact / ns_b.plan * 100) if ns_b.plan else 0 %}
             <tr class="total-row">
-                <td colspan="2" class="text-end">ИТОГО за период ({{ period_label }}):</td>
-                <td class="text-end">{{ '{:,.0f}'.format(ns_b.plan).replace(',', ' ') }}</td>
-                <td class="text-end">{{ '{:,.0f}'.format(ns_b.fact).replace(',', ' ') }}</td>
-                <td class="text-end">{% if total_diff > 0 %}+{% endif %}{{ '{:,.0f}'.format(total_diff).replace(',', ' ') }}</td>
-                <td class="text-center">{% if ns_b.plan %}{{ '{:.1f}'.format(total_pct) }}%{% else %}—{% endif %}</td>
+                <td colspan="2" class="num">ИТОГО за период ({{ period_label }}):</td>
+                <td class="num">{{ fmt_money(ns_b.plan) }}</td>
+                <td class="num">{{ fmt_money(ns_b.fact) }}</td>
+                <td class="num">{% if total_diff > 0 %}+{% endif %}{{ fmt_money(total_diff) }}</td>
+                <td class="ctr">{{ fmt_pct(ns_b.plan, ns_b.fact) }}</td>
             </tr>
         </tbody>
     </table>
 
     {% if selected_months|length > 1 %}
-    <h2 class="subtitle" style="margin-top: 14px;">Разбивка по месяцам</h2>
+    <h2 class="section">Помесячная сводка (все статьи)</h2>
     <table>
         <thead>
             <tr>
-                <th style="width: 36px;">Код</th>
-                <th>Статья</th>
-                {% for m in selected_months %}
-                <th colspan="2">{{ month_names[m][:3] }}</th>
-                {% endfor %}
-            </tr>
-            <tr>
-                <th></th><th></th>
-                {% for m in selected_months %}
-                <th>План</th><th>Факт</th>
-                {% endfor %}
+                <th>Месяц</th>
+                <th class="group" style="width: 18%;">План, ₽</th>
+                <th class="group" style="width: 18%;">Факт, ₽</th>
+                <th class="group" style="width: 18%;">Откл, ₽</th>
+                <th class="group" style="width: 12%;">% исп.</th>
             </tr>
         </thead>
         <tbody>
-            {% set ns_m = namespace(idx=0) %}
-            {% for item in items %}
-                {% set row = data[item.id] %}
-                {% set ns_x = namespace(plan=0, fact=0) %}
-                {% for m in selected_months %}
-                    {% set ns_x.plan = ns_x.plan + (row.months[m].plan or 0)|float %}
-                    {% set ns_x.fact = ns_x.fact + (row.months[m].fact or 0)|float %}
+            {% set ns_m = namespace(idx=0, plan=0, fact=0) %}
+            {% for m in selected_months %}
+                {% set ns_cell = namespace(plan=0, fact=0) %}
+                {% for item in items %}
+                    {% set row = data[item.id] %}
+                    {% set ns_cell.plan = ns_cell.plan + (row.months[m].plan or 0)|float %}
+                    {% set ns_cell.fact = ns_cell.fact + (row.months[m].fact or 0)|float %}
                 {% endfor %}
-                {% if ns_x.plan != 0 or ns_x.fact != 0 %}
+                {% if ns_cell.plan != 0 or ns_cell.fact != 0 %}
                     {% set ns_m.idx = ns_m.idx + 1 %}
+                    {% set ns_m.plan = ns_m.plan + ns_cell.plan %}
+                    {% set ns_m.fact = ns_m.fact + ns_cell.fact %}
+                    {% set mdiff = ns_cell.plan - ns_cell.fact %}
                     <tr {% if ns_m.idx % 2 == 0 %}class="zebra"{% endif %}>
-                        <td class="text-center">{{ item.code }}</td>
-                        <td class="col-name">{{ item.name }}</td>
-                        {% for m in selected_months %}
-                            <td class="text-end">{{ '{:,.0f}'.format((row.months[m].plan or 0)|float).replace(',', ' ') }}</td>
-                            <td class="text-end">{{ '{:,.0f}'.format((row.months[m].fact or 0)|float).replace(',', ' ') }}</td>
-                        {% endfor %}
+                        <td class="col-name">{{ month_names[m] }}</td>
+                        <td class="num">{{ fmt_money(ns_cell.plan) }}</td>
+                        <td class="num">{{ fmt_money(ns_cell.fact) }}</td>
+                        <td class="num {% if mdiff < 0 %}diff-neg{% elif mdiff > 0 %}diff-pos{% endif %}">
+                            {% if mdiff > 0 %}+{% endif %}{{ fmt_money(mdiff) }}
+                        </td>
+                        <td class="ctr">{{ fmt_pct(ns_cell.plan, ns_cell.fact) }}</td>
                     </tr>
                 {% endif %}
             {% endfor %}
+            {% set mtotal_diff = ns_m.plan - ns_m.fact %}
+            <tr class="total-row">
+                <td class="num">ИТОГО:</td>
+                <td class="num">{{ fmt_money(ns_m.plan) }}</td>
+                <td class="num">{{ fmt_money(ns_m.fact) }}</td>
+                <td class="num">{% if mtotal_diff > 0 %}+{% endif %}{{ fmt_money(mtotal_diff) }}</td>
+                <td class="ctr">{{ fmt_pct(ns_m.plan, ns_m.fact) }}</td>
+            </tr>
         </tbody>
     </table>
     {% endif %}
 {% endif %}
 
 <div class="footer">
-    {% if tab == 'cashflow' %}Cashflow{% else %}Бюджет{% endif %} · {{ year }} · {{ period_label }} · сгенерировано {{ generated_at.strftime('%d.%m.%Y %H:%M') }}
+    {% if tab == 'cashflow' %}Cashflow{% else %}Бюджет{% endif %}
+    · {{ year }} · {{ period_label }}
+    · сгенерировано {{ generated_at.strftime('%d.%m.%Y %H:%M') }}
 </div>
 
 </body>
