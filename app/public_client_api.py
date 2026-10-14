@@ -941,13 +941,27 @@ def public_shop_plant(plant_id):
     from app.shop_catalog import catalog_site_bucket
 
     seedling_mode = request.args.get('seedling') == '1'
-    want_bucket = 'container' if seedling_mode else 'ground'
     catalog_items = get_aggregated_catalog()
-    plant_rows = [
-        item for item in catalog_items
-        if item["plant_id"] == plant_id
-        and (item.get('catalog_bucket') or catalog_site_bucket(item)) == want_bucket
-    ]
+    all_rows = [item for item in catalog_items if item["plant_id"] == plant_id]
+    if not all_rows:
+        abort(404)
+
+    def _bucket(item):
+        return item.get('catalog_bucket') or catalog_site_bucket(item)
+
+    ground_rows = [i for i in all_rows if _bucket(i) == 'ground']
+    container_rows = [i for i in all_rows if _bucket(i) == 'container']
+    # ?seedling=1 — контейнерная карточка; иначе грунт, с запасным вариантом
+    # контейнер (иначе sitemap/прямые ссылки /shop/plant/ID давали 404).
+    if seedling_mode:
+        want_bucket = 'container'
+        plant_rows = container_rows or ground_rows
+    elif ground_rows:
+        want_bucket = 'ground'
+        plant_rows = ground_rows
+    else:
+        want_bucket = 'container'
+        plant_rows = container_rows
     if not plant_rows:
         abort(404)
 
