@@ -20,6 +20,8 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('"order"', 'archived_at', 'TIMESTAMP', 'DATETIME'),
     ('"order"', 'archive_season', 'INTEGER', 'INTEGER'),
     ('"order"', 'carried_from_year', 'INTEGER', 'INTEGER'),
+    ('"order"', 'agency_enabled', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
+    ('order_item', 'agency_per_unit', 'NUMERIC(10, 2) DEFAULT 0', 'NUMERIC(10, 2) DEFAULT 0'),
     ('employee', 'official_budget_item_id', 'INTEGER', 'INTEGER'),
     ('employee', 'unofficial_budget_item_id', 'INTEGER', 'INTEGER'),
     ('payment', 'payment_type', "VARCHAR(20) DEFAULT 'cashless'", "VARCHAR(20) DEFAULT 'cashless'"),

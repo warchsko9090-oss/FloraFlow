@@ -707,21 +707,115 @@
 
     <!-- 3. ФИНАНСОВЫЙ РЕЗУЛЬТАТ -->
     {% if active_tab == 'financial' and current_user.role in ['admin', 'executive'] %}
-    <div class="card p-3 mb-3 bg-light">
-        <form method="GET" action="{{ url_for('finance.reports_financial') }}" class="d-flex flex-wrap gap-3 align-items-center" hx-boost="false">
-            <label class="fw-bold">Отчетный год:</label>
-            <select name="year" class="form-select form-select-sm" style="width:100px;">
-                {% for y in years %}
-                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
-                {% endfor %}
-            </select>
-            <button class="btn btn-primary btn-sm">Показать</button>
-            {% if current_user.role == 'admin' %}
-            <a href="{{ url_for('finance.archive_align', year=selected_year) }}" class="btn btn-outline-dark btn-sm ms-auto">
-                <i class="fas fa-balance-scale me-1"></i> Выравнивание архива
-            </a>
-            {% endif %}
-        </form>
+    {% set fin_partners = fin_partners|default(false) %}
+    {% set fin_partners_arg = 1 if fin_partners else none %}
+    {% set fin_cash_from = fin_cash_from_year|default(2026) %}
+    {% set fin_prev_year = selected_year - 1 %}
+    {% set fin_next_year = selected_year + 1 %}
+    <style>
+        .finrez-toolbar {
+            padding: 12px 16px;
+            background: #fff;
+            border: 1px solid #e3e8e4;
+            border-radius: 12px;
+            box-shadow: 0 1px 2px rgba(33, 37, 41, 0.04);
+        }
+        .finrez-toolbar .finrez-year-nav .btn { min-width: 36px; }
+        .finrez-toolbar .finrez-quick { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+        .finrez-toolbar .finrez-quick::-webkit-scrollbar { display: none; }
+        @media (max-width: 768px) {
+            .finrez-toolbar { padding: 10px 12px; }
+            .finrez-toolbar .finrez-actions { width: 100%; }
+            .finrez-toolbar .finrez-actions .dropdown { width: 100%; }
+            .finrez-toolbar .finrez-actions .btn { width: 100%; }
+        }
+    </style>
+    <div class="finrez-toolbar mb-3">
+        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-stretch align-items-lg-center gap-2 gap-lg-3">
+            <div class="d-flex flex-column gap-2 flex-grow-1 min-w-0">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <span class="small text-muted fw-bold text-uppercase">Отчётный год</span>
+                    <div class="btn-group btn-group-sm finrez-year-nav shadow-sm" role="group" aria-label="Год">
+                        <a hx-boost="false"
+                           href="{{ url_for('finance.reports_financial', year=fin_prev_year, fin_partners=fin_partners_arg) }}"
+                           class="btn btn-outline-secondary bg-white {% if fin_prev_year < 2017 %}disabled{% endif %}"
+                           title="{{ fin_prev_year }}"><i class="fas fa-chevron-left"></i></a>
+                        <form method="GET" action="{{ url_for('finance.reports_financial') }}" class="m-0" hx-boost="false">
+                            {% if fin_partners %}<input type="hidden" name="fin_partners" value="1">{% endif %}
+                            <select name="year" class="form-select form-select-sm fw-bold border-secondary-subtle rounded-0"
+                                    style="width: 92px; border-left: 0; border-right: 0;"
+                                    onchange="this.form.submit()" aria-label="Выбор года">
+                                {% for y in years %}
+                                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                                {% endfor %}
+                            </select>
+                        </form>
+                        <a hx-boost="false"
+                           href="{{ url_for('finance.reports_financial', year=fin_next_year, fin_partners=fin_partners_arg) }}"
+                           class="btn btn-outline-secondary bg-white {% if fin_next_year > 2050 %}disabled{% endif %}"
+                           title="{{ fin_next_year }}"><i class="fas fa-chevron-right"></i></a>
+                    </div>
+                    {% if current_user.role in ['admin', 'executive'] %}
+                    <div class="form-check form-switch m-0 ms-lg-1" title="Учесть выплаты партнёрам в расходах и прибыли">
+                        <input class="form-check-input cursor-pointer" type="checkbox" id="finPartnersSwitch"
+                               {% if fin_partners %}checked{% endif %}
+                               data-url-on="{{ url_for('finance.reports_financial', year=selected_year, fin_partners=1) }}"
+                               data-url-off="{{ url_for('finance.reports_financial', year=selected_year) }}"
+                               onchange="window.location.href=this.checked ? this.dataset.urlOn : this.dataset.urlOff">
+                        <label class="form-check-label small fw-bold text-dark cursor-pointer ms-1" for="finPartnersSwitch">Партнёры</label>
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="d-flex align-items-center gap-2 finrez-quick">
+                    {% for y in quick_years|default([]) %}
+                    <a hx-boost="false"
+                       href="{{ url_for('finance.reports_financial', year=y, fin_partners=fin_partners_arg) }}"
+                       class="btn btn-sm {% if y == selected_year %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">{{ y }}</a>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="finrez-actions d-flex flex-wrap align-items-center gap-2 flex-shrink-0">
+                <a hx-boost="false"
+                   href="{{ url_for('finance.budget', tab='cashflow', month='all', year=selected_year, cf_mode='money', cf_partners=fin_partners_arg) }}"
+                   class="btn btn-sm btn-outline-primary bg-white shadow-sm"
+                   title="Кешфлоу за тот же год">
+                    <i class="fas fa-water me-1"></i><span class="d-none d-sm-inline">Кешфлоу</span>
+                </a>
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-dark bg-white shadow-sm dropdown-toggle" type="button"
+                            data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-ellipsis-h me-1"></i>Ещё
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow border-0" style="border-radius: 10px; min-width: 240px;">
+                        <li>
+                            <a class="dropdown-item py-2" href="{{ url_for('finance.reports_margin', year=selected_year) }}" hx-boost="false">
+                                <i class="fas fa-percent text-danger me-2"></i>Маржа {{ selected_year }}
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item py-2"
+                               href="{{ url_for('finance.reports_investor', start_date=selected_year ~ '-01-01', end_date=selected_year ~ '-12-31') }}"
+                               hx-boost="false">
+                                <i class="fas fa-briefcase text-info me-2"></i>Партнёры {{ selected_year }}
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item py-2" href="{{ url_for('finance.budget', tab='cashflow', month='all', year=selected_year) }}" hx-boost="false">
+                                <i class="fas fa-water text-primary me-2"></i>Кешфлоу · ДС
+                            </a>
+                        </li>
+                        {% if current_user.role == 'admin' %}
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <a class="dropdown-item py-2" href="{{ url_for('finance.archive_align', year=selected_year) }}" hx-boost="false">
+                                <i class="fas fa-balance-scale text-dark me-2"></i>Выравнивание архива
+                            </a>
+                        </li>
+                        {% endif %}
+                    </ul>
+                </div>
+            </div>
+        </div>
     </div>
     
     <div class="row">
@@ -732,8 +826,11 @@
                     <table class="table table-sm">
                         <tr><td>Наличные</td><td class="text-end fw-bold">{{ data.exp_cash|money }}</td></tr>
                         <tr><td>Безнал</td><td class="text-end fw-bold">{{ data.exp_cashless|money }}</td></tr>
+                        {% if data.exp_other %}
+                        <tr><td>Прочие (взаимозачет и др.)</td><td class="text-end fw-bold">{{ data.exp_other|money }}</td></tr>
+                        {% endif %}
                         <tr class="table-info small"><td class="ps-3 text-muted">15% от наличных</td><td class="text-end text-muted">{{ data.tax_cash_15|money }}</td></tr>
-                        {% if data.investor_debt > 0 %}
+                        {% if fin_partners and data.investor_debt > 0 %}
                         <tr class="table-warning"><td colspan="2" class="fw-bold small text-muted pt-2">Выплаты Партнерам:</td></tr>
                         {% for inv_name, amt in data.investor_breakdown.items() %}<tr class="table-warning text-muted small"><td class="ps-3">- {{ inv_name }}</td><td class="text-end">{{ amt|money }}</td></tr>{% endfor %}
                         <tr class="table-warning fw-bold border-top border-warning"><td>ИТОГО Партнерам</td><td class="text-end">{{ data.investor_debt|money }}</td></tr>
@@ -751,7 +848,26 @@
                         <tr><td>Зарезервировано</td><td class="text-end text-primary">{{ data.val_reserved|money }}</td></tr>
                         <tr><td>Отгружено (полностью)</td><td class="text-end fw-bold text-success">{{ data.val_shipped|money }}</td></tr>
                         <tr class="table-light fw-bold border-top"><td>Потенциал продаж (Всего)</td><td class="text-end">{{ data.total_sales_potential|money }}</td></tr>
-                        <tr class="table-success fw-bold border-top border-dark"><td>Реализованная выручка (Факт)</td><td class="text-end">{{ data.realized_revenue|money }}</td></tr>
+                        <tr class="table-success fw-bold border-top border-dark"><td>{{ data.fin_revenue_label|default('Реализованная выручка (отгрузки)') }}</td><td class="text-end">{{ data.fin_revenue|default(data.realized_revenue)|money }}</td></tr>
+                    </table>
+                </div>
+            </div>
+            <div class="card shadow-sm mb-4 border-info">
+                <div class="card-header bg-info text-dark fw-bold">Деньги и долг за отгрузку ({{ selected_year }})</div>
+                <div class="card-body">
+                    <table class="table table-sm mb-0">
+                        <tr>
+                            <td>Пришло ДС за год</td>
+                            <td class="text-end fw-bold text-success">{{ data.cash_in|money }}</td>
+                        </tr>
+                        <tr>
+                            <td>Отгружено (наша часть)</td>
+                            <td class="text-end fw-bold">{{ data.val_shipped|money }}</td>
+                        </tr>
+                        <tr class="table-warning fw-bold border-top">
+                            <td>Долг за отгруженное</td>
+                            <td class="text-end {% if data.shipped_client_debt > 0 %}text-danger{% else %}text-secondary{% endif %}">{{ data.shipped_client_debt|money }}</td>
+                        </tr>
                     </table>
                 </div>
             </div>
@@ -760,6 +876,7 @@
     <div class="card border-primary shadow text-center p-3 mb-3">
         <h5 class="text-muted mb-1">Чистая прибыль ({{ selected_year }})</h5>
         <h2 class="{% if data.net_profit > 0 %}text-success{% else %}text-danger{% endif %} fw-bold mb-0">{{ data.net_profit|money }}</h2>
+        <div class="small text-muted mt-1">на актуальное число {{ as_of_date.strftime('%d.%m.%Y') }}</div>
     </div>
 
     <div class="row g-3 mb-3">
@@ -774,9 +891,10 @@
                         {{ data.cum_fin_balance|money }}
                     </div>
                     <div class="small text-muted mt-2">
-                        Выручка − расходы − 15% (без партнёров по истории).
-                        {% if data.investor_debt %}
-                        С партнёрами {{ selected_year }}: <b class="{% if data.cum_fin_with_partners >= 0 %}text-success{% else %}text-danger{% endif %}">{{ data.cum_fin_with_partners|money }}</b>
+                        Σ годовых прибылей (приход − расходы − 15%, без партнёров по истории).
+                        До 2026 приход = отгрузки; с 2026 = оплаты ДС.
+                        {% if fin_partners and data.investor_debt %}
+                        <br>С партнёрами {{ selected_year }}: <b class="{% if data.cum_fin_with_partners >= 0 %}text-success{% else %}text-danger{% endif %}">{{ data.cum_fin_with_partners|money }}</b>
                         {% endif %}
                     </div>
                     {% if data.fin_series %}
@@ -811,78 +929,9 @@
             </div>
         </div>
     </div>
+    {% if fin_cum_chart %}
     <script type="application/json" id="finCumChartData">{{ fin_cum_chart|tojson }}</script>
-    <script>
-    (function () {
-        var el = document.getElementById('finCumChartData');
-        var canvas = document.getElementById('finCumChart');
-        if (!el || !canvas || typeof Chart === 'undefined') return;
-        var d = JSON.parse(el.textContent);
-        function moneyFmt(v) {
-            try {
-                return Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
-            } catch (e) { return v; }
-        }
-        new Chart(canvas.getContext('2d'), {
-            type: 'bar',
-            data: {
-                labels: d.labels,
-                datasets: [
-                    {
-                        type: 'bar',
-                        label: 'Чистая прибыль года',
-                        data: d.net,
-                        backgroundColor: d.net.map(function (v) { return v >= 0 ? 'rgba(25,135,84,0.55)' : 'rgba(220,53,69,0.55)'; }),
-                        borderWidth: 0,
-                        yAxisID: 'y',
-                        order: 2,
-                    },
-                    {
-                        type: 'line',
-                        label: 'Накопительный остаток',
-                        data: d.cum,
-                        borderColor: '#0d6efd',
-                        backgroundColor: 'rgba(13,110,253,0.12)',
-                        fill: true,
-                        tension: 0.25,
-                        borderWidth: 2,
-                        pointRadius: 4,
-                        yAxisID: 'y1',
-                        order: 1,
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { position: 'bottom' },
-                    tooltip: {
-                        callbacks: {
-                            label: function (c) {
-                                return c.dataset.label + ': ' + moneyFmt(c.parsed.y);
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    y: {
-                        position: 'left',
-                        title: { display: true, text: 'Прибыль года' },
-                        ticks: { callback: function (v) { return moneyFmt(v); } }
-                    },
-                    y1: {
-                        position: 'right',
-                        grid: { drawOnChartArea: false },
-                        title: { display: true, text: 'Накопительный' },
-                        ticks: { callback: function (v) { return moneyFmt(v); } }
-                    }
-                }
-            }
-        });
-    })();
-    </script>
+    {% endif %}
     {% endif %}
 
     <!-- 4. МАРЖИНАЛЬНОСТЬ -->
@@ -1794,6 +1843,80 @@
 
 {% block scripts %}
 <script>
+/* После Chart.js (base.html): иначе canvas пустой — Chart ещё не определён. */
+(function initFinCumChart() {
+    var el = document.getElementById('finCumChartData');
+    var canvas = document.getElementById('finCumChart');
+    if (!el || !canvas || typeof Chart === 'undefined') return;
+    var d = JSON.parse(el.textContent || '{}');
+    if (!d.labels || !d.labels.length) return;
+    function moneyFmt(v) {
+        try {
+            return Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+        } catch (e) { return v; }
+    }
+    var prev = Chart.getChart(canvas);
+    if (prev) prev.destroy();
+    new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: d.labels,
+            datasets: [
+                {
+                    type: 'bar',
+                    label: 'Чистая прибыль года',
+                    data: d.net,
+                    backgroundColor: (d.net || []).map(function (v) { return v >= 0 ? 'rgba(25,135,84,0.55)' : 'rgba(220,53,69,0.55)'; }),
+                    borderWidth: 0,
+                    yAxisID: 'y',
+                    order: 2,
+                },
+                {
+                    type: 'line',
+                    label: 'Накопительный остаток',
+                    data: d.cum,
+                    borderColor: '#0d6efd',
+                    backgroundColor: 'rgba(13,110,253,0.12)',
+                    fill: true,
+                    tension: 0.25,
+                    borderWidth: 2,
+                    pointRadius: 4,
+                    yAxisID: 'y1',
+                    order: 1,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'bottom' },
+                tooltip: {
+                    callbacks: {
+                        label: function (c) {
+                            return c.dataset.label + ': ' + moneyFmt(c.parsed.y);
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    position: 'left',
+                    title: { display: true, text: 'Прибыль года' },
+                    ticks: { callback: function (v) { return moneyFmt(v); } }
+                },
+                y1: {
+                    position: 'right',
+                    grid: { drawOnChartArea: false },
+                    title: { display: true, text: 'Накопительный' },
+                    ticks: { callback: function (v) { return moneyFmt(v); } }
+                }
+            }
+        }
+    });
+})();
+
     document.addEventListener('DOMContentLoaded', function() {
         // Партия (год) — только когда выбраны растение, размер и поле.
         function loadTurnoverYears() {

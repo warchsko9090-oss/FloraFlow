@@ -2,6 +2,7 @@ import io
 import re
 import calendar
 from datetime import datetime
+from decimal import Decimal
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file, current_app
 from flask_login import login_required, current_user
 from sqlalchemy import func, and_, extract
@@ -13,6 +14,13 @@ from app.services import calculate_cost_data
 from app.groq_util import groq_model_crm
 
 bp = Blueprint('crm', __name__)
+
+
+def _crm_agency_unit():
+    """Агентские/шт для SQL в CRM (не считаем в выручку)."""
+    from app.finance import _agency_unit_sql
+    return _agency_unit_sql()
+
 
 RUSSIAN_REGIONS_LIST = [
     "Все регионы РФ", "Москва и Московская обл.", "Санкт-Петербург и Ленинградская обл.",
@@ -66,9 +74,13 @@ def crm_client_analytics():
         flat_items_stats = {}
 
         for order in orders:
-            order_potential = 0
+            # Потенциал / резерв / отгрузка в воронке — наша часть (без агентских)
+            order_potential = Decimal(0)
             for item in order.items:
-                order_potential += item.quantity * item.price
+                unit = Decimal(str(item.price or 0))
+                if order.agency_enabled:
+                    unit -= Decimal(str(item.agency_per_unit or 0))
+                order_potential += Decimal(int(item.quantity or 0)) * unit
             
             funnel_sum['total_potential'] += order_potential
 
@@ -85,11 +97,14 @@ def crm_client_analytics():
             order_fact_sum = 0 
 
             for item in order.items:
-                fact_qty = item.shipped_quantity
-                fact_sum = fact_qty * item.price
+                unit = Decimal(str(item.price or 0))
+                if order.agency_enabled:
+                    unit -= Decimal(str(item.agency_per_unit or 0))
+                fact_qty = int(item.shipped_quantity or 0)
+                fact_sum = Decimal(fact_qty) * unit
                 
-                reserved_qty = item.quantity - item.shipped_quantity
-                funnel_sum['reserved'] += reserved_qty * item.price
+                reserved_qty = int(item.quantity or 0) - fact_qty
+                funnel_sum['reserved'] += Decimal(reserved_qty) * unit
                 
                 funnel_sum['shipped'] += fact_sum
                 order_fact_sum += fact_sum
@@ -179,7 +194,9 @@ def crm_abc():
     results = db.session.query(
         OrderItem.plant_id,
         OrderItem.size_id,
-        func.sum(OrderItem.shipped_quantity * OrderItem.price).label('rev'),
+        func.sum(
+            OrderItem.shipped_quantity * (OrderItem.price - _crm_agency_unit())
+        ).label('rev'),
         func.sum(OrderItem.shipped_quantity).label('qty'),
         func.count(func.distinct(func.strftime('%Y-%m', Order.date))).label('months')
     ).join(Order).filter(
@@ -300,7 +317,7 @@ def crm_yoy():
     q = db.session.query(
         func.extract('year', Order.date).label('yr'),
         func.extract('month', Order.date).label('mth'),
-        func.sum(OrderItem.shipped_quantity * OrderItem.price)
+        func.sum(OrderItem.shipped_quantity * (OrderItem.price - _crm_agency_unit()))
     ).join(OrderItem).filter(
         Order.is_deleted == False,
         Order.status != 'canceled',
@@ -354,7 +371,7 @@ def crm_seasonality():
     results = db.session.query(
         Client.name,
         func.extract('month', Order.date).label('mth'),
-        func.sum(OrderItem.shipped_quantity * OrderItem.price)
+        func.sum(OrderItem.shipped_quantity * (OrderItem.price - _crm_agency_unit()))
     ).join(Order, Client.id == Order.client_id)\
      .join(OrderItem, Order.id == OrderItem.order_id)\
      .filter(

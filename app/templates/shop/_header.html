@@ -1,9 +1,9 @@
-<header class="border-b border-brand-border/60 bg-brand-bg/50 backdrop-blur-md sticky top-0 z-30 reveal">
-    <div class="max-w-6xl mx-auto px-4 py-6 shop-header-inner">
+<header class="border-b border-brand-border/60 bg-brand-bg/50 backdrop-blur-md sticky top-0 z-30 reveal" id="shop-site-header">
+    <div class="max-w-6xl mx-auto px-4 shop-header-inner">
         <div class="shop-header-top">
             <a href="{{ url_for('public_client_api.public_landing') }}" class="group inline-block min-w-0 shop-header-brand">
                 <p class="site-brand-title font-serif transition-colors duration-500">Княжество</p>
-                <p class="text-xs sm:text-sm uppercase tracking-[0.2em] text-brand-brassDim/95 mt-2.5 group-hover:text-brand-brass transition-colors shop-header-subtitle">Архитектурный питомник</p>
+                <p class="text-xs sm:text-sm uppercase tracking-[0.2em] text-brand-brassDim/95 group-hover:text-brand-brass transition-colors shop-header-subtitle">Архитектурный питомник</p>
             </a>
             <nav class="shop-header-nav flex items-center gap-3 sm:gap-4" aria-label="Навигация">
                 <a href="{{ url_for('public_client_api.public_shop') }}"

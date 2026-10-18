@@ -3,8 +3,24 @@
 {# Полный reload: иначе hx-boost не перезапускает Chart.js и график «залипает» #}
 <div class="budget-page" hx-boost="false">
 {% set cf_mode = cf_mode|default('money') %}
+{% set cf_partners = cf_partners|default(false) %}
 {% set show_cf = active_tab in ('cashflow', 'cf_compare') %}
 {% set is_year_view = (target_month == 'all') and not is_custom_months %}
+{% set cf_partners_arg = 1 if cf_partners else None %}
+{# % исп. = факт / план × 100; расходы — зелёный при недоборе, поступления — при выполнении #}
+{% macro cf_pct_cell(plan, fact, kind='in', compact=false) -%}
+{%- if plan -%}
+{%- set pct = (fact / plan * 100)|float -%}
+{%- if kind == 'out' -%}
+{%- set cls = 'text-success' if pct < 80 else ('text-warning' if pct <= 100 else 'text-danger') -%}
+{%- else -%}
+{%- set cls = 'text-success' if pct >= 100 else ('text-warning' if pct >= 70 else 'text-danger') -%}
+{%- endif -%}
+<span class="{{ cls }} fw-bold{% if compact %} small{% endif %}">{{ "%.0f"|format(pct) }}%</span>
+{%- else -%}
+<span class="text-muted opacity-25{% if compact %} small{% endif %}">—</span>
+{%- endif -%}
+{%- endmacro %}
 <style>
     /* --- ОБЩИЕ СТИЛИ --- */
     .budget-wrapper {
@@ -58,7 +74,7 @@
         z-index: 40 !important;
     }
     
-    /* Итого за год: 3 фиксированные колонки */
+    /* Итого за год: 3 фиксированные колонки (бюджет) */
     .col-plan-tot { left: 350px !important; width: 115px !important; min-width: 115px !important; max-width: 115px !important; box-sizing: border-box !important; }
     .col-fact-tot { left: 465px !important; width: 115px !important; min-width: 115px !important; max-width: 115px !important; box-sizing: border-box !important; }
     .col-diff-tot { left: 580px !important; width: 115px !important; min-width: 115px !important; max-width: 115px !important; box-sizing: border-box !important; border-right: 2px solid #dee2e6 !important; }
@@ -71,6 +87,18 @@
         max-width: 345px !important; 
         box-sizing: border-box !important;
         border-right: 2px solid #dee2e6 !important; 
+    }
+
+    /* Кешфлоу: 4 колонки итогов (План · Факт · Откл · %) */
+    .cashflow-table .col-plan-tot { width: 100px !important; min-width: 100px !important; max-width: 100px !important; }
+    .cashflow-table .col-fact-tot { left: 450px !important; width: 100px !important; min-width: 100px !important; max-width: 100px !important; }
+    .cashflow-table .col-diff-tot { left: 550px !important; width: 100px !important; min-width: 100px !important; max-width: 100px !important; border-right: none !important; }
+    .cashflow-table .col-pct-tot {
+        left: 650px !important; width: 64px !important; min-width: 64px !important; max-width: 64px !important;
+        box-sizing: border-box !important; border-right: 2px solid #dee2e6 !important;
+    }
+    .cashflow-table thead tr:nth-child(1) .head-total-group {
+        width: 364px !important; min-width: 364px !important; max-width: 364px !important;
     }
 
     /* СТРОКА "ВСЕГО" */
@@ -104,6 +132,17 @@
     /* Скрытые элементы фильтра */
     .dropdown-check-list { min-width: 320px; max-height: 400px; overflow-y: auto; padding: 15px; border-radius: 8px; }
 
+    /* Фикс. высота — иначе Chart.js (maintainAspectRatio:false) раздувает карточку бесконечно */
+    #cfChartsRow .cf-chart-wrap {
+        position: relative;
+        height: 280px;
+        max-height: 280px;
+    }
+    #cfChartsRow canvas {
+        max-width: 100% !important;
+        max-height: 100% !important;
+    }
+
     /* === МОБИЛЬНАЯ АДАПТАЦИЯ (iPhone/Android) === */
     .month-filters-scroll {
         display: flex;
@@ -127,7 +166,6 @@
         .month-filters-scroll::-webkit-scrollbar { display: none; }
 
         #cfChartsRow .card-body {
-            min-height: 220px !important;
             padding: 8px !important;
         }
         #cfChartsRow .card-header {
@@ -135,8 +173,9 @@
             align-items: flex-start !important;
             gap: 2px;
         }
-        #cfChartsRow canvas {
-            max-width: 100%;
+        #cfChartsRow .cf-chart-wrap {
+            height: 220px;
+            max-height: 220px;
         }
 
         /* Уменьшаем ширину закрепленных колонок слева */
@@ -173,10 +212,10 @@
                 <a hx-boost="false" class="nav-link py-1 {% if active_tab == 'budget' %}active bg-success text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='budget', months=selected_months if is_custom_months else None) }}">Бюджет</a>
             </li>
             <li class="nav-item flex-fill text-center">
-                <a hx-boost="false" class="nav-link py-1 {% if active_tab == 'cashflow' %}active bg-primary text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cashflow', cf_mode=cf_mode, months=selected_months if is_custom_months else None) }}">Cashflow</a>
+                <a hx-boost="false" class="nav-link py-1 {% if active_tab == 'cashflow' %}active bg-primary text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cashflow', cf_mode=cf_mode, months=selected_months if is_custom_months else None, cf_partners=cf_partners_arg) }}">Cashflow</a>
             </li>
             <li class="nav-item flex-fill text-center">
-                <a hx-boost="false" class="nav-link py-1 {% if active_tab == 'cf_compare' %}active bg-dark text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cf_compare', cf_mode=cf_mode, months=selected_months if is_custom_months else None) }}">План vs Факт</a>
+                <a hx-boost="false" class="nav-link py-1 {% if active_tab == 'cf_compare' %}active bg-dark text-white fw-bold{% else %}text-muted{% endif %}" href="{{ url_for('finance.budget', year=year, month=target_month, tab='cf_compare', cf_mode=cf_mode, months=selected_months if is_custom_months else None, cf_partners=cf_partners_arg) }}">План vs Факт</a>
             </li>
         </ul>
     </div>
@@ -188,6 +227,7 @@
                 <input type="hidden" name="tab" value="{{ active_tab }}">
                 <input type="hidden" name="month" value="{{ target_month }}">
                 {% if show_cf %}<input type="hidden" name="cf_mode" value="{{ cf_mode }}">{% endif %}
+                {% if show_cf and cf_partners %}<input type="hidden" name="cf_partners" value="1">{% endif %}
                 <select name="year" class="form-select form-select-sm fw-bold bg-light shadow-sm" style="width: 80px; border: 1px solid #ced4da;" onchange="this.form.submit()">
                     <option value="{{ year }}" selected>{{ year }}</option>
                     {% for y in range(year-2, year+3) %}
@@ -203,11 +243,21 @@
 
             {% if show_cf %}
             <div class="btn-group btn-group-sm shadow-sm" role="group" title="Режим расчёта факта кешфлоу">
-                <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode='money', months=selected_months if is_custom_months else None) }}"
+                <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode='money', months=selected_months if is_custom_months else None, cf_partners=cf_partners_arg) }}"
                    class="btn {% if cf_mode == 'money' %}btn-primary fw-bold{% else %}btn-outline-primary bg-white{% endif %}">ДС (оплаты)</a>
                 <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode='accrual', months=selected_months if is_custom_months else None) }}"
                    class="btn {% if cf_mode == 'accrual' %}btn-info text-dark fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Отгрузки</a>
             </div>
+            {% if current_user.role in ['admin', 'executive'] and cf_mode == 'money' %}
+            <div class="form-check form-switch m-0 pt-1" title="Учесть долг партнёрам за год в декабре">
+                <input class="form-check-input cursor-pointer" type="checkbox" id="cfPartnersSwitch"
+                       {% if cf_partners %}checked{% endif %}
+                       data-url-on="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode=cf_mode, months=selected_months if is_custom_months else None, cf_partners=1) }}"
+                       data-url-off="{{ url_for('finance.budget', year=year, month=target_month, tab=active_tab, cf_mode=cf_mode, months=selected_months if is_custom_months else None) }}"
+                       onchange="window.location.href=this.checked ? this.dataset.urlOn : this.dataset.urlOff">
+                <label class="form-check-label small fw-bold text-dark cursor-pointer ms-1 mt-1" for="cfPartnersSwitch">Партнёры</label>
+            </div>
+            {% endif %}
             {% endif %}
         </div>
         
@@ -297,20 +347,20 @@
     <!-- 3. Скролл месяцев (Всегда внизу панели, растянут на 100%) -->
     <div class="month-filters-scroll w-100">
         <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='all', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if target_month == 'all' and not is_custom_months %}btn-dark fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Год</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='all', tab=active_tab, cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}" class="btn {% if target_month == 'all' and not is_custom_months %}btn-dark fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Год</a>
             {% for m in range(1, 13) %}
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month=m, tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month|string == m|string %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" style="min-width: 38px; padding: 4px 0;">{{ m }}</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month=m, tab=active_tab, cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}" class="btn {% if not is_custom_months and target_month|string == m|string %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" style="min-width: 38px; padding: 4px 0;">{{ m }}</a>
             {% endfor %}
         </div>
         <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q1', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q1' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q1</a>
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q2', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q2' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q2</a>
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q3', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q3' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q3</a>
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q4', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q4' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q4</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q1', tab=active_tab, cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q1' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q1</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q2', tab=active_tab, cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q2' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q2</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q3', tab=active_tab, cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q3' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q3</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='q4', tab=active_tab, cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'q4' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}">Q4</a>
         </div>
         <div class="btn-group btn-group-sm shadow-sm flex-shrink-0">
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='spring', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'spring' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" title="Январь–июнь">Весна</a>
-            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='autumn', tab=active_tab, cf_mode=cf_mode if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'autumn' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" title="Июль–декабрь">Осень</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='spring', tab=active_tab, cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'spring' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" title="Январь–июнь">Весна</a>
+            <a hx-boost="false" href="{{ url_for('finance.budget', year=year, month='autumn', tab=active_tab, cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}" class="btn {% if not is_custom_months and target_month == 'autumn' %}btn-success fw-bold{% else %}btn-outline-secondary bg-white{% endif %}" title="Июль–декабрь">Осень</a>
         </div>
 
         {# Multi-select «Несколько месяцев» — позволяет отметить произвольный
@@ -320,6 +370,7 @@
             <input type="hidden" name="year" value="{{ year }}">
             <input type="hidden" name="tab" value="{{ active_tab }}">
             {% if show_cf %}<input type="hidden" name="cf_mode" value="{{ cf_mode }}">{% endif %}
+            {% if show_cf and cf_partners %}<input type="hidden" name="cf_partners" value="1">{% endif %}
             <select name="months" class="form-select form-select-sm select-search"
                     multiple
                     data-placeholder="Несколько месяцев"
@@ -335,7 +386,7 @@
                 <i class="fas fa-check"></i>
             </button>
             {% if is_custom_months %}
-            <a href="{{ url_for('finance.budget', year=year, tab=active_tab, month='all', cf_mode=cf_mode if show_cf else None) }}"
+            <a href="{{ url_for('finance.budget', year=year, tab=active_tab, month='all', cf_mode=cf_mode if show_cf else None, cf_partners=cf_partners_arg if show_cf else None) }}"
                class="btn btn-sm btn-light border text-muted"
                title="Сбросить выбор месяцев и вернуться к году">
                 <i class="fas fa-times"></i>
@@ -357,7 +408,7 @@
         <div class="col-md-3">
             <div class="card border-0 shadow-sm border-start border-4 border-secondary h-100 bg-white">
                 <div class="card-body py-3">
-                    <div class="small text-muted fw-bold text-uppercase mb-1">План расходов · {{ period_label }}</div>
+                    <div class="small text-muted fw-bold text-uppercase mb-1">{% if period_label == 'За год' %}План расходов за год{% else %}План расходов · {{ period_label }}{% endif %}</div>
                     <div class="fw-bold fs-4 text-dark">{{ d_plan|money_int }}</div>
                 </div>
             </div>
@@ -365,7 +416,7 @@
         <div class="col-md-3">
             <div class="card border-0 shadow-sm border-start border-4 border-primary h-100 bg-white">
                 <div class="card-body py-3">
-                    <div class="small text-muted fw-bold text-uppercase mb-1">Факт расходов · {{ period_label }}</div>
+                    <div class="small text-muted fw-bold text-uppercase mb-1">{% if period_label == 'За год' %}Факт расходов за год{% else %}Факт расходов · {{ period_label }}{% endif %}</div>
                     <div class="fw-bold fs-4 text-primary">{{ d_fact|money_int }}</div>
                 </div>
             </div>
@@ -400,55 +451,125 @@
         {% set cf_fact_out = cashflow_period_out_fact %}
         {% set cf_kpi_end = period_end_month %}
         
+        {% set cf_diff_in = cf_fact_in - cf_plan_in %}
+        {% set cf_diff_out = cf_plan_out - cf_fact_out %}
+        {% set cf_title_in = 'Поступления за год' if period_label == 'За год' else 'Поступления · ' ~ period_label %}
+        {% set cf_title_out = 'Расходы за год' if period_label == 'За год' else 'Расходы · ' ~ period_label %}
         {% if active_tab == 'cf_compare' %}
         <div class="col-12">
             <div class="alert alert-light border mb-0 py-2 small">
                 <b>План vs Факт</b> —
                 {% if cf_mode == 'money' %}
-                факт: оплаты (Payment) − (Expense + 15% нал + партнёры из финреза).
+                факт: оплаты клиентов − (расходы + 15% от нал{% if cf_partners %} + партнёры из финреза{% endif %}).
                 {% else %}
-                факт: отгрузки − Expense без нал (без партнёров). Режим для сверки с планом.
+                факт: отгрузки − расходы без наличных. Режим для сверки с планом.
                 {% endif %}
-                План поступлений — из CashflowPlan; план выплат — из бюджета статей.
+                План поступлений — из плана Cashflow; план расходов — из бюджета статей.
             </div>
         </div>
         {% endif %}
         <div class="col-md-3">
             <div class="card border-0 shadow-sm border-start border-4 border-success h-100 bg-white">
                 <div class="card-body py-3">
-                    <div class="d-flex justify-content-between align-items-center mb-1">
-                        <div class="small text-muted fw-bold text-uppercase">Поступления · {{ period_label }}</div>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div class="small text-muted fw-bold text-uppercase">{{ cf_title_in }}</div>
                         <i class="fas fa-arrow-down text-success opacity-50"></i>
                     </div>
-                    <div class="fw-bold fs-4 text-success">{{ cf_plan_in|money_int }}</div>
-                    <div class="small text-muted mt-1">План · факт ({{ cf_in_label|default('факт') }}): <b class="text-dark">{{ cf_fact_in|money_int }}</b></div>
+                    <div class="d-flex justify-content-between align-items-baseline gap-2">
+                        <span class="small text-muted">План</span>
+                        <span class="fw-semibold text-dark">{{ cf_plan_in|money_int }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-baseline gap-2 mt-1">
+                        <span class="small text-muted">Факт</span>
+                        <span class="fw-bold fs-5 text-success">{{ cf_fact_in|money_int }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-baseline gap-2 border-top pt-1 mt-2">
+                        <span class="small text-muted">Откл.</span>
+                        <span class="small fw-bold {% if cf_diff_in >= 0 %}text-success{% else %}text-danger{% endif %}">{% if cf_diff_in > 0 %}+{% endif %}{{ cf_diff_in|money_int }}</span>
+                    </div>
+                    <div class="small text-muted mt-2">{{ cf_in_label|default('факт') }}</div>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
             <div class="card border-0 shadow-sm border-start border-4 border-danger h-100 bg-white">
                 <div class="card-body py-3">
-                    <div class="d-flex justify-content-between align-items-center mb-1">
-                        <div class="small text-muted fw-bold text-uppercase">Выплаты · {{ period_label }}</div>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div class="small text-muted fw-bold text-uppercase">{{ cf_title_out }}</div>
                         <i class="fas fa-arrow-up text-danger opacity-50"></i>
                     </div>
-                    <div class="fw-bold fs-4 text-danger">{{ cf_plan_out|money_int }}</div>
-                    <div class="small text-muted mt-1">План · факт ({{ cf_out_label|default('факт') }}): <b class="text-dark">{{ cf_fact_out|money_int }}</b></div>
+                    <div class="d-flex justify-content-between align-items-baseline gap-2">
+                        <span class="small text-muted">План</span>
+                        <span class="fw-semibold text-dark">{{ cf_plan_out|money_int }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-baseline gap-2 mt-1">
+                        <span class="small text-muted">Факт</span>
+                        <span class="fw-bold fs-5 text-danger">{{ cf_fact_out|money_int }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-baseline gap-2 border-top pt-1 mt-2">
+                        <span class="small text-muted">Откл.</span>
+                        <span class="small fw-bold {% if cf_diff_out >= 0 %}text-success{% else %}text-danger{% endif %}">{% if cf_diff_out > 0 %}+{% endif %}{{ cf_diff_out|money_int }}</span>
+                    </div>
+                    {% if cf_mode == 'money' %}
+                    <div class="d-flex justify-content-between align-items-baseline gap-2 mt-2">
+                        <span class="small text-muted">в т.ч. 15% от нал</span>
+                        <span class="small fw-bold text-dark">{{ (cf_tax15_period|default(0))|money_int }}</span>
+                    </div>
+                    {% endif %}
+                    {% if cf_partners and cf_partner_year|default(0) %}
+                    <div class="d-flex justify-content-between align-items-baseline gap-2 mt-1">
+                        <span class="small text-muted">партнёры (дек.)</span>
+                        <span class="small fw-bold text-dark">{{ cf_partner_year|money_int }}</span>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
+        {% set cf_net_plan = cf_plan_in - cf_plan_out %}
+        {% set cf_net_fact_period = cf_fact_in - cf_fact_out %}
+        {# Исполнение: факт/план. Если план +, а факт − — 0% (план не выполнен), а не −тысячи %. #}
+        {% if not cf_net_plan %}
+            {% set cf_net_pct = none %}
+        {% elif cf_net_plan > 0 and cf_net_fact_period < 0 %}
+            {% set cf_net_pct = 0.0 %}
+        {% else %}
+            {% set cf_net_pct = (cf_net_fact_period / cf_net_plan * 100)|float %}
+        {% endif %}
+        {% if cf_net_pct is none %}
+            {% set cf_net_pct_label = '—' %}
+            {% set cf_net_bar = 0 %}
+            {% set cf_net_bar_cls = 'bg-secondary' %}
+        {% elif cf_net_pct > 999.9 %}
+            {% set cf_net_pct_label = '>999%' %}
+            {% set cf_net_bar = 100 %}
+            {% set cf_net_bar_cls = 'bg-success' %}
+        {% elif cf_net_pct < 0 %}
+            {% set cf_net_pct_label = '0%' %}
+            {% set cf_net_bar = 0 %}
+            {% set cf_net_bar_cls = 'bg-danger' %}
+        {% else %}
+            {% set cf_net_pct_label = "%.1f"|format(cf_net_pct) ~ '%' %}
+            {% set cf_net_bar = [cf_net_pct, 100]|min %}
+            {% set cf_net_bar_cls = 'bg-success' if cf_net_pct >= 100 else ('bg-warning' if cf_net_pct >= 70 else 'bg-danger') %}
+        {% endif %}
         <div class="col-md-3">
-            <div class="card border-0 shadow-sm border-start border-4 border-primary h-100 bg-white">
-                <div class="card-body py-3">
-                    <div class="d-flex justify-content-between align-items-center mb-1">
-                        <div class="small text-muted fw-bold text-uppercase">Чистый поток (План)</div>
-                        <i class="fas fa-equals text-primary opacity-50"></i>
+            <div class="card border-0 shadow-sm h-100 bg-light">
+                <div class="card-body py-3 d-flex flex-column justify-content-center">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="small fw-bold text-muted text-uppercase">Исполнение чистого потока</span>
+                        <span class="small fw-bold text-dark">{{ cf_net_pct_label }}</span>
                     </div>
-                    {% set cf_net_plan = cf_plan_in - cf_plan_out %}
-                    <div class="fw-bold fs-4 {% if cf_net_plan >= 0 %}text-primary{% else %}text-danger{% endif %}">
-                        {{ cf_net_plan|money_int }}
+                    <div class="progress shadow-sm" style="height: 10px; border-radius: 5px;">
+                        {% if cf_net_pct is not none %}
+                        <div class="progress-bar {{ cf_net_bar_cls }}" style="width: {{ cf_net_bar }}%"></div>
+                        {% endif %}
                     </div>
-                    <div class="small text-muted mt-1">Только {{ period_label }}</div>
+                    <div class="small text-muted mt-2">
+                        Факт {{ cf_net_fact_period|money_int }} / план {{ cf_net_plan|money_int }}
+                        {% if cf_net_plan > 0 and cf_net_fact_period < 0 %}
+                        <span class="d-block text-danger mt-1">Факт ниже нуля при плюсовом плане</span>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </div>
@@ -459,11 +580,14 @@
                         <div class="small text-muted fw-bold text-uppercase">Чистый поток (Факт)</div>
                         <i class="fas fa-vault text-dark opacity-50"></i>
                     </div>
-                    {% set cf_net_fact_period = cf_fact_in - cf_fact_out %}
                     <div class="fw-bold fs-4 {% if cf_net_fact_period >= 0 %}text-dark{% else %}text-danger{% endif %}">
                         {{ cf_net_fact_period|money_int }}
                     </div>
-                    <div class="small text-muted mt-1">Только {{ period_label }} · без накопления</div>
+                    {% if cf_partners and cf_partner_year|default(0) and 12 not in selected_months %}
+                    <div class="small text-warning-emphasis mt-1">
+                        Партнёры {{ cf_partner_year|money_int }} учтены в декабре и не входят в этот период
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -492,8 +616,10 @@
                     {% if not is_year_view %} · только {{ period_label }}{% endif %}
                 </span>
             </div>
-            <div class="card-body py-2" style="min-height: 280px;">
-                <canvas id="cfMonthChart" height="120"></canvas>
+            <div class="card-body py-2">
+                <div class="cf-chart-wrap">
+                    <canvas id="cfMonthChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
@@ -502,8 +628,10 @@
             <div class="card-header bg-white py-2">
                 <span class="fw-bold small text-uppercase text-muted">Остаток по годам</span>
             </div>
-            <div class="card-body py-2" style="min-height: 280px;">
-                <canvas id="cfYearChart" height="120"></canvas>
+            <div class="card-body py-2">
+                <div class="cf-chart-wrap">
+                    <canvas id="cfYearChart"></canvas>
+                </div>
                 <div class="small text-muted text-center mt-2">
                     Входящий на 1 янв {{ year }}: <b class="text-dark">{{ opening_balance|money_int }}</b>
                     <div class="mt-1 opacity-75">Σ (приход − расход) всех лет до {{ year }} в текущем режиме</div>
@@ -523,6 +651,7 @@
 {% elif active_tab in ('cashflow', 'cf_compare') %}
 <input type="hidden" name="save_cashflow" value="1">
 <input type="hidden" name="cf_mode" value="{{ cf_mode }}">
+{% if cf_partners %}<input type="hidden" name="cf_partners" value="1">{% endif %}
 {% endif %}
 
 {# Управляющие флаги отображения таблицы:
@@ -720,15 +849,15 @@
                     <th class="col-sticky col-name border-end">Статья движения средств</th>
                     {% if monthly_breakdown %}
                         {% if is_year_view %}
-                        <th colspan="3" class="col-sticky col-total-group head-total-group text-center">ИТОГО ЗА ГОД</th>
+                        <th colspan="4" class="col-sticky col-total-group head-total-group text-center">ИТОГО ЗА ГОД</th>
                         {% else %}
-                        <th colspan="3" class="col-sticky col-total-group head-total-group text-center" title="Сумма по выбранным месяцам">ИТОГО · {{ period_label }}</th>
+                        <th colspan="4" class="col-sticky col-total-group head-total-group text-center" title="Сумма по выбранным месяцам">ИТОГО · {{ period_label }}</th>
                         {% endif %}
                         {% for m in breakdown_months %}
-                            <th colspan="3" class="text-center border-start border-2 {% if is_custom_months %}border-primary bg-primary bg-opacity-10 text-primary{% endif %}">{{ month_names.get(m) }}</th>
+                            <th colspan="4" class="text-center border-start border-2 {% if is_custom_months %}border-primary bg-primary bg-opacity-10 text-primary{% endif %}">{{ month_names.get(m) }}</th>
                         {% endfor %}
                     {% else %}
-                        <th colspan="3" class="col-sticky col-total-group head-total-group text-center bg-primary bg-opacity-10 text-primary">{{ period_label }}</th>
+                        <th colspan="4" class="col-sticky col-total-group head-total-group text-center bg-primary bg-opacity-10 text-primary">{{ period_label }}</th>
                     {% endif %}
                 </tr>
                 <tr>
@@ -736,12 +865,14 @@
                     <th class="col-sticky col-name border-end">&nbsp;</th>
                     <th class="col-sticky col-total-group col-plan-tot text-end small col-plan">План</th>
                     <th class="col-sticky col-total-group col-fact-tot text-end small col-fact">Факт</th>
-                    <th class="col-sticky col-total-group col-diff-tot text-end small col-diff border-end" style="border-right-color: #f59e0b !important;">Откл</th>
+                    <th class="col-sticky col-total-group col-diff-tot text-end small col-diff">Откл</th>
+                    <th class="col-sticky col-total-group col-pct-tot text-end small border-end" style="border-right-color: #f59e0b !important;" title="Факт / план">%</th>
                     {% if monthly_breakdown %}
                         {% for m in breakdown_months %}
                         <th class="text-end small text-muted border-start bg-light col-plan">Пл</th>
                         <th class="text-end small text-muted bg-light col-fact">Фк</th>
                         <th class="text-end small text-muted bg-light col-diff">От</th>
+                        <th class="text-end small text-muted bg-light" title="Факт / план">%</th>
                         {% endfor %}
                     {% endif %}
                 </tr>
@@ -756,12 +887,14 @@
                     </td>
                     <td class="col-sticky col-total-group col-plan-tot text-num col-plan text-muted">—</td>
                     <td class="col-sticky col-total-group col-fact-tot text-num fw-bold col-fact {% if opening_balance >= 0 %}text-dark{% else %}text-danger{% endif %}">{{ opening_balance|money_int }}</td>
-                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff border-end" style="border-right-color: #dee2e6 !important;"></td>
+                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff"></td>
+                    <td class="col-sticky col-total-group col-pct-tot text-num border-end" style="border-right-color: #dee2e6 !important;"></td>
                     {% if monthly_breakdown %}
                         {% for m in breakdown_months %}
                         <td class="border-start col-plan bg-light"></td>
                         <td class="text-num small text-muted col-fact bg-light">{% if loop.first %}{{ opening_balance|money_int }}{% endif %}</td>
                         <td class="col-diff bg-light"></td>
+                        <td class="bg-light"></td>
                         {% endfor %}
                     {% endif %}
                 </tr>
@@ -781,25 +914,31 @@
                         {% endif %}
                     </td>
                     <td class="col-sticky col-total-group col-fact-tot text-num fw-bold text-success col-fact {% if period_only %}fs-5{% endif %}">{{ cf_in_fact_summary|money_int }}</td>
-                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff border-end {% if period_only %}fs-5{% endif %}" style="border-right-color: #dee2e6 !important;">
+                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff {% if period_only %}fs-5{% endif %}">
                         {% set diff_in = cf_in_fact_summary - cf_in_plan_summary %}
                         <span class="{% if diff_in >= 0 %}text-success{% else %}text-danger{% endif %} fw-bold">{% if diff_in > 0 %}+{% endif %}{{ diff_in|money_int }}</span>
+                    </td>
+                    <td class="col-sticky col-total-group col-pct-tot text-num border-end {% if period_only %}fs-5{% endif %}" style="border-right-color: #dee2e6 !important;">
+                        {{ cf_pct_cell(cf_in_plan_summary, cf_in_fact_summary, 'in') }}
                     </td>
 
                     {% if monthly_breakdown %}
                         {% for m in breakdown_months %}
+                        {% set m_in_plan = cashflow_data.get(m).get('plan') %}
+                        {% set m_in_fact = cashflow_data.get(m).get('fact') %}
                         <td class="text-num border-start col-plan bg-white p-0">
                             {% if current_user.role == 'admin' %}
-                            <input type="text" name="cashflow[{{ m }}]" value="{{ cashflow_data.get(m).get('plan')|money_int|replace(' ', '') }}" class="plan-inp text-success">
+                            <input type="text" name="cashflow[{{ m }}]" value="{{ m_in_plan|money_int|replace(' ', '') }}" class="plan-inp text-success">
                             {% else %}
-                            <div class="pe-2 text-success">{{ cashflow_data.get(m).get('plan')|money_int }}</div>
+                            <div class="pe-2 text-success">{{ m_in_plan|money_int }}</div>
                             {% endif %}
                         </td>
-                        <td class="text-num text-success fw-bold col-fact bg-white">{{ cashflow_data.get(m).get('fact')|money_int }}</td>
+                        <td class="text-num text-success fw-bold col-fact bg-white">{{ m_in_fact|money_int }}</td>
                         <td class="text-num col-diff bg-white small">
-                            {% set md_in = cashflow_data.get(m).get('fact') - cashflow_data.get(m).get('plan') %}
+                            {% set md_in = m_in_fact - m_in_plan %}
                             <span class="{% if md_in >= 0 %}text-success{% else %}text-danger{% endif %}">{% if md_in > 0 %}+{% endif %}{{ md_in|money_int }}</span>
                         </td>
+                        <td class="text-num bg-white">{{ cf_pct_cell(m_in_plan, m_in_fact, 'in', true) }}</td>
                         {% endfor %}
                     {% endif %}
                 </tr>
@@ -807,23 +946,29 @@
                 <!-- РАСХОДЫ -->
                 <tr class="bg-white">
                     <td class="col-sticky col-code text-center text-danger"><i class="fas fa-arrow-up"></i></td>
-                    <td class="col-sticky col-name fw-bold text-danger border-end ps-4">Выплаты (Исходящие)<div class="small fw-normal text-muted">{{ cf_out_label|default('факт') }}{% if cf_mode == 'money' and cf_partner_year|default(0) %} · партнёры {{ cf_partner_year|money_int }} в дек.{% endif %}</div></td>
+                    <td class="col-sticky col-name fw-bold text-danger border-end ps-4">Расходы (Исходящие)<div class="small fw-normal text-muted">{{ cf_out_label|default('факт') }}{% if cf_partners and cf_partner_year|default(0) %} · партнёры {{ cf_partner_year|money_int }} в дек.{% endif %}</div></td>
                     {% set cf_out_plan_summary = cashflow_out_total_plan if is_year_view else cashflow_period_out_plan %}
                     {% set cf_out_fact_summary = cashflow_out_total_fact if is_year_view else cashflow_period_out_fact %}
                     <td class="col-sticky col-total-group col-plan-tot text-num col-plan {% if period_only %}fs-5{% endif %}">{{ cf_out_plan_summary|money_int }}</td>
                     <td class="col-sticky col-total-group col-fact-tot text-num fw-bold text-danger col-fact {% if period_only %}fs-5{% endif %}">{{ cf_out_fact_summary|money_int }}</td>
-                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff border-end {% if period_only %}fs-5{% endif %}" style="border-right-color: #dee2e6 !important;">
+                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff {% if period_only %}fs-5{% endif %}">
                         {% set diff_out = cf_out_plan_summary - cf_out_fact_summary %}
                         <span class="{% if diff_out >= 0 %}text-success{% else %}text-danger{% endif %} fw-bold">{% if diff_out > 0 %}+{% endif %}{{ diff_out|money_int }}</span>
                     </td>
+                    <td class="col-sticky col-total-group col-pct-tot text-num border-end {% if period_only %}fs-5{% endif %}" style="border-right-color: #dee2e6 !important;">
+                        {{ cf_pct_cell(cf_out_plan_summary, cf_out_fact_summary, 'out') }}
+                    </td>
                     {% if monthly_breakdown %}
                         {% for m in breakdown_months %}
-                        <td class="text-num border-start col-plan bg-white">{{ cashflow_out.get(m).get('plan')|money_int }}</td>
-                        <td class="text-num text-danger fw-bold col-fact bg-white">{{ cashflow_out.get(m).get('fact')|money_int }}</td>
+                        {% set m_out_plan = cashflow_out.get(m).get('plan') %}
+                        {% set m_out_fact = cashflow_out.get(m).get('fact') %}
+                        <td class="text-num border-start col-plan bg-white">{{ m_out_plan|money_int }}</td>
+                        <td class="text-num text-danger fw-bold col-fact bg-white">{{ m_out_fact|money_int }}</td>
                         <td class="text-num col-diff bg-white small">
-                            {% set md_out = cashflow_out.get(m).get('plan') - cashflow_out.get(m).get('fact') %}
+                            {% set md_out = m_out_plan - m_out_fact %}
                             <span class="{% if md_out >= 0 %}text-success{% else %}text-danger{% endif %}">{% if md_out > 0 %}+{% endif %}{{ md_out|money_int }}</span>
                         </td>
+                        <td class="text-num bg-white">{{ cf_pct_cell(m_out_plan, m_out_fact, 'out', true) }}</td>
                         {% endfor %}
                     {% endif %}
                 </tr>
@@ -836,20 +981,28 @@
                         Остаток с начала года (накоп.)
                         <div class="small fw-normal text-white-50">план = план in − план out · факт = факт in − факт out</div>
                     </td>
-                    <td class="col-sticky col-total-group col-plan-tot text-num col-cum-plan text-muted {% if period_only %}fs-5{% endif %}" style="background-color: #212529 !important;">{{ cumulative.get(summary_end_month).get('plan_balance')|money_int }}</td>
-                    <td class="col-sticky col-total-group col-fact-tot text-num col-cum-fact fw-bold text-white {% if period_only %}fs-5{% endif %}" style="background-color: #212529 !important;">{{ cumulative.get(summary_end_month).get('fact_balance')|money_int }}</td>
-                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff border-end {% if period_only %}fs-5{% endif %}" style="border-right-color: #dee2e6 !important; background-color: #212529 !important;">
-                        {% set diff_bal = cumulative.get(summary_end_month).get('fact_balance') - cumulative.get(summary_end_month).get('plan_balance') %}
+                    {% set cum_plan = cumulative.get(summary_end_month).get('plan_balance') %}
+                    {% set cum_fact = cumulative.get(summary_end_month).get('fact_balance') %}
+                    <td class="col-sticky col-total-group col-plan-tot text-num col-cum-plan text-muted {% if period_only %}fs-5{% endif %}" style="background-color: #212529 !important;">{{ cum_plan|money_int }}</td>
+                    <td class="col-sticky col-total-group col-fact-tot text-num col-cum-fact fw-bold text-white {% if period_only %}fs-5{% endif %}" style="background-color: #212529 !important;">{{ cum_fact|money_int }}</td>
+                    <td class="col-sticky col-total-group col-diff-tot text-num col-diff {% if period_only %}fs-5{% endif %}" style="background-color: #212529 !important;">
+                        {% set diff_bal = cum_fact - cum_plan %}
                         <span class="{% if diff_bal >= 0 %}text-success{% else %}text-danger{% endif %} fw-bold">{% if diff_bal > 0 %}+{% endif %}{{ diff_bal|money_int }}</span>
+                    </td>
+                    <td class="col-sticky col-total-group col-pct-tot text-num border-end {% if period_only %}fs-5{% endif %}" style="border-right-color: #dee2e6 !important; background-color: #212529 !important;">
+                        {{ cf_pct_cell(cum_plan, cum_fact, 'in') }}
                     </td>
                     {% if monthly_breakdown %}
                         {% for m in breakdown_months %}
-                        <td class="text-num border-start border-secondary col-cum-plan text-white-50">{{ cumulative.get(m).get('plan_balance')|money_int }}</td>
-                        <td class="text-num col-cum-fact text-white">{{ cumulative.get(m).get('fact_balance')|money_int }}</td>
+                        {% set m_cum_plan = cumulative.get(m).get('plan_balance') %}
+                        {% set m_cum_fact = cumulative.get(m).get('fact_balance') %}
+                        <td class="text-num border-start border-secondary col-cum-plan text-white-50">{{ m_cum_plan|money_int }}</td>
+                        <td class="text-num col-cum-fact text-white">{{ m_cum_fact|money_int }}</td>
                         <td class="text-num col-diff small">
-                            {% set md_bal = cumulative.get(m).get('fact_balance') - cumulative.get(m).get('plan_balance') %}
+                            {% set md_bal = m_cum_fact - m_cum_plan %}
                             <span class="{% if md_bal >= 0 %}text-success{% else %}text-danger{% endif %}">{% if md_bal > 0 %}+{% endif %}{{ md_bal|money_int }}</span>
                         </td>
+                        <td class="text-num small">{{ cf_pct_cell(m_cum_plan, m_cum_fact, 'in', true) }}</td>
                         {% endfor %}
                     {% endif %}
                 </tr>
@@ -1070,7 +1223,7 @@
             },
             {
                 type: 'bar',
-                label: 'Выплаты план',
+                label: 'Расходы план',
                 data: pick(monthData.out_plan || []),
                 backgroundColor: 'rgba(220, 53, 69, 0.14)',
                 borderColor: 'rgba(220, 53, 69, 0.5)',
@@ -1093,7 +1246,7 @@
                 },
                 {
                     type: 'bar',
-                    label: 'Выплаты факт',
+                    label: 'Расходы факт',
                     data: pick(monthData.out_fact),
                     backgroundColor: 'rgba(220, 53, 69, 0.65)',
                     borderRadius: 3,
@@ -1114,7 +1267,7 @@
                 },
                 {
                     type: 'bar',
-                    label: 'Выплаты факт',
+                    label: 'Расходы факт',
                     data: pick(monthData.out_fact),
                     backgroundColor: 'rgba(220, 53, 69, 0.65)',
                     borderRadius: 3,
@@ -1263,9 +1416,14 @@
             if (cumDs) cumDs.hidden = !on;
             monthChart.options.scales.y1.display = on;
             monthChart.options.scales.y1.title.display = on;
-            monthChart.update();
+            monthChart.update('none');
         }
         if (on) ensureYearChart();
+        // После смены col-12 → col-lg-8 пересчитать размер по уже зафиксированной обёртке
+        requestAnimationFrame(() => {
+            if (monthChart) monthChart.resize();
+            if (yearChart) yearChart.resize();
+        });
     }
 
     if (btn && btn.dataset.cfBound !== '1') {

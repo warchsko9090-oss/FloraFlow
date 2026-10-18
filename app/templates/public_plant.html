@@ -210,7 +210,7 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/shop.js') }}?v=9"></script>
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=10"></script>
     <script>
         const plantMeta = {{ plant | tojson }};
         const variants = Shop.sortVariants({{ variants_json|safe }});

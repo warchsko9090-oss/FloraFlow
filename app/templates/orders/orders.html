@@ -610,6 +610,9 @@
                 <!-- Колонка 10: Сумма (выравниваем ровно под столбцом Сумма) -->
                 <td class="text-end fw-bold text-dark fs-6 pt-2 pb-2 text-nowrap border-top">
                     {{ o.total_sum|money }}
+                    {% if o.agency_enabled and o.agency_total %}
+                    <div class="small fw-normal text-info" style="font-size: 11px;">агентские {{ o.agency_total|money_int }}</div>
+                    {% endif %}
                 </td>
                 <!-- Остальные пустые колонки справа -->
                 <td colspan="4"></td>

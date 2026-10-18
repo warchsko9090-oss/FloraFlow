@@ -64,15 +64,29 @@ def _cash_in_for(first_day, last_day):
     """Поступления денег за период — сумма платежей клиентов по Payment.date.
 
     Без writeoff: списания долга — корректировки сверки, не живые ДС.
+    Минус агентские по отгрузке (заказы с Order.date в периоде).
     Именно это мы считаем «выручкой за месяц» в KPI — по запросу бизнеса
     (факт поступлений, а не зарезервированные заказы).
     """
+    from app.models import Order, OrderItem
+    from app.finance import _agency_unit_sql
     q = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
         Payment.date >= first_day,
         Payment.date <= last_day,
         Payment.cash_inflow_filter(),
     )
-    return _safe_float(q.scalar() or 0)
+    pay = _safe_float(q.scalar() or 0)
+    agency = _agency_unit_sql()
+    aq = db.session.query(
+        func.coalesce(func.sum(OrderItem.shipped_quantity * agency), 0)
+    ).join(Order, OrderItem.order_id == Order.id).filter(
+        Order.date >= first_day,
+        Order.date <= last_day,
+        Order.status != 'canceled',
+        Order.is_deleted == False,
+        Order.agency_enabled.is_(True),
+    )
+    return pay - _safe_float(aq.scalar() or 0)
 
 
 # Старое имя оставляем как алиас, чтобы не ломать внешние места, если они где-то
@@ -141,9 +155,9 @@ def _debtors_count(limit_clients=None):
 
 
 def _ready_orders_stats():
-    """Заказы в статусе ready — кол-во и сумма."""
+    """Заказы в статусе ready — кол-во и сумма (наша часть, без агентских)."""
     orders = Order.query.filter(Order.status == 'ready', Order.is_deleted.is_(False)).all()
-    total_sum = sum(_safe_float(o.total_sum) for o in orders)
+    total_sum = sum(_safe_float(o.net_sum) for o in orders)
     return {'count': len(orders), 'sum': total_sum}
 
 
@@ -485,26 +499,7 @@ def _collect_kpis(user, today):
         except Exception:
             current_app.logger.exception('kpi: cashflow failed')
 
-    # ----- Просрочки по выкопке -----
-    # Только админ/исполнительный директор. Бригадиру и менеджеру эта плитка
-    # не нужна — у бригадира своя страница с задачами, а менеджер копкой не
-    # занимается.
-    if is_boss:
-        try:
-            overdue = _overdue_digging_count(today)
-            if overdue > 0:
-                tiles.append({
-                    'id': 'overdue_digging',
-                    'title': 'Просрочки выкопки',
-                    'value': overdue,
-                    'value_fmt': str(overdue),
-                    'sub': 'задач в диспетчерской',
-                    'icon': 'fa-triangle-exclamation',
-                    'color': 'danger',
-                    'url': url_for('digging.dispatch_view') if 'digging.dispatch_view' in current_app.view_functions else url_for('digging.mobile_index'),
-                })
-        except Exception:
-            current_app.logger.exception('kpi: overdue_digging failed')
+    # Просрочки выкопки на дашборд не выводим — копка только на /digging.
 
     # ----- Поручения (TG-задачи) -----
     try:
@@ -1046,42 +1041,8 @@ def index():
         except Exception:
             current_app.logger.exception('feed: shop on-request block failed')
 
-    # 3. Выкопка (Задачи) — работа бригады. В дайджесте показываем только
-    # админу (в scope='all' и scope='field'). Менеджер (user) копку не видит
-    # никогда — это не его участок работ. Бригадир (user2) видит свою копку
-    # на отдельных страницах (/digging, мобильный ввод и т.д.) — в дайджесте
-    # она ему не нужна, чтобы не забивала ленту.
-    _show_digging = (
-        is_admin and admin_scope in ('all', 'field')
-    )
-    if _show_digging:
-        try:
-            tasks = DiggingTask.query.filter(DiggingTask.status == 'pending').all()
-            for t in tasks:
-                try:
-                    item = t.item
-                    if not (item and item.order and not item.order.is_deleted):
-                        continue
-                    d = t.planned_date
-                    card = {
-                        'id': f'task_{t.id}',
-                        'type': 'task',
-                        'order_id': item.order_id,
-                        'client_name': item.order.client.name if item.order.client else '—',
-                        'plant_name': item.plant.name if item.plant else '—',
-                        'size_name': item.size.name if item.size else '—',
-                        'field_name': item.field.name if item.field else '—',
-                        'qty': t.planned_qty,
-                        'comment': t.comment,
-                        'task_id': t.id,
-                        'date_str': d.strftime('%d.%m.%Y') if d else '',
-                        'raw_date': d or today,
-                    }
-                    add_to_group(card, d or today)
-                except Exception:
-                    current_app.logger.exception('feed: digging task card failed')
-        except Exception:
-            current_app.logger.exception('feed: digging block failed')
+    # 3. Выкопка (DiggingTask) — в ленту дашборда не кладём никому:
+    # план/факт копки ведётся на /digging, карточки «ПЛАН/ФАКТ/ГОТОВО» только засоряют дайджест.
 
     # 5. Задачи из Telegram (AI)
     try:

@@ -766,10 +766,55 @@ def _budget_period_to_months(tm):
     return list(range(1, 13)), 'За год'
 
 
-def _year_realized_revenue(y):
-    """Реализованная выручка года = Σ (shipped_quantity × price)."""
+def _agency_unit_sql():
+    """Агентские/шт в SQL: только при Order.agency_enabled, иначе 0."""
+    from sqlalchemy import case, literal
+    return case(
+        (Order.agency_enabled.is_(True), func.coalesce(OrderItem.agency_per_unit, 0)),
+        else_=literal(0),
+    )
+
+
+def _year_agency_recognized(y):
+    """Агентские по отгрузке за год (Order.date) — вычитаются из прихода/выручки."""
+    agency = _agency_unit_sql()
     total = db.session.query(
-        func.coalesce(func.sum(OrderItem.shipped_quantity * OrderItem.price), 0)
+        func.coalesce(func.sum(OrderItem.shipped_quantity * agency), 0)
+    ).join(Order, OrderItem.order_id == Order.id).filter(
+        func.extract('year', Order.date) == y,
+        Order.status != 'canceled',
+        Order.is_deleted == False,
+        Order.agency_enabled.is_(True),
+    ).scalar()
+    return Decimal(total or 0)
+
+
+def _month_agency_recognized(y):
+    """Агентские по отгрузке по месяцам Order.date."""
+    result = {m: Decimal(0) for m in range(1, 13)}
+    agency = _agency_unit_sql()
+    rows = db.session.query(
+        func.extract('month', Order.date).label('month'),
+        func.coalesce(func.sum(OrderItem.shipped_quantity * agency), 0),
+    ).join(Order, OrderItem.order_id == Order.id).filter(
+        func.extract('year', Order.date) == y,
+        Order.status != 'canceled',
+        Order.is_deleted == False,
+        Order.agency_enabled.is_(True),
+    ).group_by('month').all()
+    for month, amt in rows:
+        result[int(month)] = Decimal(amt or 0)
+    return result
+
+
+def _year_realized_revenue(y):
+    """Реализованная выручка года = Σ shipped×price − агентские по отгрузке."""
+    agency = _agency_unit_sql()
+    total = db.session.query(
+        func.coalesce(
+            func.sum(OrderItem.shipped_quantity * (OrderItem.price - agency)),
+            0,
+        )
     ).join(Order, OrderItem.order_id == Order.id).filter(
         func.extract('year', Order.date) == y,
         Order.status != 'canceled',
@@ -779,12 +824,12 @@ def _year_realized_revenue(y):
 
 
 def _year_payments(y):
-    """Реальные приходы ДС за год (Payment без корректировок-списаний)."""
+    """Реальные приходы ДС за год (Payment без writeoff) минус агентские по отгрузке."""
     pay = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
         func.extract('year', Payment.date) == y,
         Payment.cash_inflow_filter(),
     ).scalar() or 0
-    return Decimal(pay)
+    return Decimal(pay) - _year_agency_recognized(y)
 
 
 def _year_partner_debt(y):
@@ -826,11 +871,15 @@ def _year_expenses_fin(y):
 
 
 def _month_realized_revenue(y):
-    """Реализованная выручка по месяцам — один GROUP BY, без N+1 по позициям."""
+    """Реализованная выручка по месяцам — shipped×price минус агентские по отгрузке."""
     result = {m: Decimal(0) for m in range(1, 13)}
+    agency = _agency_unit_sql()
     rows = db.session.query(
         func.extract('month', Order.date).label('month'),
-        func.coalesce(func.sum(OrderItem.shipped_quantity * OrderItem.price), 0),
+        func.coalesce(
+            func.sum(OrderItem.shipped_quantity * (OrderItem.price - agency)),
+            0,
+        ),
     ).join(Order, OrderItem.order_id == Order.id).filter(
         func.extract('year', Order.date) == y,
         Order.status != 'canceled',
@@ -842,7 +891,7 @@ def _month_realized_revenue(y):
 
 
 def _month_payments(y):
-    """Приход ДС по месяцам — без writeoff (корректировки долга не деньги)."""
+    """Приход ДС по месяцам — без writeoff, минус агентские (по дате заказа/отгрузке)."""
     result = {m: Decimal(0) for m in range(1, 13)}
     rows = db.session.query(
         func.extract('month', Payment.date).label('month'),
@@ -853,6 +902,9 @@ def _month_payments(y):
     ).group_by('month').all()
     for month, amt in rows:
         result[int(month)] = Decimal(amt or 0)
+    agency = _month_agency_recognized(y)
+    for m in range(1, 13):
+        result[m] = result[m] - agency[m]
     return result
 
 
@@ -890,12 +942,27 @@ def _month_expenses_fin(y, include_cash=True, include_tax15=True):
 
 
 def _payments_totals_by_year():
-    """{year: Decimal} — реальные приходы ДС по годам (один запрос)."""
+    """{year: Decimal} — приходы ДС по годам минус агентские по отгрузке (Order.date)."""
     rows = db.session.query(
         func.extract('year', Payment.date).label('y'),
         func.coalesce(func.sum(Payment.amount), 0),
     ).filter(Payment.cash_inflow_filter()).group_by('y').all()
-    return {int(y): Decimal(amt or 0) for y, amt in rows if y is not None}
+    pay = {int(y): Decimal(amt or 0) for y, amt in rows if y is not None}
+    agency = _agency_unit_sql()
+    arows = db.session.query(
+        func.extract('year', Order.date).label('y'),
+        func.coalesce(func.sum(OrderItem.shipped_quantity * agency), 0),
+    ).join(Order, OrderItem.order_id == Order.id).filter(
+        Order.status != 'canceled',
+        Order.is_deleted == False,
+        Order.agency_enabled.is_(True),
+    ).group_by('y').all()
+    for y, amt in arows:
+        if y is None:
+            continue
+        y = int(y)
+        pay[y] = pay.get(y, Decimal(0)) - Decimal(amt or 0)
+    return pay
 
 
 def _expenses_fin_totals_by_year():
@@ -931,10 +998,14 @@ def _expenses_fin_totals_by_year():
 
 
 def _realized_revenue_by_year():
-    """{year: Decimal} — отгрузки × цена по годам (один запрос)."""
+    """{year: Decimal} — отгрузки × (цена − агентские) по годам."""
+    agency = _agency_unit_sql()
     rows = db.session.query(
         func.extract('year', Order.date).label('y'),
-        func.coalesce(func.sum(OrderItem.shipped_quantity * OrderItem.price), 0),
+        func.coalesce(
+            func.sum(OrderItem.shipped_quantity * (OrderItem.price - agency)),
+            0,
+        ),
     ).join(Order, OrderItem.order_id == Order.id).filter(
         Order.status != 'canceled',
         Order.is_deleted == False,
@@ -1026,23 +1097,89 @@ def _cashflow_yearly_series(through_year, lookback=4, mode='money'):
     return series
 
 
+# С 01.01.2026 финрез считает приход по оплатам ДС; до 2026 — по отгрузкам.
+FIN_RESULT_CASH_FROM_YEAR = 2026
+
+
+def _fin_result_revenue(y):
+    """Приход года для финреза (наша часть, без партнёров).
+
+    · годы < 2026 — отгрузки;
+    · годы ≥ 2026 — оплаты ДС.
+    """
+    y = int(y)
+    if y < FIN_RESULT_CASH_FROM_YEAR:
+        return _year_realized_revenue(y)
+    return _year_payments(y)
+
+
+def _fin_result_revenue_label(y):
+    y = int(y)
+    if y < FIN_RESULT_CASH_FROM_YEAR:
+        return 'Реализованная выручка (отгрузки)'
+    return 'Выручка в финрезе (оплаты ДС)'
+
+
 def _fin_result_year_net(y):
-    """Чистая прибыль года как на финрезе, но без партнёров (лёгкий SQL)."""
-    return _year_realized_revenue(y) - _year_expenses_fin(y)['total']
+    """Чистая прибыль года как на финрезе, но без партнёров."""
+    return _fin_result_revenue(y) - _year_expenses_fin(y)['total']
+
+
+def _year_shipped_client_debt(y):
+    """Долг клиентов за уже отгруженное по заказам года (наша часть).
+
+    По каждому заказу: max(0, Σ отгружено×(цена−агентские) − оплаты включая writeoff).
+    Аванс сверх отгрузки в долг не идёт (получается 0).
+    """
+    from sqlalchemy.orm import joinedload
+    orders = (
+        Order.query.options(
+            joinedload(Order.items),
+            joinedload(Order.payments),
+        )
+        .filter(
+            func.extract('year', Order.date) == y,
+            Order.status != 'canceled',
+            Order.is_deleted == False,
+        )
+        .all()
+    )
+    total = Decimal(0)
+    for o in orders:
+        shipped_net = Decimal(0)
+        for item in o.items or []:
+            unit = Decimal(str(item.price or 0))
+            if o.agency_enabled:
+                unit -= Decimal(str(item.agency_per_unit or 0))
+            shipped_net += Decimal(int(item.shipped_quantity or 0)) * unit
+        if shipped_net <= 0:
+            continue
+        paid = sum(
+            (Decimal(str(p.amount or 0)) for p in (o.payments or [])),
+            Decimal(0),
+        )
+        debt = shipped_net - paid
+        if debt > 0:
+            total += debt
+    return total
 
 
 def _fin_result_yearly_series(through_year):
-    """Накопительный финрез по годам: Σ (выручка − расходы − 15%). Без партнёров."""
-    # Тот же пакетный расчёт, что accrual cashflow: отгрузки − expense total (с 15%)
+    """Накопительный финрез по годам: Σ (приход финреза − расходы − 15%). Без партнёров."""
     exp_map = _expenses_fin_totals_by_year()
-    rev_map = _realized_revenue_by_year()
-    years = set(exp_map) | set(rev_map) or {through_year}
+    ship_map = _realized_revenue_by_year()
+    pay_map = _payments_totals_by_year()
+    # Отсекаем мусор вроде target_year=6 из кривых расходов.
+    years = {
+        y for y in (set(exp_map) | set(ship_map) | set(pay_map) | {through_year})
+        if 2010 <= int(y) <= 2100
+    }
     running = Decimal(0)
     series = []
     for y in sorted(years):
         if y > through_year:
             break
-        net = rev_map.get(y, Decimal(0)) - exp_map.get(y, {}).get('total', Decimal(0))
+        net = _fin_result_revenue(y) - exp_map.get(y, {}).get('total', Decimal(0))
         running += net
         series.append({'year': y, 'net': net, 'cum': running})
     if not series:
@@ -1153,12 +1290,27 @@ def budget():
         tab = 'budget'
 
     export = request.args.get('export')
+    # Партнёры в кешфлоу — только по явному слайдеру admin/executive; в PDF/Excel никогда.
+    _cf_partners_raw = (request.args.get('cf_partners') or request.form.get('cf_partners') or '0')
+    cf_partners = (
+        export != 'pdf'
+        and current_user.role in ('admin', 'executive')
+        and str(_cf_partners_raw).strip().lower() in ('1', 'true', 'on', 'yes')
+        and cf_mode == 'money'
+    )
+
+    def _budget_redirect(**extra):
+        kw = dict(year=year, month=target_month, tab=tab, cf_mode=cf_mode)
+        if cf_partners:
+            kw['cf_partners'] = 1
+        kw.update(extra)
+        return redirect(url_for('finance.budget', **kw))
 
     # POST — сразу сохраняем и редиректим, без тяжёлых агрегатов
     if request.method == 'POST':
         if current_user.role in ('executive', 'shop_manager'):
             flash('Только просмотр')
-            return redirect(url_for('finance.budget', year=year, month=target_month, tab=tab, cf_mode=cf_mode))
+            return _budget_redirect()
 
         act = request.form.get('action')
         if act == 'add_item':
@@ -1221,7 +1373,7 @@ def budget():
             db.session.commit()
             flash('План поступлений сохранен')
 
-        return redirect(url_for('finance.budget', year=year, month=target_month, tab=tab, cf_mode=cf_mode))
+        return _budget_redirect()
 
     # Поддерживаем два механизма выбора периода:
     #   • multi-select «месяцы» (?months=2&months=3) — приоритетный,
@@ -1323,8 +1475,9 @@ def budget():
     cashflow_data = {m: {'plan': Decimal(0), 'fact': Decimal(0)} for m in range(1, 13)}
     cashflow_out = {m: {'plan': grand_totals[m]['plan'], 'fact': Decimal(0)} for m in range(1, 13)}
     partner_year = Decimal(0)
-    in_label = 'Приход ДС (оплаты)'
-    out_label = 'Expense + 15% нал + партнёры'
+    in_label = 'Оплаты клиентов'
+    out_label = 'Расходы + 15% от нал'
+    cf_tax15_period = Decimal(0)
     opening_balance = Decimal(0)
     cumulative = {m: {'plan_balance': Decimal(0), 'fact_balance': Decimal(0)} for m in range(1, 13)}
     yearly_cashflow = []
@@ -1346,26 +1499,36 @@ def budget():
     cashflow_period_out_plan = cashflow_period_out_fact = Decimal(0)
 
     if need_cf:
-        # mode=money: приход = Payment; расход = Expense+15% + партнёры (год → в декабрь)
+        # mode=money: приход = Payment; расход = Expense+15%;
+        #   партнёры (год → в декабрь) — только если админ включил cf_partners
         # mode=accrual: приход = отгрузки; расход = Expense без нал; без партнёров
         cashflow_records = CashflowPlan.query.filter_by(year=year).all()
         for r in cashflow_records:
             if r.month in cashflow_data:
                 cashflow_data[r.month]['plan'] = r.amount
 
-        partner_year = _year_partner_debt(year) if cf_mode == 'money' else Decimal(0)
+        partner_year = _year_partner_debt(year) if cf_partners else Decimal(0)
 
         if cf_mode == 'accrual':
             in_by_month = _month_realized_revenue(year)
             out_by_month = _month_expenses_fin(year, include_cash=False, include_tax15=False)
-            in_label = 'Отгрузки (без денег)'
-            out_label = 'Expense без нал'
+            in_label = 'Отгрузки (начисление)'
+            out_label = 'Расходы без наличных'
+            cf_tax15_period = Decimal(0)
         else:
             in_by_month = _month_payments(year)
             out_by_month = _month_expenses_fin(year, include_cash=True, include_tax15=True)
-            out_by_month[12] = out_by_month[12] + partner_year
-            in_label = 'Приход ДС (оплаты)'
-            out_label = 'Expense + 15% нал + партнёры'
+            out_no_tax15 = _month_expenses_fin(year, include_cash=True, include_tax15=False)
+            cf_tax15_period = sum(
+                ((out_by_month[m] - out_no_tax15[m]) for m in selected_months),
+                Decimal(0),
+            )
+            if cf_partners and partner_year:
+                out_by_month[12] = out_by_month[12] + partner_year
+            in_label = 'Оплаты клиентов'
+            out_label = (
+                'Расходы + 15% от нал + партнёры' if cf_partners else 'Расходы + 15% от нал'
+            )
 
         for m in range(1, 13):
             cashflow_data[m]['fact'] = in_by_month[m]
@@ -1468,8 +1631,10 @@ def budget():
                            period_totals=period_totals,
                            active_tab=tab,
                            cf_mode=cf_mode,
+                           cf_partners=cf_partners,
                            cf_in_label=in_label,
                            cf_out_label=out_label,
+                           cf_tax15_period=cf_tax15_period,
                            cf_partner_year=partner_year,
                            cashflow_data=cashflow_data,
                            cashflow_total_plan=cashflow_total_plan,
@@ -1496,6 +1661,9 @@ def budget_export():
       • активный таб `tab` (`budget` / `cashflow`),
       • период через `?months=2&months=3` (multi-select) или старое
         `?month=all|q1|spring|<число>`.
+
+    Партнёрский долг в выгрузку не входит (ни бюджет, ни кешфлоу) —
+    только оплаты / статьи Expense без начисления партнёров в декабрь.
 
     Дизайн новый — компактный, читаемый, с цветной подсветкой отклонений
     и итогами за период. На пустом всё ещё корректно отдаёт пустой шаблон.
@@ -3114,10 +3282,10 @@ def reports_reconciliation():
                 int(cid), f_start, f_end, mode, zero_opening=zero_opening
             )
             
-            # Получаем бартерные заказы клиента
+            # Получаем бартерные заказы клиента (при агентских — только наша часть)
             b_orders = Order.query.filter(Order.client_id == int(cid), Order.is_barter == True, Order.status != 'canceled', Order.is_deleted == False).all()
             for bo in b_orders:
-                bo_total = bo.total_sum
+                bo_total = bo.net_sum if bo.agency_enabled else bo.total_sum
                 bo_paid = sum(e.amount for e in bo.barter_expenses)
                 barter_orders.append({
                     'order': bo,
@@ -3911,40 +4079,59 @@ def reports_turnover():
 def reports_financial():
     if current_user.role not in ['admin', 'executive', 'shop_manager']: return redirect(url_for('main.index'))
     year = int(request.args.get('year', msk_now().year))
-    
-    # Исправление: Добавлена обработка NULL (None) при суммировании
-    expenses = db.session.query(Expense.payment_type, func.sum(Expense.amount)).filter(func.extract('year', Expense.date) == year).group_by(Expense.payment_type).all()
-    
-    # Безопасное получение сумм: если расхода нет, ставим 0
-    ec = next((x[1] for x in expenses if x[0] == 'cash'), Decimal(0))
-    if ec is None: ec = Decimal(0)
-    
-    ecl = next((x[1] for x in expenses if x[0] == 'cashless'), Decimal(0))
-    if ecl is None: ecl = Decimal(0)
-    
+    # Партнёры в финрезе — только по слайдеру admin/executive (как cf_partners в кешфлоу).
+    _fin_partners_raw = (request.args.get('fin_partners') or '0')
+    fin_partners = (
+        current_user.role in ('admin', 'executive')
+        and str(_fin_partners_raw).strip().lower() in ('1', 'true', 'on', 'yes')
+    )
+
+    # Расходы — та же база, что у накопительного/графика: target_year + прочие типы + 15%.
+    exp = _year_expenses_fin(year)
+    ec = exp['cash']
+    ecl = exp['cashless']
+    exp_other = exp['other']
+    tax15 = exp['tax_cash_15']
+
     cd_prev = calculate_cost_data(year - 1)
-    debt, breakdown = calculate_investor_debt(year, cd_prev['accumulated_costs_map'])
-    
-    total_exp = ec + ecl + (ec * Decimal('0.15')) + debt
-    
-    orders = Order.query.filter(func.extract('year', Order.date) == year, Order.status != 'canceled', Order.is_deleted == False).all()
-    
-    val_shipped = Decimal(0); val_reserved = Decimal(0)
+    partner_debt, breakdown = calculate_investor_debt(year, cd_prev['accumulated_costs_map'])
+    partner_debt = Decimal(partner_debt or 0)
+
+    base_exp = exp['total']
+    total_exp = base_exp + (partner_debt if fin_partners else Decimal(0))
+
+    orders = Order.query.filter(
+        func.extract('year', Order.date) == year,
+        Order.status != 'canceled',
+        Order.is_deleted == False,
+    ).all()
+
+    # Потенциал / резерв / отгружено — только наша часть (price − агентские/шт).
+    val_shipped = Decimal(0)
+    val_reserved = Decimal(0)
     for o in orders:
         for item in o.items:
-            # Защита от None в цене
-            price = item.price if item.price is not None else Decimal(0)
-            val_shipped += Decimal(item.shipped_quantity) * price
-            reserved_qty = item.quantity - item.shipped_quantity
-            if reserved_qty > 0: val_reserved += Decimal(reserved_qty) * price
-            
-    net_profit = val_shipped - total_exp
+            unit = Decimal(str(item.price if item.price is not None else 0))
+            if o.agency_enabled:
+                unit -= Decimal(str(item.agency_per_unit or 0))
+            shipped_qty = Decimal(int(item.shipped_quantity or 0))
+            reserved_qty = Decimal(int(item.quantity or 0)) - shipped_qty
+            val_shipped += shipped_qty * unit
+            if reserved_qty > 0:
+                val_reserved += reserved_qty * unit
+
+    cash_in = _year_payments(year)
+    shipped_client_debt = _year_shipped_client_debt(year)
+    fin_revenue = _fin_result_revenue(year)
+    fin_revenue_label = _fin_result_revenue_label(year)
+
+    net_profit = fin_revenue - total_exp
     # Накопительный финрез (лёгкий, без партнёров по всем годам — иначе воркеры виснут)
     fin_series = _fin_result_yearly_series(year)
     cum_fin = fin_series[-1]['cum'] if fin_series else Decimal(0)
     # Для отображаемого года вычитаем партнёров из накопительного остатка один раз
     # (партнёры прошлых лет в накоплении не учтены — см. подпись в шаблоне)
-    cum_fin_with_partners = cum_fin - Decimal(debt or 0)
+    cum_fin_with_partners = cum_fin - partner_debt
     fin_cum_chart = {
         'labels': [str(r['year']) for r in fin_series],
         'net': [float(r['net'] or 0) for r in fin_series],
@@ -3952,30 +4139,51 @@ def reports_financial():
     }
 
     data = {
-        'exp_cash': ec, 
-        'exp_cashless': ecl, 
-        'tax_cash_15': ec * Decimal('0.15'), 
-        'investor_debt': debt, 
-        'investor_breakdown': breakdown, 
+        'exp_cash': ec,
+        'exp_cashless': ecl,
+        'exp_other': exp_other,
+        'tax_cash_15': tax15,
+        'investor_debt': partner_debt,
+        'investor_breakdown': breakdown,
         'total_expenses': total_exp,
-        'realized_revenue': val_shipped, 
+        'realized_revenue': fin_revenue,
+        'fin_revenue': fin_revenue,
+        'fin_revenue_label': fin_revenue_label,
         'net_profit': net_profit,
         'cum_fin_balance': cum_fin,
         'cum_fin_with_partners': cum_fin_with_partners,
         'fin_series': fin_series,
-        'val_reserved': val_reserved, 
-        'val_shipped': val_shipped, 
-        'val_partial_shipped': 0, 
-        'val_partial_unshipped': 0, 
-        'total_sales_potential': val_shipped + val_reserved
+        'val_reserved': val_reserved,
+        'val_shipped': val_shipped,
+        'val_partial_shipped': 0,
+        'val_partial_unshipped': 0,
+        'total_sales_potential': val_shipped + val_reserved,
+        'cash_in': cash_in,
+        'shipped_client_debt': shipped_client_debt,
     }
+    today = msk_today()
+    year_choices = sorted({
+        year,
+        today.year,
+        *(year + d for d in range(-3, 4)),
+        *(int(r['year']) for r in fin_series),
+    })
+    year_choices = [y for y in year_choices if 2017 <= y <= 2050]
+    quick_years = sorted({today.year - 1, today.year, today.year + 1} | {
+        int(r['year']) for r in fin_series[-4:]
+    })
+    quick_years = [y for y in quick_years if 2017 <= y <= 2050][-5:]
     return render_template(
         'finance/reports.html',
         active_tab='financial',
-        years=range(2017, 2051),
+        years=year_choices,
+        quick_years=quick_years,
         selected_year=year,
         data=data,
         fin_cum_chart=fin_cum_chart,
+        fin_partners=fin_partners,
+        as_of_date=today,
+        fin_cash_from_year=FIN_RESULT_CASH_FROM_YEAR,
     )
 
 

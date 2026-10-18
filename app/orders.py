@@ -182,6 +182,11 @@ def _can_use_price_editor(user, order=None):
     return True
 
 
+def _can_edit_agency(user):
+    """Агентские суммы правит только админ и руководитель."""
+    return bool(user and getattr(user, 'role', None) in ('admin', 'executive'))
+
+
 def _notify_assign_batch_task(order, item):
     """Задача менеджеру питомника + админу: проставить поле и партию."""
     try:
@@ -2686,8 +2691,6 @@ def order_detail(order_id):
             d = request.form.get('invoice_date')
             o.invoice_date = datetime.strptime(d, '%Y-%m-%d') if d else None
             
-            if current_user.role in ['admin', 'executive']:
-                o.is_barter = request.form.get('is_barter') == 'on'
             if current_user.role == 'admin':
                 o.buh_exclude = request.form.get('buh_exclude') == 'on'
                 
@@ -2825,13 +2828,39 @@ def order_detail(order_id):
             flash('Восстановлен')
             log_action(f"Восстановил заказ #{o.id}")
 
+        elif 'toggle_agency' in request.form:
+            if not _can_edit_agency(current_user):
+                flash('Агентские может включать только администратор или руководитель', 'danger')
+            else:
+                o.agency_enabled = not bool(o.agency_enabled)
+                db.session.commit()
+                flash('Агентские включены' if o.agency_enabled else 'Агентские выключены')
+                log_action(
+                    f"{'Включил' if o.agency_enabled else 'Выключил'} агентские в заказе #{o.id}"
+                )
+
+        elif 'toggle_barter' in request.form:
+            if current_user.role not in ('admin', 'executive'):
+                flash('Взаимозачет может включать только администратор или руководитель', 'danger')
+            else:
+                # Состояние берём из чекбокса (form=toggleBarterForm), не инвертируем —
+                # так нет гонки при двойном клике.
+                o.is_barter = request.form.get('is_barter') == 'on'
+                db.session.commit()
+                flash('Взаимозачет включён' if o.is_barter else 'Взаимозачет выключен')
+                log_action(
+                    f"{'Включил' if o.is_barter else 'Выключил'} взаимозачет в заказе #{o.id}"
+                )
+
         elif 'save_items' in request.form:
             ids = request.form.getlist('item_id[]')
             prices = request.form.getlist('price[]')
+            agencies = request.form.getlist('agency_per_unit[]')
             qtys = request.form.getlist('quantity[]')
             flds = request.form.getlist('field_id[]')
             yrs = request.form.getlist('year[]')
             prepared_updates = []
+            can_agency = _can_edit_agency(current_user)
 
             # Snapshot для защиты от гонки: смотрим, какие нарушения уже есть
             # ДО изменений менеджера. Финальный assert ниже сравнит с этим.
@@ -2927,10 +2956,20 @@ def order_detail(order_id):
                             return redirect(return_to)
                         return redirect(url_for('orders.order_detail', order_id=order_id))
 
+                new_agency = None
+                if can_agency and o.agency_enabled and i < len(agencies):
+                    try:
+                        new_agency = float(agencies[i] or 0)
+                    except Exception:
+                        new_agency = 0.0
+                    if new_agency < 0:
+                        new_agency = 0.0
+
                 prepared_updates.append({
                     'item': it,
                     'new_qty': new_qty,
                     'new_price': new_price_forced if new_price_forced is not None else float(prices[i]),
+                    'new_agency': new_agency,
                     'new_field_id': new_field_id,
                     'new_year': new_year
                 })
@@ -2944,11 +2983,17 @@ def order_detail(order_id):
                     old_price_dec = Decimal(it.price or 0)
                 except Exception:
                     old_price_dec = Decimal(0)
+                try:
+                    old_agency_dec = Decimal(it.agency_per_unit or 0)
+                except Exception:
+                    old_agency_dec = Decimal(0)
 
                 it.quantity = upd['new_qty']
                 it.price = upd['new_price']
                 it.field_id = upd['new_field_id']
                 it.year = upd['new_year']
+                if upd['new_agency'] is not None:
+                    it.agency_per_unit = upd['new_agency']
                 if old_qty != upd['new_qty']:
                     _record_order_item_history(
                         order_id=o.id,
@@ -2972,6 +3017,17 @@ def order_detail(order_id):
                     changes.append({'field': 'year', 'old': old_year, 'new': upd['new_year']})
                 if old_price_dec != new_price_dec:
                     changes.append({'field': 'price', 'old': str(old_price_dec), 'new': str(new_price_dec)})
+                if upd['new_agency'] is not None:
+                    try:
+                        new_agency_dec = Decimal(str(upd['new_agency']))
+                    except Exception:
+                        new_agency_dec = old_agency_dec
+                    if old_agency_dec != new_agency_dec:
+                        changes.append({
+                            'field': 'agency_per_unit',
+                            'old': str(old_agency_dec),
+                            'new': str(new_agency_dec),
+                        })
                 if changes:
                     _audit_paid_order_change(o, 'save_items', {
                         'item_id': it.id,
@@ -3316,6 +3372,7 @@ def order_detail(order_id):
                         year=p['year'],
                         quantity=p['quantity'],
                         price=p['price'],
+                        agency_per_unit=it.agency_per_unit or 0,
                     )
                     db.session.add(new_item)
                     db.session.flush()
@@ -3601,6 +3658,7 @@ def order_detail(order_id):
                            meta_locked=meta_locked,
                            price_locked=price_locked,
                            can_use_price_editor=can_use_price_editor,
+                           can_edit_agency=_can_edit_agency(current_user),
                            price_editor_rows=price_editor_rows,
                            sale_mini_invoice=sale_mini_invoice,
                            sale_invoices=sale_invoices,

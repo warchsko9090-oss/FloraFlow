@@ -48,4 +48,5 @@ Desktop.ini
 _test_*.pdf
 _budget_preview/
 _tmp_budget_preview.py
+_tmp_restore_local_pg.py
 _tmp_*.py

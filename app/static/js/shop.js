@@ -583,6 +583,25 @@
         });
     }
 
+    function syncStickyHeaderOffset() {
+        const header = document.getElementById('shop-site-header');
+        if (!header) return;
+        const h = Math.ceil(header.getBoundingClientRect().height);
+        document.documentElement.style.setProperty('--shop-header-h', `${h}px`);
+    }
+
+    function initStickyHeaderOffset() {
+        syncStickyHeaderOffset();
+        window.addEventListener('resize', syncStickyHeaderOffset);
+        if (typeof ResizeObserver !== 'undefined') {
+            const header = document.getElementById('shop-site-header');
+            if (header) {
+                const ro = new ResizeObserver(syncStickyHeaderOffset);
+                ro.observe(header);
+            }
+        }
+    }
+
     window.Shop = {
         init(catalogData, uiOptions) {
             catalog = catalogData || [];
@@ -595,6 +614,8 @@
             initOnRequestModal();
             updateUI(window.Shop._uiOptions);
         },
+        syncStickyHeaderOffset,
+        initStickyHeaderOffset,
         getCart: () => ({ ...cart }),
         updateCart,
         setCart,
@@ -631,4 +652,10 @@
             );
         },
     };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initStickyHeaderOffset);
+    } else {
+        initStickyHeaderOffset();
+    }
 })();

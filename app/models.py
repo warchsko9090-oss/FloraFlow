@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from datetime import datetime
+from decimal import Decimal
 from sqlalchemy import func
 from sqlalchemy.orm import deferred
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -349,6 +350,10 @@ class Order(db.Model):
     # Незакрытый заказ, оставленный в работе при закрытии этого сезона.
     carried_from_year = db.Column(db.Integer, nullable=True)
 
+    # Агентские: клиент платит полную прайсовую сумму, часть возвращаем.
+    # Включённый флаг — только учёт в заказе; в расходы/приходы/финрез не идёт.
+    agency_enabled = db.Column(db.Boolean, default=False)
+
     client = db.relationship('Client', foreign_keys=[client_id])
     billing_client = db.relationship('Client', foreign_keys=[billing_client_id])
     buh_posted_by = db.relationship('User', foreign_keys=[buh_posted_by_id])
@@ -387,6 +392,31 @@ class Order(db.Model):
     @property
     def total_sum(self):
         return sum(item.sum for item in self.items)
+
+    @property
+    def agency_total(self):
+        """Полные агентские по плану: Σ (агентские/шт × кол-во). 0 если слайдер выкл."""
+        if not self.agency_enabled:
+            return Decimal(0)
+        total = Decimal(0)
+        for item in self.items or []:
+            total += Decimal(str(item.agency_per_unit or 0)) * Decimal(int(item.quantity or 0))
+        return total
+
+    @property
+    def agency_recognized(self):
+        """Агентские по отгрузке: Σ (агентские/шт × отгружено). Для финрезов/кешфлоу."""
+        if not self.agency_enabled:
+            return Decimal(0)
+        total = Decimal(0)
+        for item in self.items or []:
+            total += Decimal(str(item.agency_per_unit or 0)) * Decimal(int(item.shipped_quantity or 0))
+        return total
+
+    @property
+    def net_sum(self):
+        """Наша часть по плану: прайс − агентские. Для потенциала/резервов/взаимозачёта."""
+        return Decimal(str(self.total_sum or 0)) - self.agency_total
     
     @property
     def paid_sum(self):
@@ -458,12 +488,26 @@ class OrderItem(db.Model):
     field_id = db.Column(db.Integer, db.ForeignKey('field.id'), nullable=True)
     year = db.Column(db.Integer, nullable=True, default=2025)
     price = db.Column(db.Numeric(10, 2), default=0.0)
+    # Агентские за шт. (₽); учитываются только если Order.agency_enabled.
+    agency_per_unit = db.Column(db.Numeric(10, 2), default=0.0)
     quantity = db.Column(db.Integer, default=0) 
     shipped_quantity = db.Column(db.Integer, default=0) 
     plant = db.relationship('Plant')
     size = db.relationship('Size')
     field = db.relationship('Field')
     dug_quantity = db.Column(db.Integer, default=0)
+
+    @property
+    def agency_line_total(self):
+        return Decimal(str(self.agency_per_unit or 0)) * Decimal(int(self.quantity or 0))
+
+    @property
+    def net_unit_price(self):
+        """Цена/шт для нашей части: price − agency_per_unit, если у заказа включены агентские."""
+        unit = Decimal(str(self.price or 0))
+        if self.order is not None and self.order.agency_enabled:
+            unit -= Decimal(str(self.agency_per_unit or 0))
+        return unit
 
     @property
     def dug_total(self):
@@ -1013,8 +1057,10 @@ class Project(db.Model):
         from app.finance import _project_potting_stock_field_id
         from app.utils import msk_now
 
-        # 1. Выручка (Сумма активных заказов, привязанных к проекту)
-        revenue = sum(o.total_sum for o in self.orders if o.status != 'canceled')
+        # 1. Выручка (Сумма активных заказов — наша часть без агентских)
+        revenue = sum(
+            o.net_sum for o in self.orders if o.status != 'canceled'
+        )
         linked_order_ids = {o.id for o in self.orders if o.status != 'canceled'}
 
         # Отгрузки с контейнерной площадки проекта, если заказ ещё не в выручке
@@ -1043,7 +1089,10 @@ class Project(db.Model):
                 shipped = Decimal(int(item.shipped_quantity or 0))
                 if shipped <= 0:
                     continue
-                revenue += Decimal(str(item.price or 0)) * shipped
+                unit = Decimal(str(item.price or 0))
+                if item.order and item.order.agency_enabled:
+                    unit -= Decimal(str(item.agency_per_unit or 0))
+                revenue += unit * shipped
                 yard_extra_items.append(item)
 
         # 2. Прямые расходы (Total Fact)

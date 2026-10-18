@@ -15,7 +15,7 @@
 
         <main class="flex-1 px-4 py-10 sm:py-14 pb-32 shop-page-glow shop-main-with-cart">
             <div class="max-w-6xl mx-auto">
-                <div class="flex flex-col gap-5 mb-10 reveal reveal-delay-2">
+                <div class="flex flex-col gap-5 mb-6 reveal reveal-delay-2">
                     <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
                         <div>
                             <div class="flex items-center gap-3 mb-3">
@@ -32,8 +32,11 @@
                                 oninput="filterCatalog()">
                         </div>
                     </div>
-                    <div class="hidden md:flex flex-wrap gap-2" id="cat-filters"></div>
                 </div>
+
+                {# Высокий sticky-контейнер: фильтры + сетки (иначе sticky некуда «липнуть») #}
+                <div class="catalog-sticky-scope">
+                <div class="hidden md:flex flex-wrap gap-2 mb-8" id="cat-filters"></div>
 
                 <section id="section-regular">
                     <div id="section-ground-header" class="hidden flex items-center gap-4 mb-8 reveal">
@@ -64,6 +67,7 @@
                 </section>
 
                 <p id="empty-state" class="hidden text-center text-brand-muted py-20 font-serif italic text-lg">Ничего не найдено</p>
+                </div>
             </div>
         </main>
 
@@ -75,7 +79,7 @@
     {% include 'shop/_checkout.html' %}
     {% include 'shop/_cookie_consent.html' %}
 
-    <script src="{{ url_for('static', filename='js/shop.js') }}?v=9"></script>
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=10"></script>
     <script>
         const plants = {{ plants_json|safe }};
         let activeCategory = 'all';
