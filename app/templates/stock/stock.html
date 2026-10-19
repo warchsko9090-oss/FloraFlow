@@ -870,7 +870,9 @@
             {% if current_user.role == 'admin' %}
             <button type="button" class="btn btn-outline-dark btn-sm" data-bs-toggle="modal" data-bs-target="#printSettingsModal"><i class="fas fa-cog"></i> Шапка</button>
             {% endif %}
-            <button type="button" onclick="printKP()" class="btn btn-dark btn-sm"><i class="fas fa-print"></i> Выгрузка тов. остатков</button>
+            <button type="button" onclick="printKP()" class="btn btn-dark btn-sm"><i class="fas fa-print"></i>
+                {% if report_mode == 'product' %}Выгрузка тов. остатков{% elif report_mode == 'inventory' %}PDF по полям{% else %}PDF все поля{% endif %}
+            </button>
         </div>
         </div>
         </details>
@@ -1310,9 +1312,33 @@
         const form = document.getElementById('stockForm');
         if (!form) return;
 
+        // Явная сборка URL: закрытый <details> в Chromium не кладёт поля в submit.
         function submitStockFilters() {
-            if (form.requestSubmit) form.requestSubmit();
-            else form.submit();
+            const params = new URLSearchParams();
+            const modeEl = form.querySelector('input[name="mode"]');
+            const endEl = form.querySelector('input[name="end_date"]');
+            if (modeEl && modeEl.value) params.set('mode', modeEl.value);
+            if (endEl && endEl.value) params.set('end_date', endEl.value);
+
+            form.querySelectorAll('select.stock-filter-ms').forEach((el) => {
+                if (!el.name) return;
+                let vals = [];
+                if (window.jQuery && jQuery(el).data('select2')) {
+                    vals = jQuery(el).val() || [];
+                } else {
+                    vals = Array.from(el.selectedOptions).map((o) => o.value);
+                }
+                (Array.isArray(vals) ? vals : [vals]).forEach((v) => {
+                    if (v !== undefined && v !== null && String(v) !== '') {
+                        params.append(el.name, String(v));
+                    }
+                });
+            });
+
+            const qs = params.toString();
+            const next = window.location.pathname + (qs ? ('?' + qs) : '');
+            if (next === (window.location.pathname + window.location.search)) return;
+            window.location.assign(next);
         }
         window.__stockFiltersSubmit = submitStockFilters;
 
@@ -1384,17 +1410,22 @@
         function bindAll() {
             if (!(window.jQuery && jQuery.fn.select2)) {
                 form.querySelectorAll('select.stock-filter-ms').forEach((el) => {
+                    el.removeEventListener('change', submitStockFilters);
                     el.addEventListener('change', submitStockFilters);
                 });
+                syncSummaryCounts();
                 return;
             }
             jQuery(form).find('select.stock-filter-ms').each(function () {
                 bindMulti(jQuery(this));
             });
+            syncSummaryCounts();
         }
         bindAll();
         setTimeout(bindAll, 400);
         setTimeout(bindAll, 900);
+        document.addEventListener('flora:select2-ready', bindAll);
+        document.addEventListener('htmx:afterSwap', () => setTimeout(bindAll, 50));
     })();
     function sortStockGroups(n) {
         // Простая сортировка (реализация есть в прошлых версиях, тут для краткости)
@@ -1829,7 +1860,19 @@
         const form = document.getElementById('stockForm');
         if (!form) return;
         const params = new URLSearchParams();
-        new FormData(form).forEach((value, key) => params.append(key, value));
+        const modeEl = form.querySelector('input[name="mode"]');
+        const endEl = form.querySelector('input[name="end_date"]');
+        if (modeEl && modeEl.value) params.set('mode', modeEl.value);
+        if (endEl && endEl.value) params.set('end_date', endEl.value);
+        form.querySelectorAll('select.stock-filter-ms').forEach((el) => {
+            if (!el.name) return;
+            let vals = [];
+            if (window.jQuery && jQuery(el).data('select2')) vals = jQuery(el).val() || [];
+            else vals = Array.from(el.selectedOptions).map((o) => o.value);
+            (Array.isArray(vals) ? vals : [vals]).forEach((v) => {
+                if (v !== undefined && v !== null && String(v) !== '') params.append(el.name, String(v));
+            });
+        });
         params.set('price_mode', getStockPriceMode());
 
         // Быстрый поиск: в Excel только видимые растения
@@ -1899,11 +1942,114 @@
         return el ? el.outerHTML : '';
     }
 
+    function getStockReportMode() {
+        return document.querySelector('#stockForm input[name="mode"]')?.value || 'product';
+    }
+
     function getStockPrintDocTitle() {
         const now = new Date();
         const pad = (n) => String(n).padStart(2, '0');
         const dateStr = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()}`;
+        const mode = getStockReportMode();
+        if (mode === 'inventory') return `Остатки по полям ${dateStr}`;
+        if (mode === 'fields') return `Остатки все поля ${dateStr}`;
         return `Товарные остатки ${dateStr}`;
+    }
+
+    const STOCK_INV_PRINT_CSS = `
+      @page { size: A4 landscape; margin: 8mm 8mm 12mm 8mm; }
+      * { box-sizing: border-box !important; box-shadow: none !important; text-shadow: none !important; }
+      body { margin: 0; padding: 4mm; background: #fff; font-family: Arial, Helvetica, sans-serif; color: #111; }
+      .inv-title { text-align: center; margin: 0 0 8px; font-size: 14pt; font-weight: 800; text-transform: uppercase; color: #1B5E20; }
+      .inv-sub { text-align: center; margin: 0 0 10px; font-size: 9pt; color: #666; }
+      .table-stock { width: 100% !important; border-collapse: collapse !important; table-layout: auto !important; font-size: 8pt !important; }
+      .table-stock thead th {
+        background: #2E7D32 !important; color: #fff !important; border: 1px solid #1B5E20 !important;
+        padding: 4px 5px !important; font-size: 8pt !important; font-weight: 800 !important;
+        text-transform: uppercase !important; white-space: nowrap !important;
+      }
+      .table-stock td {
+        border: 1px solid #e0e0e0 !important; padding: 3px 5px !important; font-size: 8pt !important;
+        vertical-align: middle !important; background: #fff !important;
+      }
+      .group-header-row td {
+        background: #F1F8E9 !important; border-top: 2px solid #2E7D32 !important;
+        font-weight: 800 !important; color: #1B5E20 !important;
+      }
+      .section-header-row td { background: #E8F5E9 !important; border-top: 2px solid #2E7D32 !important; font-weight: 700 !important; }
+      .col-free-cell, .col-free-header { color: #1B5E20 !important; font-weight: 700 !important; text-align: center !important; }
+      .col-fact-cell, .col-fact-header { color: #01579B !important; font-weight: 700 !important; text-align: center !important; }
+      .col-reserve, .col-shipped, .col-year { text-align: center !important; }
+      .col-sum, .col-free-sum { text-align: right !important; white-space: nowrap !important; font-weight: 700 !important; }
+      .col-info, .col-free-sum, .no-print, .rotate-icon, form, .btn { display: none !important; }
+      .collapse { display: table-row !important; visibility: visible !important; height: auto !important; }
+      .badge-qty { background: transparent !important; padding: 0 !important; font-weight: 700 !important; }
+      .stock-footer-row td { background: #f4faf4 !important; border-top: 2px solid #2E7D32 !important; font-weight: 800 !important; }
+      .print-latin { display: inline !important; margin-left: 6px !important; font-style: italic !important; color: #555 !important; font-size: 7.5pt !important; }
+    `;
+
+    function prepareStockTableForInventoryPrint(tableEl) {
+        const cloned = tableEl.cloneNode(true);
+        cloned.querySelectorAll('form, .rotate-icon, .col-info, .no-print').forEach((el) => el.remove());
+        cloned.querySelectorAll('tr').forEach((tr) => {
+            tr.classList.remove('collapse');
+            tr.classList.add('show');
+            tr.style.display = '';
+            tr.hidden = false;
+        });
+        applyPriceModeToTable(cloned, getStockPriceMode(), { forcePlainText: true });
+        return cloned;
+    }
+
+    async function printStockInventoryPdf() {
+        const mode = getStockReportMode();
+        const tableEl = mode === 'fields'
+            ? document.getElementById('stockFieldsTable')
+            : document.getElementById('stockTable');
+        const docTitle = getStockPrintDocTitle();
+        if (!tableEl) {
+            alert('Таблица остатков не найдена для выгрузки.');
+            return;
+        }
+
+        const cloned = prepareStockTableForInventoryPrint(tableEl);
+
+        let headerHtml = '';
+        const headerEl = document.querySelector('.print-header');
+        if (headerEl) {
+            const hClone = headerEl.cloneNode(true);
+            await optimizePrintImages(hClone);
+            const title = hClone.querySelector('h2');
+            if (title) {
+                title.textContent = mode === 'fields' ? 'Остатки — все поля' : 'Остатки — по полям';
+            }
+            headerHtml = hClone.outerHTML;
+        }
+
+        const endDate = document.querySelector('#stockForm input[name="end_date"]')?.value || '';
+        const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${docTitle}</title>
+  <style>${KP_PRINT_UTILS_CSS}</style>
+  <style>${STOCK_INV_PRINT_CSS}</style>
+  <style>
+    .print-header { display:block !important; margin-bottom: 10px; border-bottom: 2px solid #2E7D32; padding-bottom: 8px; }
+    .print-header h1, .print-header h2 { font-size: 14pt !important; margin: 0 !important; }
+    .print-header p, .print-header div { font-size: 9pt !important; }
+    .no-print, form, .modal, .btn, .navbar, .app-sidebar, .app-header, .bottom-nav,
+    #chatButton, #chatWindow, #networkStatus, .offcanvas, .dropdown-menu, .toast,
+    nav, aside, header.app-header, footer, .drawer, .mobile-drawer { display:none !important; }
+  </style>
+</head>
+<body>
+  ${headerHtml || `<div class="inv-title">${mode === 'fields' ? 'Остатки — все поля' : 'Остатки — по полям'}</div>`}
+  <div class="inv-sub">на ${endDate || 'сегодня'} · цена: ${getStockPriceMode() === 'retail' ? 'розница' : 'опт'}</div>
+  <div class="table-responsive">${cloned.outerHTML}</div>
+</body>
+</html>`;
+        deliverPrintDocument(html, docTitle);
     }
 
     function withPrintDocumentTitle(docTitle, printFn) {
@@ -2011,6 +2157,13 @@
     }
 
     async function printKP() {
+        // «По полям» / «Все поля» — полный складской PDF (цена, факт), не клиентское КП.
+        const mode = getStockReportMode();
+        if (mode === 'inventory' || mode === 'fields') {
+            await printStockInventoryPdf();
+            return;
+        }
+
         // Печатаем КП через лёгкий iframe без layout/CSS приложения,
         // чтобы в PDF не попадали Bootstrap, Font Awesome, Inter и пр.
         const headerEl = document.querySelector('.print-header');
@@ -2021,14 +2174,7 @@
         const docTitle = getStockPrintDocTitle();
 
         if (!tableEl) {
-            document.body.classList.add('kp-print');
-            withPrintDocumentTitle(docTitle, () => {
-                window.addEventListener('afterprint', () => {
-                    document.body.classList.remove('kp-print');
-                }, { once: true });
-                setTimeout(() => document.body.classList.remove('kp-print'), 60000);
-                window.print();
-            });
+            await printStockInventoryPdf();
             return;
         }
 

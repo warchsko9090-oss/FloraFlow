@@ -2098,6 +2098,10 @@
         if (window.matchMedia('(max-width: 991.98px)').matches) {
             var ordersFold = document.getElementById('ordersFilterDetails');
             if (ordersFold) ordersFold.removeAttribute('open');
+            var stockFold = document.getElementById('stockFilterDetails');
+            var stockMb = document.getElementById('stockMbFold');
+            if (stockFold) stockFold.removeAttribute('open');
+            if (stockMb) stockMb.removeAttribute('open');
         }
     });
 
@@ -2135,6 +2139,9 @@
             } catch(e) { console.warn('Select2 init warning:', e); }
         });
         applySeedlingFilter(scope);
+        try {
+            document.dispatchEvent(new CustomEvent('flora:select2-ready', { detail: { scope: scope } }));
+        } catch (e) {}
     }
     window.initSelect2 = initSelect2;
 
