@@ -14,7 +14,16 @@ from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from app.models import db, Order, OrderItem, Client, Plant, Size, Field, Payment, StockBalance, Document, DocumentRow, OrderItemHistory, DiggingLog, ActionLog, User, TgTask
-from app.utils import msk_now, check_stock_availability, get_actual_price, log_action, natural_key, dateru, parse_iso_date
+from app.utils import (
+    msk_now,
+    check_stock_availability,
+    check_order_line_stock,
+    get_actual_price,
+    log_action,
+    natural_key,
+    dateru,
+    parse_iso_date,
+)
 from app.shop_prices import order_default_price, resolve_shop_price, get_shop_price_map
 from app.models import Project
 
@@ -2268,15 +2277,18 @@ def order_create():
         create_discount_pct = max(0.0, min(100.0, create_discount_pct))
         for i in range(len(p_ids)):
             if int(q_ids[i]) > 0:
-                ok, free = check_stock_availability(p_ids[i], s_ids[i], f_ids[i], int(y_ids[i]), int(q_ids[i]))
-                if not ok: 
+                ok, free = check_order_line_stock(
+                    p_ids[i], s_ids[i], f_ids[i], int(y_ids[i]), int(q_ids[i])
+                )
+                if not ok:
                     # ИСПРАВЛЕНО: Откат транзакции перед редиректом
                     db.session.rollback()
                     flash(f"Ошибка! Недостаточно товара (доступно: {free}). Заказ не создан.")
                     return redirect(url_for('orders.order_create'))
 
                 need = int(q_ids[i])
-                if free < need:
+                # free is None для услуг / «Не распределено»
+                if free is not None and free < need:
                     from app.seedlings import suggest_deficit_sources, allows_order_deficit
                     from app.models import Size as _Size, Plant as _Plant
                     sz = _Size.query.get(int(s_ids[i]))
@@ -2935,26 +2947,29 @@ def order_detail(order_id):
                         return redirect(return_to)
                     return redirect(url_for('orders.order_detail', order_id=order_id))
 
-                # Проверка остатка: позиции без поля/партии (добавлены менеджером продаж) — пропускаем.
-                if new_field_id is not None and new_year is not None:
-                    ok, free = check_stock_availability(
-                        it.plant_id,
-                        it.size_id,
-                        new_field_id,
-                        new_year,
-                        new_qty,
-                        exclude_item_id=it.id
+                # Проверка остатка: текущую строку исключаем из резерва; в зачёт
+                # идут только ещё не отгруженные шт. Услуги («Не распределено») — skip.
+                ok, free = check_order_line_stock(
+                    it.plant_id,
+                    it.size_id,
+                    new_field_id,
+                    new_year,
+                    new_qty,
+                    exclude_item_id=it.id,
+                    shipped_quantity=int(it.shipped_quantity or 0),
+                )
+                if not ok:
+                    field_obj = Field.query.get(new_field_id) if new_field_id else None
+                    field_name = field_obj.name if field_obj else (new_field_id or '—')
+                    open_need = max(0, int(new_qty) - int(it.shipped_quantity or 0))
+                    flash(
+                        f'Недостаточно остатка для позиции "{it.plant.name} {it.size.name}" '
+                        f'(поле: {field_name}, год: {new_year}). '
+                        f'Доступно: {free}, запрошено в резерв: {open_need}.'
                     )
-                    if not ok:
-                        field_obj = Field.query.get(new_field_id)
-                        field_name = field_obj.name if field_obj else new_field_id
-                        flash(
-                            f'Недостаточно остатка для позиции "{it.plant.name} {it.size.name}" '
-                            f'(поле: {field_name}, год: {new_year}). Доступно: {free}, запрошено: {new_qty}.'
-                        )
-                        if return_to:
-                            return redirect(return_to)
-                        return redirect(url_for('orders.order_detail', order_id=order_id))
+                    if return_to:
+                        return redirect(return_to)
+                    return redirect(url_for('orders.order_detail', order_id=order_id))
 
                 new_agency = None
                 if can_agency and o.agency_enabled and i < len(agencies):
@@ -3139,7 +3154,7 @@ def order_detail(order_id):
                 flash('Позиция добавлена без поля и партии. Задача на назначение ушла менеджеру питомника и админу.')
             else:
                 f, y = request.form.get('field'), request.form.get('year')
-                ok, free = check_stock_availability(p, s, f, int(y), q)
+                ok, free = check_order_line_stock(p, s, f, int(y) if y not in (None, '') else None, q)
                 if ok:
                     wholesale = get_actual_price(p, s, f)
                     new_item = OrderItem(
@@ -3290,9 +3305,9 @@ def order_detail(order_id):
             # (исходная удалится). Это даёт менеджеру возможность перебиркивать
             # позицию даже когда свободный остаток сейчас 0 из-за её же резерва.
             for p in parts:
-                ok, free = check_stock_availability(
+                ok, free = check_order_line_stock(
                     it.plant_id, p['size_id'], p['field_id'], p['year'],
-                    p['quantity'], exclude_item_id=it.id,
+                    p['quantity'], exclude_item_id=it.id, shipped_quantity=0,
                 )
                 if not ok:
                     field_obj = Field.query.get(p['field_id'])
@@ -3302,7 +3317,7 @@ def order_detail(order_id):
                     flash(
                         f'Недостаточно остатка для части "{it.plant.name} {size_name}" '
                         f'(поле: {field_name}, год: {p["year"]}). '
-                        f'Доступно: {free}, запрошено: {p["quantity"]}.'
+                        f'Доступно: {free}, запрошено в резерв: {p["quantity"]}.'
                     )
                     if return_to:
                         return redirect(return_to)

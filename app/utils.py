@@ -147,6 +147,25 @@ def size_natural_key(obj):
             parts.append((1, s.lower()))
     return parts or [(1, '')]
 
+def field_skips_stock_check(field_id):
+    """Поле «Не распределено» и аналоги — услуги/внескладовые позиции, без остатка."""
+    if field_id is None or field_id == '':
+        return True
+    try:
+        fid = int(field_id)
+    except (TypeError, ValueError):
+        return True
+    fld = Field.query.get(fid)
+    if not fld:
+        return False
+    name = (fld.name or '').strip().lower().replace('ё', 'е')
+    if not name:
+        return False
+    if name in ('не распределено', 'нераспределено'):
+        return True
+    return 'не распредел' in name
+
+
 def check_stock_availability(plant_id, size_id, field_id, year, quantity_needed, exclude_item_id=None):
     """Проверяет, хватает ли свободного остатка (с учётом резервов).
 
@@ -171,6 +190,44 @@ def check_stock_availability(plant_id, size_id, field_id, year, quantity_needed,
     if free_qty < quantity_needed:
         return False, free_qty
     return True, free_qty
+
+
+def check_order_line_stock(
+    plant_id,
+    size_id,
+    field_id,
+    year,
+    quantity,
+    *,
+    exclude_item_id=None,
+    shipped_quantity=0,
+):
+    """Остаток для строки заказа при сохранении / правке.
+
+    - В складской резерв идут только ещё не отгруженные штуки (quantity − shipped).
+    - exclude_item_id снимает текущую строку из резерва на время проверки,
+      иначе «свободно 15» при плане 102 ломает сохранение тех же 102.
+    - Поле «Не распределено» / без поля — без складской проверки (услуги).
+    """
+    if field_id is None or field_id == '' or year is None or year == '':
+        return True, None
+    if field_skips_stock_check(field_id):
+        return True, None
+
+    shipped = max(0, int(shipped_quantity or 0))
+    qty = max(0, int(quantity or 0))
+    needed = max(0, qty - shipped)
+    if needed <= 0:
+        return True, None
+
+    return check_stock_availability(
+        plant_id,
+        size_id,
+        field_id,
+        year,
+        needed,
+        exclude_item_id=exclude_item_id,
+    )
 
 def get_actual_price(plant_id, size_id, field_id, check_year=None):
     """Получает цену товара из истории или текущих остатков."""

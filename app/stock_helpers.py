@@ -191,6 +191,10 @@ def assert_stock_for_order(order_id, baseline=None):
             # Саженцы можно уводить в минус — не блокируем заказ.
             if sz and allows_order_deficit(sz.name):
                 continue
+            # Услуги / «Не распределено» — без складской партии.
+            from app.utils import field_skips_stock_check
+            if fid is None or field_skips_stock_check(fid):
+                continue
             pl = Plant.query.get(pid)
             fld = Field.query.get(fid) if fid else None
             name = ' · '.join([
