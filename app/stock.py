@@ -377,8 +377,9 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
         batch_sum = calc_price * fact
 
         if report_mode == 'inventory':
-            k_agg = (pid, fid, byear)
-            size_val = None
+            # Размер нужен в PDF/прайсе (Нетов·C / Товарный·C), не схлопываем.
+            k_agg = (pid, sid, fid, byear)
+            size_val = size_name
         elif report_mode == 'fields':
             k_agg = (fid, pid, sid, byear)
             size_val = size_name
@@ -391,7 +392,7 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
         if k_agg not in aggregated:
             aggregated[k_agg] = {
                 'plant_id': pid,
-                'size_id': sid if report_mode != 'inventory' else 0,
+                'size_id': sid,
                 'plant': pl_obj.name if pl_obj else 'Unknown',
                 'latin_name': pl_obj.latin_name if pl_obj else '',
                 'characteristic': pl_obj.characteristic if pl_obj else '',
@@ -470,7 +471,11 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
     for p_name in sorted(grouped_final.keys()):
         group = grouped_final[p_name]
         if report_mode == 'inventory':
-            group['rows'].sort(key=lambda x: (x.get('year') or 0, x['fields_str']))
+            group['rows'].sort(key=lambda x: (
+                natural_key(x.get('size') or ''),
+                x.get('year') or 0,
+                x['fields_str'],
+            ))
         else:
             group['rows'].sort(key=lambda x: (natural_key(x['size']), x['fields_str']))
         sorted_groups.append({'name': p_name, 'data': group})

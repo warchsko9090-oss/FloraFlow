@@ -889,7 +889,7 @@
         <thead class="table-light">
             <tr>
                 <th class="text-start ps-3" onclick="sortStockGroups(0)">Растение</th>
-                {% if report_mode != 'inventory' %}<th>Размер</th>{% endif %}
+                <th>Размер</th>
                 <th class="col-field">Поле</th>
                 {% if current_user.role != 'user2' %}<th>Цена</th>{% endif %}
                 <th class="col-reserve">Резерв</th>
@@ -910,7 +910,7 @@
             <tr class="section-header-row {% if group.section_key == 'raw_seedlings' %}section-raw{% else %}{% endif %}"
                 data-section-key="{{ group.section_key or '' }}"
                 data-print="{{ '0' if group.section_key == 'raw_seedlings' else '1' }}">
-                <td colspan="{% if report_mode != 'inventory' %}{% if current_user.role != 'user2' %}6{% else %}5{% endif %}{% else %}{% if current_user.role != 'user2' %}5{% else %}4{% endif %}{% endif %}"
+                <td colspan="{% if current_user.role != 'user2' %}6{% else %}5{% endif %}"
                     class="ps-3 py-2">
                     <div class="fw-bold text-uppercase small text-muted" style="letter-spacing:.04em;">{{ group.name }}</div>
                     {% if group.section_key == 'ground' %}
@@ -967,7 +967,7 @@
                     </div>
                 </td>
                 
-                {% if report_mode != 'inventory' %}<td class="text-muted small">{{ group.data.rows|length }} поз.</td>{% endif %}
+                <td class="text-muted small">{{ group.data.rows|length }} поз.</td>
                 
                 <td class="col-field text-muted small">
                     {% set fields_short = group.data.rows | map(attribute='fields_str') | join(', ') | truncate(20) %}
@@ -1000,14 +1000,14 @@
                 data-shipped="{{ row.shipped|round(0)|int }}">
                 <td class="border-0 ps-4"></td> <!-- Пустая ячейка под Растение для отступа -->
                 
-                {% if report_mode != 'inventory' %}<td class="small">{{ row.size }}</td>{% endif %}
+                <td class="small">{{ row.size or '—' }}</td>
 
                 <td class="col-field small text-muted">{{ row.fields_str }}</td>
                 
                 {% if current_user.role != 'user2' %}
                 <td class="text-end fw-bold stock-price-cell">
                     <!-- Логика отображения цены -->
-                    {% if report_mode != 'inventory' and current_user.role == 'admin' %}
+                    {% if current_user.role == 'admin' %}
                     <span class="stock-price-wholesale-view">
                         <form method="POST" style="display:inline;" class="no-print stock-price-form">
                             <input type="hidden" name="update_price" value="1">
@@ -1044,7 +1044,7 @@
         </tbody>
         <tfoot>
             <tr class="stock-footer-row table-light">
-                <td class="text-end pe-3 footer-label-cell" colspan="{% if report_mode != 'inventory' %}{% if current_user.role != 'user2' %}6{% else %}5{% endif %}{% else %}{% if current_user.role != 'user2' %}5{% else %}4{% endif %}{% endif %}">
+                <td class="text-end pe-3 footer-label-cell" colspan="{% if current_user.role != 'user2' %}6{% else %}5{% endif %}">
                     {% if report_mode == 'product' %}Итого по всем растениям{% else %}Итого по складу{% endif %}
                 </td>
                 
@@ -1956,49 +1956,162 @@
         return `Товарные остатки ${dateStr}`;
     }
 
+    // PDF «по полям» / «все поля» — как товарный прайс: растение, размер, цена, свободно.
+    // В отличие от КП товарных: оставляем Нетов / Товарный · C… (больше вариантов размеров).
     const STOCK_INV_PRINT_CSS = `
-      @page { size: A4 landscape; margin: 8mm 8mm 12mm 8mm; }
+      @page { size: A4 portrait; margin: 12mm 12mm 18mm 12mm; }
       * { box-sizing: border-box !important; box-shadow: none !important; text-shadow: none !important; }
-      body { margin: 0; padding: 4mm; background: #fff; font-family: Arial, Helvetica, sans-serif; color: #111; }
-      .inv-title { text-align: center; margin: 0 0 8px; font-size: 14pt; font-weight: 800; text-transform: uppercase; color: #1B5E20; }
-      .inv-sub { text-align: center; margin: 0 0 10px; font-size: 9pt; color: #666; }
-      .table-stock { width: 100% !important; border-collapse: collapse !important; table-layout: auto !important; font-size: 8pt !important; }
+      body { margin: 0; padding: 8mm; background: #fff; font-family: Arial, Helvetica, sans-serif; color: #111; }
+      .inv-title { text-align: center; margin: 0 0 4px; font-size: 14pt; font-weight: 800; text-transform: uppercase; color: #1B5E20; }
+      .inv-sub { text-align: center; margin: 0 0 12px; font-size: 9pt; color: #666; }
+      .kp-section-banner { margin: 10px 0 6px; padding: 8px 12px; background: #E8F5E9; border-top: 3px solid #2E7D32; text-align: center; }
+      .table-stock { width: 100% !important; border-collapse: collapse !important; table-layout: fixed !important; }
       .table-stock thead th {
-        background: #2E7D32 !important; color: #fff !important; border: 1px solid #1B5E20 !important;
-        padding: 4px 5px !important; font-size: 8pt !important; font-weight: 800 !important;
-        text-transform: uppercase !important; white-space: nowrap !important;
+        background: #2E7D32 !important; color: #fff !important; border: none !important;
+        padding: 6px !important; font-size: 9pt !important; font-weight: 800 !important;
+        text-transform: uppercase !important;
       }
       .table-stock td {
-        border: 1px solid #e0e0e0 !important; padding: 3px 5px !important; font-size: 8pt !important;
-        vertical-align: middle !important; background: #fff !important;
+        border: none !important; border-bottom: 1px dotted #E0E0E0 !important;
+        padding: 4px 6px !important; font-size: 9pt !important; vertical-align: middle !important; background: #fff !important;
       }
       .group-header-row td {
-        background: #F1F8E9 !important; border-top: 2px solid #2E7D32 !important;
-        font-weight: 800 !important; color: #1B5E20 !important;
+        background: #F1F8E9 !important; border-top: 2px solid #2E7D32 !important; border-bottom: 1px solid #C5E1A5 !important;
+        font-weight: 800 !important; font-size: 10.5pt !important; color: #1B5E20 !important;
+        text-transform: uppercase !important; padding: 8px 6px !important;
       }
-      .section-header-row td { background: #E8F5E9 !important; border-top: 2px solid #2E7D32 !important; font-weight: 700 !important; }
-      .col-free-cell, .col-free-header { color: #1B5E20 !important; font-weight: 700 !important; text-align: center !important; }
-      .col-fact-cell, .col-fact-header { color: #01579B !important; font-weight: 700 !important; text-align: center !important; }
-      .col-reserve, .col-shipped, .col-year { text-align: center !important; }
-      .col-sum, .col-free-sum { text-align: right !important; white-space: nowrap !important; font-weight: 700 !important; }
-      .col-info, .col-free-sum, .no-print, .rotate-icon, form, .btn { display: none !important; }
-      .collapse { display: table-row !important; visibility: visible !important; height: auto !important; }
+      .kp-col-name { width: 48% !important; text-align: left !important; white-space: normal !important; }
+      .kp-col-size { width: 22% !important; text-align: center !important; white-space: normal !important; }
+      .kp-col-price { width: 15% !important; text-align: right !important; white-space: nowrap !important; }
+      .col-free-cell, .col-free-header { width: 15% !important; text-align: center !important; color: #1B5E20 !important; font-weight: 700 !important; }
+      .group-gap-row td { border: none !important; height: 12px !important; padding: 0 !important; }
+      .print-latin { display: inline !important; margin-left: 6px !important; font-style: italic !important; color: #555 !important; font-size: 8pt !important; font-weight: normal !important; text-transform: none !important; }
       .badge-qty { background: transparent !important; padding: 0 !important; font-weight: 700 !important; }
-      .stock-footer-row td { background: #f4faf4 !important; border-top: 2px solid #2E7D32 !important; font-weight: 800 !important; }
-      .print-latin { display: inline !important; margin-left: 6px !important; font-style: italic !important; color: #555 !important; font-size: 7.5pt !important; }
     `;
 
-    function prepareStockTableForInventoryPrint(tableEl) {
-        const cloned = tableEl.cloneNode(true);
-        cloned.querySelectorAll('form, .rotate-icon, .col-info, .no-print').forEach((el) => el.remove());
-        cloned.querySelectorAll('tr').forEach((tr) => {
-            tr.classList.remove('collapse');
-            tr.classList.add('show');
-            tr.style.display = '';
-            tr.hidden = false;
+    function parseFreeQtyFromRow(tr) {
+        const td = tr.querySelector('.col-free-cell');
+        if (!td) return 0;
+        const txt = (td.textContent || '').replace(/\s+/g, '').replace(',', '.');
+        const m = txt.match(/-?\d+(?:\.\d+)?/);
+        return m ? parseFloat(m[0]) : 0;
+    }
+
+    function cellText(tr, idx) {
+        const td = tr.children[idx];
+        if (!td) return '';
+        return (td.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function priceListColMap(table) {
+        const map = { name: -1, size: -1, price: -1, free: -1 };
+        table.querySelectorAll('thead th').forEach((th, i) => {
+            const t = (th.textContent || '').trim().toUpperCase();
+            if (t.includes('РАСТЕНИЕ') || t.startsWith('ПОЛЕ')) map.name = i;
+            else if (t.includes('РАЗМЕР')) map.size = i;
+            else if (t.includes('ЦЕНА')) map.price = i;
+            else if (t.includes('СВОБОДНО')) map.free = i;
         });
-        applyPriceModeToTable(cloned, getStockPriceMode(), { forcePlainText: true });
-        return cloned;
+        return map;
+    }
+
+    function buildPriceListTableHtml(groups, title) {
+        const priceLabel = getStockPriceMode() === 'retail' ? 'Цена (розница)' : 'Цена (опт)';
+        let body = '';
+        let first = true;
+        groups.forEach((g) => {
+            if (!g.rows.length) return;
+            if (!first) {
+                body += `<tr class="group-gap-row"><td colspan="4"></td></tr>`;
+            }
+            first = false;
+            body += `<tr class="group-header-row"><td class="kp-col-name" colspan="4">${g.name}</td></tr>`;
+            g.rows.forEach((r) => {
+                body += `<tr class="detail-row">
+                    <td class="kp-col-name"></td>
+                    <td class="kp-col-size">${r.size || '—'}</td>
+                    <td class="kp-col-price">${r.price || ''}</td>
+                    <td class="col-free-cell">${r.free}</td>
+                </tr>`;
+            });
+        });
+        if (!body) {
+            body = `<tr><td colspan="4" style="text-align:center;color:#666;padding:16px;">Нет позиций со свободным остатком</td></tr>`;
+        }
+        const banner = title
+            ? `<div class="kp-section-banner"><div style="font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:13pt;">${title}</div></div>`
+            : '';
+        return `${banner}<table class="table-stock">
+          <thead><tr>
+            <th class="kp-col-name">Растение</th>
+            <th class="kp-col-size">Размер</th>
+            <th class="kp-col-price">${priceLabel}</th>
+            <th class="col-free-header">Свободно</th>
+          </tr></thead>
+          <tbody>${body}</tbody>
+        </table>`;
+    }
+
+    function collectInventoryPriceListGroups(table) {
+        const cols = priceListColMap(table);
+        const groups = [];
+        let cur = null;
+        Array.from(table.querySelector('tbody')?.children || []).forEach((tr) => {
+            if (tr.classList.contains('group-header-row')) {
+                const nameEl = tr.querySelector('.fw-bold') || tr.children[cols.name];
+                let name = (nameEl?.textContent || '').replace(/\s+/g, ' ').trim();
+                name = name.replace(/\d+\s*поз\.?/i, '').trim();
+                const latin = tr.querySelector('.print-latin');
+                if (latin && latin.textContent.trim()) {
+                    name += ` <span class="print-latin">${latin.textContent.trim()}</span>`;
+                }
+                cur = { name: name || '—', rows: [] };
+                groups.push(cur);
+                return;
+            }
+            if (!cur || !tr.classList.contains('detail-row')) return;
+            const free = parseFreeQtyFromRow(tr);
+            if (free <= 0) return;
+            let size = cols.size >= 0 ? cellText(tr, cols.size) : '';
+            // Нетов / Товарный · C… оставляем как есть (в отличие от товарного КП).
+            cur.rows.push({
+                size,
+                price: cols.price >= 0 ? cellText(tr, cols.price) : '',
+                free: String(Math.round(free)),
+            });
+        });
+        return groups.filter((g) => g.rows.length);
+    }
+
+    function collectFieldsPriceListGroups(table) {
+        const cols = priceListColMap(table);
+        const byPlant = new Map();
+        let fieldName = '';
+        Array.from(table.querySelector('tbody')?.children || []).forEach((tr) => {
+            if (tr.classList.contains('group-header-row')) {
+                const nameEl = tr.querySelector('.fw-bold');
+                fieldName = (nameEl?.textContent || cellText(tr, cols.name) || '').replace(/\s+/g, ' ').trim();
+                fieldName = fieldName.replace(/\d+\s*поз\.?/i, '').trim();
+                return;
+            }
+            if (!tr.classList.contains('detail-row')) return;
+            const free = parseFreeQtyFromRow(tr);
+            if (free <= 0) return;
+            const plant = cols.name >= 0 ? cellText(tr, cols.name) : '';
+            if (!plant) return;
+            let size = cols.size >= 0 ? cellText(tr, cols.size) : '';
+            // В «все поля» размер + поле в подписи размера, если поле не контейнерная площадка целиком.
+            if (fieldName && fieldName !== 'Контейнерная площадка') {
+                size = size ? `${size} · ${fieldName}` : fieldName;
+            }
+            if (!byPlant.has(plant)) byPlant.set(plant, { name: plant, rows: [] });
+            byPlant.get(plant).rows.push({
+                size,
+                price: cols.price >= 0 ? cellText(tr, cols.price) : '',
+                free: String(Math.round(free)),
+            });
+        });
+        return Array.from(byPlant.values()).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     }
 
     async function printStockInventoryPdf() {
@@ -2012,7 +2125,21 @@
             return;
         }
 
-        const cloned = prepareStockTableForInventoryPrint(tableEl);
+        // Цены в клоне → plain text (розница/опт), затем собираем прайс-таблицу.
+        const work = tableEl.cloneNode(true);
+        work.querySelectorAll('form, .rotate-icon, .no-print').forEach((el) => el.remove());
+        work.querySelectorAll('tr').forEach((tr) => {
+            tr.classList.remove('collapse');
+            tr.style.display = '';
+            tr.hidden = false;
+        });
+        applyPriceModeToTable(work, getStockPriceMode(), { forcePlainText: true });
+
+        const groups = mode === 'fields'
+            ? collectFieldsPriceListGroups(work)
+            : collectInventoryPriceListGroups(work);
+        const sectionTitle = mode === 'fields' ? 'Остатки — все поля' : 'Остатки — по полям';
+        const tableHtml = buildPriceListTableHtml(groups, sectionTitle);
 
         let headerHtml = '';
         const headerEl = document.querySelector('.print-header');
@@ -2020,9 +2147,7 @@
             const hClone = headerEl.cloneNode(true);
             await optimizePrintImages(hClone);
             const title = hClone.querySelector('h2');
-            if (title) {
-                title.textContent = mode === 'fields' ? 'Остатки — все поля' : 'Остатки — по полям';
-            }
+            if (title) title.textContent = sectionTitle;
             headerHtml = hClone.outerHTML;
         }
 
@@ -2038,15 +2163,13 @@
     .print-header { display:block !important; margin-bottom: 10px; border-bottom: 2px solid #2E7D32; padding-bottom: 8px; }
     .print-header h1, .print-header h2 { font-size: 14pt !important; margin: 0 !important; }
     .print-header p, .print-header div { font-size: 9pt !important; }
-    .no-print, form, .modal, .btn, .navbar, .app-sidebar, .app-header, .bottom-nav,
-    #chatButton, #chatWindow, #networkStatus, .offcanvas, .dropdown-menu, .toast,
-    nav, aside, header.app-header, footer, .drawer, .mobile-drawer { display:none !important; }
+    .print-gallery { display:none !important; }
   </style>
 </head>
 <body>
-  ${headerHtml || `<div class="inv-title">${mode === 'fields' ? 'Остатки — все поля' : 'Остатки — по полям'}</div>`}
-  <div class="inv-sub">на ${endDate || 'сегодня'} · цена: ${getStockPriceMode() === 'retail' ? 'розница' : 'опт'}</div>
-  <div class="table-responsive">${cloned.outerHTML}</div>
+  ${headerHtml || `<div class="inv-title">${sectionTitle}</div>`}
+  <div class="inv-sub">на ${endDate || 'сегодня'} · ${getStockPriceMode() === 'retail' ? 'розница' : 'опт'} · только свободный остаток</div>
+  ${tableHtml}
 </body>
 </html>`;
         deliverPrintDocument(html, docTitle);
