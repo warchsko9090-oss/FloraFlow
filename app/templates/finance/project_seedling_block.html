@@ -112,6 +112,8 @@
                     <br>Если в остатках видите <b>«Нетов»</b> или <b>«Саженцы»</b> <u>без контейнера</u> — это старый размер.
                     Выберите его в «Из размера», укажите контейнер и проведите пересадку — получится <b>Нетов · C…</b>.
                     Сменить контейнер у уже посаженного <b>Нетов · C2</b> → то же: «Из размера» = Нетов · C2, новый контейнер = C3.
+                    <br>«Доступно» и год партии: можно выбрать поле вручную, кликнуть партию в панели справа или строку в «Где лежит» —
+                    если на «Откуда» нет остатка этого размера, подставим поле, где партия есть.
                 </p>
                 <div id="seedPipelineTransplant" class="seed-pipeline-panel mb-3" style="display:none;"></div>
                 {% if can_edit_seedlings %}
@@ -850,6 +852,7 @@
     const defaultFieldId = hub.dataset.defaultFieldId || '';
     const yearDefault = hub.dataset.yearDefault || String(new Date().getFullYear());
     let activeTxRow = null;
+    let _txSilent = false;
     let gradeSizeNames = [];
     try {
         gradeSizeNames = JSON.parse(document.getElementById('seedGradeSizesJson')?.textContent || '[]');
@@ -995,79 +998,197 @@
     }
 
     // --- Transplant ---
+    function applyTxBatch(row, item) {
+        if (!row || !item) return;
+        const fromSel = row.querySelector('.seed-tx-from');
+        const yearSel = row.querySelector('.seed-tx-year');
+        const avail = row.querySelector('.seed-tx-avail');
+        const qty = row.querySelector('.seed-tx-qty');
+        if (!fromSel || !yearSel || !avail) return;
+        activeTxRow = row;
+        _txSilent = true;
+        try {
+            if (window.jQuery) {
+                jQuery(fromSel).val(String(item.field_id)).trigger('change');
+            } else {
+                fromSel.value = String(item.field_id);
+            }
+            yearSel.innerHTML = '';
+            const opt = document.createElement('option');
+            opt.value = item.year;
+            opt.textContent = `${item.year} (${item.qty} шт)`;
+            yearSel.appendChild(opt);
+            yearSel.value = String(item.year);
+            avail.textContent = String(item.qty);
+            avail.className = item.qty > 0
+                ? 'badge bg-success text-white seed-tx-avail'
+                : 'badge bg-danger text-white seed-tx-avail';
+            if (qty && (!qty.value || Number(qty.value) > Number(item.qty))) {
+                qty.value = item.qty;
+            }
+        } finally {
+            _txSilent = false;
+        }
+    }
+
+    function bestTxBatch(items) {
+        if (!items || !items.length) return null;
+        return items.find(i => i.preferred)
+            || items.reduce((best, i) => (
+                !best
+                || i.qty > best.qty
+                || (i.qty === best.qty && Number(i.year) > Number(best.year))
+            ) ? i : best, null);
+    }
+
+    function fillTxYears(row, items) {
+        const fromSel = row.querySelector('.seed-tx-from');
+        const yearSel = row.querySelector('.seed-tx-year');
+        const avail = row.querySelector('.seed-tx-avail');
+        if (!fromSel || !yearSel || !avail) return false;
+
+        const fieldId = fromSel.value;
+        let fieldItems = items.filter(i => fieldId && String(i.field_id) === String(fieldId));
+
+        // И так (панель / поле с остатком), и так (случайно «Контейнерная» без Нетов.):
+        // если на выбранном «Откуда» пусто — подставляем поле, где партия реально есть.
+        if (!fieldItems.length && items.length) {
+            const pick = bestTxBatch(items);
+            if (pick) {
+                applyTxBatch(row, pick);
+                fieldItems = items.filter(i => String(i.field_id) === String(fromSel.value));
+            }
+        }
+
+        const yearsMap = {};
+        fieldItems.forEach(i => {
+            yearsMap[i.year] = (yearsMap[i.year] || 0) + i.qty;
+        });
+        // Если после подстановки всё ещё пусто — годы со всех полей (чтобы не было «2026 / 0»).
+        if (!Object.keys(yearsMap).length && items.length) {
+            items.forEach(i => {
+                yearsMap[i.year] = Math.max(yearsMap[i.year] || 0, i.qty);
+            });
+        }
+
+        const years = Object.keys(yearsMap).map(Number).sort((a, b) => b - a);
+        const prev = yearSel.value;
+        yearSel.innerHTML = '';
+        if (!years.length) {
+            yearSel.innerHTML = `<option value="${yearDefault}">${yearDefault}</option>`;
+            avail.textContent = '0';
+            avail.title = '';
+            avail.className = 'badge bg-danger text-white seed-tx-avail';
+            return false;
+        }
+        years.forEach(y => {
+            const opt = document.createElement('option');
+            opt.value = y;
+            const onThis = fieldItems.filter(i => Number(i.year) === y);
+            if (onThis.length) {
+                opt.textContent = `${y} (${yearsMap[y]} шт)`;
+            } else {
+                const any = items.filter(i => Number(i.year) === y)
+                    .sort((a, b) => b.qty - a.qty)[0];
+                opt.textContent = any
+                    ? `${y} · ${any.field_name} (${any.qty} шт)`
+                    : `${y} (${yearsMap[y]} шт)`;
+            }
+            yearSel.appendChild(opt);
+        });
+        yearSel.value = (prev && years.includes(Number(prev))) ? prev : String(years[0]);
+
+        const y = Number(yearSel.value);
+        let qtyAvail = fieldItems
+            .filter(i => Number(i.year) === y)
+            .reduce((s, i) => s + i.qty, 0);
+        let hint = '';
+        if (!qtyAvail && items.length) {
+            const alt = items
+                .filter(i => Number(i.year) === y)
+                .sort((a, b) => b.qty - a.qty)[0]
+                || bestTxBatch(items);
+            if (alt && alt.qty > 0) {
+                applyTxBatch(row, alt);
+                qtyAvail = alt.qty;
+                hint = `Остаток на поле «${alt.field_name}»`;
+            }
+        }
+        avail.textContent = String(qtyAvail);
+        avail.title = hint;
+        avail.className = qtyAvail > 0
+            ? 'badge bg-success text-white seed-tx-avail'
+            : 'badge bg-danger text-white seed-tx-avail';
+        return qtyAvail > 0;
+    }
+
     window.seedAddTransplantRow = function() {
         const tpl = document.getElementById('tplSeedTransplantRow');
         const body = document.getElementById('seedTransplantBody');
         body.appendChild(tpl.content.cloneNode(true));
         const row = body.lastElementChild;
+        activeTxRow = row;
         bindTxRow(row);
         initSelect2In(row);
         refreshTxRow(row);
     };
 
     function bindTxRow(row) {
-        const refresh = () => refreshTxRow(row);
+        const refresh = () => {
+            if (_txSilent) return;
+            activeTxRow = row;
+            refreshTxRow(row);
+        };
         $(row).on('select2:select change', '.seed-tx-plant, .seed-tx-size, .seed-tx-from, .seed-tx-year', refresh);
         $(row).on('select2:select change', '.seed-tx-plant', () => {
             const plant = row.querySelector('.seed-tx-plant')?.value;
             refreshPipelinePanel(plant, 'seedPipelineTransplant');
-            refreshLocationsForPlant(plant, 'seedTxLocations');
+            refreshLocationsForPlant(plant, 'seedTxLocations', (it) => {
+                const target = activeTxRow || row;
+                applyTxBatch(target, {
+                    field_id: it.field_id,
+                    year: it.year,
+                    qty: it.qty != null ? it.qty : it.free,
+                });
+                if (it.size_id) {
+                    const sizeSel = target.querySelector('.seed-tx-size');
+                    if (sizeSel && window.jQuery) {
+                        _txSilent = true;
+                        try {
+                            jQuery(sizeSel).val(String(it.size_id)).trigger('change');
+                        } finally {
+                            _txSilent = false;
+                        }
+                    }
+                }
+                refreshTxRow(target);
+            });
         });
         row.addEventListener('focusin', () => { activeTxRow = row; });
-        $(row).on('select2:open', '.seed-tx-plant, .seed-tx-size', function() { activeTxRow = row; });
+        row.addEventListener('mousedown', () => { activeTxRow = row; }, true);
+        $(row).on('select2:open', '.seed-tx-plant, .seed-tx-size, .seed-tx-from, .seed-tx-to', function() {
+            activeTxRow = row;
+        });
     }
 
     async function refreshTxRow(row) {
+        activeTxRow = row;
         const plant = row.querySelector('.seed-tx-plant')?.value;
         const size = row.querySelector('.seed-tx-size')?.value;
-        const fromSel = row.querySelector('.seed-tx-from');
-        const yearSel = row.querySelector('.seed-tx-year');
         const avail = row.querySelector('.seed-tx-avail');
-        if (!plant || !size) { avail.textContent = '—'; return; }
+        if (!plant || !size) { if (avail) avail.textContent = '—'; return; }
         try {
             const res = await fetch(`/api/seedling_source_batches?plant_id=${plant}&size_id=${size}&preferred_field_id=${defaultFieldId || ''}`);
             const data = await res.json();
             const items = data.items || [];
-            if (activeTxRow === row) {
-                showPanel('Откуда пересаживать', items, (item) => {
-                    $(fromSel).val(String(item.field_id)).trigger('change');
-                    yearSel.innerHTML = '';
-                    const opt = document.createElement('option');
-                    opt.value = item.year;
-                    opt.textContent = `${item.year} (${item.qty} шт)`;
-                    yearSel.appendChild(opt);
-                    avail.textContent = String(item.qty);
-                    avail.className = 'badge bg-success text-white seed-tx-avail';
-                    const qty = row.querySelector('.seed-tx-qty');
-                    if (qty && (!qty.value || Number(qty.value) > item.qty)) qty.value = item.qty;
-                });
-            }
-            const fieldId = fromSel.value;
-            const yearsMap = {};
-            items.filter(i => !fieldId || String(i.field_id) === String(fieldId)).forEach(i => {
-                yearsMap[i.year] = (yearsMap[i.year] || 0) + i.qty;
+            // Панель всегда на строку, которую только что правили (2-я строка тоже).
+            showPanel('Откуда пересаживать', items, (item) => {
+                applyTxBatch(row, item);
+                fillTxYears(row, items);
             });
-            const years = Object.keys(yearsMap).map(Number).sort((a,b) => b-a);
-            const prev = yearSel.value;
-            yearSel.innerHTML = '';
-            if (!years.length) {
-                yearSel.innerHTML = `<option value="${yearDefault}">${yearDefault}</option>`;
-                avail.textContent = '0';
-                avail.className = 'badge bg-danger text-white seed-tx-avail';
-                return;
-            }
-            years.forEach(y => {
-                const opt = document.createElement('option');
-                opt.value = y;
-                opt.textContent = `${y} (${yearsMap[y]} шт)`;
-                yearSel.appendChild(opt);
-            });
-            yearSel.value = (prev && years.includes(Number(prev))) ? prev : String(years[0]);
-            const qtyAvail = yearsMap[Number(yearSel.value)] || 0;
-            avail.textContent = String(qtyAvail);
-            avail.className = qtyAvail > 0 ? 'badge bg-success text-white seed-tx-avail' : 'badge bg-danger text-white seed-tx-avail';
+            fillTxYears(row, items);
         } catch (e) {
-            avail.textContent = '?';
+            if (avail) avail.textContent = '?';
         }
     }
 
