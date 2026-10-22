@@ -51,6 +51,10 @@
     padding: 12px; margin-bottom: 16px;
   }
   .ops-side h6 { font-weight: 700; color: #1f3d2a; margin-bottom: 10px; }
+  .ops-hr-toggle { cursor: pointer; min-height: 40px; }
+  .ops-hr-toggle h6 { margin-bottom: 0; }
+  .ops-hr-chevron { transition: transform .2s ease; }
+  .ops-hr-toggle:not(.collapsed) .ops-hr-chevron { transform: rotate(180deg); }
   .ops-task-row {
     display: flex; gap: 8px; align-items: flex-start; justify-content: space-between;
     padding: 8px 0; border-bottom: 1px solid #f0f3f0; font-size: .88rem;
@@ -101,28 +105,43 @@
 
   {% if upcoming_hr %}
   <div class="ops-side">
-    <h6><i class="fas fa-id-card me-1 text-primary"></i> Ближайшие сроки ИН</h6>
-    {% for e in upcoming_hr %}
-    <div class="ops-task-row">
-      <div>
-        <div class="fw-semibold">{{ e.employee_name }}</div>
-        <div class="text-muted small">
-          {% if e.kind == 'patent' %}патент{% else %}регистрация{% endif %}
-          · до {{ e.end_date.strftime('%d.%m.%Y') }}
+    <button type="button"
+            class="ops-hr-toggle collapsed w-100 d-flex align-items-center justify-content-between border-0 bg-transparent p-0 text-start"
+            data-bs-toggle="collapse"
+            data-bs-target="#opsHrUpcoming"
+            aria-expanded="false"
+            aria-controls="opsHrUpcoming">
+      <h6 class="mb-0">
+        <i class="fas fa-id-card me-1 text-primary"></i> Ближайшие сроки ИН
+        <span class="badge bg-primary bg-opacity-10 text-primary ms-1">{{ upcoming_hr|length }}</span>
+      </h6>
+      <i class="fas fa-chevron-down text-muted small ops-hr-chevron"></i>
+    </button>
+    <div id="opsHrUpcoming" class="collapse">
+      <div class="pt-2">
+        {% for e in upcoming_hr %}
+        <div class="ops-task-row">
+          <div>
+            <div class="fw-semibold">{{ e.employee_name }}</div>
+            <div class="text-muted small">
+              {% if e.kind == 'patent' %}патент{% else %}регистрация{% endif %}
+              · до {{ e.end_date.strftime('%d.%m.%Y') }}
+            </div>
+          </div>
+          <button type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  data-bs-toggle="modal"
+                  data-bs-target="#hrExtendModal"
+                  data-kind="{{ e.kind }}"
+                  data-employee-id="{{ e.employee_id }}"
+                  data-employee-name="{{ e.employee_name }}"
+                  data-end-date="{{ e.end_date.isoformat() }}">
+            Продлить
+          </button>
         </div>
+        {% endfor %}
       </div>
-      <button type="button"
-              class="btn btn-sm btn-outline-primary"
-              data-bs-toggle="modal"
-              data-bs-target="#hrExtendModal"
-              data-kind="{{ e.kind }}"
-              data-employee-id="{{ e.employee_id }}"
-              data-employee-name="{{ e.employee_name }}"
-              data-end-date="{{ e.end_date.isoformat() }}">
-        Продлить
-      </button>
     </div>
-    {% endfor %}
   </div>
   {% endif %}
 
