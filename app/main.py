@@ -103,52 +103,104 @@ def _expenses_for(first_day, last_day):
     return _safe_float(q.scalar() or 0)
 
 
-def _client_debt(client):
-    """Дебиторка клиента = неоплаченный остаток по АКТИВНЫМ заказам.
+def _order_shipped_sum(order) -> float:
+    """Сумма уже отгруженного по прайсу заказа (price × shipped_qty)."""
+    total = 0.0
+    for item in (order.items or []):
+        total += _safe_float(item.price) * int(item.shipped_quantity or 0)
+    return total
 
-    Берём только не удалённые заказы в статусах reserved/in_progress/ready/shipped
-    (исключаем canceled и ghost). По каждому считаем:
-        debt = total_sum − paid_sum (если положительный — добавляем).
 
-    Такой подход даёт честную текущую задолженность, без шума старых ghost-записей
-    и без привязки к fixed_balance.
+def _order_debt_parts(order) -> tuple[float, float]:
+    """По заказу: (долг за отгрузку, долг/экспозиция резерва).
+
+    Оплаты сначала закрывают отгруженное, остаток — резерв:
+      shipped_debt = max(0, shipped_sum − paid)
+      reserve_debt = max(0, (total − shipped) − max(0, paid − shipped))
     """
+    billed = _safe_float(order.total_sum)
+    paid = _safe_float(order.paid_sum)
+    shipped = _order_shipped_sum(order)
+    if shipped < 0:
+        shipped = 0.0
+    if shipped > billed:
+        shipped = billed
+    reserve = billed - shipped
+    shipped_debt = shipped - paid
+    if shipped_debt < 0:
+        shipped_debt = 0.0
+    paid_left = paid - shipped
+    if paid_left < 0:
+        paid_left = 0.0
+    reserve_debt = reserve - paid_left
+    if reserve_debt < 0:
+        reserve_debt = 0.0
+    return shipped_debt, reserve_debt
+
+
+def _client_debt_parts(client) -> tuple[float, float, int, int]:
+    """(shipped_debt, reserve_debt, shipped_orders_cnt, reserve_orders_cnt)."""
     orders = Order.query.filter(
         Order.client_id == client.id,
         Order.is_deleted.is_(False),
         Order.status.in_(_ACTIVE_ORDER_STATUSES),
     ).all()
-    total_debt = 0.0
+    shipped_debt = 0.0
+    reserve_debt = 0.0
+    shipped_orders = 0
+    reserve_orders = 0
     for o in orders:
-        billed = _safe_float(o.total_sum)
-        paid = _safe_float(o.paid_sum)
-        diff = billed - paid
-        if diff > 0.5:  # копеечные округления отсекаем
-            total_debt += diff
-    return total_debt
+        sd, rd = _order_debt_parts(o)
+        if sd > 0.5:
+            shipped_debt += sd
+            shipped_orders += 1
+        if rd > 0.5:
+            reserve_debt += rd
+            reserve_orders += 1
+    return shipped_debt, reserve_debt, shipped_orders, reserve_orders
 
 
-def _all_debtors():
-    """Список всех клиентов с положительной задолженностью (по логике сверки)."""
+def _client_debt(client):
+    """Реальный долг клиента = неоплата уже отгруженного (не резерв)."""
+    shipped_debt, _, _, _ = _client_debt_parts(client)
+    return shipped_debt
+
+
+def _all_debtors(*, kind: str = 'shipped'):
+    """Клиенты с долгом.
+
+    kind='shipped' — отгрузили, оплата не перекрыла отгрузку.
+    kind='reserve' — ещё не отгружено, оплата не закрыла резерв.
+    """
+    key_debt = 'debt'
     debtors = []
     for client in Client.query.all():
         try:
-            debt = _client_debt(client)
+            shipped_debt, reserve_debt, ship_n, res_n = _client_debt_parts(client)
         except Exception:
-            current_app.logger.exception(f'_client_debt failed for client id={client.id}')
+            current_app.logger.exception(f'_client_debt_parts failed for client id={client.id}')
             continue
+        if kind == 'reserve':
+            debt, n = reserve_debt, res_n
+        else:
+            debt, n = shipped_debt, ship_n
         if debt > 0.5:
-            debtors.append({'id': client.id, 'name': client.name, 'debt': debt})
+            debtors.append({
+                'id': client.id,
+                'name': client.name,
+                key_debt: debt,
+                'orders_count': n,
+            })
     debtors.sort(key=lambda r: r['debt'], reverse=True)
     return debtors
 
 
 def _overall_debt():
-    return sum(r['debt'] for r in _all_debtors())
+    return sum(r['debt'] for r in _all_debtors(kind='shipped'))
 
 
-def _debtors_count(limit_clients=None):
-    debtors = _all_debtors()
+def _debtors_count(limit_clients=None, kind: str = 'shipped'):
+    debtors = _all_debtors(kind=kind)
     if limit_clients:
         return debtors[:limit_clients]
     return debtors
@@ -423,10 +475,10 @@ def _collect_kpis(user, today):
         except Exception:
             current_app.logger.exception('kpi: cash_in failed')
 
-    # ----- Дебиторка (admin/executive/user) -----
+    # ----- Дебиторка за отгруженное (admin/executive/user) -----
     if is_boss or is_manager:
         try:
-            all_debtors = _all_debtors()
+            all_debtors = _all_debtors(kind='shipped')
             debt = sum(r['debt'] for r in all_debtors)
             top = all_debtors[:5]
             tiles.append({
@@ -434,13 +486,11 @@ def _collect_kpis(user, today):
                 'title': 'Дебиторка',
                 'value': debt,
                 'value_fmt': f'{debt:,.0f} ₽'.replace(',', ' '),
-                'sub': (f'Клиентов с долгом: {len(all_debtors)} · по активным заказам'
-                        if all_debtors else 'Нет должников'),
+                'sub': (f'За отгруженное · клиентов: {len(all_debtors)}'
+                        if all_debtors else 'Нет долга за отгрузку'),
                 'icon': 'fa-hand-holding-usd',
                 'color': 'danger',
-                'url': (url_for('crm.crm_client_analytics')
-                        if 'crm.crm_client_analytics' in current_app.view_functions
-                        else url_for('main.analytics')),
+                'url': url_for('main.analytics'),
                 'top': top,
             })
         except Exception:
@@ -740,6 +790,7 @@ def _analytics_data(user, today, period):
         'top_plants': [],
         'tg_summary': {},
         'debtors': [],
+        'reserves': [],
         'show_revenue_chart': is_boss,
     }
 
@@ -851,11 +902,15 @@ def _analytics_data(user, today, period):
     except Exception:
         current_app.logger.exception('analytics: tg_summary failed')
 
-    # --- Должники (топ-10) ---
+    # --- Должники за отгрузку + резервы без оплаты (топ-10) ---
     try:
-        data['debtors'] = _debtors_count(limit_clients=10)
+        data['debtors'] = _debtors_count(limit_clients=10, kind='shipped')
     except Exception:
         current_app.logger.exception('analytics: debtors failed')
+    try:
+        data['reserves'] = _debtors_count(limit_clients=10, kind='reserve')
+    except Exception:
+        current_app.logger.exception('analytics: reserves failed')
 
     return data
 

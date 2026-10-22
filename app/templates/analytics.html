@@ -354,7 +354,56 @@
         </div>
     </div>
 
-    <!-- ПОРУЧЕНИЯ + ДОЛЖНИКИ -->
+    <!-- ДОЛГ ЗА ОТГРУЗКУ + РЕЗЕРВЫ -->
+    <div class="chart-grid">
+        <div class="chart-card">
+            <h6>Топ должников</h6>
+            <div class="chart-sub">Отгрузили, оплата не перекрыла сумму отгрузки</div>
+            {% if analytics.debtors %}
+            <table class="ana-table">
+                <thead>
+                    <tr><th>Клиент</th><th class="num">Заказов</th><th class="num">Долг</th></tr>
+                </thead>
+                <tbody>
+                    {% for d in analytics.debtors %}
+                    <tr>
+                        <td>{{ d.name }}</td>
+                        <td class="num">{{ d.orders_count or '—' }}</td>
+                        <td class="num">{{ '%s ₽'|format('{:,.0f}'.format(d.debt).replace(',', ' ')) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">Нет долга за отгруженное</div>
+            {% endif %}
+        </div>
+
+        <div class="chart-card">
+            <h6>Резервы без оплаты</h6>
+            <div class="chart-sub">Ещё не отгружено · оплата не закрыла резерв</div>
+            {% if analytics.reserves %}
+            <table class="ana-table">
+                <thead>
+                    <tr><th>Клиент</th><th class="num">Заказов</th><th class="num">Сумма</th></tr>
+                </thead>
+                <tbody>
+                    {% for d in analytics.reserves %}
+                    <tr>
+                        <td>{{ d.name }}</td>
+                        <td class="num">{{ d.orders_count or '—' }}</td>
+                        <td class="num">{{ '%s ₽'|format('{:,.0f}'.format(d.debt).replace(',', ' ')) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">Резервы закрыты оплатой</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ПОРУЧЕНИЯ -->
     <div class="chart-grid">
         <div class="chart-card">
             <h6>Поручения из Telegram</h6>
@@ -376,28 +425,6 @@
             </table>
             {% else %}
             <div class="empty-state">Нет назначенных поручений</div>
-            {% endif %}
-        </div>
-
-        <div class="chart-card">
-            <h6>Топ должников</h6>
-            <div class="chart-sub">По приблизительной задолженности</div>
-            {% if analytics.debtors %}
-            <table class="ana-table">
-                <thead>
-                    <tr><th>Клиент</th><th class="num">Долг</th></tr>
-                </thead>
-                <tbody>
-                    {% for d in analytics.debtors %}
-                    <tr>
-                        <td>{{ d.name }}</td>
-                        <td class="num">{{ '%s ₽'|format('{:,.0f}'.format(d.debt).replace(',', ' ')) }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="empty-state">Все расчёты в норме</div>
             {% endif %}
         </div>
     </div>

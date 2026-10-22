@@ -447,10 +447,10 @@ def tool_get_shipments(client_name=None, plant_name=None, month=None, year=None,
 
 
 def tool_get_client_debt(client_name):
-    """Долг клиента по активным заказам (reserved/in_progress/ready/shipped).
+    """Долг клиента: отдельно за отгруженное и по резерву.
 
-    Для каждого активного заказа: billed = price*qty, paid = сумма платежей.
-    Если billed > paid — считаем разницу долгом.
+    По каждому активному заказу оплаты сначала закрывают отгрузку,
+    остаток — резерв (ещё не отгружено).
     """
     if not client_name:
         return _err('Укажите имя клиента')
@@ -459,33 +459,46 @@ def tool_get_client_debt(client_name):
         if cands: return _ambig('клиентов', cands)
         return _err(f'Клиент "{client_name}" не найден')
 
+    from app.main import _order_debt_parts, _order_shipped_sum
+
     active_statuses = ('reserved', 'in_progress', 'ready', 'shipped')
     orders = Order.query.filter(
         Order.client_id == client.id,
         Order.is_deleted.is_(False),
         Order.status.in_(active_statuses),
     ).all()
-    total_debt = 0.0
+    shipped_debt = 0.0
+    reserve_debt = 0.0
     details = []
     for o in orders:
         billed = _safe_float(o.total_sum)
         paid = _safe_float(o.paid_sum)
-        diff = billed - paid
-        if diff > 0.5:
-            total_debt += diff
+        shipped = _order_shipped_sum(o)
+        sd, rd = _order_debt_parts(o)
+        if sd > 0.5 or rd > 0.5:
+            shipped_debt += sd
+            reserve_debt += rd
             details.append({
                 'order_id': o.id,
                 'date': o.date.strftime('%d.%m.%Y') if o.date else '',
                 'status': o.status,
                 'billed': round(billed, 2),
+                'shipped': round(shipped, 2),
                 'paid': round(paid, 2),
-                'debt': round(diff, 2),
+                'shipped_debt': round(sd, 2),
+                'reserve_debt': round(rd, 2),
+                'debt': round(sd + rd, 2),
             })
     details.sort(key=lambda r: r['debt'], reverse=True)
+    total_debt = shipped_debt + reserve_debt
     return _ok(
-        f'Долг «{client.name}»: {_money(total_debt)} по {len(details)} активным заказам',
+        f'«{client.name}»: долг за отгрузку {_money(shipped_debt)}, '
+        f'резерв без оплаты {_money(reserve_debt)} '
+        f'(всего {_money(total_debt)}, заказов {len(details)})',
         data={
             'client_id': client.id,
+            'shipped_debt': round(shipped_debt, 2),
+            'reserve_debt': round(reserve_debt, 2),
             'client_name': client.name,
             'debt': round(total_debt, 2),
             'orders': details[:10],
