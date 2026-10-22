@@ -7,6 +7,9 @@
   2. Для каждой — ищем открытый TgTask с таким dedup_key.
      - Если нашли: обновляем last_seen_at и details (поля могли измениться).
      - Если не нашли: создаём новый TgTask, first_seen_at = last_seen_at = сейчас.
+       Исключение: если по этому ключу уже есть done с completed_by_id
+       (кнопка «Разобрал») — не создаём снова, карточка остаётся только
+       в истории. Авто-закрытие без completed_by_id не блокирует повтор.
   3. Все ещё-открытые аномальные TgTask, которых СЕЙЧАС в списке нет, закрываем
      (status='done', completed_at=now) — аномалия сама себя решила.
 """
@@ -79,6 +82,25 @@ def _serialize_roles(roles):
     return ','.join(roles) if isinstance(roles, (list, tuple)) else str(roles)
 
 
+def _was_manually_acked(dedup_key: str) -> bool:
+    """True, если по ключу уже жали «Разобрал» (done + completed_by_id).
+
+    Такие аномалии не поднимаем снова на дашборд — остаются в истории.
+    Авто-закрытие (completed_by_id is None) повтор не блокирует.
+    """
+    if not dedup_key:
+        return False
+    return (
+        TgTask.query.filter(
+            TgTask.action_type == ANOMALY_ACTION_TYPE,
+            TgTask.dedup_key == dedup_key,
+            TgTask.status == 'done',
+            TgTask.completed_by_id.isnot(None),
+        ).first()
+        is not None
+    )
+
+
 def run_daily_scan():
     """Синхронизировать аномалии с TgTask. Возвращает dict со сводкой."""
     now = msk_now()
@@ -98,6 +120,7 @@ def run_daily_scan():
     created = 0
     updated = 0
     resolved = 0
+    skipped_acked = 0
 
     # 1) Создание / обновление
     newly_created_anomalies = []
@@ -105,6 +128,9 @@ def run_daily_scan():
         card = existing_map.get(key)
         payload_json = json.dumps(a.get('payload') or {}, ensure_ascii=False)
         if card is None:
+            if _was_manually_acked(key):
+                skipped_acked += 1
+                continue
             card = TgTask(
                 raw_text=f'[anomaly:{a["kind"]}]',
                 title=a['title'],
@@ -165,6 +191,7 @@ def run_daily_scan():
         'created': created,
         'updated': updated,
         'resolved': resolved,
+        'skipped_acked': skipped_acked,
         'total_detected': len(detected_map),
         'scan_at': now.isoformat(),
         'detector_errors': detector_errors,
@@ -201,21 +228,22 @@ def sync_price_anomaly_for_order(order_id):
             a = found[0]
             payload_json = json.dumps(a.get('payload') or {}, ensure_ascii=False)
             if card is None:
-                db.session.add(TgTask(
-                    raw_text=f'[anomaly:{a["kind"]}]',
-                    title=a['title'],
-                    details=a['details'],
-                    action_type=ANOMALY_ACTION_TYPE,
-                    action_payload=payload_json,
-                    status='new',
-                    first_seen_at=now,
-                    last_seen_at=now,
-                    dedup_key=dedup_key,
-                    severity=a.get('severity', 'warning'),
-                    assignee_role=_serialize_roles(a.get('roles') or ['admin', 'executive', 'user']),
-                    sender_name='system.anomaly',
-                    source='anomaly',
-                ))
+                if not _was_manually_acked(dedup_key):
+                    db.session.add(TgTask(
+                        raw_text=f'[anomaly:{a["kind"]}]',
+                        title=a['title'],
+                        details=a['details'],
+                        action_type=ANOMALY_ACTION_TYPE,
+                        action_payload=payload_json,
+                        status='new',
+                        first_seen_at=now,
+                        last_seen_at=now,
+                        dedup_key=dedup_key,
+                        severity=a.get('severity', 'warning'),
+                        assignee_role=_serialize_roles(a.get('roles') or ['admin', 'executive', 'user']),
+                        sender_name='system.anomaly',
+                        source='anomaly',
+                    ))
             else:
                 card.title = a['title']
                 card.details = a['details']
@@ -274,21 +302,22 @@ def sync_year_mismatch_for_order(order_id):
                         ensure_ascii=False, default=str,
                     )
                     if card is None:
-                        db.session.add(TgTask(
-                            raw_text=f'[anomaly:{k}]',
-                            title=new_a['title'],
-                            details=new_a['details'],
-                            action_type=ANOMALY_ACTION_TYPE,
-                            action_payload=payload_json,
-                            status='new',
-                            first_seen_at=now,
-                            last_seen_at=now,
-                            dedup_key=key,
-                            severity=new_a.get('severity', 'warning'),
-                            assignee_role=_serialize_roles(new_a.get('roles') or ['admin', 'executive']),
-                            sender_name='system.anomaly',
-                            source='anomaly',
-                        ))
+                        if not _was_manually_acked(key):
+                            db.session.add(TgTask(
+                                raw_text=f'[anomaly:{k}]',
+                                title=new_a['title'],
+                                details=new_a['details'],
+                                action_type=ANOMALY_ACTION_TYPE,
+                                action_payload=payload_json,
+                                status='new',
+                                first_seen_at=now,
+                                last_seen_at=now,
+                                dedup_key=key,
+                                severity=new_a.get('severity', 'warning'),
+                                assignee_role=_serialize_roles(new_a.get('roles') or ['admin', 'executive']),
+                                sender_name='system.anomaly',
+                                source='anomaly',
+                            ))
                     else:
                         card.title = new_a['title']
                         card.details = new_a['details']
@@ -368,8 +397,8 @@ def check_digging_started_without_invoice(order_id):
             card.last_seen_at = msk_now()
             db.session.commit()
             return
-        if card and card.status == 'done':
-            # Уже закрыта руками админа — не воскрешаем.
+        if _was_manually_acked(dedup_key):
+            # «Разобрал» — только история, не поднимаем снова.
             return
 
         # Создаём новую карточку.
@@ -468,6 +497,8 @@ def sync_recount_anomaly_for_doc(doc_id):
             payload_json = json.dumps(a.get('payload') or {}, ensure_ascii=False, default=str)
             card = existing_map.get(key)
             if card is None:
+                if _was_manually_acked(key):
+                    continue
                 db.session.add(TgTask(
                     raw_text=f'[anomaly:{a["kind"]}]',
                     title=a['title'],
