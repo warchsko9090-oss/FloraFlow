@@ -314,13 +314,14 @@ def _card_topic(card):
         if kind.startswith('recount_'):
             return 'field'
         return 'other'
-    if t in ('tg_task',):
+    if t in ('tg_task', 'ai_ops'):
         at = (card.get('action_type') or '')
         if at in _TG_TASK_FIELD_TYPES:
             return 'field'
-        if at in ('create_order', 'shipment', 'order', 'paid_order_change'):
+        if at in ('create_order', 'shipment', 'order', 'paid_order_change',
+                  'shipment_confirm', 'order_create', 'order_qty_change'):
             return 'sales'
-        if at in ('expense', 'income', 'payment'):
+        if at in ('expense', 'income', 'payment', 'payment_confirm', 'price_change'):
             return 'finance'
         return 'other'
     return 'other'
@@ -1051,19 +1052,41 @@ def index():
         exclude_system = (TgTask.action_type.notin_(['anomaly', 'digest']))
 
         scope_cond = _tg_task_scope_cond(current_user, admin_scope=admin_scope)
-        tg_query = TgTask.query.filter(TgTask.status == 'new', exclude_system)
+        # snoozed с дедлайном ≤ сегодня снова показываем (и будим в new)
+        tg_query = TgTask.query.filter(
+            TgTask.status.in_(['new', 'snoozed']),
+            exclude_system,
+        )
         if scope_cond is not None:
             tg_query = tg_query.filter(scope_cond)
 
+        # AI Ops карточки — только пилоту Vlad
+        try:
+            from app.ai_ops import is_ai_ops_pilot as _is_ai_ops_pilot
+            _ai_ops_ok = _is_ai_ops_pilot(current_user)
+        except Exception:
+            _ai_ops_ok = False
+
         for t in tg_query.all():
             try:
+                if t.source == 'ai_ops' and not _ai_ops_ok:
+                    continue
+                if t.status == 'snoozed':
+                    # Ещё рано — прячем до дедлайна
+                    if t.deadline and t.deadline > today:
+                        continue
+                    t.status = 'new'
+                    t.updated_at = msk_now()
+
                 d = t.deadline or today
                 payload_order_id = None
+                payload_pl = {}
                 if t.action_payload:
                     try:
-                        payload_order_id = json.loads(t.action_payload).get('order_id')
+                        payload_pl = json.loads(t.action_payload) or {}
+                        payload_order_id = payload_pl.get('order_id')
                     except Exception:
-                        pass
+                        payload_pl = {}
 
                 # «Тянущиеся» задачи (passive):
                 #   • если дедлайн прошёл — карточка висит в группе «Просрочено»
@@ -1093,9 +1116,9 @@ def index():
                 # Для карточек «расход из ТГ» подтянем поля из payload,
                 # чтобы шаблон мог отрисовать селект статьи + кнопки.
                 chat_expense = None
-                if t.action_type == 'chat_expense' and t.action_payload:
+                if t.action_type == 'chat_expense' and payload_pl:
                     try:
-                        pl = json.loads(t.action_payload) or {}
+                        pl = payload_pl
                         chat_expense = {
                             'id': pl.get('chat_expense_id'),
                             'amount': pl.get('amount'),
@@ -1114,15 +1137,42 @@ def index():
                     except Exception:
                         chat_expense = None
 
+                # AI Ops draft для карточки оплаты / фазы 2
+                ops_draft = None
+                if t.source == 'ai_ops':
+                    try:
+                        from app.ai_ops import get_draft_for_task, draft_payload
+                        dr = get_draft_for_task(t.id)
+                        if dr and dr.status == 'pending':
+                            pl = draft_payload(dr)
+                            ent = pl.get('entities') or {}
+                            ops_draft = {
+                                'id': dr.id,
+                                'action_type': dr.action_type,
+                                'order_id': dr.order_id or payload_order_id,
+                                'amount': ent.get('amount'),
+                                'quote': dr.quote or t.details,
+                                'channel': dr.channel,
+                            }
+                    except Exception:
+                        ops_draft = None
+
+                card_type = 'tg_task'
+                if t.action_type == 'chat_expense':
+                    card_type = 'chat_expense'
+                elif t.source == 'ai_ops':
+                    card_type = 'ai_ops'
+
                 card = {
                     'id': f'tgtask_{t.id}',
-                    'type': 'chat_expense' if t.action_type == 'chat_expense' else 'tg_task',
+                    'type': card_type,
                     'title': t.title,
                     'details': t.details,
                     'task_id': t.id,
                     'action_type': t.action_type,
                     'payload_order_id': payload_order_id,
                     'chat_expense': chat_expense,
+                    'ops_draft': ops_draft,
                     'assignee_id': t.assignee_id,
                     'assignee_name': t.assignee.username if t.assignee else None,
                     'assignee_role': t.assignee_role,
@@ -1140,6 +1190,10 @@ def index():
                 add_to_group(card, d if days_overdue > 0 else today)
             except Exception:
                 current_app.logger.exception('feed: tg_task card failed')
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
     except Exception:
         current_app.logger.exception('feed: tg_tasks block failed (table may be missing)')
 
@@ -1255,12 +1309,19 @@ def index():
         current_app.logger.exception('feed: _collect_kpis failed')
         kpi_tiles = []
 
+    try:
+        from app.ai_ops import is_ai_ops_pilot
+        show_ai_ops = is_ai_ops_pilot(current_user)
+    except Exception:
+        show_ai_ops = False
+
     resp = make_response(render_template(
         'feed.html',
         feed_groups=feed_groups,
         kpi_tiles=kpi_tiles,
         today=today,
         admin_scope=admin_scope,
+        show_ai_ops=show_ai_ops,
     ))
     # Если админ явно передал ?scope=... в URL — запоминаем его выбор в cookie
     # на 30 дней, чтобы переключатель «сохранялся» между заходами.
@@ -1738,7 +1799,7 @@ def complete_tg_task():
         # Карточку уже удалили/завершили — просто говорим «ок», чтобы фронт скрыл плитку
         return done_html
 
-    if task.status == 'new':
+    if task.status in ('new', 'snoozed'):
         task.status = 'done'
         task.completed_at = msk_now()
         task.completed_by_id = current_user.id
@@ -2279,6 +2340,16 @@ def process_telegram_update(data):
         current_app.logger.exception('sales_chat_digest.ingest_message failed')
         _tg_audit({**base_audit, 'stage': 'sales_chat_log_error', 'error': str(exc)})
 
+    # 2.7) AI Ops: сырой лог sales/hr/production/itr → OpsChatMessage
+    try:
+        from app.ai_ops import ingest_ops_message, channel_for_chat_id
+        if channel_for_chat_id(chat_id):
+            ops_result = ingest_ops_message(msg)
+            _tg_audit({**base_audit, 'stage': 'ops_chat_log', 'result': ops_result})
+    except Exception as exc:
+        current_app.logger.exception('ai_ops.ingest_ops_message failed')
+        _tg_audit({**base_audit, 'stage': 'ops_chat_log_error', 'error': str(exc)})
+
     # 3) Whitelist отправителей (по username).
     allowed_senders = _tg_allowed_senders()
     if not is_private and allowed_senders is not None:
@@ -2337,6 +2408,22 @@ def telegram_sales_digest_now():
     )
     day = parse_iso_date(request.args.get('date') or request.form.get('date'))
     result = run_sales_chat_digest(day=day, force=force, send=True)
+    return jsonify(result)
+
+
+@bp.route('/api/telegram/ops_digest', methods=['POST', 'GET'])
+@login_required
+def telegram_ops_digest_now():
+    """Ручной запуск AI Ops мульти-сводки (пилот / admin)."""
+    from app.ai_ops import is_ai_ops_pilot, run_ops_digest
+    if current_user.role != 'admin' and not is_ai_ops_pilot(current_user):
+        return jsonify({'error': 'forbidden'}), 403
+    from app.utils import parse_iso_date
+    force = (request.args.get('force') or request.form.get('force') or '').lower() in (
+        '1', 'true', 'yes',
+    )
+    day = parse_iso_date(request.args.get('date') or request.form.get('date'))
+    result = run_ops_digest(day=day, force=force, send=True)
     return jsonify(result)
 
 

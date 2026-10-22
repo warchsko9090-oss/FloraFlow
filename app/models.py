@@ -2135,3 +2135,72 @@ class CashMove(db.Model):
     note = db.Column(db.String(300), nullable=True)
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
+
+
+# --- AI Ops (пилот Vlad): мульти-чат + черновики действий ---
+class OpsChatMessage(db.Model):
+    """Сырые сообщения из чатов sales/hr/production/itr для сводки и extract."""
+    __tablename__ = 'ops_chat_message'
+
+    id = db.Column(db.Integer, primary_key=True)
+    channel = db.Column(db.String(20), nullable=False, index=True)  # sales|hr|production|itr
+    tg_chat_id = db.Column(db.String(64), nullable=False)
+    tg_message_id = db.Column(db.Integer, nullable=False)
+    tg_date = db.Column(db.DateTime, nullable=True, index=True)
+    raw_text = db.Column(db.Text, nullable=False)
+    sender_name = db.Column(db.String(150), nullable=True)
+    sender_tg_id = db.Column(db.String(64), nullable=True)
+    is_bot = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        db.UniqueConstraint('tg_chat_id', 'tg_message_id', name='_ops_chat_msg_uc'),
+        db.Index('idx_ops_chat_channel_date', 'channel', 'tg_date'),
+    )
+
+
+class OpsDigestLog(db.Model):
+    """Идемпотентность дневной мульти-сводки AI Ops."""
+    __tablename__ = 'ops_digest_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    digest_date = db.Column(db.Date, nullable=False, unique=True)
+    message_count = db.Column(db.Integer, nullable=False, default=0)
+    summary_text = db.Column(db.Text, nullable=True)
+    actions_json = db.Column(db.Text, nullable=True)  # JSON list of extracted actions
+    recipient_ids = db.Column(db.String(500), nullable=True)
+    sent_at = db.Column(db.DateTime, default=datetime.now)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+
+class OpsActionDraft(db.Model):
+    """Черновик действия из чата: оплата / отгрузка / заказ / qty / цена."""
+    __tablename__ = 'ops_action_draft'
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey('tg_task.id'), nullable=True, index=True)
+    action_type = db.Column(db.String(40), nullable=False, index=True)
+    # pending | posted | rejected | skipped
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    payload_json = db.Column(db.Text, nullable=True)
+    file_path = db.Column(db.String(255), nullable=True)
+    channel = db.Column(db.String(20), nullable=True)
+    quote = db.Column(db.Text, nullable=True)
+    confidence = db.Column(db.Numeric(5, 2), nullable=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=True)
+    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=True)
+    payment_id = db.Column(db.Integer, db.ForeignKey('payment.id'), nullable=True)
+    document_id = db.Column(db.Integer, db.ForeignKey('document.id'), nullable=True)
+    plant_id = db.Column(db.Integer, db.ForeignKey('plant.id'), nullable=True)
+    size_id = db.Column(db.Integer, db.ForeignKey('size.id'), nullable=True)
+    posted_at = db.Column(db.DateTime, nullable=True)
+    posted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+    task = db.relationship('TgTask', foreign_keys=[task_id])
+    order = db.relationship('Order', foreign_keys=[order_id])
+    client = db.relationship('Client', foreign_keys=[client_id])
+    payment = db.relationship('Payment', foreign_keys=[payment_id])
+    posted_by = db.relationship('User', foreign_keys=[posted_by_id])

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .ops-cal-wrap { max-width: 1100px; margin: 0 auto; padding: 0 8px 40px; }
+  .ops-cal-head {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    justify-content: space-between; margin-bottom: 16px;
+  }
+  .ops-cal-title { font-size: 1.35rem; font-weight: 700; color: #1f3d2a; margin: 0; }
+  .ops-week {
+    background: #fff; border: 1px solid #d7e3d9; border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(31,61,42,.06); margin-bottom: 14px; overflow: hidden;
+  }
+  .ops-week-label {
+    background: #eaf4eb; padding: 8px 12px; font-weight: 600; font-size: .85rem;
+    color: #2d5a3a; border-bottom: 1px solid #d7e3d9;
+  }
+  .ops-days {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 0;
+  }
+  .ops-day {
+    min-height: 110px; padding: 8px; border-right: 1px solid #eef2ee;
+    border-bottom: 1px solid #eef2ee; background: #fff;
+  }
+  .ops-day:nth-child(7n) { border-right: none; }
+  .ops-day.is-today { background: #f3faf4; }
+  .ops-day.is-past { opacity: .72; }
+  .ops-day-num { font-size: .75rem; font-weight: 700; color: #64748b; margin-bottom: 6px; }
+  .ops-chip {
+    display: block; font-size: .72rem; line-height: 1.25; padding: 4px 6px;
+    margin-bottom: 4px; border-radius: 6px; background: #eaf4eb; color: #1f3d2a;
+    border-left: 3px solid #3d8b57; text-decoration: none;
+  }
+  .ops-chip.ship { border-left-color: #c2410c; background: #fff7ed; }
+  .ops-chip.task { border-left-color: #2563eb; background: #eff6ff; }
+  .ops-side {
+    background: #fff; border: 1px solid #d7e3d9; border-radius: 10px;
+    padding: 12px; margin-bottom: 16px;
+  }
+  .ops-side h6 { font-weight: 700; color: #1f3d2a; margin-bottom: 10px; }
+  .ops-task-row {
+    display: flex; gap: 8px; align-items: flex-start; justify-content: space-between;
+    padding: 8px 0; border-bottom: 1px solid #f0f3f0; font-size: .88rem;
+  }
+  .ops-task-row:last-child { border-bottom: none; }
+  .ops-legend { font-size: .78rem; color: #64748b; }
+  @media (max-width: 768px) {
+    .ops-days { grid-template-columns: 1fr; }
+    .ops-day { min-height: auto; border-right: none; }
+  }
+</style>
+
+<div class="ops-cal-wrap">
+  <div class="ops-cal-head">
+    <div>
+      <h1 class="ops-cal-title"><i class="fas fa-calendar-alt me-2 text-success"></i>Календарь Ops</h1>
+      <div class="ops-legend">Пилот · выкопка и отгрузки (как в плане) · слоты под оплаты позже</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">← Дашборд</a>
+      <a href="{{ url_for('digging.digging_planning') }}" class="btn btn-outline-success btn-sm" data-hx-boost="false">План выкопки</a>
+    </div>
+  </div>
+
+  {% if open_ops %}
+  <div class="ops-side">
+    <h6><i class="fas fa-robot me-1 text-info"></i> Открытые AI Ops</h6>
+    {% for t in open_ops %}
+    <div class="ops-task-row">
+      <div>
+        <div class="fw-semibold">{{ t.title }}</div>
+        <div class="text-muted small">
+          {{ t.action_type }} ·
+          {% if t.status == 'snoozed' %}на завтра{% else %}открыта{% endif %}
+          {% if t.deadline %} · до {{ t.deadline.strftime('%d.%m') }}{% endif %}
+        </div>
+      </div>
+      <a href="{{ url_for('main.index') }}#card-tgtask_{{ t.id }}" class="btn btn-sm btn-outline-primary">Карточка</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% for week in weeks_data %}
+  <div class="ops-week">
+    <div class="ops-week-label">
+      {% if week.month_label %}{{ week.month_label }} · {% endif %}
+      {{ week.start.strftime('%d.%m') }} — {{ week.end.strftime('%d.%m.%Y') }}
+    </div>
+    <div class="ops-days">
+      {% for day in week.days %}
+      <div class="ops-day {% if day.is_today %}is-today{% endif %} {% if day.date_obj < today %}is-past{% endif %}">
+        <div class="ops-day-num">
+          {{ day.date_obj.strftime('%a') }} {{ day.date_obj.strftime('%d.%m') }}
+          {% if day.is_today %}<span class="badge bg-success ms-1">сегодня</span>{% endif %}
+        </div>
+        {% for g in day.orders_groups or [] %}
+        <a class="ops-chip" href="{{ url_for('orders.order_detail', order_id=g.order_id) }}" data-hx-boost="false">
+          #{{ g.order_id }} {{ g.client }} · {{ g.total_qty }} шт
+        </a>
+        {% endfor %}
+        {% for s in day.shipments or [] %}
+        <a class="ops-chip ship" href="{{ url_for('orders.order_detail', order_id=s.order_id) }}" data-hx-boost="false">
+          отгруз #{{ s.order_id }} {{ s.client }}
+        </a>
+        {% endfor %}
+        {% if not (day.orders_groups or day.shipments) %}
+        <div class="text-muted" style="font-size:.7rem;">—</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-light border">Нет данных плана выкопки на выбранный период.</div>
+  {% endfor %}
+</div>
+{% endblock %}

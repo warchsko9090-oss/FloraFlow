@@ -160,6 +160,9 @@ def create_app():
     app.register_blueprint(push_module.bp)
     push_module.register_push_hooks(app)
 
+    from . import ai_ops
+    app.register_blueprint(ai_ops.bp)
+
     # Менеджер сайта: просмотр как у руководителя; запись — только заказы
     # (и связанные sales Mini App / push / auth). Остальное — только GET.
     SHOP_MANAGER_WRITE_PREFIXES = (

@@ -201,6 +201,14 @@
             </div>
             {% endif %}
             <div class="kpi-actions">
+            {% if show_ai_ops %}
+            <a href="{{ url_for('ai_ops.ops_calendar') }}"
+               class="btn btn-outline-success fw-bold"
+               data-hx-boost="false"
+               title="Календарь AI Ops (выкопка)">
+                <i class="fas fa-calendar-alt me-1"></i> Календарь
+            </a>
+            {% endif %}
             {% if current_user.role in ['admin', 'executive', 'user'] %}
             <button type="button"
                     class="btn btn-success fw-bold"
@@ -469,6 +477,90 @@
                                             </div>
                                         </form>
 
+                                    {% elif card.type == 'ai_ops' %}
+                                        <!-- КАРТОЧКА: AI OPS -->
+                                        <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                                            <div class="small text-success text-uppercase fw-bold">
+                                                <i class="fas fa-robot fs-6 me-1"></i> AI Ops
+                                                {% if card.action_type %}<span class="text-muted text-lowercase fw-normal">· {{ card.action_type }}</span>{% endif %}
+                                            </div>
+                                            <span class="badge bg-light text-dark border"><i class="fas fa-calendar-check me-1 text-danger"></i> {{ card.date_str }}</span>
+                                        </div>
+                                        <h5 class="fw-bold text-dark mb-2">{{ card.title }}</h5>
+                                        {% if card.details %}
+                                        <div class="bg-light p-2 rounded small text-dark mb-3 border fst-italic">{{ card.details }}</div>
+                                        {% endif %}
+
+                                        {% if card.ops_draft and card.ops_draft.action_type == 'payment_confirm' %}
+                                        <form hx-post="{{ url_for('ai_ops.api_post_payment', draft_id=card.ops_draft.id) }}"
+                                              hx-target="#card-{{ card.id }}" hx-swap="outerHTML"
+                                              enctype="multipart/form-data" class="mb-2">
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Сумма</label>
+                                                    <input type="number" step="0.01" name="amount" class="form-control form-control-sm"
+                                                           value="{{ card.ops_draft.amount or '' }}" required inputmode="decimal">
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Дата</label>
+                                                    <input type="date" name="date" class="form-control form-control-sm"
+                                                           value="{{ today.isoformat() }}">
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Тип</label>
+                                                    <select name="payment_type" class="form-select form-select-sm">
+                                                        <option value="cashless">Безнал</option>
+                                                        <option value="cash">Нал</option>
+                                                        <option value="barter">Бартер</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Файл</label>
+                                                    <input type="file" name="file" class="form-control form-control-sm" accept=".pdf,.jpg,.jpeg,.png,.webp">
+                                                </div>
+                                                <div class="col-12">
+                                                    <input type="text" name="comment" class="form-control form-control-sm" placeholder="Комментарий" value="AI Ops">
+                                                </div>
+                                            </div>
+                                            {% if card.ops_draft.order_id %}
+                                            <div class="small text-muted mb-2">Заказ #{{ card.ops_draft.order_id }}
+                                                <a href="{{ url_for('orders.order_detail', order_id=card.ops_draft.order_id) }}" data-hx-boost="false">открыть</a>
+                                            </div>
+                                            {% endif %}
+                                            <button type="submit" class="btn btn-success btn-sm fw-bold w-100 mb-2">
+                                                <i class="fas fa-ruble-sign me-1"></i> Провести оплату
+                                            </button>
+                                        </form>
+                                        {% elif card.ops_draft %}
+                                        <div class="d-flex flex-wrap gap-2 mb-2">
+                                            {% if card.ops_draft.order_id %}
+                                            <a href="{{ url_for('orders.order_detail', order_id=card.ops_draft.order_id) }}"
+                                               class="btn btn-outline-primary btn-sm fw-bold" data-hx-boost="false">В заказ #{{ card.ops_draft.order_id }}</a>
+                                            {% elif card.action_type == 'order_create' %}
+                                            <a href="{{ url_for('orders.order_create') }}" class="btn btn-outline-primary btn-sm fw-bold" data-hx-boost="false">Новый заказ</a>
+                                            {% elif card.action_type == 'price_change' %}
+                                            <a href="{{ url_for('stock.price_history') }}" class="btn btn-outline-primary btn-sm fw-bold" data-hx-boost="false">К ценам</a>
+                                            {% endif %}
+                                            <form hx-post="{{ url_for('ai_ops.api_draft_ack', draft_id=card.ops_draft.id) }}"
+                                                  hx-target="#card-{{ card.id }}" hx-swap="outerHTML" class="m-0 flex-grow-1">
+                                                <button type="submit" class="btn btn-success btn-sm fw-bold w-100"><i class="fas fa-check"></i> Готово</button>
+                                            </form>
+                                        </div>
+                                        {% endif %}
+
+                                        <div class="d-flex gap-2">
+                                            <form hx-post="{{ url_for('ai_ops.api_task_snooze', task_id=card.task_id) }}"
+                                                  hx-target="#card-{{ card.id }}" hx-swap="outerHTML" class="m-0 flex-grow-1">
+                                                <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
+                                                    <i class="fas fa-moon me-1"></i> На завтра
+                                                </button>
+                                            </form>
+                                            <form hx-post="/api/feed/complete_tg_task" hx-target="#card-{{ card.id }}" hx-swap="outerHTML" class="m-0 flex-grow-1">
+                                                <input type="hidden" name="task_id" value="{{ card.task_id }}">
+                                                <button type="submit" class="btn btn-outline-success btn-sm fw-bold w-100"><i class="fas fa-check"></i> Готово</button>
+                                            </form>
+                                        </div>
+
                                     {% elif card.type == 'tg_task' %}
                                         <!-- КАРТОЧКА: ЗАДАЧА-ПОРУЧЕНИЕ -->
                                         <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
@@ -481,6 +573,8 @@
                                                     <i class="fas fa-chart-line fs-6 me-1"></i> Дайджест
                                                 {% elif card.source == 'fallback' %}
                                                     <i class="fas fa-inbox fs-6 me-1"></i> Из чата (ручной разбор)
+                                                {% elif card.source == 'ai_ops' %}
+                                                    <i class="fas fa-robot fs-6 me-1"></i> AI Ops
                                                 {% else %}
                                                     <i class="fab fa-telegram fs-6 me-1"></i> Из рабочего чата
                                                 {% endif %}

@@ -134,13 +134,25 @@ def _run_friday_itr_cash(app):
 
 
 def _run_sales_chat_digest(app):
-    """20:00 МСК: саммари чата продаж в личку руководителю."""
+    """20:00 МСК: вечерняя сводка в личку.
+
+    При AI_OPS_ENABLED — мульти-чат AI Ops (sales/hr/prod/itr) вместо
+    отдельного sales-only дайджеста, чтобы не слать два сообщения.
+    """
     lock_path = os.path.join(_lock_dir(app), '.sales_chat_digest.lock')
     if not _acquire_file_lock(lock_path, ttl_seconds=7200):
         _logger.info('sales chat digest: lock held by another worker, skip')
         return
     try:
         with app.app_context():
+            try:
+                from app.ai_ops import ai_ops_enabled, run_ops_digest
+                if ai_ops_enabled():
+                    ops_result = run_ops_digest(force=False, send=True)
+                    _logger.info('ai ops digest (scheduled): %s', ops_result)
+                    return
+            except Exception:
+                _logger.exception('ai ops digest (scheduled) failed')
             try:
                 from app.sales_chat_digest import run_sales_chat_digest
                 result = run_sales_chat_digest(force=False, send=True)
