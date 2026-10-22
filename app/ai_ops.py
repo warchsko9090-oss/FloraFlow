@@ -1438,16 +1438,23 @@ def enrich_ops_draft_card(dr: OpsActionDraft, payload_order_id=None) -> dict:
 @login_required
 @pilot_required
 def ops_calendar():
-    """Оболочка календаря: v1 — дубль плана выкопки."""
+    """Календарь Ops: выкопка/отгрузки + сроки патентов и регистраций ИН."""
     from app.digging import build_planning_weeks
+    from app.hr import attach_hr_events_to_weeks
 
     today = msk_today()
     center = today - timedelta(days=today.weekday())
     weeks_before = int(request.args.get('wb', 2) or 2)
-    weeks_after = int(request.args.get('wa', 4) or 4)
+    # шире вперёд — патенты/регистрации часто на 1–3 месяца
+    weeks_after = int(request.args.get('wa', 12) or 12)
     weeks_data = build_planning_weeks(
         center, weeks_before=weeks_before, weeks_after=weeks_after,
     )
+    first_monday = center - timedelta(weeks=weeks_before)
+    last_sunday = center + timedelta(weeks=weeks_after, days=6)
+    hr_events = attach_hr_events_to_weeks(weeks_data, first_monday, last_sunday)
+    upcoming_hr = [e for e in hr_events if e['date'] >= today][:30]
+
     open_ops = TgTask.query.filter(
         TgTask.source == 'ai_ops',
         TgTask.status.in_(['new', 'snoozed']),
@@ -1458,6 +1465,7 @@ def ops_calendar():
         center_monday=center,
         today=today,
         open_ops=open_ops,
+        upcoming_hr=upcoming_hr,
         weeks_before=weeks_before,
         weeks_after=weeks_after,
     )

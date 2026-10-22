@@ -24,15 +24,19 @@
   }
   .ops-day:nth-child(7n) { border-right: none; }
   .ops-day.is-today { background: #f3faf4; }
-  .ops-day.is-past { opacity: .72; }
+  .ops-day.is-past { opacity: .78; }
   .ops-day-num { font-size: .75rem; font-weight: 700; color: #64748b; margin-bottom: 6px; }
   .ops-chip {
     display: block; font-size: .72rem; line-height: 1.25; padding: 4px 6px;
     margin-bottom: 4px; border-radius: 6px; background: #eaf4eb; color: #1f3d2a;
-    border-left: 3px solid #3d8b57; text-decoration: none;
+    border-left: 3px solid #3d8b57; text-decoration: none; width: 100%; text-align: left;
   }
   .ops-chip.ship { border-left-color: #c2410c; background: #fff7ed; }
-  .ops-chip.task { border-left-color: #2563eb; background: #eff6ff; }
+  .ops-chip.patent { border-left-color: #7c3aed; background: #f5f3ff; color: #4c1d95; }
+  .ops-chip.registration { border-left-color: #0284c7; background: #e0f2fe; color: #0c4a6e; }
+  .ops-chip.hr-btn {
+    border: 0; cursor: pointer; font-family: inherit;
+  }
   .ops-side {
     background: #fff; border: 1px solid #d7e3d9; border-radius: 10px;
     padding: 12px; margin-bottom: 16px;
@@ -44,9 +48,22 @@
   }
   .ops-task-row:last-child { border-bottom: none; }
   .ops-legend { font-size: .78rem; color: #64748b; }
+  .ops-legend-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px;
+    vertical-align: middle;
+  }
+  .ops-legend-dot.dig { background: #3d8b57; }
+  .ops-legend-dot.ship { background: #c2410c; }
+  .ops-legend-dot.pat { background: #7c3aed; }
+  .ops-legend-dot.reg { background: #0284c7; }
+  #hrExtendModal .modal-dialog { max-width: 440px; }
+  #hrExtendModal .form-control,
+  #hrExtendModal .form-select { min-height: 42px; font-size: 16px; }
+  #hrExtendModal .btn { min-height: 44px; }
   @media (max-width: 768px) {
     .ops-days { grid-template-columns: 1fr; }
     .ops-day { min-height: auto; border-right: none; }
+    #hrExtendModal .modal-dialog { margin: 0.5rem; }
   }
 </style>
 
@@ -54,13 +71,47 @@
   <div class="ops-cal-head">
     <div>
       <h1 class="ops-cal-title"><i class="fas fa-calendar-alt me-2 text-success"></i>Календарь Ops</h1>
-      <div class="ops-legend">Пилот · выкопка и отгрузки (как в плане) · слоты под оплаты позже</div>
+      <div class="ops-legend">
+        <span class="ops-legend-dot dig"></span>выкопка
+        <span class="ops-legend-dot ship ms-2"></span>отгрузка
+        <span class="ops-legend-dot pat ms-2"></span>патент
+        <span class="ops-legend-dot reg ms-2"></span>регистрация
+        · тап по патенту/регистрации — продлить
+      </div>
     </div>
     <div class="d-flex flex-wrap gap-2">
       <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">← Дашборд</a>
+      <a href="{{ url_for('main.analytics') }}" class="btn btn-outline-secondary btn-sm">Аналитика</a>
       <a href="{{ url_for('digging.digging_planning') }}" class="btn btn-outline-success btn-sm" data-hx-boost="false">План выкопки</a>
     </div>
   </div>
+
+  {% if upcoming_hr %}
+  <div class="ops-side">
+    <h6><i class="fas fa-id-card me-1 text-primary"></i> Ближайшие сроки ИН</h6>
+    {% for e in upcoming_hr %}
+    <div class="ops-task-row">
+      <div>
+        <div class="fw-semibold">{{ e.employee_name }}</div>
+        <div class="text-muted small">
+          {% if e.kind == 'patent' %}патент{% else %}регистрация{% endif %}
+          · до {{ e.end_date.strftime('%d.%m.%Y') }}
+        </div>
+      </div>
+      <button type="button"
+              class="btn btn-sm btn-outline-primary"
+              data-bs-toggle="modal"
+              data-bs-target="#hrExtendModal"
+              data-kind="{{ e.kind }}"
+              data-employee-id="{{ e.employee_id }}"
+              data-employee-name="{{ e.employee_name }}"
+              data-end-date="{{ e.end_date.isoformat() }}">
+        Продлить
+      </button>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   {% if open_ops %}
   <div class="ops-side">
@@ -104,7 +155,19 @@
           отгруз #{{ s.order_id }} {{ s.client }}
         </a>
         {% endfor %}
-        {% if not (day.orders_groups or day.shipments) %}
+        {% for h in day.hr_events or [] %}
+        <button type="button"
+                class="ops-chip hr-btn {{ h.kind }}"
+                data-bs-toggle="modal"
+                data-bs-target="#hrExtendModal"
+                data-kind="{{ h.kind }}"
+                data-employee-id="{{ h.employee_id }}"
+                data-employee-name="{{ h.employee_name }}"
+                data-end-date="{{ h.end_date.isoformat() }}">
+          {{ h.label }}
+        </button>
+        {% endfor %}
+        {% if not (day.orders_groups or day.shipments or day.hr_events) %}
         <div class="text-muted" style="font-size:.7rem;">—</div>
         {% endif %}
       </div>
@@ -115,4 +178,139 @@
   <div class="alert alert-light border">Нет данных плана выкопки на выбранный период.</div>
   {% endfor %}
 </div>
+
+<!-- Модалка продления патента / регистрации -->
+<div class="modal fade" id="hrExtendModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="hrExtendTitle">Продление</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <div id="hrExtendFlash"></div>
+        <p class="small text-muted mb-3" id="hrExtendSubtitle"></p>
+
+        <form id="hrPatentForm" class="d-none" enctype="multipart/form-data"
+              hx-encoding="multipart/form-data"
+              hx-post="{{ url_for('hr.api_calendar_extend_patent') }}"
+              hx-target="#hrExtendFlash" hx-swap="innerHTML">
+          <input type="hidden" name="employee_id" id="hrPatEmpId">
+          <div class="mb-2">
+            <label class="small fw-bold">Продлить на</label>
+            <select name="months" class="form-select" id="hrPatMonths">
+              <option value="1">1 месяц</option>
+              <option value="2">2 месяца</option>
+              <option value="3" selected>3 месяца</option>
+              <option value="">своя дата ↓</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="small fw-bold">Или новая дата окончания</label>
+            <input type="date" name="new_end_date" class="form-control" id="hrPatNewEnd">
+          </div>
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <label class="small fw-bold">Сумма оплаты (опц.)</label>
+              <input type="number" step="0.01" name="amount" class="form-control" inputmode="decimal" placeholder="0">
+            </div>
+            <div class="col-6">
+              <label class="small fw-bold">Дата оплаты</label>
+              <input type="date" name="payment_date" class="form-control" value="{{ today.isoformat() }}">
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="small fw-bold">Чек (опц.)</label>
+            <input type="file" name="file" class="form-control" accept=".pdf,.jpg,.jpeg,.png,.webp">
+          </div>
+          <div class="mb-3">
+            <input type="text" name="comment" class="form-control" placeholder="Комментарий" value="Продление из календаря">
+          </div>
+          <button type="submit" class="btn btn-success w-100 fw-bold">Продлить патент</button>
+          <a href="#" id="hrPatCardLink" class="btn btn-outline-secondary w-100 mt-2" data-hx-boost="false">Открыть карточку</a>
+        </form>
+
+        <form id="hrRegForm" class="d-none" enctype="multipart/form-data"
+              hx-encoding="multipart/form-data"
+              hx-post="{{ url_for('hr.api_calendar_extend_registration') }}"
+              hx-target="#hrExtendFlash" hx-swap="innerHTML">
+          <input type="hidden" name="employee_id" id="hrRegEmpId">
+          <div class="mb-2">
+            <label class="small fw-bold">Продлить на</label>
+            <select name="months" class="form-select" id="hrRegMonths">
+              <option value="3">3 месяца</option>
+              <option value="6" selected>6 месяцев</option>
+              <option value="12">12 месяцев</option>
+              <option value="1">1 месяц</option>
+              <option value="">своя дата ↓</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="small fw-bold">Или новая дата окончания</label>
+            <input type="date" name="new_end_date" class="form-control" id="hrRegNewEnd">
+          </div>
+          <div class="mb-2">
+            <label class="small fw-bold">Дата продления</label>
+            <input type="date" name="renewal_date" class="form-control" value="{{ today.isoformat() }}">
+          </div>
+          <div class="mb-2">
+            <label class="small fw-bold">Документ (опц.)</label>
+            <input type="file" name="file" class="form-control" accept=".pdf,.jpg,.jpeg,.png,.webp">
+          </div>
+          <div class="mb-3">
+            <input type="text" name="comment" class="form-control" placeholder="Комментарий" value="Продление из календаря">
+          </div>
+          <button type="submit" class="btn btn-primary w-100 fw-bold">Продлить регистрацию</button>
+          <a href="#" id="hrRegCardLink" class="btn btn-outline-secondary w-100 mt-2" data-hx-boost="false">Открыть карточку</a>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const modal = document.getElementById('hrExtendModal');
+  if (!modal) return;
+  modal.addEventListener('show.bs.modal', function (ev) {
+    const btn = ev.relatedTarget;
+    if (!btn) return;
+    const kind = btn.getAttribute('data-kind');
+    const empId = btn.getAttribute('data-employee-id');
+    const name = btn.getAttribute('data-employee-name') || '';
+    const endDate = btn.getAttribute('data-end-date') || '';
+    document.getElementById('hrExtendFlash').innerHTML = '';
+    document.getElementById('hrExtendTitle').textContent =
+      (kind === 'patent' ? 'Патент' : 'Регистрация') + ' · ' + name;
+    document.getElementById('hrExtendSubtitle').textContent =
+      'Сейчас до ' + endDate + '. После сохранения срок обновится в карточке сотрудника.';
+
+    const patForm = document.getElementById('hrPatentForm');
+    const regForm = document.getElementById('hrRegForm');
+    const cardUrl = "{{ url_for('hr.foreign_employee_card', employee_id=999999) }}".replace('999999', empId);
+
+    if (kind === 'patent') {
+      patForm.classList.remove('d-none');
+      regForm.classList.add('d-none');
+      document.getElementById('hrPatEmpId').value = empId;
+      document.getElementById('hrPatCardLink').href = cardUrl;
+    } else {
+      regForm.classList.remove('d-none');
+      patForm.classList.add('d-none');
+      document.getElementById('hrRegEmpId').value = empId;
+      document.getElementById('hrRegCardLink').href = cardUrl;
+    }
+  });
+
+  // после успешного HTMX — через 1.2с перезагрузить календарь
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (e.target && e.target.id === 'hrExtendFlash') {
+      const ok = e.target.querySelector('.alert-success');
+      if (ok) {
+        setTimeout(function () { window.location.reload(); }, 1100);
+      }
+    }
+  });
+})();
+</script>
 {% endblock %}

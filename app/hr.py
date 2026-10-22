@@ -1360,3 +1360,374 @@ def report_success():
     if current_user.role not in HR_PERSONNEL_ROLES:
         return redirect(url_for('main.index'))
     return render_template('hr/report_success.html')
+
+
+def collect_hr_deadline_events(date_from: date, date_to: date) -> list[dict]:
+    """События окончания патента / регистрации для календаря Ops."""
+    events: list[dict] = []
+    if not date_from or not date_to or date_to < date_from:
+        return events
+
+    patents = (
+        PatentPeriod.query
+        .options(joinedload(PatentPeriod.employee))
+        .filter(
+            PatentPeriod.is_current.is_(True),
+            PatentPeriod.status == 'active',
+            PatentPeriod.end_date >= date_from,
+            PatentPeriod.end_date <= date_to,
+        )
+        .all()
+    )
+    for p in patents:
+        emp = p.employee
+        if not emp or not emp.is_active:
+            continue
+        name = (emp.foreign_profile.full_name if emp.foreign_profile else None) or emp.name
+        events.append({
+            'kind': 'patent',
+            'date': p.end_date,
+            'employee_id': emp.id,
+            'employee_name': name,
+            'period_id': p.id,
+            'end_date': p.end_date,
+            'label': f'патент · {name}',
+        })
+
+    # Регистрация: текущий период + денорм. дата в профиле (на случай рассинхрона)
+    seen_emp = set()
+    reg_periods = (
+        RegistrationPeriod.query
+        .options(joinedload(RegistrationPeriod.employee))
+        .filter(
+            RegistrationPeriod.is_current.is_(True),
+            RegistrationPeriod.status == 'active',
+            RegistrationPeriod.end_date >= date_from,
+            RegistrationPeriod.end_date <= date_to,
+        )
+        .all()
+    )
+    for rp in reg_periods:
+        emp = rp.employee
+        if not emp or not emp.is_active:
+            continue
+        seen_emp.add(emp.id)
+        name = (emp.foreign_profile.full_name if emp.foreign_profile else None) or emp.name
+        events.append({
+            'kind': 'registration',
+            'date': rp.end_date,
+            'employee_id': emp.id,
+            'employee_name': name,
+            'period_id': rp.id,
+            'end_date': rp.end_date,
+            'label': f'регистр. · {name}',
+        })
+
+    profiles = (
+        ForeignEmployeeProfile.query
+        .options(joinedload(ForeignEmployeeProfile.employee))
+        .filter(
+            ForeignEmployeeProfile.registration_end_date.isnot(None),
+            ForeignEmployeeProfile.registration_end_date >= date_from,
+            ForeignEmployeeProfile.registration_end_date <= date_to,
+        )
+        .all()
+    )
+    for pr in profiles:
+        emp = pr.employee
+        if not emp or not emp.is_active or emp.id in seen_emp:
+            continue
+        events.append({
+            'kind': 'registration',
+            'date': pr.registration_end_date,
+            'employee_id': emp.id,
+            'employee_name': pr.full_name or emp.name,
+            'period_id': None,
+            'end_date': pr.registration_end_date,
+            'label': f'регистр. · {pr.full_name or emp.name}',
+        })
+
+    events.sort(key=lambda e: (e['date'], e['kind'], e['employee_name'].lower()))
+    return events
+
+
+def attach_hr_events_to_weeks(weeks_data: list, date_from: date, date_to: date) -> list[dict]:
+    """Кладёт hr_events в каждый день weeks_data; возвращает плоский список."""
+    events = collect_hr_deadline_events(date_from, date_to)
+    by_day: dict[date, list] = {}
+    for ev in events:
+        by_day.setdefault(ev['date'], []).append(ev)
+    for week in weeks_data or []:
+        for day in week.get('days') or []:
+            d = day.get('date_obj')
+            day['hr_events'] = by_day.get(d, []) if d else []
+    return events
+
+
+def extend_patent_period(
+    *,
+    employee_id: int,
+    months: int | None = None,
+    new_end_date: date | None = None,
+    amount: float | None = None,
+    payment_date: date | None = None,
+    comment: str = '',
+    check_file=None,
+    user_id: int | None = None,
+) -> dict:
+    """Продление текущего патента: обновляет PatentPeriod (+ опц. PatentPayment)."""
+    emp = Employee.query.get(employee_id)
+    if not emp:
+        return {'ok': False, 'error': 'Сотрудник не найден'}
+    period = (
+        PatentPeriod.query
+        .filter_by(employee_id=employee_id, is_current=True)
+        .order_by(PatentPeriod.end_date.desc())
+        .first()
+    )
+    if not period:
+        return {'ok': False, 'error': 'Нет текущего периода патента'}
+
+    pay_date = payment_date or msk_today()
+    old_end = period.end_date
+    if months in (1, 2, 3):
+        base = old_end if old_end and old_end >= pay_date else pay_date
+        new_end = _add_months(base, months)
+        months_paid = months
+    elif new_end_date:
+        new_end = new_end_date
+        months_paid = 0
+    else:
+        return {'ok': False, 'error': 'Укажите срок (1–3 мес.) или новую дату'}
+
+    if new_end < old_end:
+        return {'ok': False, 'error': 'Новая дата не может быть раньше текущей'}
+
+    check_rel_path = None
+    check_original_name = None
+    if check_file and getattr(check_file, 'filename', None):
+        allowed_ext = {'pdf', 'jpg', 'jpeg', 'png', 'webp'}
+        ext = check_file.filename.rsplit('.', 1)[1].lower() if '.' in check_file.filename else ''
+        if ext not in allowed_ext:
+            return {'ok': False, 'error': 'Недопустимый формат файла'}
+        base_dir = _employee_storage_dir(emp)
+        checks_dir = os.path.join(base_dir, 'patent_checks')
+        os.makedirs(checks_dir, exist_ok=True)
+        safe_name = secure_filename(check_file.filename)
+        unique_name = f"check_{int(msk_now().timestamp())}_{safe_name}"
+        check_abs = os.path.join(checks_dir, unique_name)
+        check_file.save(check_abs)
+        check_rel_path = _safe_rel_path(check_abs)
+        check_original_name = check_file.filename
+
+    amt = float(amount or 0)
+    if amt > 0 or check_rel_path:
+        if months_paid not in (1, 2, 3):
+            months_paid = 1
+        db.session.add(PatentPayment(
+            employee_id=employee_id,
+            patent_period_id=period.id,
+            payment_date=pay_date,
+            months_paid=months_paid,
+            amount=amt if amt > 0 else Decimal('0'),
+            period_end_after_payment=new_end,
+            check_file_rel_path=check_rel_path,
+            check_original_name=check_original_name,
+            comment=(comment or 'Продление из календаря')[:500],
+            created_by_user_id=user_id,
+        ))
+
+    period.end_date = new_end
+    period.updated_at = msk_now()
+    db.session.commit()
+    log_action(f'Календарь: патент сотрудника #{employee_id} {old_end} → {new_end}')
+    return {
+        'ok': True,
+        'employee_id': employee_id,
+        'period_id': period.id,
+        'old_end': old_end.isoformat(),
+        'new_end': new_end.isoformat(),
+    }
+
+
+def extend_registration_period(
+    *,
+    employee_id: int,
+    months: int | None = None,
+    new_end_date: date | None = None,
+    renewal_date: date | None = None,
+    comment: str = '',
+    doc_file=None,
+    user_id: int | None = None,
+) -> dict:
+    """Продление регистрации: RegistrationPeriod + профиль + RegistrationRenewal."""
+    emp = Employee.query.get(employee_id)
+    if not emp:
+        return {'ok': False, 'error': 'Сотрудник не найден'}
+    profile = ForeignEmployeeProfile.query.filter_by(employee_id=employee_id).first()
+    _ensure_registration_period_from_profile(emp, profile)
+
+    period = (
+        RegistrationPeriod.query
+        .filter_by(employee_id=employee_id, is_current=True)
+        .order_by(RegistrationPeriod.end_date.desc())
+        .first()
+    )
+    if not period:
+        return {'ok': False, 'error': 'Нет текущего периода регистрации'}
+
+    ren_date = renewal_date or msk_today()
+    old_end = period.end_date
+    if months in (1, 2, 3, 6, 12):
+        base = old_end if old_end and old_end >= ren_date else ren_date
+        new_end = _add_months(base, months)
+        months_ext = months
+    elif new_end_date:
+        new_end = new_end_date
+        months_ext = 0
+    else:
+        return {'ok': False, 'error': 'Укажите срок или новую дату окончания'}
+
+    if new_end < ren_date:
+        return {'ok': False, 'error': 'Новая дата не может быть раньше даты продления'}
+
+    doc_rel_path = None
+    doc_original_name = None
+    if doc_file and getattr(doc_file, 'filename', None):
+        allowed_ext = {'pdf', 'jpg', 'jpeg', 'png', 'webp'}
+        ext = doc_file.filename.rsplit('.', 1)[1].lower() if '.' in doc_file.filename else ''
+        if ext not in allowed_ext:
+            return {'ok': False, 'error': 'Недопустимый формат файла'}
+        base_dir = _employee_storage_dir(emp)
+        renewals_dir = os.path.join(base_dir, 'registration_renewals')
+        os.makedirs(renewals_dir, exist_ok=True)
+        safe_name = secure_filename(doc_file.filename)
+        unique_name = f"reg_{int(msk_now().timestamp())}_{safe_name}"
+        doc_abs = os.path.join(renewals_dir, unique_name)
+        doc_file.save(doc_abs)
+        doc_rel_path = _safe_rel_path(doc_abs)
+        doc_original_name = doc_file.filename
+
+    db.session.add(RegistrationRenewal(
+        employee_id=employee_id,
+        registration_period_id=period.id,
+        renewal_date=ren_date,
+        months_extended=months_ext,
+        period_end_after_renewal=new_end,
+        doc_file_rel_path=doc_rel_path,
+        doc_original_name=doc_original_name,
+        comment=(comment or 'Продление из календаря')[:500],
+        created_by_user_id=user_id,
+    ))
+    period.end_date = new_end
+    period.updated_at = msk_now()
+    _sync_profile_registration_end(employee_id, new_end)
+    db.session.commit()
+    log_action(f'Календарь: регистрация сотрудника #{employee_id} {old_end} → {new_end}')
+    return {
+        'ok': True,
+        'employee_id': employee_id,
+        'period_id': period.id,
+        'old_end': old_end.isoformat(),
+        'new_end': new_end.isoformat(),
+    }
+
+
+def _calendar_extend_allowed() -> bool:
+    """HR-роли или пилот AI Ops (календарь Ops)."""
+    if _ensure_hr_access():
+        return True
+    try:
+        from app.ai_ops import is_ai_ops_pilot
+        return is_ai_ops_pilot(current_user)
+    except Exception:
+        return False
+
+
+@bp.route('/api/calendar/extend_patent', methods=['POST'])
+@login_required
+def api_calendar_extend_patent():
+    if not _calendar_extend_allowed():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    try:
+        employee_id = int(request.form.get('employee_id') or 0)
+    except Exception:
+        return jsonify({'ok': False, 'error': 'bad employee'}), 400
+    months_raw = request.form.get('months')
+    months = int(months_raw) if months_raw not in (None, '') else None
+    new_end = None
+    if request.form.get('new_end_date'):
+        try:
+            new_end = datetime.strptime(request.form.get('new_end_date'), '%Y-%m-%d').date()
+        except Exception:
+            return jsonify({'ok': False, 'error': 'Некорректная дата'}), 400
+    pay_date = None
+    if request.form.get('payment_date'):
+        try:
+            pay_date = datetime.strptime(request.form.get('payment_date'), '%Y-%m-%d').date()
+        except Exception:
+            pay_date = None
+    try:
+        amount = float(str(request.form.get('amount') or '0').replace(',', '.').replace(' ', ''))
+    except Exception:
+        amount = 0.0
+    result = extend_patent_period(
+        employee_id=employee_id,
+        months=months,
+        new_end_date=new_end,
+        amount=amount,
+        payment_date=pay_date,
+        comment=request.form.get('comment') or '',
+        check_file=request.files.get('file'),
+        user_id=current_user.id,
+    )
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            return (
+                f'<div class="alert alert-success mb-0">Патент продлён до '
+                f'{result["new_end"]}</div>'
+            )
+        return f'<div class="alert alert-danger mb-0">{result.get("error")}</div>', 400
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@bp.route('/api/calendar/extend_registration', methods=['POST'])
+@login_required
+def api_calendar_extend_registration():
+    if not _calendar_extend_allowed():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    try:
+        employee_id = int(request.form.get('employee_id') or 0)
+    except Exception:
+        return jsonify({'ok': False, 'error': 'bad employee'}), 400
+    months_raw = request.form.get('months')
+    months = int(months_raw) if months_raw not in (None, '') else None
+    new_end = None
+    if request.form.get('new_end_date'):
+        try:
+            new_end = datetime.strptime(request.form.get('new_end_date'), '%Y-%m-%d').date()
+        except Exception:
+            return jsonify({'ok': False, 'error': 'Некорректная дата'}), 400
+    ren_date = None
+    if request.form.get('renewal_date'):
+        try:
+            ren_date = datetime.strptime(request.form.get('renewal_date'), '%Y-%m-%d').date()
+        except Exception:
+            ren_date = None
+    result = extend_registration_period(
+        employee_id=employee_id,
+        months=months,
+        new_end_date=new_end,
+        renewal_date=ren_date,
+        comment=request.form.get('comment') or '',
+        doc_file=request.files.get('file'),
+        user_id=current_user.id,
+    )
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            return (
+                f'<div class="alert alert-success mb-0">Регистрация продлена до '
+                f'{result["new_end"]}</div>'
+            )
+        return f'<div class="alert alert-danger mb-0">{result.get("error")}</div>', 400
+    return jsonify(result), (200 if result.get('ok') else 400)
