@@ -25,6 +25,13 @@
   .ops-day:nth-child(7n) { border-right: none; }
   .ops-day.is-today { background: #f3faf4; }
   .ops-day.is-past { opacity: .78; }
+  .ops-day.crew-off { background: #fce8ec; }
+  .ops-day.brigadier-off { background: #fff6d6; }
+  .ops-day.crew-off.brigadier-off {
+    background: linear-gradient(135deg, #fce8ec 50%, #fff6d6 50%);
+  }
+  .ops-day.is-today.crew-off,
+  .ops-day.is-today.brigadier-off { box-shadow: inset 0 0 0 2px #3d8b57; }
   .ops-day-num { font-size: .75rem; font-weight: 700; color: #64748b; margin-bottom: 6px; }
   .ops-chip {
     display: block; font-size: .72rem; line-height: 1.25; padding: 4px 6px;
@@ -34,6 +41,8 @@
   .ops-chip.ship { border-left-color: #c2410c; background: #fff7ed; }
   .ops-chip.patent { border-left-color: #7c3aed; background: #f5f3ff; color: #4c1d95; }
   .ops-chip.registration { border-left-color: #0284c7; background: #e0f2fe; color: #0c4a6e; }
+  .ops-chip.crew-off { border-left-color: #db2777; background: #fce7f3; color: #9d174d; }
+  .ops-chip.brigadier-off { border-left-color: #ca8a04; background: #fef9c3; color: #854d0e; }
   .ops-chip.hr-btn {
     border: 0; cursor: pointer; font-family: inherit;
   }
@@ -56,6 +65,8 @@
   .ops-legend-dot.ship { background: #c2410c; }
   .ops-legend-dot.pat { background: #7c3aed; }
   .ops-legend-dot.reg { background: #0284c7; }
+  .ops-legend-dot.crew { background: #db2777; }
+  .ops-legend-dot.brig { background: #ca8a04; }
   #hrExtendModal .modal-dialog { max-width: 440px; }
   #hrExtendModal .form-control,
   #hrExtendModal .form-select { min-height: 42px; font-size: 16px; }
@@ -74,6 +85,8 @@
       <div class="ops-legend">
         <span class="ops-legend-dot dig"></span>выкопка
         <span class="ops-legend-dot ship ms-2"></span>отгрузка
+        <span class="ops-legend-dot crew ms-2"></span>вых. бригады
+        <span class="ops-legend-dot brig ms-2"></span>вых. бригадира
         <span class="ops-legend-dot pat ms-2"></span>патент
         <span class="ops-legend-dot reg ms-2"></span>регистрация
         · тап по патенту/регистрации — продлить
@@ -132,6 +145,7 @@
   </div>
   {% endif %}
 
+  {% set wd_ru = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'] %}
   {% for week in weeks_data %}
   <div class="ops-week">
     <div class="ops-week-label">
@@ -140,11 +154,17 @@
     </div>
     <div class="ops-days">
       {% for day in week.days %}
-      <div class="ops-day {% if day.is_today %}is-today{% endif %} {% if day.date_obj < today %}is-past{% endif %}">
+      <div class="ops-day {% if day.is_today %}is-today{% endif %} {% if day.date_obj < today %}is-past{% endif %} {% if day.crew_off %}crew-off{% endif %} {% if day.brigadier_off %}brigadier-off{% endif %}">
         <div class="ops-day-num">
-          {{ day.date_obj.strftime('%a') }} {{ day.date_obj.strftime('%d.%m') }}
+          {{ wd_ru[day.date_obj.weekday()] }} {{ day.date_obj.strftime('%d.%m') }}
           {% if day.is_today %}<span class="badge bg-success ms-1">сегодня</span>{% endif %}
         </div>
+        {% if day.crew_off %}
+        <span class="ops-chip crew-off">вых. бригады</span>
+        {% endif %}
+        {% if day.brigadier_off %}
+        <span class="ops-chip brigadier-off">вых. бригадира</span>
+        {% endif %}
         {% for g in day.orders_groups or [] %}
         <a class="ops-chip" href="{{ url_for('orders.order_detail', order_id=g.order_id) }}" data-hx-boost="false">
           #{{ g.order_id }} {{ g.client }} · {{ g.total_qty }} шт
@@ -167,7 +187,7 @@
           {{ h.label }}
         </button>
         {% endfor %}
-        {% if not (day.orders_groups or day.shipments or day.hr_events) %}
+        {% if not (day.orders_groups or day.shipments or day.hr_events or day.crew_off or day.brigadier_off) %}
         <div class="text-muted" style="font-size:.7rem;">—</div>
         {% endif %}
       </div>
