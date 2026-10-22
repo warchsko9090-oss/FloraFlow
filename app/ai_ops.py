@@ -1684,3 +1684,94 @@ def api_run_digest():
     force = request.form.get('force') in ('1', 'true', 'yes')
     result = run_ops_digest(force=force, send=True)
     return jsonify(result)
+
+
+@bp.route('/api/demo_seed', methods=['GET', 'POST'])
+@login_required
+@pilot_required
+def api_demo_seed():
+    """Пилот: создать демо-карточки всех типов для UI-проверки (без проведения)."""
+    # Берём незакрытый заказ; для оплаты предпочтём с долгом
+    sample_order = None
+    unpaid_order = None
+    for o in Order.query.filter(Order.is_deleted.is_(False)).order_by(Order.id.desc()).limit(80):
+        if (o.status or '') in ('canceled', 'ghost'):
+            continue
+        if sample_order is None and (o.status or '') != 'shipped':
+            sample_order = o
+        try:
+            if unpaid_order is None and float(o.total_sum or 0) > float(o.paid_sum or 0) + 0.5:
+                if (o.status or '') != 'shipped':
+                    unpaid_order = o
+        except Exception:
+            pass
+        if sample_order and unpaid_order:
+            break
+    pay_order = unpaid_order or sample_order
+    plant = Plant.query.order_by(Plant.id.asc()).first()
+    size = Size.query.order_by(Size.id.asc()).first()
+    client = sample_order.client if sample_order and sample_order.client else Client.query.first()
+
+    actions = [
+        {
+            'type': 'payment_confirm',
+            'entities': {
+                'order_id': pay_order.id if pay_order else None,
+                'amount': 1000,
+                'client': (pay_order.client.name if pay_order and pay_order.client else None)
+                or (client.name if client else None),
+            },
+            'quote': 'Демо: проверить оплату',
+            'confidence': 0.99,
+            'channel': 'sales',
+        },
+        {
+            'type': 'shipment_confirm',
+            'entities': {'order_id': sample_order.id if sample_order else None},
+            'quote': 'Демо: отгрузка',
+            'confidence': 0.99,
+            'channel': 'sales',
+        },
+        {
+            'type': 'order_create',
+            'entities': {'client': (client.name if client else 'Демо') + ' AIOpsDemo'},
+            'quote': 'Демо: новый заказ',
+            'confidence': 0.99,
+            'channel': 'sales',
+        },
+        {
+            'type': 'order_qty_change',
+            'entities': {
+                'order_id': sample_order.id if sample_order else None,
+                'qty': 5,
+                'plant': plant.name if plant else None,
+            },
+            'quote': 'Демо: qty',
+            'confidence': 0.99,
+            'channel': 'sales',
+        },
+        {
+            'type': 'price_change',
+            'entities': {
+                'plant': plant.name if plant else None,
+                'size': size.name if size else None,
+                'price': 777,
+            },
+            'quote': 'Демо: цена',
+            'confidence': 0.99,
+            'channel': 'sales',
+        },
+    ]
+    # уникальные ключи на день — force через суффикс quote в entities day
+    for a in actions:
+        a['entities'] = dict(a.get('entities') or {})
+        a['entities']['_demo'] = msk_today().isoformat()
+
+    # для order_create dedup использует client+day — суффикс в имени уже есть
+    result = reconcile_and_upsert_tasks(actions, day=msk_today())
+    return jsonify({
+        'ok': True,
+        'reconcile': result,
+        'sample_order_id': sample_order.id if sample_order else None,
+        'hint': 'Откройте дашборд — карточки AI Ops. Проведение документов на проде делайте осознанно.',
+    })
