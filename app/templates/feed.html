@@ -47,6 +47,10 @@
         .kpi-scopes .btn { width: 100%; text-align: center; }
         .kpi-scopes .btn:last-child:nth-child(odd) { grid-column: 1 / -1; }
         .kpi-actions { flex-direction: column; }
+        .ai-ops-form .form-control,
+        .ai-ops-form .form-select { font-size: 16px; min-height: 42px; }
+        .ai-ops-actions { flex-direction: column; }
+        .ai-ops-actions .btn { min-height: 42px; }
         .kpi-actions .btn,
         .kpi-actions .btn-analytics { width: 100%; }
     }
@@ -494,19 +498,19 @@
                                         {% if card.ops_draft and card.ops_draft.action_type == 'payment_confirm' %}
                                         <form hx-post="{{ url_for('ai_ops.api_post_payment', draft_id=card.ops_draft.id) }}"
                                               hx-target="#card-{{ card.id }}" hx-swap="outerHTML"
-                                              enctype="multipart/form-data" class="mb-2">
+                                              enctype="multipart/form-data" class="mb-2 ai-ops-form">
                                             <div class="row g-2 mb-2">
-                                                <div class="col-6">
+                                                <div class="col-6 col-md-4">
                                                     <label class="small fw-bold">Сумма</label>
                                                     <input type="number" step="0.01" name="amount" class="form-control form-control-sm"
                                                            value="{{ card.ops_draft.amount or '' }}" required inputmode="decimal">
                                                 </div>
-                                                <div class="col-6">
+                                                <div class="col-6 col-md-4">
                                                     <label class="small fw-bold">Дата</label>
                                                     <input type="date" name="date" class="form-control form-control-sm"
                                                            value="{{ today.isoformat() }}">
                                                 </div>
-                                                <div class="col-6">
+                                                <div class="col-6 col-md-4">
                                                     <label class="small fw-bold">Тип</label>
                                                     <select name="payment_type" class="form-select form-select-sm">
                                                         <option value="cashless">Безнал</option>
@@ -531,30 +535,150 @@
                                                 <i class="fas fa-ruble-sign me-1"></i> Провести оплату
                                             </button>
                                         </form>
-                                        {% elif card.ops_draft %}
-                                        <div class="d-flex flex-wrap gap-2 mb-2">
+
+                                        {% elif card.ops_draft and card.ops_draft.action_type == 'shipment_confirm' %}
+                                        <div class="small mb-2">
                                             {% if card.ops_draft.order_id %}
-                                            <a href="{{ url_for('orders.order_detail', order_id=card.ops_draft.order_id) }}"
-                                               class="btn btn-outline-primary btn-sm fw-bold" data-hx-boost="false">В заказ #{{ card.ops_draft.order_id }}</a>
-                                            {% elif card.action_type == 'order_create' %}
-                                            <a href="{{ url_for('orders.order_create') }}" class="btn btn-outline-primary btn-sm fw-bold" data-hx-boost="false">Новый заказ</a>
-                                            {% elif card.action_type == 'price_change' %}
-                                            <a href="{{ url_for('stock.price_history') }}" class="btn btn-outline-primary btn-sm fw-bold" data-hx-boost="false">К ценам</a>
+                                            Заказ <a href="{{ url_for('orders.order_detail', order_id=card.ops_draft.order_id) }}" data-hx-boost="false">#{{ card.ops_draft.order_id }}</a>
                                             {% endif %}
-                                            <form hx-post="{{ url_for('ai_ops.api_draft_ack', draft_id=card.ops_draft.id) }}"
-                                                  hx-target="#card-{{ card.id }}" hx-swap="outerHTML" class="m-0 flex-grow-1">
-                                                <button type="submit" class="btn btn-success btn-sm fw-bold w-100"><i class="fas fa-check"></i> Готово</button>
-                                            </form>
+                                            {% if card.ops_draft.items_preview %}
+                                            <ul class="mb-1 ps-3">
+                                                {% for it in card.ops_draft.items_preview %}
+                                                <li>{{ it.plant }} {{ it.size }}: осталось {{ it.left }} шт</li>
+                                                {% endfor %}
+                                            </ul>
+                                            {% endif %}
                                         </div>
+                                        <form hx-post="{{ url_for('ai_ops.api_post_shipment', draft_id=card.ops_draft.id) }}"
+                                              hx-target="#card-{{ card.id }}" hx-swap="outerHTML"
+                                              hx-confirm="Отгрузить весь остаток по заказу?"
+                                              class="mb-2 ai-ops-form">
+                                            <button type="submit" class="btn btn-success btn-sm fw-bold w-100">
+                                                <i class="fas fa-truck me-1"></i> Провести отгрузку
+                                            </button>
+                                        </form>
+
+                                        {% elif card.ops_draft and card.ops_draft.action_type == 'order_create' %}
+                                        <form hx-post="{{ url_for('ai_ops.api_post_order', draft_id=card.ops_draft.id) }}"
+                                              hx-target="#card-{{ card.id }}" hx-swap="outerHTML"
+                                              class="mb-2 ai-ops-form">
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-12">
+                                                    <label class="small fw-bold">Клиент</label>
+                                                    <select name="client_id" class="form-select form-select-sm" required>
+                                                        <option value="">— выберите —</option>
+                                                        {% for c in card.ops_draft.clients_opts or [] %}
+                                                        <option value="{{ c.id }}" {% if card.ops_draft.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Растение (опц.)</label>
+                                                    <select name="plant_id" class="form-select form-select-sm">
+                                                        <option value="">—</option>
+                                                        {% for p in card.ops_draft.plants_opts or [] %}
+                                                        <option value="{{ p.id }}" {% if card.ops_draft.plant_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Размер</label>
+                                                    <select name="size_id" class="form-select form-select-sm">
+                                                        <option value="">—</option>
+                                                        {% for s in card.ops_draft.sizes_opts or [] %}
+                                                        <option value="{{ s.id }}" {% if card.ops_draft.size_id == s.id %}selected{% endif %}>{{ s.name }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Кол-во</label>
+                                                    <input type="number" name="qty" class="form-control form-control-sm" value="{{ card.ops_draft.qty or '' }}" inputmode="numeric" min="1">
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Цена</label>
+                                                    <input type="number" step="0.01" name="price" class="form-control form-control-sm" value="{{ card.ops_draft.price or '' }}" inputmode="decimal">
+                                                </div>
+                                            </div>
+                                            <button type="submit" class="btn btn-success btn-sm fw-bold w-100">
+                                                <i class="fas fa-file-signature me-1"></i> Создать заказ
+                                            </button>
+                                        </form>
+
+                                        {% elif card.ops_draft and card.ops_draft.action_type == 'order_qty_change' %}
+                                        <form hx-post="{{ url_for('ai_ops.api_post_qty', draft_id=card.ops_draft.id) }}"
+                                              hx-target="#card-{{ card.id }}" hx-swap="outerHTML"
+                                              class="mb-2 ai-ops-form">
+                                            {% if card.ops_draft.order_id %}
+                                            <div class="small text-muted mb-2">Заказ
+                                                <a href="{{ url_for('orders.order_detail', order_id=card.ops_draft.order_id) }}" data-hx-boost="false">#{{ card.ops_draft.order_id }}</a>
+                                            </div>
+                                            {% endif %}
+                                            {% if card.ops_draft.items_preview %}
+                                            <div class="mb-2">
+                                                <label class="small fw-bold">Позиция</label>
+                                                <select name="item_id" class="form-select form-select-sm">
+                                                    {% for it in card.ops_draft.items_preview %}
+                                                    <option value="{{ it.id }}">{{ it.plant }} {{ it.size }} · сейчас {{ it.qty }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            {% endif %}
+                                            <label class="small fw-bold">Новое количество</label>
+                                            <div class="input-group input-group-sm mb-2">
+                                                <input type="number" name="qty" class="form-control" value="{{ card.ops_draft.qty or '' }}" required inputmode="numeric" min="0">
+                                                <button type="submit" class="btn btn-success fw-bold">Изменить qty</button>
+                                            </div>
+                                        </form>
+
+                                        {% elif card.ops_draft and card.ops_draft.action_type == 'price_change' %}
+                                        <form hx-post="{{ url_for('ai_ops.api_post_price', draft_id=card.ops_draft.id) }}"
+                                              hx-target="#card-{{ card.id }}" hx-swap="outerHTML"
+                                              class="mb-2 ai-ops-form">
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Растение</label>
+                                                    <select name="plant_id" class="form-select form-select-sm" required>
+                                                        <option value="">—</option>
+                                                        {% for p in card.ops_draft.plants_opts or [] %}
+                                                        <option value="{{ p.id }}" {% if card.ops_draft.plant_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="small fw-bold">Размер</label>
+                                                    <select name="size_id" class="form-select form-select-sm" required>
+                                                        <option value="">—</option>
+                                                        {% for s in card.ops_draft.sizes_opts or [] %}
+                                                        <option value="{{ s.id }}" {% if card.ops_draft.size_id == s.id %}selected{% endif %}>{{ s.name }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="small fw-bold">Новая цена</label>
+                                                    <input type="number" step="0.01" name="price" class="form-control form-control-sm"
+                                                           value="{{ card.ops_draft.price or '' }}" required inputmode="decimal">
+                                                </div>
+                                            </div>
+                                            <button type="submit" class="btn btn-success btn-sm fw-bold w-100">
+                                                <i class="fas fa-tags me-1"></i> Применить цену
+                                            </button>
+                                        </form>
                                         {% endif %}
 
-                                        <div class="d-flex gap-2">
+                                        <div class="d-flex flex-wrap gap-2 ai-ops-actions">
                                             <form hx-post="{{ url_for('ai_ops.api_task_snooze', task_id=card.task_id) }}"
                                                   hx-target="#card-{{ card.id }}" hx-swap="outerHTML" class="m-0 flex-grow-1">
                                                 <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
                                                     <i class="fas fa-moon me-1"></i> На завтра
                                                 </button>
                                             </form>
+                                            {% if card.ops_draft %}
+                                            <form hx-post="{{ url_for('ai_ops.api_draft_ack', draft_id=card.ops_draft.id) }}"
+                                                  hx-target="#card-{{ card.id }}" hx-swap="outerHTML" class="m-0 flex-grow-1"
+                                                  title="Закрыть без проведения в ERP">
+                                                <button type="submit" class="btn btn-outline-dark btn-sm w-100">Пропустить</button>
+                                            </form>
+                                            {% endif %}
                                             <form hx-post="/api/feed/complete_tg_task" hx-target="#card-{{ card.id }}" hx-swap="outerHTML" class="m-0 flex-grow-1">
                                                 <input type="hidden" name="task_id" value="{{ card.task_id }}">
                                                 <button type="submit" class="btn btn-outline-success btn-sm fw-bold w-100"><i class="fas fa-check"></i> Готово</button>

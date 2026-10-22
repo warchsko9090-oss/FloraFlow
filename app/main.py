@@ -1141,19 +1141,10 @@ def index():
                 ops_draft = None
                 if t.source == 'ai_ops':
                     try:
-                        from app.ai_ops import get_draft_for_task, draft_payload
+                        from app.ai_ops import get_draft_for_task, enrich_ops_draft_card
                         dr = get_draft_for_task(t.id)
                         if dr and dr.status == 'pending':
-                            pl = draft_payload(dr)
-                            ent = pl.get('entities') or {}
-                            ops_draft = {
-                                'id': dr.id,
-                                'action_type': dr.action_type,
-                                'order_id': dr.order_id or payload_order_id,
-                                'amount': ent.get('amount'),
-                                'quote': dr.quote or t.details,
-                                'channel': dr.channel,
-                            }
+                            ops_draft = enrich_ops_draft_card(dr, payload_order_id)
                     except Exception:
                         ops_draft = None
 

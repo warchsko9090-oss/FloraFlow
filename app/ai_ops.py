@@ -521,12 +521,62 @@ def _order_paid_enough(order: Order, amount: float | None) -> bool:
     return False
 
 
-def _shipment_exists(order: Order) -> bool:
+def _shipment_fully_done(order: Order) -> bool:
+    """Skip только если заказ уже полностью отгружен."""
     if not order:
         return False
     if (order.status or '') == 'shipped':
         return True
-    return Document.query.filter_by(order_id=order.id, doc_type='shipment').first() is not None
+    items = list(order.items or [])
+    if not items:
+        return False
+    return all(int(i.shipped_quantity or 0) >= int(i.quantity or 0) for i in items)
+
+
+def _resolve_plant(name: str | None) -> Plant | None:
+    name = (name or '').strip()
+    if not name:
+        return None
+    return Plant.query.filter(Plant.name.ilike(f'%{name}%')).order_by(Plant.id.asc()).first()
+
+
+def _resolve_size(name: str | None) -> Size | None:
+    name = (name or '').strip()
+    if not name:
+        return None
+    return Size.query.filter(Size.name.ilike(f'%{name}%')).order_by(Size.id.asc()).first()
+
+
+def _resolve_client(name: str | None) -> Client | None:
+    name = (name or '').strip()
+    if not name:
+        return None
+    return Client.query.filter(Client.name.ilike(f'%{name}%')).order_by(Client.id.asc()).first()
+
+
+def _unallocated_field_id() -> int | None:
+    from app.models import Field
+    f = Field.query.filter(Field.name.ilike('%не распредел%')).first()
+    if f:
+        return f.id
+    f = Field.query.order_by(Field.id.asc()).first()
+    return f.id if f else None
+
+
+def _mark_draft_done(draft: OpsActionDraft, *, user_id: int | None, extra: dict | None = None) -> None:
+    draft.status = 'posted'
+    draft.posted_at = msk_now()
+    draft.posted_by_id = user_id
+    if extra:
+        for k, v in extra.items():
+            if hasattr(draft, k):
+                setattr(draft, k, v)
+    if draft.task_id:
+        t = TgTask.query.get(draft.task_id)
+        if t and t.status in ('new', 'snoozed'):
+            t.status = 'done'
+            t.completed_at = msk_now()
+            t.completed_by_id = user_id
 
 
 def _similar_order_today(entities: dict) -> bool:
@@ -596,7 +646,7 @@ def _should_skip_action(action_type: str, entities: dict, order: Order | None) -
             return True, 'already_paid'
         return False, ''
     if action_type == 'shipment_confirm':
-        if order and _shipment_exists(order):
+        if order and _shipment_fully_done(order):
             return True, 'already_shipped'
         return False, ''
     if action_type == 'order_create':
@@ -988,6 +1038,400 @@ def snooze_task(task: TgTask, until: date | None = None) -> None:
     db.session.commit()
 
 
+def _draft_order(draft: OpsActionDraft) -> Order | None:
+    order = draft.order or (Order.query.get(draft.order_id) if draft.order_id else None)
+    if order:
+        return order
+    pl = draft_payload(draft)
+    return _find_order(pl.get('entities') or {})
+
+
+def post_shipment_draft(draft: OpsActionDraft, *, user_id: int | None = None) -> dict:
+    """Отгрузить весь остаток по заказу (как order_ship по каждой позиции)."""
+    order = _draft_order(draft)
+    if not order:
+        return {'ok': False, 'error': 'Заказ не найден'}
+    if _shipment_fully_done(order):
+        draft.status = 'skipped'
+        if draft.task_id:
+            t = TgTask.query.get(draft.task_id)
+            if t and t.status in ('new', 'snoozed'):
+                t.status = 'done'
+                t.completed_at = msk_now()
+                t.completed_by_id = user_id
+        db.session.commit()
+        return {'ok': True, 'status': 'skipped_already_shipped', 'order_id': order.id}
+
+    from app.utils import get_or_create_stock
+    from app.digging import clear_plan_after_ship
+
+    shipped_rows = 0
+    doc = Document(
+        doc_type='shipment',
+        user_id=user_id,
+        order_id=order.id,
+        comment=f'AI Ops отгрузка {order.id}',
+        date=msk_now(),
+    )
+    db.session.add(doc)
+    db.session.flush()
+
+    for item in (order.items or []):
+        left = int(item.quantity or 0) - int(item.shipped_quantity or 0)
+        if left <= 0:
+            continue
+        db.session.add(DocumentRow(
+            document_id=doc.id,
+            plant_id=item.plant_id,
+            size_id=item.size_id,
+            field_from_id=item.field_id,
+            year=item.year,
+            quantity=left,
+        ))
+        from app.utils import field_skips_stock_check
+        if not field_skips_stock_check(item.field_id):
+            stock = get_or_create_stock(item.plant_id, item.size_id, item.field_id, item.year)
+            stock.quantity = int(stock.quantity or 0) - left
+        item.shipped_quantity = int(item.shipped_quantity or 0) + left
+        shipped_rows += 1
+
+    if shipped_rows == 0:
+        db.session.rollback()
+        return {'ok': False, 'error': 'Нечего отгружать'}
+
+    if not order.project_id:
+        try:
+            from app.finance import resolve_project_id_for_yard_fields
+            linked = resolve_project_id_for_yard_fields(
+                [it.field_id for it in (order.items or []) if it.field_id]
+            )
+            if linked:
+                order.project_id = linked
+        except Exception:
+            pass
+
+    if (order.status or '') == 'reserved':
+        order.status = 'in_progress'
+    if all(int(i.shipped_quantity or 0) >= int(i.quantity or 0) for i in (order.items or [])):
+        order.status = 'shipped'
+
+    try:
+        clear_plan_after_ship(order)
+    except Exception:
+        current_app.logger.exception('ai_ops clear_plan_after_ship')
+
+    _mark_draft_done(draft, user_id=user_id, extra={
+        'order_id': order.id,
+        'document_id': doc.id,
+    })
+    db.session.commit()
+    return {
+        'ok': True,
+        'status': 'posted',
+        'order_id': order.id,
+        'document_id': doc.id,
+        'lines': shipped_rows,
+    }
+
+
+def post_order_create_draft(
+    draft: OpsActionDraft,
+    *,
+    client_id: int,
+    plant_id: int | None = None,
+    size_id: int | None = None,
+    qty: int | None = None,
+    price: float | None = None,
+    field_id: int | None = None,
+    year: int | None = None,
+    user_id: int | None = None,
+) -> dict:
+    client = Client.query.get(client_id)
+    if not client:
+        return {'ok': False, 'error': 'Клиент не найден'}
+
+    entities = (draft_payload(draft).get('entities') or {})
+    if _similar_order_today({'client': client.name}):
+        draft.status = 'skipped'
+        if draft.task_id:
+            t = TgTask.query.get(draft.task_id)
+            if t and t.status in ('new', 'snoozed'):
+                t.status = 'done'
+                t.completed_at = msk_now()
+                t.completed_by_id = user_id
+        db.session.commit()
+        return {'ok': True, 'status': 'skipped_similar_today'}
+
+    from app.models import OrderItem
+
+    o = Order(
+        client_id=client.id,
+        date=msk_now(),
+        status='reserved',
+        created_by_user_id=user_id,
+    )
+    db.session.add(o)
+    db.session.flush()
+
+    if plant_id and size_id and qty and int(qty) > 0:
+        fid = field_id or _unallocated_field_id()
+        yr = year or msk_today().year
+        try:
+            from app.utils import get_actual_price
+            from app.shop_prices import order_default_price
+            wholesale = float(get_actual_price(plant_id, size_id, fid) or 0)
+            p = float(price) if price is not None else float(
+                order_default_price(plant_id, size_id, wholesale) or wholesale or 0
+            )
+        except Exception:
+            p = float(price or 0)
+        db.session.add(OrderItem(
+            order_id=o.id,
+            plant_id=int(plant_id),
+            size_id=int(size_id),
+            field_id=fid,
+            year=int(yr),
+            quantity=int(qty),
+            price=p,
+        ))
+        draft.plant_id = int(plant_id)
+        draft.size_id = int(size_id)
+
+    # сохранить client из формы в payload
+    entities['client'] = client.name
+    entities['client_id'] = client.id
+    draft.payload_json = json.dumps({
+        **draft_payload(draft),
+        'entities': entities,
+    }, ensure_ascii=False)
+
+    _mark_draft_done(draft, user_id=user_id, extra={
+        'order_id': o.id,
+        'client_id': client.id,
+    })
+    db.session.commit()
+    return {'ok': True, 'status': 'posted', 'order_id': o.id, 'client_id': client.id}
+
+
+def post_qty_change_draft(
+    draft: OpsActionDraft,
+    *,
+    qty: int,
+    item_id: int | None = None,
+    user_id: int | None = None,
+) -> dict:
+    order = _draft_order(draft)
+    if not order:
+        return {'ok': False, 'error': 'Заказ не найден'}
+    if qty < 0:
+        return {'ok': False, 'error': 'Количество не может быть < 0'}
+
+    entities = draft_payload(draft).get('entities') or {}
+    item = None
+    if item_id:
+        from app.models import OrderItem
+        item = OrderItem.query.filter_by(id=item_id, order_id=order.id).first()
+    if item is None:
+        plant_name = (entities.get('plant') or '').strip().lower()
+        for it in (order.items or []):
+            pname = (it.plant.name if it.plant else '').lower()
+            if plant_name and plant_name not in pname:
+                continue
+            item = it
+            break
+        if item is None and order.items:
+            item = order.items[0]
+    if item is None:
+        return {'ok': False, 'error': 'Позиция заказа не найдена'}
+
+    if int(item.quantity or 0) == int(qty):
+        draft.status = 'skipped'
+        if draft.task_id:
+            t = TgTask.query.get(draft.task_id)
+            if t and t.status in ('new', 'snoozed'):
+                t.status = 'done'
+                t.completed_at = msk_now()
+                t.completed_by_id = user_id
+        db.session.commit()
+        return {'ok': True, 'status': 'skipped_qty_matches', 'order_id': order.id}
+
+    shipped = int(item.shipped_quantity or 0)
+    if qty < shipped:
+        return {'ok': False, 'error': f'Нельзя меньше уже отгруженного ({shipped})'}
+
+    old_qty = int(item.quantity or 0)
+    item.quantity = int(qty)
+    try:
+        from app.models import OrderItemHistory
+        db.session.add(OrderItemHistory(
+            order_id=order.id,
+            order_item_id=item.id,
+            action_type='qty_change',
+            before_quantity=old_qty,
+            after_quantity=int(qty),
+            delta_quantity=int(qty) - old_qty,
+            changed_by_user_id=user_id,
+            created_at=msk_now(),
+        ))
+    except Exception:
+        current_app.logger.exception('ai_ops qty history')
+
+    _mark_draft_done(draft, user_id=user_id, extra={'order_id': order.id})
+    db.session.commit()
+    return {
+        'ok': True,
+        'status': 'posted',
+        'order_id': order.id,
+        'item_id': item.id,
+        'old_qty': old_qty,
+        'new_qty': int(qty),
+    }
+
+
+def post_price_change_draft(
+    draft: OpsActionDraft,
+    *,
+    plant_id: int,
+    size_id: int,
+    price: float,
+    user_id: int | None = None,
+) -> dict:
+    if price < 0:
+        return {'ok': False, 'error': 'Цена не может быть < 0'}
+    from app.stock import apply_price_for_plant_size
+
+    # apply_price_for_plant_size уже коммитит — сначала проверим skip
+    entities = {'plant': None, 'size': None, 'price': price}
+    plant = Plant.query.get(plant_id)
+    size = Size.query.get(size_id)
+    if plant:
+        entities['plant'] = plant.name
+    if size:
+        entities['size'] = size.name
+    if _price_already_matches(entities):
+        draft.status = 'skipped'
+        if draft.task_id:
+            t = TgTask.query.get(draft.task_id)
+            if t and t.status in ('new', 'snoozed'):
+                t.status = 'done'
+                t.completed_at = msk_now()
+                t.completed_by_id = user_id
+        db.session.commit()
+        return {'ok': True, 'status': 'skipped_price_matches'}
+
+    draft_id = draft.id
+    result = apply_price_for_plant_size(plant_id, size_id, price, source='ai_ops')
+    if not result.get('ok'):
+        return {'ok': False, 'error': result.get('message') or 'Не удалось сменить цену'}
+
+    # apply_price коммитит сам — перечитаем draft и закроем
+    draft = OpsActionDraft.query.get(draft_id)
+    if draft:
+        draft.plant_id = plant_id
+        draft.size_id = size_id
+        _mark_draft_done(draft, user_id=user_id)
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('ai_ops price draft commit')
+            return {'ok': False, 'error': 'Цена применена, но черновик не закрылся'}
+    return {
+        'ok': True,
+        'status': 'posted',
+        'plant_id': plant_id,
+        'size_id': size_id,
+        'price': price,
+        'detail': result.get('message'),
+    }
+
+
+def enrich_ops_draft_card(dr: OpsActionDraft, payload_order_id=None) -> dict:
+    """Поля для шаблона карточки дашборда."""
+    pl = draft_payload(dr)
+    ent = pl.get('entities') or {}
+    order = dr.order or (Order.query.get(dr.order_id) if dr.order_id else None)
+    if order is None and payload_order_id:
+        order = Order.query.get(payload_order_id)
+
+    plant = None
+    size = None
+    if dr.plant_id:
+        plant = Plant.query.get(dr.plant_id)
+    elif ent.get('plant'):
+        plant = _resolve_plant(ent.get('plant'))
+    if dr.size_id:
+        size = Size.query.get(dr.size_id)
+    elif ent.get('size'):
+        size = _resolve_size(ent.get('size'))
+
+    client = None
+    if dr.client_id:
+        client = Client.query.get(dr.client_id)
+    elif ent.get('client'):
+        client = _resolve_client(ent.get('client'))
+    elif order and order.client:
+        client = order.client
+
+    items_preview = []
+    if order:
+        for it in (order.items or [])[:8]:
+            left = int(it.quantity or 0) - int(it.shipped_quantity or 0)
+            items_preview.append({
+                'id': it.id,
+                'plant': it.plant.name if it.plant else '—',
+                'size': it.size.name if it.size else '—',
+                'qty': int(it.quantity or 0),
+                'shipped': int(it.shipped_quantity or 0),
+                'left': left,
+            })
+
+    clients_opts = []
+    if dr.action_type == 'order_create':
+        q = Client.query.order_by(Client.name.asc()).limit(80)
+        if client:
+            clients_opts = [{'id': client.id, 'name': client.name}]
+            for c in q:
+                if c.id != client.id:
+                    clients_opts.append({'id': c.id, 'name': c.name})
+                    if len(clients_opts) >= 40:
+                        break
+        else:
+            clients_opts = [{'id': c.id, 'name': c.name} for c in q.limit(40)]
+
+    plants_opts, sizes_opts = [], []
+    if dr.action_type in ('order_create', 'price_change'):
+        plants_opts = [
+            {'id': p.id, 'name': p.name}
+            for p in Plant.query.order_by(Plant.name.asc()).limit(80)
+        ]
+        sizes_opts = [
+            {'id': s.id, 'name': s.name}
+            for s in Size.query.order_by(Size.name.asc()).limit(80)
+        ]
+
+    return {
+        'id': dr.id,
+        'action_type': dr.action_type,
+        'order_id': (order.id if order else None) or dr.order_id or payload_order_id,
+        'amount': ent.get('amount'),
+        'qty': ent.get('qty'),
+        'price': ent.get('price'),
+        'plant_id': plant.id if plant else None,
+        'plant_name': plant.name if plant else (ent.get('plant') or ''),
+        'size_id': size.id if size else None,
+        'size_name': size.name if size else (ent.get('size') or ''),
+        'client_id': client.id if client else None,
+        'client_name': client.name if client else (ent.get('client') or ''),
+        'quote': dr.quote,
+        'channel': dr.channel,
+        'items_preview': items_preview,
+        'clients_opts': clients_opts,
+        'plants_opts': plants_opts,
+        'sizes_opts': sizes_opts,
+    }
+
+
 # ---------- HTTP routes ----------
 
 @bp.route('/calendar')
@@ -1100,11 +1544,125 @@ def api_post_payment(draft_id):
     return redirect(request.referrer or url_for('main.index'))
 
 
+def _hx_ok(title: str, *, success: bool = True) -> str:
+    color = 'success' if success else 'primary'
+    return f"""
+    <div class="card border-0 shadow-sm mb-3 bg-{color} bg-opacity-10 text-center py-3">
+        <h6 class="text-{color} m-0"><i class="fas fa-check-double"></i> {html.escape(title)}</h6>
+    </div>
+    """
+
+
+def _hx_err(msg: str, code: int = 400):
+    return f'<div class="alert alert-danger mb-0">{html.escape(msg or "Ошибка")}</div>', code
+
+
+@bp.route('/api/draft/<int:draft_id>/post_shipment', methods=['POST'])
+@login_required
+@pilot_required
+def api_post_shipment(draft_id):
+    draft = OpsActionDraft.query.get_or_404(draft_id)
+    if draft.action_type != 'shipment_confirm' or draft.status != 'pending':
+        return _hx_err('Черновик недоступен')
+    result = post_shipment_draft(draft, user_id=current_user.id)
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            return _hx_ok(f'Отгружено · заказ #{result.get("order_id")}')
+        return _hx_err(result.get('error') or 'Ошибка')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@bp.route('/api/draft/<int:draft_id>/post_order', methods=['POST'])
+@login_required
+@pilot_required
+def api_post_order(draft_id):
+    draft = OpsActionDraft.query.get_or_404(draft_id)
+    if draft.action_type != 'order_create' or draft.status != 'pending':
+        return _hx_err('Черновик недоступен')
+    try:
+        client_id = int(request.form.get('client_id') or 0)
+    except Exception:
+        client_id = 0
+    plant_id = request.form.get('plant_id') or None
+    size_id = request.form.get('size_id') or None
+    qty = request.form.get('qty') or None
+    price = request.form.get('price') or None
+    try:
+        plant_id = int(plant_id) if plant_id else None
+        size_id = int(size_id) if size_id else None
+        qty = int(qty) if qty not in (None, '') else None
+        price = float(str(price).replace(',', '.')) if price not in (None, '') else None
+    except Exception:
+        return _hx_err('Проверьте поля позиции')
+    result = post_order_create_draft(
+        draft,
+        client_id=client_id,
+        plant_id=plant_id,
+        size_id=size_id,
+        qty=qty,
+        price=price,
+        user_id=current_user.id,
+    )
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            oid = result.get('order_id')
+            return _hx_ok(f'Заказ создан' + (f' #{oid}' if oid else ''))
+        return _hx_err(result.get('error') or 'Ошибка')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@bp.route('/api/draft/<int:draft_id>/post_qty', methods=['POST'])
+@login_required
+@pilot_required
+def api_post_qty(draft_id):
+    draft = OpsActionDraft.query.get_or_404(draft_id)
+    if draft.action_type != 'order_qty_change' or draft.status != 'pending':
+        return _hx_err('Черновик недоступен')
+    try:
+        qty = int(request.form.get('qty') or -1)
+        item_id = int(request.form.get('item_id') or 0) or None
+    except Exception:
+        return _hx_err('Некорректное количество')
+    result = post_qty_change_draft(
+        draft, qty=qty, item_id=item_id, user_id=current_user.id,
+    )
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            return _hx_ok(f'Qty: {result.get("old_qty")} → {result.get("new_qty")}')
+        return _hx_err(result.get('error') or 'Ошибка')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@bp.route('/api/draft/<int:draft_id>/post_price', methods=['POST'])
+@login_required
+@pilot_required
+def api_post_price(draft_id):
+    draft = OpsActionDraft.query.get_or_404(draft_id)
+    if draft.action_type != 'price_change' or draft.status != 'pending':
+        return _hx_err('Черновик недоступен')
+    try:
+        plant_id = int(request.form.get('plant_id') or 0)
+        size_id = int(request.form.get('size_id') or 0)
+        price = float(str(request.form.get('price') or '0').replace(',', '.').replace(' ', ''))
+    except Exception:
+        return _hx_err('Проверьте растение / размер / цену')
+    if not plant_id or not size_id:
+        return _hx_err('Укажите растение и размер')
+    result = post_price_change_draft(
+        draft, plant_id=plant_id, size_id=size_id, price=price, user_id=current_user.id,
+    )
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            return _hx_ok(f'Цена {price:g} ₽ применена')
+        return _hx_err(result.get('error') or 'Ошибка')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
 @bp.route('/api/draft/<int:draft_id>/ack', methods=['POST'])
 @login_required
 @pilot_required
 def api_draft_ack(draft_id):
-    """Фаза 2: отметить черновик обработанным вручную (отгрузка/заказ/qty/цена)."""
+    """Ручное закрытие без проведения документа (fallback)."""
     draft = OpsActionDraft.query.get_or_404(draft_id)
     draft.status = 'posted'
     draft.posted_at = msk_now()
@@ -1116,11 +1674,7 @@ def api_draft_ack(draft_id):
             t.completed_at = msk_now()
             t.completed_by_id = current_user.id
     db.session.commit()
-    return """
-    <div class="card border-0 shadow-sm mb-3 bg-primary bg-opacity-10 text-center py-3">
-        <h6 class="text-primary m-0"><i class="fas fa-check"></i> Готово</h6>
-    </div>
-    """
+    return _hx_ok('Отмечено вручную', success=True)
 
 
 @bp.route('/api/run_digest', methods=['POST'])
