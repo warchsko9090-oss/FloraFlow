@@ -136,8 +136,10 @@ def _run_friday_itr_cash(app):
 def _run_sales_chat_digest(app):
     """20:00 МСК: вечерняя сводка в личку.
 
-    При AI_OPS_ENABLED — мульти-чат AI Ops (sales/hr/prod/itr) вместо
-    отдельного sales-only дайджеста, чтобы не слать два сообщения.
+    При AI_OPS_ENABLED сначала пробуем мульти-чат AI Ops. Если ops уже
+    отмечен за день, но сообщений в логе 0 (типичный ручной force днём
+    при тесте) или ops упал — шлём привычную sales-сводку, чтобы в 20:00
+    не было тишины.
     """
     lock_path = os.path.join(_lock_dir(app), '.sales_chat_digest.lock')
     if not _acquire_file_lock(lock_path, ttl_seconds=7200):
@@ -145,14 +147,23 @@ def _run_sales_chat_digest(app):
         return
     try:
         with app.app_context():
+            ops_covered = False
             try:
                 from app.ai_ops import ai_ops_enabled, run_ops_digest
                 if ai_ops_enabled():
                     ops_result = run_ops_digest(force=False, send=True)
                     _logger.info('ai ops digest (scheduled): %s', ops_result)
-                    return
+                    status = (ops_result or {}).get('status')
+                    msg_n = int((ops_result or {}).get('message_count') or 0)
+                    # Реальная ops-сводка с текстом из чатов — sales не дублируем.
+                    if status in ('sent', 'partial', 'built') and msg_n > 0:
+                        ops_covered = True
+                    elif status == 'already_sent' and msg_n > 0:
+                        ops_covered = True
             except Exception:
                 _logger.exception('ai ops digest (scheduled) failed')
+            if ops_covered:
+                return
             try:
                 from app.sales_chat_digest import run_sales_chat_digest
                 result = run_sales_chat_digest(force=False, send=True)
