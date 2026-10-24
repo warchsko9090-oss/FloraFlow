@@ -27,7 +27,10 @@ from flask import (
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.utils import secure_filename
 
-from app.models import db, User, PaymentInvoice, BudgetItem, ChatExpenseMessage, AppSetting
+from app.models import (
+    db, User, PaymentInvoice, BudgetItem, ChatExpenseMessage, AppSetting,
+    Employee, EmployeePayment,
+)
 from app.tg_pay_parse import parse_invoice_file
 from app.utils import msk_now, msk_today
 from app.telegram import (
@@ -687,6 +690,53 @@ def _can_inbox(user: User) -> bool:
 
 def _can_quick_expense(user: User) -> bool:
     return (user.role or '') in ('admin', 'executive')
+
+
+_VLAD_TG_ID = '8512060616'
+
+
+def _is_vlad_user(user: User | None) -> bool:
+    """Админ-Влад: логин vlad или TG 8512060616."""
+    if not user:
+        return False
+    if (getattr(user, 'username', None) or '').strip().lower() == 'vlad':
+        return True
+    return str(getattr(user, 'telegram_id', '') or '') == _VLAD_TG_ID
+
+
+def _can_vlad_cash(user: User) -> bool:
+    """Кнопка «Касса Влада» под плюсиком — только Владу."""
+    return _can_edit(user) and _is_vlad_user(user)
+
+
+def _vladislav_employee() -> Employee | None:
+    """Сотрудник «Владислав» для корректировок табеля.
+
+    Приоритет: AppSetting tg_pay_vlad_cash_employee_id → env → поиск по имени.
+    """
+    emp_id = None
+    try:
+        row = AppSetting.query.get('tg_pay_vlad_cash_employee_id')
+        if row and (row.value or '').strip().isdigit():
+            emp_id = int(row.value.strip())
+    except Exception:
+        emp_id = None
+    if emp_id is None:
+        raw = (os.environ.get('TG_PAY_VLAD_CASH_EMPLOYEE_ID') or '').strip()
+        if raw.isdigit():
+            emp_id = int(raw)
+    if emp_id:
+        emp = Employee.query.get(emp_id)
+        if emp and emp.is_active:
+            return emp
+    # Имя: Владислав / Владислав …
+    q = (
+        Employee.query
+        .filter(Employee.is_active.is_(True))
+        .filter(Employee.name.ilike('Владислав%'))
+        .order_by(Employee.id.asc())
+    )
+    return q.first()
 
 
 def _can_see_invoice(user: User, inv: PaymentInvoice) -> bool:
@@ -1366,6 +1416,7 @@ def api_auth():
         'role': user.role,
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
+        'can_vlad_cash': _can_vlad_cash(user),
         'dev': is_dev,
         'telegram_id': session_tg or user.telegram_id,
     })
@@ -1381,6 +1432,7 @@ def api_me(user: User):
         'role': user.role,
         'can_edit': _can_edit(user),
         'can_inbox': _can_inbox(user),
+        'can_vlad_cash': _can_vlad_cash(user),
         'dev': _dev_mode() and not _init_data_candidates(),
         'telegram_id': user.telegram_id,
     })
@@ -2416,6 +2468,121 @@ def api_quick_expense(user: User):
         'slip_id': result.get('slip_id'),
         'amount': result.get('amount'),
         'summary': result.get('summary'),
+        'payment_type': result.get('payment_type'),
+        'has_file': bool(result.get('has_file')),
+    })
+
+
+@bp.route('/api/vlad-cash', methods=['POST'])
+@require_user
+def api_vlad_cash(user: User):
+    """Касса Влада: обычный быстрый расход + корректировка табеля Владиславу.
+
+    Корректировка: −сумма (увеличивает долг / к доплате) с тем же комментарием.
+    """
+    if not _can_vlad_cash(user):
+        return jsonify({'error': 'forbidden'}), 403
+
+    emp = _vladislav_employee()
+    if not emp:
+        return jsonify({
+            'error': 'no_employee',
+            'hint': 'Не найден сотрудник Владислав. Задайте AppSetting '
+                    'tg_pay_vlad_cash_employee_id или TG_PAY_VLAD_CASH_EMPLOYEE_ID.',
+        }), 400
+
+    summary = (request.form.get('summary') or request.form.get('description') or '').strip()
+    # Касса — по умолчанию нал
+    ptype = (request.form.get('payment_type') or 'cash').strip()
+    try:
+        amount = _parse_money(request.form.get('amount'))
+    except (InvalidOperation, TypeError, ValueError):
+        return jsonify({'error': 'bad_amount'}), 400
+    if amount <= 0:
+        return jsonify({'error': 'bad_amount'}), 400
+    if not summary:
+        return jsonify({'error': 'need_summary'}), 400
+
+    file_bytes = None
+    filename = None
+    f = request.files.get('file')
+    if f and f.filename:
+        filename = secure_filename(f.filename) or 'receipt.jpg'
+        ext = os.path.splitext(filename)[1].lower()
+        if ext and ext not in _ALLOWED_EXT:
+            return jsonify({'error': 'bad_file'}), 400
+        file_bytes = f.read()
+        if len(file_bytes) > 12 * 1024 * 1024:
+            return jsonify({'error': 'file_too_large'}), 400
+
+    # Пометка в назначении, чтобы на дашборде было видно «касса»
+    tagged_summary = summary if summary.lower().startswith('касса') else f'Касса: {summary}'
+
+    from app.expense_chat import ingest_miniapp_quick_expense
+    result = ingest_miniapp_quick_expense(
+        user,
+        amount=amount,
+        summary=tagged_summary[:500],
+        payment_type=ptype,
+        file_bytes=file_bytes,
+        filename=filename,
+    )
+    if not result.get('ok'):
+        return jsonify({'ok': False, 'error': result.get('error') or 'failed'}), 400
+
+    # −amount → увеличивает долг перед Владиславом (к возмещению)
+    adj_amount = -abs(Decimal(str(amount)))
+    adj_comment = (tagged_summary or summary)[:200]
+    pay_date = msk_today()
+    try:
+        adj = EmployeePayment(
+            employee_id=emp.id,
+            date=pay_date,
+            amount=adj_amount,
+            payment_type='other_manual',
+            comment=adj_comment,
+        )
+        db.session.add(adj)
+        db.session.commit()
+        adj_id = adj.id
+    except Exception:
+        current_app.logger.exception('vlad-cash adjustment failed')
+        db.session.rollback()
+        return jsonify({
+            'ok': False,
+            'error': 'adjustment_failed',
+            'hint': 'Расход создан, но корректировка табеля не записалась.',
+            'chat_expense_id': result.get('chat_expense_id'),
+        }), 500
+
+    amt_s = f"{float(amount):,.0f}".replace(',', ' ')
+    ptype_lbl = 'нал' if result.get('payment_type') == 'cash' else 'безнал'
+    text = (
+        f"Касса Влада: {tagged_summary}\n"
+        f"{amt_s} ₽ · {ptype_lbl}\n"
+        f"Корректировка табеля → {emp.name}: {adj_amount} ₽\n"
+        f"Проверьте статью на дашборде."
+    )
+    try:
+        _notify_admins_quick_expense(
+            text,
+            except_user=user,
+            file_bytes=result.get('file_bytes'),
+            filename=result.get('filename'),
+        )
+    except Exception:
+        current_app.logger.exception('vlad-cash notify admins failed')
+
+    return jsonify({
+        'ok': True,
+        'chat_expense_id': result.get('chat_expense_id'),
+        'task_id': result.get('task_id'),
+        'adjustment_id': adj_id,
+        'employee_id': emp.id,
+        'employee_name': emp.name,
+        'adjustment_amount': float(adj_amount),
+        'amount': result.get('amount'),
+        'summary': tagged_summary,
         'payment_type': result.get('payment_type'),
         'has_file': bool(result.get('has_file')),
     })

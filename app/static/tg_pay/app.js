@@ -127,6 +127,9 @@
     if (raw === 'bad_amount') return 'Проверьте суммы: у каждой строки должна быть сумма больше 0.';
     if (raw === 'need_summary') return 'Укажите назначение.';
     if (raw === 'empty') return 'Добавьте хотя бы одну строку.';
+    if (raw === 'no_employee') return 'Не найден сотрудник Владислав для корректировки табеля.';
+    if (raw === 'adjustment_failed') return 'Расход создан, но корректировка табеля не записалась.';
+    if (raw === 'forbidden') return 'Доступно только Владу.';
     return raw || fallback || 'Ошибка';
   }
 
@@ -137,6 +140,7 @@
     const parts = path.split('/').filter(Boolean);
     if (parts[0] === 'inv' && parts[1]) return renderDetail(+parts[1]);
     if (parts[0] === 'new') return renderNew();
+    if (parts[0] === 'vlad-cash') return renderVladCash();
     if (parts[0] === 'quick') return renderQuickExpense(parts[1] ? +parts[1] : null);
     if (parts[0] === 'week-plan') {
       if (parts[1] === 'full') return renderWeekPlan();
@@ -361,6 +365,9 @@
       if (sessionStorage.getItem('ff_quick_ok')) {
         sessionStorage.removeItem('ff_quick_ok');
         toastText = 'Отправлено админу';
+      } else if (sessionStorage.getItem('ff_vlad_cash_ok')) {
+        sessionStorage.removeItem('ff_vlad_cash_ok');
+        toastText = 'Касса: расход и корректировка записаны';
       } else if (sessionStorage.getItem('ff_week_ok')) {
         sessionStorage.removeItem('ff_week_ok');
         toastText = 'План сохранён';
@@ -866,8 +873,15 @@
 
   function renderNew() {
     setTitle('Добавить');
+    const vladCash = me.can_vlad_cash
+      ? `<a class="choice" href="#/vlad-cash">
+        <div class="choice-k">Касса Влада</div>
+        <p>Расход как обычно + сумма в корректировки табеля Владиславу (автоподсчёт).</p>
+      </a>`
+      : '';
     view.innerHTML = `
       <button class="back" type="button" id="goBack">← к списку</button>
+      ${vladCash}
       <a class="choice" href="#/quick">
         <div class="choice-k">Быстрый расход</div>
         <p>Сумма, назначение, нал/безнал и файл — админ разнесёт по статье.</p>
@@ -878,6 +892,90 @@
       </a>
     `;
     document.getElementById('goBack').onclick = () => { location.hash = '#/'; };
+  }
+
+  async function renderVladCash() {
+    if (!me.can_vlad_cash) {
+      location.hash = '#/new';
+      return;
+    }
+    setTitle('Касса Влада');
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← назад</button>
+      <div class="card" id="vladCashCard">
+        <p class="hint" style="margin:0 0 12px">
+          Уведомление расхода как обычно, плюс сумма и комментарий в корректировки
+          табеля Владиславу (−, к доплате).
+        </p>
+        <div class="field"><label>Сумма, ₽</label>
+          <input id="vcAmount" inputmode="decimal" placeholder="0" autofocus></div>
+        <div class="field"><label>Назначение</label>
+          <input id="vcSummary" type="text" placeholder="топливо, магазин, ЧОП…"></div>
+        <div class="field"><label>Оплата</label>
+          <div class="pay-toggle" id="vcType">
+            <button type="button" class="pay-opt" data-v="cash" aria-pressed="true">Нал</button>
+            <button type="button" class="pay-opt" data-v="cashless" aria-pressed="false">Безнал</button>
+          </div>
+        </div>
+        <div class="field"><label>Файл (необязательно)</label>
+          <label class="file-btn">Прикрепить фото или PDF
+            <input id="vcFile" class="file-proxy" type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp">
+          </label>
+          <p class="hint" id="vcFileName" style="margin-top:6px"></p>
+        </div>
+        <button class="btn btn-ink" type="button" id="btnVladCash">Записать в кассу</button>
+        <div id="vcStatus"></div>
+      </div>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/new'; };
+    let ptype = 'cash';
+    view.querySelectorAll('#vcType .pay-opt').forEach((btn) => {
+      btn.onclick = () => {
+        ptype = btn.dataset.v;
+        view.querySelectorAll('#vcType .pay-opt').forEach((b) => {
+          b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+        });
+      };
+    });
+    const fileInput = document.getElementById('vcFile');
+    const fileName = document.getElementById('vcFileName');
+    fileInput.onchange = () => {
+      const f = fileInput.files && fileInput.files[0];
+      fileName.textContent = f ? f.name : '';
+    };
+    const sendBtn = document.getElementById('btnVladCash');
+    sendBtn.onclick = async () => {
+      if (sendBtn.disabled) return;
+      const status = document.getElementById('vcStatus');
+      const amount = (document.getElementById('vcAmount') || {}).value;
+      const summary = (document.getElementById('vcSummary') || {}).value;
+      if (!String(amount || '').trim() || !String(summary || '').trim()) {
+        status.innerHTML = '<p class="hint">Укажите сумму и назначение.</p>';
+        return;
+      }
+      const fd = new FormData();
+      fd.append('amount', amount);
+      fd.append('summary', summary);
+      fd.append('payment_type', ptype);
+      if (fileInput.files && fileInput.files[0]) fd.append('file', fileInput.files[0]);
+      sendBtn.disabled = true;
+      view.classList.add('busy');
+      status.innerHTML = loadingCard('Записываем…');
+      try {
+        await apiTimed('/tg/pay/api/vlad-cash', { method: 'POST', body: fd }, 25000);
+        haptic('medium');
+        try { sessionStorage.setItem('ff_vlad_cash_ok', '1'); } catch (_) {}
+        location.hash = '#/';
+      } catch (e) {
+        status.innerHTML = `<p class="hint">${esc(e.message || 'Не удалось записать')}</p>`;
+        view.classList.remove('busy');
+        if (!e.timeout) sendBtn.disabled = false;
+      }
+    };
+    setTimeout(() => {
+      const el = document.getElementById('vcAmount');
+      if (el) el.focus();
+    }, 80);
   }
 
   function renderWeekPlanMenu() {
