@@ -93,6 +93,16 @@ def ingest_message(msg: dict) -> dict:
         text = (msg.get('text') or msg.get('caption') or '').strip()
         if not text:
             text = _media_placeholder(msg)
+        if msg.get('voice') or msg.get('audio'):
+            try:
+                from app.telegram import message_text_with_voice
+                text = message_text_with_voice(msg, text) or text
+            except Exception:
+                try:
+                    from flask import current_app
+                    current_app.logger.exception('sales_chat voice STT failed')
+                except Exception:
+                    pass
         if not text:
             return {'ok': True, 'status': 'empty_skip'}
 
@@ -106,9 +116,12 @@ def ingest_message(msg: dict) -> dict:
             tg_chat_id=tg_chat_id, tg_message_id=tg_message_id,
         ).first()
         if existing is not None:
-            # edited_message — обновляем текст
-            if existing.raw_text != text[:8000]:
-                existing.raw_text = text[:8000]
+            new_text = text[:8000]
+            old = existing.raw_text or ''
+            if old.startswith('[голос]') and new_text in ('[аудио]', '[аудио, стикер]'):
+                return {'ok': True, 'status': 'dup', 'id': existing.id}
+            if existing.raw_text != new_text:
+                existing.raw_text = new_text
                 existing.updated_at = msk_now()
                 db.session.commit()
                 return {'ok': True, 'status': 'updated', 'id': existing.id}

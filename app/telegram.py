@@ -829,6 +829,57 @@ def download_bot_file(file_id):
         return None, str(exc)
 
 
+def _voice_or_audio_file_id(msg: dict) -> str | None:
+    for key in ('voice', 'audio'):
+        obj = msg.get(key)
+        if isinstance(obj, dict) and obj.get('file_id'):
+            return str(obj['file_id'])
+    return None
+
+
+def message_text_with_voice(msg: dict, base_text: str = '') -> str:
+    """Текст сообщения + расшифровка voice/audio через Groq Whisper (ru).
+
+    Если голоса нет — возвращает base_text. При ошибке STT оставляет
+    исходный текст или пометку [аудио].
+    """
+    text = (base_text or '').strip()
+    file_id = _voice_or_audio_file_id(msg or {})
+    if not file_id:
+        return text
+
+    data, path_or_err = download_bot_file(file_id)
+    if not data:
+        try:
+            from flask import current_app
+            current_app.logger.warning('voice download failed: %s', path_or_err)
+        except Exception:
+            pass
+        return text or '[аудио]'
+
+    # На успехе второй элемент — file_path вида voice/file_123.oga
+    path_hint = path_or_err if isinstance(path_or_err, str) else ''
+    ext = 'ogg'
+    if path_hint and '.' in path_hint:
+        ext = path_hint.rsplit('.', 1)[-1].lower()[:8] or 'ogg'
+    filename = f'voice.{ext}'
+
+    try:
+        from app.groq_util import groq_transcribe_audio
+        transcript = groq_transcribe_audio(data, filename=filename, language='ru')
+    except Exception:
+        transcript = ''
+
+    if not transcript:
+        return text or '[аудио]'
+
+    tagged = f'[голос] {transcript.strip()}'
+    placeholders = {'', '[аудио]', '[аудио, стикер]', '[стикер, аудио]'}
+    if text and text not in placeholders and not text.startswith('[голос]'):
+        return f'{text}\n{tagged}'[:8000]
+    return tagged[:8000]
+
+
 def default_miniapp_url():
     env = (os.environ.get('TG_MINIAPP_URL') or '').strip()
     if env:

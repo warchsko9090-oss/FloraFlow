@@ -164,6 +164,13 @@ def ingest_ops_message(msg: dict, channel: str | None = None) -> dict:
         text = (msg.get('text') or msg.get('caption') or '').strip()
         if not text:
             text = _media_placeholder(msg)
+        # Голосовые / аудио — расшифровка Whisper (ru), иначе в сводке только [аудио]
+        if msg.get('voice') or msg.get('audio'):
+            try:
+                from app.telegram import message_text_with_voice
+                text = message_text_with_voice(msg, text) or text
+            except Exception:
+                current_app.logger.exception('ai_ops voice STT failed')
         if not text:
             return {'ok': True, 'status': 'empty_skip'}
 
@@ -177,8 +184,13 @@ def ingest_ops_message(msg: dict, channel: str | None = None) -> dict:
             tg_chat_id=tg_chat_id, tg_message_id=tg_message_id,
         ).first()
         if existing is not None:
-            if existing.raw_text != text[:8000]:
-                existing.raw_text = text[:8000]
+            # Не затираем уже расшифрованный голос плейсхолдером при повторном апдейте
+            new_text = text[:8000]
+            old = existing.raw_text or ''
+            if old.startswith('[голос]') and new_text in ('[аудио]', '[аудио, стикер]'):
+                return {'ok': True, 'status': 'dup', 'id': existing.id, 'channel': ch}
+            if existing.raw_text != new_text:
+                existing.raw_text = new_text
                 existing.updated_at = msk_now()
                 db.session.commit()
                 return {'ok': True, 'status': 'updated', 'id': existing.id, 'channel': ch}
@@ -257,11 +269,19 @@ _DIGEST_PROMPT = (
     'Сделай оперативную сводку на русском за {day} по каналам ниже.\n\n'
     '1) Текстовая сводка: секции по каналам (Продажи / Кадры / Производство / ИТР), '
     'короткие «•» пункты, пустые секции пропускай. До ~2000 символов.\n'
+    '   Если одна и та же тема (заказ / оплата / отгрузка) всплыла в нескольких чатах — '
+    'в сводке один пункт с пометкой каналов (напр. «ИТР+Производство»), без дублей.\n'
     '2) Затем отдельной строкой ровно маркер <<<ACTIONS>>> и JSON-массив кандидатов:\n'
     '[{{"type":"payment_confirm|shipment_confirm|order_create|order_qty_change|price_change",'
     '"entities":{{"order_id":null,"client":null,"amount":null,"plant":null,"size":null,"qty":null,"price":null}},'
-    '"quote":"...","confidence":0.0-1.0,"channel":"sales|hr|production|itr"}}]\n'
-    'Если кандидатов нет — пустой массив [].\n'
+    '"quote":"...","confidence":0.0-1.0,"channel":"sales|hr|production|itr",'
+    '"channels":["itr","production"]}}]\n'
+    'КРИТИЧНО про ACTIONS:\n'
+    '- Одна крупица факта = один элемент массива, даже если её повторили/дополнили в других чатах.\n'
+    '- В quote склей цитаты из всех каналов: «[ИТР] …; [Производство] …».\n'
+    '- В channels перечисли все затронутые каналы; channel = основной (где впервые или полнее).\n'
+    '- Голосовые помечены [голос] — это полноценный текст, учитывай.\n'
+    '- Если кандидатов нет — пустой массив [].\n'
     'Только факты из текста. Игнор болтовни про логины/стикеры.\n\n'
     'Сообщений: {message_count}\n\n'
     '{transcript_block}'
@@ -474,6 +494,120 @@ def _stable_entity_key(action_type: str, entities: dict) -> str:
     return f'raw={hash(json.dumps(entities, sort_keys=True, default=str)) % 10**8}'
 
 
+def _channel_label(ch: str | None) -> str:
+    return CHANNEL_LABELS.get((ch or '').strip(), ch or '?')
+
+
+def _merge_quote(prev: str, new: str, channel: str | None = None) -> str:
+    """Склеивает цитаты из разных чатов без дублей."""
+    prev = (prev or '').strip()
+    new = (new or '').strip()
+    if not new:
+        return prev[:2000]
+    tagged = new
+    if channel and not new.startswith('['):
+        tagged = f'[{_channel_label(channel)}] {new}'
+    if not prev:
+        return tagged[:2000]
+    if new in prev or tagged in prev:
+        return prev[:2000]
+    return f'{prev}\n{tagged}'.strip()[:2000]
+
+
+def _normalize_and_merge_actions(actions: list[dict]) -> list[dict]:
+    """Одна крупица факта = один action: резолвим заказ и склеиваем чаты.
+
+    ИТР «по заказу #12» + Производство «дополнили» → один payment/shipment.
+    """
+    buckets: dict[str, dict] = {}
+    order_cache: dict[str, Order | None] = {}
+
+    for raw in actions or []:
+        if not isinstance(raw, dict):
+            continue
+        action_type = (raw.get('type') or '').strip()
+        if action_type not in ACTION_TYPES:
+            continue
+        entities = raw.get('entities') or {}
+        if not isinstance(entities, dict):
+            entities = {}
+        else:
+            entities = dict(entities)
+
+        # Резолв заказа до ключа — иначе дубли «клиент+сумма» и «order=#» не схлопнутся
+        cache_key = json.dumps(
+            {'oid': entities.get('order_id'), 'c': entities.get('client')},
+            sort_keys=True, default=str,
+        )
+        if cache_key not in order_cache:
+            order_cache[cache_key] = _find_order(entities)
+        order = order_cache[cache_key]
+        if order:
+            entities['order_id'] = order.id
+            if order.client and not entities.get('client'):
+                entities['client'] = order.client.name
+
+        stable = _stable_entity_key(action_type, entities)
+        key = f'{action_type}:{stable}'
+        channel = (raw.get('channel') or '')[:20]
+        channels_in = raw.get('channels')
+        ch_list: list[str] = []
+        if isinstance(channels_in, list):
+            ch_list = [str(c)[:20] for c in channels_in if c]
+        if channel and channel not in ch_list:
+            ch_list.append(channel)
+
+        quote = (raw.get('quote') or '')[:2000]
+        conf = raw.get('confidence')
+        try:
+            conf_f = float(conf) if conf is not None else 0.0
+        except (TypeError, ValueError):
+            conf_f = 0.0
+
+        if key in buckets:
+            prev = buckets[key]
+            prev_ch = list(prev.get('channels') or [])
+            # При появлении второго канала — пометим исходную цитату источником
+            prev_quote = prev.get('quote') or ''
+            if (
+                len(prev_ch) == 1
+                and quote
+                and prev_quote
+                and not prev_quote.startswith('[')
+            ):
+                prev_quote = f'[{_channel_label(prev_ch[0])}] {prev_quote}'
+            prev['quote'] = _merge_quote(prev_quote, quote, channel)
+            for c in ch_list:
+                if c and c not in prev_ch:
+                    prev_ch.append(c)
+            prev['channels'] = prev_ch
+            if conf_f > float(prev.get('confidence') or 0):
+                prev['confidence'] = conf_f
+            # itr приоритетнее как источник «главного» канала
+            if channel and (
+                not prev.get('channel')
+                or (channel == 'itr' and prev.get('channel') != 'itr')
+            ):
+                prev['channel'] = channel
+            pe = prev.get('entities') or {}
+            for k, v in entities.items():
+                if v is not None and v != '' and (pe.get(k) is None or pe.get(k) == ''):
+                    pe[k] = v
+            prev['entities'] = pe
+            continue
+
+        buckets[key] = {
+            'type': action_type,
+            'entities': entities,
+            'quote': quote,
+            'confidence': conf_f,
+            'channel': channel or (ch_list[0] if ch_list else 'sales'),
+            'channels': ch_list,
+        }
+
+    return list(buckets.values())
+
+
 def _find_order(entities: dict) -> Order | None:
     oid = entities.get('order_id')
     if oid:
@@ -682,7 +816,10 @@ def _title_for_action(action_type: str, entities: dict, order: Order | None) -> 
 
 
 def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> dict:
-    """Создаёт/обновляет TgTask + OpsActionDraft по кандидатам. Без спама."""
+    """Создаёт/обновляет TgTask + OpsActionDraft по кандидатам. Без спама.
+
+    Перед записью склеивает кросс-канальные дубли в один action.
+    """
     day = day or msk_today()
     vlad = resolve_vlad_user()
     created = updated = skipped = closed = 0
@@ -696,20 +833,24 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
     ).all()
     by_key = {t.dedup_key: t for t in open_tasks if t.dedup_key}
 
-    for raw in actions or []:
+    for raw in _normalize_and_merge_actions(actions):
         action_type = (raw.get('type') or '').strip()
         if action_type not in ACTION_TYPES:
             continue
         entities = raw.get('entities') or {}
         if not isinstance(entities, dict):
             entities = {}
+        order = _find_order(entities)
+        if order:
+            entities = dict(entities)
+            entities['order_id'] = order.id
+
         stable = _stable_entity_key(action_type, entities)
         dedup_key = f'ai_ops:{action_type}:{stable}'
         if dedup_key in seen_keys:
             continue
         seen_keys.add(dedup_key)
 
-        order = _find_order(entities)
         skip, reason = _should_skip_action(action_type, entities, order)
         if skip:
             existing = by_key.get(dedup_key)
@@ -728,7 +869,15 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
         except (InvalidOperation, ValueError):
             conf_d = None
         channel = (raw.get('channel') or 'sales')[:20]
+        channels = raw.get('channels') if isinstance(raw.get('channels'), list) else []
+        channels = [str(c)[:20] for c in channels if c]
+        if channel and channel not in channels:
+            channels.append(channel)
         title = _title_for_action(action_type, entities, order)[:200]
+        if len(channels) > 1:
+            ch_hint = '+'.join(_channel_label(c) for c in channels[:4])
+            if ch_hint and ch_hint not in title:
+                title = f'{title} · {ch_hint}'[:200]
         details = quote or title
         payload = {
             'action_type': action_type,
@@ -736,6 +885,7 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             'order_id': order.id if order else None,
             'client_id': order.client_id if order else None,
             'channel': channel,
+            'channels': channels,
             'quote': quote,
             'confidence': float(conf_d) if conf_d is not None else None,
             'digest_date': day.isoformat(),
@@ -744,7 +894,8 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
         task = by_key.get(dedup_key)
         if task is not None:
             task.last_seen_at = now
-            task.details = details[:4000]
+            merged_details = _merge_quote(task.details or '', quote, channel)
+            task.details = (merged_details or details)[:4000]
             task.title = title
             task.action_payload = json.dumps(payload, ensure_ascii=False)
             if task.status == 'snoozed' and task.deadline and task.deadline <= day:
@@ -754,11 +905,16 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             ).first()
             if draft and draft.status == 'pending':
                 draft.payload_json = json.dumps(payload, ensure_ascii=False)
-                draft.quote = quote
+                draft.quote = _merge_quote(draft.quote or '', quote, channel)
                 draft.order_id = order.id if order else draft.order_id
-                draft.client_id = order.client_id if order else draft.client_id
+                draft.client_id = (
+                    order.client_id if order else draft.client_id
+                )
                 draft.confidence = conf_d
                 draft.updated_at = now
+                if channels:
+                    # channel колонка — «главный»; полный список в payload
+                    draft.channel = channel or draft.channel
             updated += 1
             continue
 
@@ -970,13 +1126,24 @@ def post_payment_draft(
     comment: str,
     file_storage=None,
     user_id: int | None = None,
+    order_id: int | None = None,
 ) -> dict:
-    order = draft.order or (Order.query.get(draft.order_id) if draft.order_id else None)
+    order = None
+    if order_id:
+        order = Order.query.get(int(order_id))
+        if order and getattr(order, 'is_deleted', False):
+            order = None
+    if not order:
+        order = draft.order or (Order.query.get(draft.order_id) if draft.order_id else None)
     if not order:
         pl = draft_payload(draft)
         order = _find_order(pl.get('entities') or {})
     if not order:
-        return {'ok': False, 'error': 'Заказ не найден'}
+        return {'ok': False, 'error': 'Выберите заказ'}
+    # Зафиксируем выбор в черновике (на случай повторного открытия)
+    draft.order_id = order.id
+    if order.client_id:
+        draft.client_id = order.client_id
 
     if _order_paid_enough(order, amount):
         draft.status = 'skipped'
@@ -1410,10 +1577,22 @@ def enrich_ops_draft_card(dr: OpsActionDraft, payload_order_id=None) -> dict:
             for s in Size.query.order_by(Size.name.asc()).limit(80)
         ]
 
+    orders_opts = []
+    preferred_oid = (order.id if order else None) or dr.order_id or payload_order_id
+    if dr.action_type == 'payment_confirm':
+        orders_opts = _orders_opts_for_payment(
+            client=client,
+            preferred_order_id=preferred_oid,
+        )
+
+    channels = pl.get('channels') if isinstance(pl.get('channels'), list) else []
+    if not channels and dr.channel:
+        channels = [dr.channel]
+
     return {
         'id': dr.id,
         'action_type': dr.action_type,
-        'order_id': (order.id if order else None) or dr.order_id or payload_order_id,
+        'order_id': preferred_oid,
         'amount': ent.get('amount'),
         'qty': ent.get('qty'),
         'price': ent.get('price'),
@@ -1425,11 +1604,88 @@ def enrich_ops_draft_card(dr: OpsActionDraft, payload_order_id=None) -> dict:
         'client_name': client.name if client else (ent.get('client') or ''),
         'quote': dr.quote,
         'channel': dr.channel,
+        'channels': channels,
+        'channels_label': '+'.join(_channel_label(c) for c in channels) if channels else '',
         'items_preview': items_preview,
         'clients_opts': clients_opts,
         'plants_opts': plants_opts,
         'sizes_opts': sizes_opts,
+        'orders_opts': orders_opts,
+        'suggest_cash': ('нал' in (dr.quote or '').lower()),
     }
+
+
+def _orders_opts_for_payment(
+    *,
+    client: Client | None = None,
+    preferred_order_id=None,
+) -> list[dict]:
+    """Активные заказы с долгом для выбора в карточке оплаты."""
+    active = ('reserved', 'in_progress', 'ready', 'shipped')
+    q = (
+        Order.query
+        .filter(
+            Order.is_deleted.is_(False),
+            Order.status.in_(active),
+        )
+        .order_by(Order.id.desc())
+    )
+    if client is not None:
+        q = q.filter(Order.client_id == client.id)
+    rows = q.limit(80).all()
+
+    preferred = None
+    if preferred_order_id:
+        try:
+            preferred = Order.query.get(int(preferred_order_id))
+        except Exception:
+            preferred = None
+
+    opts: list[dict] = []
+    seen: set[int] = set()
+
+    def _add(o: Order):
+        if not o or o.id in seen:
+            return
+        try:
+            paid = float(o.paid_sum or 0)
+            total = float(o.total_sum or 0)
+        except Exception:
+            paid, total = 0.0, 0.0
+        debt = total - paid
+        # Полностью оплаченные — только если это уже выбранный заказ
+        if debt <= 0.5 and (preferred is None or o.id != preferred.id):
+            return
+        cname = o.client.name if o.client else '—'
+        debt_s = f'{debt:,.0f}'.replace(',', ' ')
+        opts.append({
+            'id': o.id,
+            'label': f'#{o.id} · {cname} · долг {debt_s} ₽',
+            'debt': debt,
+        })
+        seen.add(o.id)
+
+    if preferred:
+        _add(preferred)
+    for o in rows:
+        _add(o)
+        if len(opts) >= 40:
+            break
+
+    # Если по клиенту пусто — расширяем на всех с долгом
+    if len(opts) <= 1 and client is not None:
+        for o in (
+            Order.query
+            .filter(Order.is_deleted.is_(False), Order.status.in_(active))
+            .order_by(Order.id.desc())
+            .limit(60)
+            .all()
+        ):
+            _add(o)
+            if len(opts) >= 40:
+                break
+
+    return opts
 
 
 # ---------- HTTP routes ----------
@@ -1528,6 +1784,14 @@ def api_post_payment(draft_id):
     except Exception:
         pay_date = msk_today()
 
+    order_id = None
+    raw_oid = (request.form.get('order_id') or '').strip()
+    if raw_oid:
+        try:
+            order_id = int(raw_oid)
+        except Exception:
+            order_id = None
+
     result = post_payment_draft(
         draft,
         amount=amount,
@@ -1536,6 +1800,7 @@ def api_post_payment(draft_id):
         comment=request.form.get('comment') or '',
         file_storage=request.files.get('file'),
         user_id=current_user.id,
+        order_id=order_id,
     )
     if request.headers.get('HX-Request'):
         if result.get('ok'):

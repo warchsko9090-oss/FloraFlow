@@ -15,6 +15,8 @@ _DEFAULT_CLASSIFY = 'openai/gpt-oss-20b'
 _DEFAULT_VISION = 'qwen/qwen3.6-27b'
 # CRM: анализ рынка с web search
 _DEFAULT_CRM = 'groq/compound-beta'
+# Голосовые / аудио → текст (Whisper)
+_DEFAULT_STT = 'whisper-large-v3-turbo'
 
 _LEGACY_MODELS = {
     'llama-3.3-70b-versatile',
@@ -30,15 +32,17 @@ _TASK_DEFAULTS = {
     'vision': _DEFAULT_VISION,
     'crm': _DEFAULT_CRM,
     'chat': _DEFAULT_TEXT,
+    'stt': _DEFAULT_STT,
 }
 
-# Порядок env: специфичный ключ задачи → общий GROQ_MODEL (кроме vision/crm)
+# Порядок env: специфичный ключ задачи → общий GROQ_MODEL (кроме vision/crm/stt)
 _TASK_ENV = {
     'text': ('GROQ_MODEL_TEXT', 'GROQ_MODEL'),
     'classify': ('GROQ_MODEL_CLASSIFY', 'GROQ_MODEL'),
     'vision': ('GROQ_VISION_MODEL',),
     'crm': ('GROQ_MODEL_CRM',),
     'chat': ('GROQ_MODEL_CHAT', 'GROQ_MODEL'),
+    'stt': ('GROQ_MODEL_STT',),
 }
 
 
@@ -50,7 +54,7 @@ def _resolve(raw: str | None, fallback: str) -> str:
 
 
 def groq_model_for(task: str, default: str | None = None) -> str:
-    """task: text | classify | vision | crm | chat."""
+    """task: text | classify | vision | crm | chat | stt."""
     key = (task or 'text').strip().lower()
     fallback = default or _TASK_DEFAULTS.get(key, _DEFAULT_TEXT)
     for env_name in _TASK_ENV.get(key, ('GROQ_MODEL',)):
@@ -83,3 +87,43 @@ def groq_model_crm() -> str:
 
 def groq_model_chat() -> str:
     return groq_model_for('chat')
+
+
+def groq_model_stt() -> str:
+    return groq_model_for('stt')
+
+
+def groq_transcribe_audio(
+    file_bytes: bytes,
+    *,
+    filename: str = 'voice.ogg',
+    language: str = 'ru',
+) -> str:
+    """Whisper STT через Groq. Пустая строка при ошибке / отсутствии ключа."""
+    api_key = (os.environ.get('GROQ_API_KEY') or '').strip()
+    if not api_key or not file_bytes:
+        return ''
+    try:
+        from groq import Groq
+        client = Groq(api_key=api_key)
+        name = (filename or 'voice.ogg').strip() or 'voice.ogg'
+        transcription = client.audio.transcriptions.create(
+            file=(name, file_bytes),
+            model=groq_model_stt(),
+            language=(language or 'ru')[:8] or 'ru',
+            temperature=0.0,
+            response_format='text',
+        )
+        if isinstance(transcription, str):
+            return transcription.strip()
+        text = getattr(transcription, 'text', None)
+        if text:
+            return str(text).strip()
+        return str(transcription or '').strip()
+    except Exception:
+        try:
+            from flask import current_app
+            current_app.logger.exception('groq_transcribe_audio failed')
+        except Exception:
+            pass
+        return ''

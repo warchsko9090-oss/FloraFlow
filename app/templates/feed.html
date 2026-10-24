@@ -499,7 +499,24 @@
                                         <form hx-post="{{ url_for('ai_ops.api_post_payment', draft_id=card.ops_draft.id) }}"
                                               hx-target="#card-{{ card.id }}" hx-swap="outerHTML"
                                               enctype="multipart/form-data" class="mb-2 ai-ops-form">
+                                            {% if card.ops_draft.channels_label %}
+                                            <div class="small text-muted mb-2">
+                                                <i class="fas fa-comments me-1"></i>{{ card.ops_draft.channels_label }}
+                                            </div>
+                                            {% endif %}
                                             <div class="row g-2 mb-2">
+                                                <div class="col-12">
+                                                    <label class="small fw-bold">Заказ <span class="text-danger">*</span></label>
+                                                    <select name="order_id" class="form-select form-select-sm" required>
+                                                        <option value="">— выберите заказ —</option>
+                                                        {% for o in card.ops_draft.orders_opts or [] %}
+                                                        <option value="{{ o.id }}" {% if card.ops_draft.order_id == o.id %}selected{% endif %}>{{ o.label }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                    {% if not card.ops_draft.orders_opts %}
+                                                    <div class="form-text text-danger">Нет заказов с долгом — проверьте клиента в цитате</div>
+                                                    {% endif %}
+                                                </div>
                                                 <div class="col-6 col-md-4">
                                                     <label class="small fw-bold">Сумма</label>
                                                     <input type="number" step="0.01" name="amount" class="form-control form-control-sm"
@@ -513,8 +530,8 @@
                                                 <div class="col-6 col-md-4">
                                                     <label class="small fw-bold">Тип</label>
                                                     <select name="payment_type" class="form-select form-select-sm">
-                                                        <option value="cashless">Безнал</option>
-                                                        <option value="cash">Нал</option>
+                                                        <option value="cashless" {% if not card.ops_draft.suggest_cash %}selected{% endif %}>Безнал</option>
+                                                        <option value="cash" {% if card.ops_draft.suggest_cash %}selected{% endif %}>Нал</option>
                                                         <option value="barter">Бартер</option>
                                                     </select>
                                                 </div>
@@ -527,11 +544,12 @@
                                                 </div>
                                             </div>
                                             {% if card.ops_draft.order_id %}
-                                            <div class="small text-muted mb-2">Заказ #{{ card.ops_draft.order_id }}
-                                                <a href="{{ url_for('orders.order_detail', order_id=card.ops_draft.order_id) }}" data-hx-boost="false">открыть</a>
+                                            <div class="small text-muted mb-2">
+                                                <a href="{{ url_for('orders.order_detail', order_id=card.ops_draft.order_id) }}" data-hx-boost="false">открыть заказ #{{ card.ops_draft.order_id }}</a>
                                             </div>
                                             {% endif %}
-                                            <button type="submit" class="btn btn-success btn-sm fw-bold w-100 mb-2">
+                                            <button type="submit" class="btn btn-success btn-sm fw-bold w-100 mb-2"
+                                                    {% if not card.ops_draft.orders_opts and not card.ops_draft.order_id %}disabled{% endif %}>
                                                 <i class="fas fa-ruble-sign me-1"></i> Провести оплату
                                             </button>
                                         </form>
