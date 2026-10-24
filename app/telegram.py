@@ -864,11 +864,35 @@ def message_text_with_voice(msg: dict, base_text: str = '') -> str:
         ext = path_hint.rsplit('.', 1)[-1].lower()[:8] or 'ogg'
     filename = f'voice.{ext}'
 
+    transcript = ''
+    # 1) Groq Whisper (на Miami часто 403) → 2) Gemini audio (ключ уже в prod)
     try:
         from app.groq_util import groq_transcribe_audio
         transcript = groq_transcribe_audio(data, filename=filename, language='ru')
     except Exception:
         transcript = ''
+    if not transcript:
+        try:
+            from app.gemini_util import gemini_transcribe_audio
+            mime = 'audio/ogg'
+            if ext in ('mp3', 'mpeg', 'mpga'):
+                mime = 'audio/mp3'
+            elif ext in ('wav',):
+                mime = 'audio/wav'
+            elif ext in ('m4a', 'mp4'):
+                mime = 'audio/mp4'
+            elif ext in ('webm',):
+                mime = 'audio/webm'
+            elif ext in ('oga', 'ogg', 'opus'):
+                mime = 'audio/ogg'
+            transcript = gemini_transcribe_audio(data, mime_type=mime, language_hint='ru')
+        except Exception:
+            try:
+                from flask import current_app
+                current_app.logger.exception('gemini voice STT failed')
+            except Exception:
+                pass
+            transcript = ''
 
     if not transcript:
         return text or '[аудио]'

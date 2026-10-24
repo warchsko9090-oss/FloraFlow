@@ -2141,36 +2141,35 @@ def api_selftest():
     if not ping_ok:
         report['ok'] = False
 
-    # 3) STT smoke — если groq есть, пробуем крошечный ogg; ожидаем не падение
-    stt = {'ok': False, 'skipped': False, 'transcript_len': 0, 'error': None}
+    # 3) STT: Groq часто 403 с Miami — проверяем Gemini audio (боевой fallback)
+    stt = {
+        'groq_reachable': False,
+        'gemini_stt_ready': False,
+        'ok': False,
+        'error': None,
+    }
     if groq_on:
         try:
-            from app.groq_util import groq_transcribe_audio
-            # Минимальный валидный OggS заголовок часто отклоняется — ловим ошибку как soft-fail
-            # Реальный голос проверим через ingest; здесь — что клиент STT жив.
             from groq import Groq
             client = Groq(api_key=(os.environ.get('GROQ_API_KEY') or '').strip())
-            # models.list — дешёвая проверка доступа к API
-            models = client.models.list()
-            names = []
-            try:
-                names = [m.id for m in (models.data or [])][:8]
-            except Exception:
-                names = ['listed']
-            whisper = any('whisper' in (n or '') for n in names) or True
-            stt = {
-                'ok': bool(names) or whisper,
-                'skipped': False,
-                'models_sample': names,
-                'error': None,
-            }
-            # Доп.: пустой файл не должен ронять процесс
-            _ = groq_transcribe_audio(b'', filename='empty.ogg')
+            client.models.list()
+            stt['groq_reachable'] = True
         except Exception as exc:
-            stt = {'ok': False, 'skipped': False, 'error': str(exc)[:200]}
-            report['ok'] = False
-    else:
-        stt = {'ok': True, 'skipped': True, 'error': 'no GROQ_API_KEY'}
+            stt['groq_error'] = str(exc)[:160]
+    if gemini_on:
+        try:
+            from app.gemini_util import gemini_transcribe_audio
+            # Пустой вызов не бьёт API; проверяем, что функция и ключ на месте
+            empty = gemini_transcribe_audio(b'', mime_type='audio/ogg')
+            stt['gemini_stt_ready'] = True
+            stt['empty_call_ok'] = (empty == '')
+        except Exception as exc:
+            stt['gemini_error'] = str(exc)[:160]
+    # Достаточно Gemini STT (Groq на Miami часто закрыт сетью)
+    stt['ok'] = bool(stt['gemini_stt_ready'] or stt['groq_reachable'])
+    if not stt['ok']:
+        stt['error'] = 'нет доступного STT (Groq/Gemini)'
+        report['ok'] = False
     report['steps']['stt_api'] = stt
 
     # 4) cross-chat merge

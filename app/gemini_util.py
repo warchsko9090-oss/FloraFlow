@@ -93,3 +93,78 @@ def gemini_generate_text(
             last_err = exc
             continue
     raise RuntimeError(str(last_err) if last_err else 'Gemini: все модели недоступны')
+
+
+def gemini_transcribe_audio(
+    file_bytes: bytes,
+    *,
+    mime_type: str = 'audio/ogg',
+    language_hint: str = 'ru',
+    timeout_sec: float = 60.0,
+) -> str:
+    """Speech→text через Gemini (inline audio). Пустая строка при ошибке."""
+    import base64
+
+    api_key = gemini_api_key()
+    if not api_key or not file_bytes:
+        return ''
+
+    b64 = base64.b64encode(file_bytes).decode('ascii')
+    mime = (mime_type or 'audio/ogg').strip() or 'audio/ogg'
+    prompt = (
+        'Расшифруй речь из аудио в текст. Язык преимущественно русский. '
+        'Верни только расшифровку без комментариев. Если речи нет — пустую строку.'
+    )
+    if language_hint:
+        prompt = f'{prompt} (подсказка языка: {language_hint})'
+
+    body = {
+        'contents': [{
+            'role': 'user',
+            'parts': [
+                {'text': prompt},
+                {'inlineData': {'mimeType': mime, 'data': b64}},
+            ],
+        }],
+        'generationConfig': {
+            'temperature': 0.0,
+            'maxOutputTokens': 2048,
+        },
+    }
+
+    last_err: Exception | None = None
+    for model in gemini_models_for_text():
+        url = (
+            f'https://generativelanguage.googleapis.com/v1beta/models/'
+            f'{model}:generateContent'
+        )
+        try:
+            resp = requests.post(
+                url,
+                params={'key': api_key},
+                json=body,
+                timeout=timeout_sec,
+            )
+            if resp.status_code in (404, 503):
+                last_err = RuntimeError(f'{model}: HTTP {resp.status_code}')
+                continue
+            if resp.status_code >= 400:
+                last_err = RuntimeError(f'{model}: HTTP {resp.status_code} {resp.text[:200]}')
+                continue
+            data = resp.json()
+            cands = data.get('candidates') or []
+            if not cands:
+                last_err = RuntimeError(f'{model}: empty candidates')
+                continue
+            parts = ((cands[0].get('content') or {}).get('parts')) or []
+            text = ''.join((p.get('text') or '') for p in parts).strip()
+            return text
+        except requests.RequestException as exc:
+            last_err = exc
+            continue
+    try:
+        from flask import current_app
+        current_app.logger.warning('gemini_transcribe_audio failed: %s', last_err)
+    except Exception:
+        pass
+    return ''
