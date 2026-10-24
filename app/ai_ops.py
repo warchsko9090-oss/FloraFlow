@@ -164,13 +164,13 @@ def ingest_ops_message(msg: dict, channel: str | None = None) -> dict:
         text = (msg.get('text') or msg.get('caption') or '').strip()
         if not text:
             text = _media_placeholder(msg)
-        # Голосовые / аудио — расшифровка Whisper (ru), иначе в сводке только [аудио]
-        if msg.get('voice') or msg.get('audio'):
+        # Голос / аудио / видео / кружок — расшифровка речи (Groq→Gemini)
+        if msg.get('voice') or msg.get('audio') or msg.get('video') or msg.get('video_note'):
             try:
                 from app.telegram import message_text_with_voice
                 text = message_text_with_voice(msg, text) or text
             except Exception:
-                current_app.logger.exception('ai_ops voice STT failed')
+                current_app.logger.exception('ai_ops speech STT failed')
         if not text:
             return {'ok': True, 'status': 'empty_skip'}
 
@@ -184,10 +184,15 @@ def ingest_ops_message(msg: dict, channel: str | None = None) -> dict:
             tg_chat_id=tg_chat_id, tg_message_id=tg_message_id,
         ).first()
         if existing is not None:
-            # Не затираем уже расшифрованный голос плейсхолдером при повторном апдейте
+            # Не затираем уже расшифрованную речь плейсхолдером при повторном апдейте
             new_text = text[:8000]
             old = existing.raw_text or ''
-            if old.startswith('[голос]') and new_text in ('[аудио]', '[аудио, стикер]'):
+            _speech_prefixes = ('[голос]', '[видео]', '[кружок]')
+            _placeholders = (
+                '[аудио]', '[видео]', '[аудио, стикер]', '[стикер, аудио]',
+                '[видео, стикер]',
+            )
+            if old.startswith(_speech_prefixes) and new_text in _placeholders:
                 return {'ok': True, 'status': 'dup', 'id': existing.id, 'channel': ch}
             if existing.raw_text != new_text:
                 existing.raw_text = new_text
@@ -280,7 +285,8 @@ _DIGEST_PROMPT = (
     '- Одна крупица факта = один элемент массива, даже если её повторили/дополнили в других чатах.\n'
     '- В quote склей цитаты из всех каналов: «[ИТР] …; [Производство] …».\n'
     '- В channels перечисли все затронутые каналы; channel = основной (где впервые или полнее).\n'
-    '- Голосовые помечены [голос] — это полноценный текст, учитывай.\n'
+    '- Речь из голосовых/видео/кружков помечена [голос]/[видео]/[кружок] — '
+    'это полноценный текст, учитывай.\n'
     '- Если кандидатов нет — пустой массив [].\n'
     'Только факты из текста. Игнор болтовни про логины/стикеры.\n\n'
     'Сообщений: {message_count}\n\n'

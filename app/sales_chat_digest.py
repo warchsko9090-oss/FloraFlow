@@ -93,14 +93,14 @@ def ingest_message(msg: dict) -> dict:
         text = (msg.get('text') or msg.get('caption') or '').strip()
         if not text:
             text = _media_placeholder(msg)
-        if msg.get('voice') or msg.get('audio'):
+        if msg.get('voice') or msg.get('audio') or msg.get('video') or msg.get('video_note'):
             try:
                 from app.telegram import message_text_with_voice
                 text = message_text_with_voice(msg, text) or text
             except Exception:
                 try:
                     from flask import current_app
-                    current_app.logger.exception('sales_chat voice STT failed')
+                    current_app.logger.exception('sales_chat speech STT failed')
                 except Exception:
                     pass
         if not text:
@@ -118,7 +118,12 @@ def ingest_message(msg: dict) -> dict:
         if existing is not None:
             new_text = text[:8000]
             old = existing.raw_text or ''
-            if old.startswith('[голос]') and new_text in ('[аудио]', '[аудио, стикер]'):
+            _speech_prefixes = ('[голос]', '[видео]', '[кружок]')
+            _placeholders = (
+                '[аудио]', '[видео]', '[аудио, стикер]', '[стикер, аудио]',
+                '[видео, стикер]',
+            )
+            if old.startswith(_speech_prefixes) and new_text in _placeholders:
                 return {'ok': True, 'status': 'dup', 'id': existing.id}
             if existing.raw_text != new_text:
                 existing.raw_text = new_text

@@ -829,77 +829,97 @@ def download_bot_file(file_id):
         return None, str(exc)
 
 
-def _voice_or_audio_file_id(msg: dict) -> str | None:
-    for key in ('voice', 'audio'):
+def _speech_media_from_msg(msg: dict) -> tuple[str | None, str]:
+    """file_id и вид медиа: voice | audio | video | video_note."""
+    msg = msg or {}
+    for key in ('voice', 'audio', 'video_note', 'video'):
         obj = msg.get(key)
         if isinstance(obj, dict) and obj.get('file_id'):
-            return str(obj['file_id'])
-    return None
+            return str(obj['file_id']), key
+    return None, ''
+
+
+def _mime_for_speech_file(ext: str, kind: str) -> str:
+    ext = (ext or '').lower()
+    if kind in ('video', 'video_note'):
+        if ext in ('webm',):
+            return 'video/webm'
+        if ext in ('mov',):
+            return 'video/quicktime'
+        return 'video/mp4'
+    if ext in ('mp3', 'mpeg', 'mpga'):
+        return 'audio/mp3'
+    if ext in ('wav',):
+        return 'audio/wav'
+    if ext in ('m4a', 'mp4'):
+        return 'audio/mp4'
+    if ext in ('webm',):
+        return 'audio/webm'
+    return 'audio/ogg'
 
 
 def message_text_with_voice(msg: dict, base_text: str = '') -> str:
-    """Текст сообщения + расшифровка voice/audio через Groq Whisper (ru).
+    """Текст + расшифровка речи из voice/audio/video/video_note (кружок).
 
-    Если голоса нет — возвращает base_text. При ошибке STT оставляет
-    исходный текст или пометку [аудио].
+    Groq Whisper → при сбое Gemini (audio или video). Ошибка STT →
+    плейсхолдер [аудио]/[видео].
     """
     text = (base_text or '').strip()
-    file_id = _voice_or_audio_file_id(msg or {})
+    file_id, kind = _speech_media_from_msg(msg or {})
     if not file_id:
         return text
+
+    is_video = kind in ('video', 'video_note')
+    fallback_tag = '[видео]' if is_video else '[аудио]'
 
     data, path_or_err = download_bot_file(file_id)
     if not data:
         try:
             from flask import current_app
-            current_app.logger.warning('voice download failed: %s', path_or_err)
+            current_app.logger.warning('speech media download failed kind=%s: %s', kind, path_or_err)
         except Exception:
             pass
-        return text or '[аудио]'
+        return text or fallback_tag
 
-    # На успехе второй элемент — file_path вида voice/file_123.oga
     path_hint = path_or_err if isinstance(path_or_err, str) else ''
-    ext = 'ogg'
+    ext = 'mp4' if is_video else 'ogg'
     if path_hint and '.' in path_hint:
-        ext = path_hint.rsplit('.', 1)[-1].lower()[:8] or 'ogg'
-    filename = f'voice.{ext}'
+        ext = path_hint.rsplit('.', 1)[-1].lower()[:8] or ext
+    filename = f'{"video" if is_video else "voice"}.{ext}'
+    mime = _mime_for_speech_file(ext, kind)
 
     transcript = ''
-    # 1) Groq Whisper (на Miami часто 403) → 2) Gemini audio (ключ уже в prod)
-    try:
-        from app.groq_util import groq_transcribe_audio
-        transcript = groq_transcribe_audio(data, filename=filename, language='ru')
-    except Exception:
-        transcript = ''
+    # Groq Whisper — только для аудио; видео сразу в Gemini
+    if not is_video:
+        try:
+            from app.groq_util import groq_transcribe_audio
+            transcript = groq_transcribe_audio(data, filename=filename, language='ru')
+        except Exception:
+            transcript = ''
     if not transcript:
         try:
             from app.gemini_util import gemini_transcribe_audio
-            mime = 'audio/ogg'
-            if ext in ('mp3', 'mpeg', 'mpga'):
-                mime = 'audio/mp3'
-            elif ext in ('wav',):
-                mime = 'audio/wav'
-            elif ext in ('m4a', 'mp4'):
-                mime = 'audio/mp4'
-            elif ext in ('webm',):
-                mime = 'audio/webm'
-            elif ext in ('oga', 'ogg', 'opus'):
-                mime = 'audio/ogg'
-            transcript = gemini_transcribe_audio(data, mime_type=mime, language_hint='ru')
+            transcript = gemini_transcribe_audio(
+                data, mime_type=mime, language_hint='ru',
+            )
         except Exception:
             try:
                 from flask import current_app
-                current_app.logger.exception('gemini voice STT failed')
+                current_app.logger.exception('gemini speech STT failed kind=%s', kind)
             except Exception:
                 pass
             transcript = ''
 
     if not transcript:
-        return text or '[аудио]'
+        return text or fallback_tag
 
-    tagged = f'[голос] {transcript.strip()}'
-    placeholders = {'', '[аудио]', '[аудио, стикер]', '[стикер, аудио]'}
-    if text and text not in placeholders and not text.startswith('[голос]'):
+    label = 'кружок' if kind == 'video_note' else ('видео' if is_video else 'голос')
+    tagged = f'[{label}] {transcript.strip()}'
+    placeholders = {
+        '', '[аудио]', '[видео]', '[аудио, стикер]', '[стикер, аудио]',
+        '[видео, стикер]',
+    }
+    if text and text not in placeholders and not text.startswith(('[голос]', '[видео]', '[кружок]')):
         return f'{text}\n{tagged}'[:8000]
     return tagged[:8000]
 
