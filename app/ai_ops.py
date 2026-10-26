@@ -840,6 +840,15 @@ def _unallocated_field_id() -> int | None:
     return f.id if f else None
 
 
+def _sync_vium_purchase(draft: OpsActionDraft, *, close: bool = False) -> None:
+    """Зеркало заявки в учёт ВиУМ (цены/сроки живут там)."""
+    try:
+        from app.vium_purchases import upsert_purchase_from_ops_draft
+        upsert_purchase_from_ops_draft(draft, close=close)
+    except Exception:
+        current_app.logger.exception('vium purchase sync failed')
+
+
 def _mark_draft_done(draft: OpsActionDraft, *, user_id: int | None, extra: dict | None = None) -> None:
     draft.status = 'posted'
     draft.posted_at = msk_now()
@@ -1102,6 +1111,8 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
                 if channels:
                     # channel колонка — «главный»; полный список в payload
                     draft.channel = channel or draft.channel
+                if action_type == 'purchase_request':
+                    _sync_vium_purchase(draft)
             updated += 1
             continue
 
@@ -1139,6 +1150,9 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             client_id=order.client_id if order else None,
         )
         db.session.add(draft)
+        db.session.flush()
+        if action_type == 'purchase_request':
+            _sync_vium_purchase(draft)
         by_key[dedup_key] = task
         created += 1
 
@@ -1868,6 +1882,7 @@ def toggle_purchase_item(
     if not found:
         return {'ok': False, 'error': 'Позиция не найдена'}
     _persist_purchase_items(draft, items)
+    _sync_vium_purchase(draft)
     db.session.commit()
     done_n = sum(1 for x in items if x.get('done'))
     return {
@@ -1888,6 +1903,7 @@ def complete_purchase_draft(
         return {'ok': False, 'error': 'Не заявка на закупку'}
     if draft.status != 'pending':
         return {'ok': False, 'error': 'Уже закрыто'}
+    _sync_vium_purchase(draft, close=True)
     _mark_draft_done(draft, user_id=user_id)
     db.session.commit()
     return {'ok': True}
@@ -2215,6 +2231,8 @@ def api_post_price(draft_id):
 def api_draft_ack(draft_id):
     """Ручное закрытие без проведения документа (fallback)."""
     draft = OpsActionDraft.query.get_or_404(draft_id)
+    if draft.action_type == 'purchase_request':
+        _sync_vium_purchase(draft, close=True)
     draft.status = 'posted'
     draft.posted_at = msk_now()
     draft.posted_by_id = current_user.id

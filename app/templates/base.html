@@ -1364,7 +1364,7 @@
                             <i class="fas fa-chevron-right sl-chevron"></i>
                         </button>
                         <div class="sidebar-sub">
-                            <a class="sidebar-link {% if ep == 'vium.vium_report' or (vium_active and 'techcard' not in ep and 'plan_report' not in ep) %}active{% endif %}"
+                            <a class="sidebar-link {% if ep == 'vium.vium_report' or (vium_active and 'techcard' not in ep and 'plan_report' not in ep and 'purchase' not in ep) %}active{% endif %}"
                                href="{{ url_for('vium.vium_report') }}">
                                 <span class="sl-icon"><i class="fas fa-boxes-stacked"></i></span>
                                 <span class="sl-label">Учёт ВиУМ</span>
@@ -1378,6 +1378,11 @@
                                href="{{ url_for('vium.vium_plan_report') }}">
                                 <span class="sl-icon"><i class="fas fa-chart-line"></i></span>
                                 <span class="sl-label">План ВиУМ</span>
+                            </a>
+                            <a class="sidebar-link {% if 'purchase' in ep %}active{% endif %}"
+                               href="{{ url_for('vium.vium_purchases') }}">
+                                <span class="sl-icon"><i class="fas fa-shopping-basket"></i></span>
+                                <span class="sl-label">Закупки ВиУМ</span>
                             </a>
                         </div>
                     </div>
@@ -1780,6 +1785,7 @@
             <a class="drawer-link" href="{{ url_for('vium.vium_report') }}"><i class="fas fa-boxes-stacked"></i> Учёт ВиУМ</a>
             <a class="drawer-link" href="{{ url_for('vium.vium_techcards') }}"><i class="fas fa-clipboard-list"></i> Тех.карты ВиУМ</a>
             <a class="drawer-link" href="{{ url_for('vium.vium_plan_report') }}"><i class="fas fa-chart-line"></i> План ВиУМ</a>
+            <a class="drawer-link" href="{{ url_for('vium.vium_purchases') }}"><i class="fas fa-shopping-basket"></i> Закупки ВиУМ</a>
             {% endif %}
             {% endif %}
         </div>

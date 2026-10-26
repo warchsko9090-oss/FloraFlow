@@ -1,0 +1,298 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1280px; margin: 0 auto; padding-bottom: 80px; }
+  .vium-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+  .vium-head .btn-sec, .vium-head .btn-prim {
+    border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: .9rem;
+    text-decoration: none !important; display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid #e2e8f0; background: #fff; color: #0f172a; cursor: pointer;
+  }
+  .vium-head .btn-sec:hover { background: #f1f5f9; }
+  .vium-head .btn-prim { background: #2E7D32; color: #fff; border-color: #2E7D32; }
+  .vium-head .btn-prim:hover { background: #1B5E20; color: #fff; }
+
+  .vium-summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px; margin-bottom: 16px;
+  }
+  .vium-card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+    padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.03);
+  }
+  .vium-card .lbl { font-size: .76rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+  .vium-card .val { font-size: 1.25rem; font-weight: 800; color: #0f172a; margin-top: 2px; }
+  .vium-card.brand .val { color: #1B5E20; }
+  .vium-card.warn .val { color: #b45309; }
+  .vium-card.danger .val { color: #b91c1c; }
+
+  .filter-bar {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+    padding: 12px 14px; margin-bottom: 16px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  }
+
+  .purchase-block {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+    margin-bottom: 16px; overflow: hidden;
+  }
+  .purchase-block .ph {
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+    padding: 12px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+  }
+  .purchase-block .ph h6 { margin: 0; font-weight: 800; color: #0f172a; }
+  .purchase-block table { width: 100%; margin: 0; border-collapse: collapse; }
+  .purchase-block th, .purchase-block td {
+    padding: 8px 10px; vertical-align: middle; border-bottom: 1px solid #f1f5f9;
+    font-size: .9rem;
+  }
+  .purchase-block thead th {
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+    color: #475569; background: #fff; font-weight: 700;
+  }
+  .purchase-block .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .purchase-block tr.overdue td { background: #fef2f2; }
+  .purchase-block input.form-control-sm,
+  .purchase-block select.form-select-sm { min-width: 0; font-size: .85rem; }
+  .empty { text-align: center; color: #94a3b8; padding: 36px; }
+  .badge-src {
+    font-size: .7rem; font-weight: 700; border-radius: 6px; padding: .2rem .45rem;
+    background: #eaf4eb; color: #1B5E20;
+  }
+  .badge-src.manual { background: #eef2ff; color: #3730a3; }
+  @media (max-width: 900px) {
+    .purchase-block .hide-sm { display: none; }
+  }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4><i class="fas fa-shopping-basket me-2 text-success"></i>Закупки ВиУМ</h4>
+      <span class="text-muted small">Заявки из чатов и ручные — с ценами и сроками поставки</span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn-sec" href="{{ url_for('vium.vium_report') }}">
+        <i class="fas fa-warehouse"></i> Остатки
+      </a>
+      <a class="btn-sec" href="{{ url_for('vium.vium_plan_report') }}">
+        <i class="fas fa-chart-line"></i> План
+      </a>
+      <a class="btn-sec" href="{{ url_for('vium.vium_purchases_export', status=status) }}">
+        <i class="fas fa-file-excel"></i> Excel
+      </a>
+      <button type="button" class="btn-prim" data-bs-toggle="modal" data-bs-target="#newPurchaseModal">
+        <i class="fas fa-plus"></i> Новая заявка
+      </button>
+    </div>
+  </div>
+
+  <div class="vium-summary">
+    <div class="vium-card">
+      <div class="lbl">Заявок</div>
+      <div class="val">{{ purchase_count }}</div>
+    </div>
+    <div class="vium-card warn">
+      <div class="lbl">В плане</div>
+      <div class="val">{{ open_lines }}</div>
+    </div>
+    <div class="vium-card brand">
+      <div class="lbl">Заказано</div>
+      <div class="val">{{ ordered_lines }}</div>
+    </div>
+    <div class="vium-card danger">
+      <div class="lbl">Просрочено</div>
+      <div class="val">{{ overdue_lines }}</div>
+    </div>
+    <div class="vium-card brand">
+      <div class="lbl">Сумма (где есть цена)</div>
+      <div class="val">
+        {% if total_amount is not none %}
+          {{ '{:,.0f}'.format(total_amount|float).replace(',', ' ') }} ₽
+        {% else %}—{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <form method="GET" class="filter-bar">
+    <label class="fw-semibold small mb-0">Статус:</label>
+    <select name="status" class="form-select form-select-sm" style="max-width:140px">
+      <option value="open" {% if status=='open' %}selected{% endif %}>Открытые</option>
+      <option value="closed" {% if status=='closed' %}selected{% endif %}>Закрытые</option>
+      <option value="cancelled" {% if status=='cancelled' %}selected{% endif %}>Отменённые</option>
+      <option value="all" {% if status=='all' %}selected{% endif %}>Все</option>
+    </select>
+    <label class="fw-semibold small mb-0">С:</label>
+    <input type="date" name="start" value="{{ start.isoformat() if start else '' }}" class="form-control form-control-sm" style="max-width:150px">
+    <label class="fw-semibold small mb-0">По:</label>
+    <input type="date" name="end" value="{{ end.isoformat() if end else '' }}" class="form-control form-control-sm" style="max-width:150px">
+    <label class="small mb-0 d-flex align-items-center gap-1">
+      <input type="checkbox" name="overdue" value="1" {% if overdue_only %}checked{% endif %}>
+      только просроченные
+    </label>
+    <button class="btn btn-outline-success btn-sm">Применить</button>
+  </form>
+
+  {% if not groups %}
+  <div class="purchase-block">
+    <div class="empty">Нет заявок. Они появятся из производственного чата (AI Ops) или создайте вручную.</div>
+  </div>
+  {% endif %}
+
+  {% for g in groups %}
+  {% set p = g.purchase %}
+  <div class="purchase-block">
+    <div class="ph">
+      <div>
+        <h6>
+          {{ p.title }}
+          <span class="badge-src {% if p.source=='manual' %}manual{% endif %}">
+            {% if p.source=='ai_ops' %}AI Ops{% else %}вручную{% endif %}
+          </span>
+          {% if p.channel %}<span class="text-muted small ms-1">· {{ p.channel }}</span>{% endif %}
+        </h6>
+        <div class="small text-muted">
+          заявка от {{ p.request_date.strftime('%d.%m.%Y') if p.request_date else '—' }}
+          · {{ p.status }}
+        </div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        {% if p.status == 'open' %}
+        <form method="post" action="{{ url_for('vium.vium_purchase_status', purchase_id=p.id) }}" class="m-0">
+          <input type="hidden" name="status" value="closed">
+          <button class="btn btn-sm btn-outline-success">Закрыть заявку</button>
+        </form>
+        {% elif p.status == 'closed' %}
+        <form method="post" action="{{ url_for('vium.vium_purchase_status', purchase_id=p.id) }}" class="m-0">
+          <input type="hidden" name="status" value="open">
+          <button class="btn btn-sm btn-outline-secondary">Открыть снова</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% if p.quote %}
+    <div class="px-3 py-2 small text-muted border-bottom" style="white-space:pre-wrap;max-height:5rem;overflow:auto;">{{ p.quote }}</div>
+    {% endif %}
+
+    {# отдельные формы вне таблицы — inputs связываем через form= #}
+    {% for r in g.rows %}
+    {% set ln = r.line %}
+    <form id="pline-{{ ln.id }}" method="post" action="{{ url_for('vium.vium_purchase_line_edit', line_id=ln.id) }}" class="d-none"></form>
+    {% endfor %}
+
+    <div class="table-responsive">
+      <table>
+        <thead>
+          <tr>
+            <th>Позиция</th>
+            <th style="width:7rem">Кол-во</th>
+            <th style="width:7rem">Цена, ₽</th>
+            <th style="width:6rem">Сумма</th>
+            <th class="hide-sm" style="width:9rem">Поставщик</th>
+            <th style="width:9rem">Срок</th>
+            <th style="width:8rem">Статус</th>
+            <th style="width:3.5rem"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in g.rows %}
+          {% set ln = r.line %}
+          <tr class="{% if r.is_overdue %}overdue{% endif %}">
+            <td>
+              <input form="pline-{{ ln.id }}" type="text" name="title" class="form-control form-control-sm" value="{{ ln.title }}">
+            </td>
+            <td>
+              <input form="pline-{{ ln.id }}" type="text" name="qty_text" class="form-control form-control-sm" value="{{ ln.qty_text or '' }}" placeholder="как в заявке">
+              <input form="pline-{{ ln.id }}" type="number" step="0.001" name="qty" class="form-control form-control-sm mt-1" value="{{ ln.qty if ln.qty is not none else '' }}" placeholder="число" inputmode="decimal">
+            </td>
+            <td>
+              <input form="pline-{{ ln.id }}" type="number" step="0.01" name="unit_price" class="form-control form-control-sm" value="{{ ln.unit_price if ln.unit_price is not none else '' }}" inputmode="decimal">
+            </td>
+            <td class="num">
+              {% if r.amount is not none %}{{ '{:,.0f}'.format(r.amount|float).replace(',', ' ') }}{% else %}—{% endif %}
+            </td>
+            <td class="hide-sm">
+              <input form="pline-{{ ln.id }}" type="text" name="supplier" class="form-control form-control-sm" value="{{ ln.supplier or '' }}">
+            </td>
+            <td>
+              <input form="pline-{{ ln.id }}" type="date" name="delivery_date" class="form-control form-control-sm" value="{{ ln.delivery_date.isoformat() if ln.delivery_date else '' }}">
+            </td>
+            <td>
+              <select form="pline-{{ ln.id }}" name="status" class="form-select form-select-sm">
+                {% for k, lab in line_status_labels.items() %}
+                <option value="{{ k }}" {% if ln.status==k %}selected{% endif %}>{{ lab }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <button form="pline-{{ ln.id }}" type="submit" class="btn btn-sm btn-success" title="Сохранить">
+                <i class="fas fa-save"></i>
+              </button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="text-muted small px-3 py-3">Нет позиций</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="modal fade" id="newPurchaseModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <form method="post" action="{{ url_for('vium.vium_purchase_new') }}" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Новая заявка на закупку</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2 mb-3">
+          <div class="col-md-8">
+            <label class="small fw-bold">Название</label>
+            <input type="text" name="title" class="form-control" value="Заявка на закупку" required>
+          </div>
+          <div class="col-md-4">
+            <label class="small fw-bold">Дата</label>
+            <input type="date" name="request_date" class="form-control" value="{{ today.isoformat() }}">
+          </div>
+          <div class="col-12">
+            <label class="small fw-bold">Комментарий</label>
+            <input type="text" name="note" class="form-control" placeholder="опционально">
+          </div>
+        </div>
+        <div class="small fw-bold mb-2">Позиции</div>
+        {% for i in range(4) %}
+        <div class="row g-2 mb-2 align-items-end">
+          <div class="col-md-5">
+            {% if loop.first %}<label class="small">Наименование</label>{% endif %}
+            <input type="text" name="line_title[]" class="form-control form-control-sm" {% if loop.first %}required{% endif %}>
+          </div>
+          <div class="col-md-2">
+            {% if loop.first %}<label class="small">Кол-во</label>{% endif %}
+            <input type="text" name="line_qty[]" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-2">
+            {% if loop.first %}<label class="small">Цена</label>{% endif %}
+            <input type="number" step="0.01" name="line_price[]" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-3">
+            {% if loop.first %}<label class="small">Срок</label>{% endif %}
+            <input type="date" name="line_delivery[]" class="form-control form-control-sm">
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-success">Создать</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

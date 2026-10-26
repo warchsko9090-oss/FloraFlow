@@ -49,7 +49,8 @@ from app.models import (
     Plant, Size,
 )
 from app import vium_service, vium_techcard, vium_fot
-from app.utils import msk_now
+from app import vium_purchases as vium_purchase_svc
+from app.utils import msk_now, msk_today
 
 bp = Blueprint('vium', __name__, url_prefix='/vium')
 
@@ -1172,5 +1173,172 @@ def vium_plan_report_export():
         buf,
         as_attachment=True,
         download_name=fn,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+
+
+# ---------------------------------------------------------------------------
+# Закупки (заявки с ценами и сроками)
+# ---------------------------------------------------------------------------
+
+LINE_STATUS_LABELS = {
+    'planned': 'План',
+    'ordered': 'Заказано',
+    'received': 'Получено',
+    'cancelled': 'Отмена',
+}
+
+
+@bp.route('/purchases')
+@login_required
+def vium_purchases():
+    deny = _check_access()
+    if deny is not None:
+        return deny
+
+    # Подтянуть pending AI Ops заявки, если ещё не в учёте
+    try:
+        vium_purchase_svc.sync_pending_ops_purchases()
+    except Exception:
+        current_app.logger.exception('vium purchases sync failed')
+
+    status = (request.args.get('status') or 'open').strip()
+    if status not in ('open', 'closed', 'cancelled', 'all'):
+        status = 'open'
+    overdue_only = request.args.get('overdue') == '1'
+    start = _parse_date(request.args.get('start')) if request.args.get('start') else None
+    end = _parse_date(request.args.get('end')) if request.args.get('end') else None
+
+    overview = vium_purchase_svc.purchases_overview(
+        status=status,
+        start=start,
+        end=end,
+        overdue_only=overdue_only,
+    )
+    return render_template(
+        'vium/purchases.html',
+        status=status,
+        overdue_only=overdue_only,
+        start=start,
+        end=end,
+        line_status_labels=LINE_STATUS_LABELS,
+        materials=ViumMaterial.query.filter_by(is_archived=False)
+            .order_by(ViumMaterial.name.asc()).limit(200).all(),
+        **overview,
+    )
+
+
+@bp.route('/purchases/line/<int:line_id>/edit', methods=['POST'])
+@login_required
+def vium_purchase_line_edit(line_id):
+    deny = _check_access()
+    if deny is not None:
+        return deny
+    line = vium_purchase_svc.update_line_fields(line_id, request.form)
+    if not line:
+        flash('Позиция не найдена', 'danger')
+    else:
+        flash('Позиция сохранена', 'success')
+    return redirect(request.referrer or url_for('vium.vium_purchases'))
+
+
+@bp.route('/purchases/<int:purchase_id>/status', methods=['POST'])
+@login_required
+def vium_purchase_status(purchase_id):
+    deny = _check_access()
+    if deny is not None:
+        return deny
+    st = (request.form.get('status') or '').strip()
+    p = vium_purchase_svc.set_purchase_status(purchase_id, st)
+    if not p:
+        flash('Не удалось сменить статус', 'danger')
+    else:
+        flash('Статус заявки обновлён', 'success')
+    return redirect(request.referrer or url_for('vium.vium_purchases'))
+
+
+@bp.route('/purchases/new', methods=['POST'])
+@login_required
+def vium_purchase_new():
+    deny = _check_access()
+    if deny is not None:
+        return deny
+    title = (request.form.get('title') or 'Заявка на закупку').strip()
+    req_date = _parse_date(request.form.get('request_date'))
+    note = (request.form.get('note') or '').strip() or None
+    titles = request.form.getlist('line_title[]') or request.form.getlist('line_title')
+    qtys = request.form.getlist('line_qty[]') or request.form.getlist('line_qty')
+    prices = request.form.getlist('line_price[]') or request.form.getlist('line_price')
+    dates = request.form.getlist('line_delivery[]') or request.form.getlist('line_delivery')
+    lines = []
+    for i, t in enumerate(titles):
+        t = (t or '').strip()
+        if not t:
+            continue
+        lines.append({
+            'title': t,
+            'qty_text': (qtys[i] if i < len(qtys) else '') or None,
+            'unit_price': (prices[i] if i < len(prices) else '') or None,
+            'delivery_date': (dates[i] if i < len(dates) else '') or None,
+        })
+    if not lines:
+        flash('Добавьте хотя бы одну позицию', 'warning')
+        return redirect(url_for('vium.vium_purchases'))
+    vium_purchase_svc.create_manual_purchase(
+        title=title,
+        request_date=req_date,
+        lines=lines,
+        user_id=current_user.id,
+        note=note,
+    )
+    flash('Заявка создана', 'success')
+    return redirect(url_for('vium.vium_purchases'))
+
+
+@bp.route('/purchases/export')
+@login_required
+def vium_purchases_export():
+    deny = _check_access()
+    if deny is not None:
+        return deny
+    status = (request.args.get('status') or 'all').strip()
+    overview = vium_purchase_svc.purchases_overview(status=status)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Закупки'
+    headers = [
+        'Заявка', 'Дата заявки', 'Источник', 'Канал', 'Статус заявки',
+        'Позиция', 'Кол-во', 'Цена', 'Сумма', 'Поставщик',
+        'Срок поставки', 'Статус позиции',
+    ]
+    bold = Font(bold=True)
+    fill = PatternFill('solid', fgColor='FFE5E5E5')
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.font = bold
+        c.fill = fill
+    row = 2
+    for r in overview['rows']:
+        p, ln = r['purchase'], r['line']
+        ws.cell(row=row, column=1, value=p.title)
+        ws.cell(row=row, column=2, value=p.request_date.isoformat() if p.request_date else '')
+        ws.cell(row=row, column=3, value=p.source)
+        ws.cell(row=row, column=4, value=p.channel or '')
+        ws.cell(row=row, column=5, value=p.status)
+        ws.cell(row=row, column=6, value=ln.title)
+        ws.cell(row=row, column=7, value=ln.qty_text or (float(ln.qty) if ln.qty is not None else ''))
+        ws.cell(row=row, column=8, value=float(ln.unit_price) if ln.unit_price is not None else '')
+        ws.cell(row=row, column=9, value=float(r['amount']) if r['amount'] is not None else '')
+        ws.cell(row=row, column=10, value=ln.supplier or '')
+        ws.cell(row=row, column=11, value=ln.delivery_date.isoformat() if ln.delivery_date else '')
+        ws.cell(row=row, column=12, value=ln.status)
+        row += 1
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=f'vium_purchases_{msk_today().isoformat()}.xlsx',
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )

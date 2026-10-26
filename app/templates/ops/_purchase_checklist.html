@@ -8,6 +8,8 @@
         <span class="small fw-bold text-dark">
             <i class="fas fa-shopping-basket me-1 text-success"></i>
             {{ draft.purchase_title or 'Заявка на закупку' }}
+            <a href="{{ url_for('vium.vium_purchases') }}" class="ms-2 fw-normal" data-hx-boost="false"
+               title="Цены и сроки в учёте ВиУМ">ВиУМ →</a>
         </span>
         <span class="badge {% if total_n and done_n == total_n %}bg-success{% else %}bg-light text-dark border{% endif %}">
             {{ done_n }}/{{ total_n }}

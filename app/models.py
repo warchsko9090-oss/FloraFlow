@@ -1716,6 +1716,84 @@ class ViumPlannedConsume(db.Model):
     material = db.relationship('ViumMaterial')
 
 
+class ViumPurchase(db.Model):
+    """Заявка на закупку (отчёт ВиУМ + опционально из AI Ops).
+
+    Не путать с приходом на склад (`ViumOperation kind=intake`) — здесь
+    планирование: что купить, по какой цене, к какому сроку.
+    """
+    __tablename__ = 'vium_purchase'
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False, default='Заявка на закупку')
+    request_date = db.Column(db.Date, nullable=False, index=True)
+    # open | closed | cancelled
+    status = db.Column(db.String(20), nullable=False, default='open', index=True)
+    # ai_ops | manual
+    source = db.Column(db.String(20), nullable=False, default='manual')
+    channel = db.Column(db.String(20), nullable=True)
+    quote = db.Column(db.Text, nullable=True)
+    note = db.Column(db.String(500), nullable=True)
+    ops_draft_id = db.Column(
+        db.Integer, db.ForeignKey('ops_action_draft.id'), nullable=True, unique=True
+    )
+    task_id = db.Column(db.Integer, db.ForeignKey('tg_task.id'), nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+    ops_draft = db.relationship('OpsActionDraft', foreign_keys=[ops_draft_id])
+    task = db.relationship('TgTask', foreign_keys=[task_id])
+    created_by = db.relationship('User', foreign_keys=[created_by_user_id])
+    lines = db.relationship(
+        'ViumPurchaseLine',
+        backref='purchase',
+        cascade='all, delete-orphan',
+        order_by='ViumPurchaseLine.sort_order, ViumPurchaseLine.id',
+    )
+
+
+class ViumPurchaseLine(db.Model):
+    """Позиция заявки на закупку: название, кол-во, цена, срок поставки."""
+    __tablename__ = 'vium_purchase_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    purchase_id = db.Column(
+        db.Integer, db.ForeignKey('vium_purchase.id'), nullable=False, index=True
+    )
+    # стабильный ключ из AI checklist (i1…) или нормализованный текст
+    external_key = db.Column(db.String(120), nullable=True, index=True)
+    title = db.Column(db.String(300), nullable=False)
+    qty_text = db.Column(db.String(80), nullable=True)
+    qty = db.Column(db.Numeric(12, 3), nullable=True)
+    unit = db.Column(db.String(20), nullable=True)
+    unit_price = db.Column(db.Numeric(12, 2), nullable=True)
+    supplier = db.Column(db.String(200), nullable=True)
+    delivery_date = db.Column(db.Date, nullable=True, index=True)
+    # planned | ordered | received | cancelled
+    status = db.Column(db.String(20), nullable=False, default='planned', index=True)
+    material_id = db.Column(
+        db.Integer, db.ForeignKey('vium_material.id'), nullable=True
+    )
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    note = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+    material = db.relationship('ViumMaterial')
+
+    @property
+    def amount(self):
+        if self.qty is None or self.unit_price is None:
+            return None
+        try:
+            return (Decimal(self.qty) * Decimal(self.unit_price)).quantize(
+                Decimal('0.01')
+            )
+        except Exception:
+            return None
+
+
 class ShopContact(db.Model):
     """Контакты питомника для витрины /shop и PDF КП."""
     __tablename__ = 'shop_contact'
