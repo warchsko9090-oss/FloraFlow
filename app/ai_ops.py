@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
@@ -50,6 +51,7 @@ ACTION_TYPES = (
     'order_create',
     'order_qty_change',
     'price_change',
+    'purchase_request',
 )
 
 
@@ -277,8 +279,9 @@ _DIGEST_PROMPT = (
     '   Если одна и та же тема (заказ / оплата / отгрузка) всплыла в нескольких чатах — '
     'в сводке один пункт с пометкой каналов (напр. «ИТР+Производство»), без дублей.\n'
     '2) Затем отдельной строкой ровно маркер <<<ACTIONS>>> и JSON-массив кандидатов:\n'
-    '[{{"type":"payment_confirm|shipment_confirm|order_create|order_qty_change|price_change",'
-    '"entities":{{"order_id":null,"client":null,"amount":null,"plant":null,"size":null,"qty":null,"price":null}},'
+    '[{{"type":"payment_confirm|shipment_confirm|order_create|order_qty_change|price_change|purchase_request",'
+    '"entities":{{"order_id":null,"client":null,"amount":null,"plant":null,"size":null,"qty":null,"price":null,'
+    '"items":[{{"text":"название","qty":"1"}}],"title":null}},'
     '"quote":"...","confidence":0.0-1.0,"channel":"sales|hr|production|itr",'
     '"channels":["itr","production"]}}]\n'
     'КРИТИЧНО про ACTIONS:\n'
@@ -287,6 +290,9 @@ _DIGEST_PROMPT = (
     '- В channels перечисли все затронутые каналы; channel = основной (где впервые или полнее).\n'
     '- Речь из голосовых/видео/кружков помечена [голос]/[видео]/[кружок] — '
     'это полноценный текст, учитывай.\n'
+    '- purchase_request: список закупок/заявка «что купить» (часто производство). '
+    'В entities.items — нормализованные позиции (text, qty опц.), без выдуманных строк. '
+    'Один список = один action, даже если нумерация 1,2,3…\n'
     '- Если кандидатов нет — пустой массив [].\n'
     'Только факты из текста. Игнор болтовни про логины/стикеры.\n\n'
     'Сообщений: {message_count}\n\n'
@@ -471,7 +477,120 @@ def _heuristic_actions(by_ch: dict[str, str]) -> list[dict]:
                 })
             if len(out) >= 20:
                 return out
+        # Нумерованный список закупок (часто производство)
+        purchase = _heuristic_purchase_list(ch, transcript)
+        if purchase:
+            out.append(purchase)
     return out
+
+
+def _normalize_purchase_items(raw_items) -> list[dict]:
+    """items → [{id, text, qty, done}] без пустых."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for i, it in enumerate(raw_items or []):
+        if isinstance(it, str):
+            text = it.strip()
+            qty = None
+            done = False
+            iid = None
+        elif isinstance(it, dict):
+            text = (it.get('text') or it.get('name') or it.get('title') or '').strip()
+            qty = it.get('qty') if it.get('qty') not in (None, '') else it.get('quantity')
+            done = bool(it.get('done'))
+            iid = it.get('id')
+        else:
+            continue
+        if not text:
+            continue
+        key = re.sub(r'\s+', ' ', text.lower())[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            'id': str(iid or f'i{len(out) + 1}'),
+            'text': text[:300],
+            'qty': (str(qty)[:40] if qty not in (None, '') else None),
+            'done': done,
+        })
+        if len(out) >= 40:
+            break
+    return out
+
+
+def _merge_purchase_items(old_items, new_items) -> list[dict]:
+    """Склеивает позиции, сохраняя галочки done."""
+    old = _normalize_purchase_items(old_items)
+    new = _normalize_purchase_items(new_items)
+    by_key: dict[str, dict] = {}
+    for it in old:
+        by_key[re.sub(r'\s+', ' ', it['text'].lower())[:120]] = dict(it)
+    for it in new:
+        k = re.sub(r'\s+', ' ', it['text'].lower())[:120]
+        if k in by_key:
+            prev = by_key[k]
+            if it.get('qty') and not prev.get('qty'):
+                prev['qty'] = it['qty']
+            # галочки админа не сбрасываем; True с любой стороны сохраняем
+            prev['done'] = bool(prev.get('done') or it.get('done'))
+        else:
+            by_key[k] = dict(it)
+            by_key[k]['done'] = bool(it.get('done'))
+    merged = list(by_key.values())
+    for i, it in enumerate(merged):
+        it['id'] = str(it.get('id') or f'i{i + 1}')
+    return merged[:40]
+
+
+def _heuristic_purchase_list(channel: str, transcript: str) -> dict | None:
+    """Ищет нумерованный список (1, … / 1. …) — заявка на закупку."""
+    lines = (transcript or '').splitlines()
+    item_re = re.compile(
+        r'^\s*(?:\d{1,2})\s*[.,):\-–—]\s*(.+)$'
+    )
+    # Также «1, текст» как у Бехруза
+    item_re2 = re.compile(r'^\s*(\d{1,2})\s*,\s*(.+)$')
+    collected: list[str] = []
+    start_idx = None
+    for idx, line in enumerate(lines):
+        body = line.split(':', 1)[-1].strip()
+        m = item_re.match(body) or item_re2.match(body)
+        if m:
+            text = (m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(1)).strip()
+            text = re.sub(r'\s+', ' ', text)
+            if len(text) >= 3:
+                if start_idx is None:
+                    start_idx = idx
+                collected.append(text[:300])
+            continue
+        # разрыв списка
+        if collected and len(collected) >= 2:
+            break
+        if collected and not m:
+            collected = []
+            start_idx = None
+
+    if len(collected) < 2:
+        return None
+    # Контекст: закуп/нужно рядом или канал production
+    window = '\n'.join(lines[max(0, (start_idx or 0) - 4):(start_idx or 0) + 1]).lower()
+    buyish = any(
+        k in window for k in ('закуп', 'купи', 'нужн', 'надо ', 'список', 'прин')
+    )
+    if channel != 'production' and not buyish:
+        return None
+    items = _normalize_purchase_items([{'text': t} for t in collected])
+    return {
+        'type': 'purchase_request',
+        'entities': {
+            'items': items,
+            'title': 'Заявка на закупку',
+            'day': msk_today().isoformat(),
+        },
+        'quote': '\n'.join(f'{i + 1}. {t}' for i, t in enumerate(collected))[:1500],
+        'confidence': 0.55 if buyish else 0.4,
+        'channel': channel or 'production',
+    }
 
 
 def _stable_entity_key(action_type: str, entities: dict) -> str:
@@ -497,6 +616,10 @@ def _stable_entity_key(action_type: str, entities: dict) -> str:
         plant = (entities.get('plant') or '').strip().lower()[:30]
         size = (entities.get('size') or '').strip().lower()[:20]
         return f'plant={plant or "?"}:size={size or "?"}'
+    if action_type == 'purchase_request':
+        # Одна открытая заявка на день (склейка дописок в тот же чеклист)
+        day = (entities.get('day') or msk_today().isoformat())[:10]
+        return f'day={day}'
     return f'raw={hash(json.dumps(entities, sort_keys=True, default=str)) % 10**8}'
 
 
@@ -539,6 +662,14 @@ def _normalize_and_merge_actions(actions: list[dict]) -> list[dict]:
             entities = {}
         else:
             entities = dict(entities)
+
+        if action_type == 'purchase_request':
+            entities['items'] = _normalize_purchase_items(entities.get('items'))
+            entities['day'] = (entities.get('day') or msk_today().isoformat())[:10]
+            if not entities.get('title'):
+                entities['title'] = 'Заявка на закупку'
+            if not entities['items']:
+                continue
 
         # Резолв заказа до ключа — иначе дубли «клиент+сумма» и «order=#» не схлопнутся
         cache_key = json.dumps(
@@ -596,9 +727,15 @@ def _normalize_and_merge_actions(actions: list[dict]) -> list[dict]:
             ):
                 prev['channel'] = channel
             pe = prev.get('entities') or {}
-            for k, v in entities.items():
-                if v is not None and v != '' and (pe.get(k) is None or pe.get(k) == ''):
-                    pe[k] = v
+            if action_type == 'purchase_request':
+                pe['items'] = _merge_purchase_items(pe.get('items'), entities.get('items'))
+                pe['day'] = entities.get('day') or pe.get('day')
+                if entities.get('title') and not pe.get('title'):
+                    pe['title'] = entities['title']
+            else:
+                for k, v in entities.items():
+                    if v is not None and v != '' and (pe.get(k) is None or pe.get(k) == ''):
+                        pe[k] = v
             prev['entities'] = pe
             continue
 
@@ -801,6 +938,11 @@ def _should_skip_action(action_type: str, entities: dict, order: Order | None) -
         if _price_already_matches(entities):
             return True, 'price_matches'
         return False, ''
+    if action_type == 'purchase_request':
+        items = _normalize_purchase_items(entities.get('items'))
+        if not items:
+            return True, 'empty_purchase'
+        return False, ''
     return False, ''
 
 
@@ -811,8 +953,15 @@ def _title_for_action(action_type: str, entities: dict, order: Order | None) -> 
         'order_create': 'Создать заказ',
         'order_qty_change': 'Изменить количество',
         'price_change': 'Изменить цену',
+        'purchase_request': 'Заявка на закупку',
     }
     base = labels.get(action_type, action_type)
+    if action_type == 'purchase_request':
+        items = _normalize_purchase_items(entities.get('items'))
+        n = len(items)
+        done = sum(1 for x in items if x.get('done'))
+        title = entities.get('title') or base
+        return f'{title}: {done}/{n}' if n else str(title)
     if order:
         client = order.client.name if order.client else ''
         return f'{base}: заказ #{order.id}' + (f' · {client}' if client else '')
@@ -846,9 +995,15 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
         entities = raw.get('entities') or {}
         if not isinstance(entities, dict):
             entities = {}
+        entities = dict(entities)
+        if action_type == 'purchase_request':
+            entities['items'] = _normalize_purchase_items(entities.get('items'))
+            entities['day'] = (entities.get('day') or day.isoformat())[:10]
+            if not entities.get('title'):
+                entities['title'] = 'Заявка на закупку'
+
         order = _find_order(entities)
         if order:
-            entities = dict(entities)
             entities['order_id'] = order.id
 
         stable = _stable_entity_key(action_type, entities)
@@ -885,9 +1040,16 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             if ch_hint and ch_hint not in title:
                 title = f'{title} · {ch_hint}'[:200]
         details = quote or title
+        if action_type == 'purchase_request':
+            details = '\n'.join(
+                f'{"✓" if it.get("done") else "○"} {it.get("text")}'
+                + (f' ({it["qty"]})' if it.get('qty') else '')
+                for it in (entities.get('items') or [])
+            ) or details
         payload = {
             'action_type': action_type,
             'entities': entities,
+            'items': entities.get('items') if action_type == 'purchase_request' else None,
             'order_id': order.id if order else None,
             'client_id': order.client_id if order else None,
             'channel': channel,
@@ -900,15 +1062,34 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
         task = by_key.get(dedup_key)
         if task is not None:
             task.last_seen_at = now
-            merged_details = _merge_quote(task.details or '', quote, channel)
+            draft = OpsActionDraft.query.filter_by(task_id=task.id).order_by(
+                OpsActionDraft.id.desc()
+            ).first()
+            if action_type == 'purchase_request' and draft and draft.status == 'pending':
+                old_pl = draft_payload(draft)
+                old_items = (
+                    old_pl.get('items')
+                    or (old_pl.get('entities') or {}).get('items')
+                    or []
+                )
+                entities['items'] = _merge_purchase_items(old_items, entities.get('items'))
+                payload['items'] = entities['items']
+                payload['entities'] = entities
+                title = _title_for_action(action_type, entities, order)[:200]
+                details = '\n'.join(
+                    f'{"✓" if it.get("done") else "○"} {it.get("text")}'
+                    + (f' ({it["qty"]})' if it.get('qty') else '')
+                    for it in entities['items']
+                ) or details
+            merged_details = (
+                details if action_type == 'purchase_request'
+                else _merge_quote(task.details or '', quote, channel)
+            )
             task.details = (merged_details or details)[:4000]
             task.title = title
             task.action_payload = json.dumps(payload, ensure_ascii=False)
             if task.status == 'snoozed' and task.deadline and task.deadline <= day:
                 task.status = 'new'
-            draft = OpsActionDraft.query.filter_by(task_id=task.id).order_by(
-                OpsActionDraft.id.desc()
-            ).first()
             if draft and draft.status == 'pending':
                 draft.payload_json = json.dumps(payload, ensure_ascii=False)
                 draft.quote = _merge_quote(draft.quote or '', quote, channel)
@@ -939,7 +1120,10 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             dedup_key=dedup_key,
             first_seen_at=now,
             last_seen_at=now,
-            severity='warning' if action_type == 'payment_confirm' else 'info',
+            severity=(
+                'warning' if action_type in ('payment_confirm', 'purchase_request')
+                else 'info'
+            ),
         )
         db.session.add(task)
         db.session.flush()
@@ -1595,7 +1779,7 @@ def enrich_ops_draft_card(dr: OpsActionDraft, payload_order_id=None) -> dict:
     if not channels and dr.channel:
         channels = [dr.channel]
 
-    return {
+    result = {
         'id': dr.id,
         'action_type': dr.action_type,
         'order_id': preferred_oid,
@@ -1618,7 +1802,95 @@ def enrich_ops_draft_card(dr: OpsActionDraft, payload_order_id=None) -> dict:
         'sizes_opts': sizes_opts,
         'orders_opts': orders_opts,
         'suggest_cash': ('нал' in (dr.quote or '').lower()),
+        'purchase_items': [],
+        'purchase_done': 0,
+        'purchase_total': 0,
+        'purchase_title': '',
     }
+    if dr.action_type == 'purchase_request':
+        items = _normalize_purchase_items(pl.get('items') or ent.get('items'))
+        result['purchase_items'] = items
+        result['purchase_total'] = len(items)
+        result['purchase_done'] = sum(1 for x in items if x.get('done'))
+        result['purchase_title'] = (
+            ent.get('title') or pl.get('title') or 'Заявка на закупку'
+        )
+    return result
+
+
+def _persist_purchase_items(draft: OpsActionDraft, items: list[dict]) -> None:
+    """Пишет чеклист в payload + обновляет заголовок/детали задачи."""
+    items = _normalize_purchase_items(items)
+    pl = draft_payload(draft)
+    ent = dict(pl.get('entities') or {})
+    ent['items'] = items
+    if not ent.get('day'):
+        ent['day'] = msk_today().isoformat()
+    if not ent.get('title'):
+        ent['title'] = 'Заявка на закупку'
+    pl['entities'] = ent
+    pl['items'] = items
+    draft.payload_json = json.dumps(pl, ensure_ascii=False)
+    draft.updated_at = msk_now()
+    if draft.task_id:
+        t = TgTask.query.get(draft.task_id)
+        if t:
+            t.title = _title_for_action('purchase_request', ent, None)[:200]
+            t.details = '\n'.join(
+                f'{"✓" if it.get("done") else "○"} {it.get("text")}'
+                + (f' ({it["qty"]})' if it.get('qty') else '')
+                for it in items
+            )[:4000]
+            t.action_payload = json.dumps(pl, ensure_ascii=False)
+            t.last_seen_at = msk_now()
+
+
+def toggle_purchase_item(
+    draft: OpsActionDraft,
+    *,
+    item_id: str,
+    done: bool | None = None,
+) -> dict:
+    if draft.action_type != 'purchase_request':
+        return {'ok': False, 'error': 'Не заявка на закупку'}
+    if draft.status != 'pending':
+        return {'ok': False, 'error': 'Черновик уже закрыт'}
+    pl = draft_payload(draft)
+    items = _normalize_purchase_items(
+        pl.get('items') or (pl.get('entities') or {}).get('items')
+    )
+    found = False
+    for it in items:
+        if str(it.get('id')) == str(item_id):
+            it['done'] = (not it.get('done')) if done is None else bool(done)
+            found = True
+            break
+    if not found:
+        return {'ok': False, 'error': 'Позиция не найдена'}
+    _persist_purchase_items(draft, items)
+    db.session.commit()
+    done_n = sum(1 for x in items if x.get('done'))
+    return {
+        'ok': True,
+        'items': items,
+        'done': done_n,
+        'total': len(items),
+        'all_done': bool(items) and done_n == len(items),
+    }
+
+
+def complete_purchase_draft(
+    draft: OpsActionDraft,
+    *,
+    user_id: int | None = None,
+) -> dict:
+    if draft.action_type != 'purchase_request':
+        return {'ok': False, 'error': 'Не заявка на закупку'}
+    if draft.status != 'pending':
+        return {'ok': False, 'error': 'Уже закрыто'}
+    _mark_draft_done(draft, user_id=user_id)
+    db.session.commit()
+    return {'ok': True}
 
 
 def _orders_opts_for_payment(
@@ -1956,6 +2228,49 @@ def api_draft_ack(draft_id):
     return _hx_ok('Отмечено вручную', success=True)
 
 
+def _render_purchase_checklist(draft: OpsActionDraft, *, card_id: str | None = None) -> str:
+    enriched = enrich_ops_draft_card(draft)
+    return render_template(
+        'ops/_purchase_checklist.html',
+        draft=enriched,
+        card_id=card_id or '',
+    )
+
+
+@bp.route('/api/draft/<int:draft_id>/purchase_toggle', methods=['POST'])
+@login_required
+@pilot_required
+def api_purchase_toggle(draft_id):
+    draft = OpsActionDraft.query.get_or_404(draft_id)
+    item_id = (request.form.get('item_id') or '').strip()
+    if not item_id:
+        return _hx_err('Нет item_id')
+    done_raw = request.form.get('done')
+    done = None
+    if done_raw is not None and str(done_raw) != '':
+        done = str(done_raw).lower() in ('1', 'true', 'yes', 'on')
+    result = toggle_purchase_item(draft, item_id=item_id, done=done)
+    if not result.get('ok'):
+        return _hx_err(result.get('error') or 'Ошибка')
+    if request.headers.get('HX-Request'):
+        card_id = (request.form.get('card_id') or '').strip() or None
+        return _render_purchase_checklist(draft, card_id=card_id)
+    return jsonify(result)
+
+
+@bp.route('/api/draft/<int:draft_id>/purchase_done', methods=['POST'])
+@login_required
+@pilot_required
+def api_purchase_done(draft_id):
+    draft = OpsActionDraft.query.get_or_404(draft_id)
+    result = complete_purchase_draft(draft, user_id=current_user.id)
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            return _hx_ok('Закупка закрыта')
+        return _hx_err(result.get('error') or 'Ошибка')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
 @bp.route('/api/run_digest', methods=['POST'])
 @login_required
 @pilot_required
@@ -2039,6 +2354,31 @@ def api_demo_seed():
             'quote': 'Демо: цена',
             'confidence': 0.99,
             'channel': 'sales',
+        },
+        {
+            'type': 'purchase_request',
+            'entities': {
+                'title': 'Заявка на закупку',
+                'day': msk_today().isoformat(),
+                'items': [
+                    {'text': 'комбинезон для химии', 'qty': '1'},
+                    {'text': 'весы маленькие для удобрений', 'qty': '1'},
+                    {'text': 'перчатки резиновые', 'qty': '3 пары'},
+                    {'text': 'фонарик налобный', 'qty': '3'},
+                    {'text': 'цепь для пилы', 'qty': '1'},
+                    {'text': 'замок', 'qty': '4'},
+                ],
+            },
+            'quote': (
+                '1, комбинезон для химии\n'
+                '2, весы маленькие для удобрений\n'
+                '3, перчатки 3 пары резиновые\n'
+                '4, фонарик 3 шт налобный\n'
+                '5, 1 цепь для пилы\n'
+                '6, замок 4 шт'
+            ),
+            'confidence': 0.99,
+            'channel': 'production',
         },
     ]
     # уникальные ключи на день — force через суффикс quote в entities day

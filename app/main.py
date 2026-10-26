@@ -373,7 +373,8 @@ def _card_topic(card):
         if at in ('create_order', 'shipment', 'order', 'paid_order_change',
                   'shipment_confirm', 'order_create', 'order_qty_change'):
             return 'sales'
-        if at in ('expense', 'income', 'payment', 'payment_confirm', 'price_change'):
+        if at in ('expense', 'income', 'payment', 'payment_confirm', 'price_change',
+                  'purchase_request'):
             return 'finance'
         return 'other'
     return 'other'

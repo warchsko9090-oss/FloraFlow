@@ -491,7 +491,14 @@
                                             <span class="badge bg-light text-dark border"><i class="fas fa-calendar-check me-1 text-danger"></i> {{ card.date_str }}</span>
                                         </div>
                                         <h5 class="fw-bold text-dark mb-2">{{ card.title }}</h5>
-                                        {% if card.details %}
+                                        {% if card.ops_draft and card.ops_draft.action_type == 'purchase_request' %}
+                                        {% if card.ops_draft.quote %}
+                                        <div class="bg-light p-2 rounded small text-dark mb-2 border fst-italic text-break" style="white-space:pre-wrap;max-height:7rem;overflow:auto;">{{ card.ops_draft.quote }}</div>
+                                        {% endif %}
+                                        {% with draft=card.ops_draft, card_id=card.id %}
+                                        {% include 'ops/_purchase_checklist.html' %}
+                                        {% endwith %}
+                                        {% elif card.details %}
                                         <div class="bg-light p-2 rounded small text-dark mb-3 border fst-italic">{{ card.details }}</div>
                                         {% endif %}
 

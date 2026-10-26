@@ -1,0 +1,58 @@
+{# Чеклист заявки на закупку (AI Ops). draft = enrich_ops_draft_card(...) #}
+{% set items = draft.purchase_items or [] %}
+{% set done_n = draft.purchase_done or 0 %}
+{% set total_n = draft.purchase_total or (items|length) %}
+<div id="purchase-check-{{ draft.id }}" class="purchase-checklist mb-2"
+     data-done="{{ done_n }}" data-total="{{ total_n }}">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="small fw-bold text-dark">
+            <i class="fas fa-shopping-basket me-1 text-success"></i>
+            {{ draft.purchase_title or 'Заявка на закупку' }}
+        </span>
+        <span class="badge {% if total_n and done_n == total_n %}bg-success{% else %}bg-light text-dark border{% endif %}">
+            {{ done_n }}/{{ total_n }}
+        </span>
+    </div>
+    {% if draft.channels_label %}
+    <div class="small text-muted mb-2">
+        <i class="fas fa-comments me-1"></i>{{ draft.channels_label }}
+    </div>
+    {% endif %}
+    <ul class="list-group list-group-flush border rounded mb-2">
+        {% for it in items %}
+        <li class="list-group-item px-2 py-2 d-flex align-items-start gap-2 {% if it.done %}bg-success bg-opacity-10{% endif %}">
+            <form hx-post="{{ url_for('ai_ops.api_purchase_toggle', draft_id=draft.id) }}"
+                  hx-target="#purchase-check-{{ draft.id }}"
+                  hx-swap="outerHTML"
+                  class="m-0 d-flex align-items-start gap-2 flex-grow-1">
+                <input type="hidden" name="item_id" value="{{ it.id }}">
+                <input type="hidden" name="done" value="{{ '0' if it.done else '1' }}">
+                {% if card_id %}<input type="hidden" name="card_id" value="{{ card_id }}">{% endif %}
+                <button type="submit"
+                        class="btn btn-sm {% if it.done %}btn-success{% else %}btn-outline-secondary{% endif %} rounded-circle p-0 flex-shrink-0"
+                        style="width:1.75rem;height:1.75rem;line-height:1;"
+                        title="{% if it.done %}Снять отметку{% else %}Отметить заказанным{% endif %}">
+                    {% if it.done %}<i class="fas fa-check"></i>{% else %}&nbsp;{% endif %}
+                </button>
+                <span class="small {% if it.done %}text-decoration-line-through text-muted{% else %}text-dark{% endif %}">
+                    {{ it.text }}{% if it.qty %} <span class="text-muted">({{ it.qty }})</span>{% endif %}
+                </span>
+            </form>
+        </li>
+        {% else %}
+        <li class="list-group-item small text-muted">Список пуст</li>
+        {% endfor %}
+    </ul>
+    <form hx-post="{{ url_for('ai_ops.api_purchase_done', draft_id=draft.id) }}"
+          {% if card_id %}hx-target="#card-{{ card_id }}" hx-swap="outerHTML"{% endif %}
+          class="m-0 mb-2"
+          {% if not (total_n and done_n == total_n) %}
+          hx-confirm="Закрыть заявку? Не все позиции отмечены."
+          {% endif %}>
+        <button type="submit" class="btn btn-success btn-sm fw-bold w-100"
+                {% if not items %}disabled{% endif %}>
+            <i class="fas fa-check-double me-1"></i>
+            {% if total_n and done_n == total_n %}Всё заказано — закрыть{% else %}Закрыть заявку{% endif %}
+        </button>
+    </form>
+</div>
