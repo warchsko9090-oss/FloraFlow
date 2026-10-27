@@ -3,16 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    {# Redmi/Chrome/Yandex PWA часто открывают сайт в «версии для ПК»
+       (layout viewport ~980px). Тогда media max-width:991 не срабатывает.
+       Скрипт до CSS: на телефоне фиксируем viewport по короткой стороне экрана. #}
+    <script>
+    (function () {
+        var KEY = 'ff_ui_mode';
+        var pref = 'auto';
+        try { pref = localStorage.getItem(KEY) || 'auto'; } catch (e) {}
+        var touch = (navigator.maxTouchPoints || 0) > 0 || ('ontouchstart' in window);
+        var shortSide = Math.min(screen.width || 0, screen.height || 0);
+        var layoutW = window.innerWidth || document.documentElement.clientWidth || 0;
+        var coarse = false;
+        var standalone = false;
+        try { coarse = window.matchMedia('(pointer: coarse)').matches; } catch (e) {}
+        try {
+            standalone = window.matchMedia('(display-mode: standalone)').matches
+                || window.matchMedia('(display-mode: fullscreen)').matches
+                || window.navigator.standalone === true;
+        } catch (e) {}
+        var phoneScreen = touch && shortSide > 0 && shortSide <= 820;
+        // Chrome/Яндекс/MIUI «версия для ПК»: layout ~980 при экране ~360–430
+        var desktopSpoof = phoneScreen && layoutW >= 900 && layoutW > shortSide + 100;
+        var phoneHw = phoneScreen && (coarse || standalone || desktopSpoof || shortSide <= 540);
+        var mqMobile = false;
+        try { mqMobile = window.matchMedia('(max-width: 991.98px)').matches; } catch (e) {}
+        var mode = pref;
+        if (pref !== 'mobile' && pref !== 'desktop') {
+            mode = (phoneHw || mqMobile) ? 'mobile' : 'desktop';
+        }
+        if (mode === 'mobile' && phoneHw && shortSide >= 280) {
+            var meta = document.querySelector('meta[name="viewport"]');
+            if (meta) {
+                meta.setAttribute(
+                    'content',
+                    'width=' + shortSide + ', initial-scale=1, viewport-fit=cover'
+                );
+            }
+        }
+        var root = document.documentElement;
+        root.dataset.uiMode = mode;
+        if (mode === 'mobile') root.classList.add('ff-force-mobile');
+        if (mode === 'desktop') root.classList.add('ff-force-desktop');
+        window.__ffUiMode = mode;
+        window.__ffIsPhoneHw = phoneHw;
+    })();
+    </script>
     {% if request.endpoint == 'main.index' and request.args.get('dash') != '1' %}
     <script>
-    if (window.matchMedia('(max-width: 991.98px)').matches) {
-        location.replace({{ url_for('orders.orders_list')|tojson }});
-    }
+    (function () {
+        var mobile = document.documentElement.classList.contains('ff-force-mobile')
+            || window.matchMedia('(max-width: 991.98px)').matches;
+        if (mobile) location.replace({{ url_for('orders.orders_list')|tojson }});
+    })();
     </script>
     {% endif %}
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="{{ url_for('main.manifest') }}">
     <meta name="theme-color" content="#16a34a">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="apple-touch-icon" href="{{ url_for('main.app_icon') }}">
@@ -1189,6 +1238,59 @@
         body.chat-open #toTopBtn { visibility: hidden; }
         #chatWindow { bottom: calc(var(--bottomnav-h) + 12px) !important; right: 12px !important; left: 12px !important; width: auto !important; height: 70vh !important; }
     }
+    /* Дубль мобильной оболочки на случай, если браузер/PWA оставил
+       широкий layout viewport (часто Redmi + «версия для ПК»). */
+    html.ff-force-mobile .app-shell,
+    html.ff-force-mobile .app-shell.sidebar-collapsed {
+        grid-template-columns: 1fr !important;
+        grid-template-rows: var(--header-h) 1fr;
+        grid-template-areas: "header" "main" !important;
+    }
+    html.ff-force-mobile .app-sidebar {
+        position: fixed;
+        left: 0; top: 0;
+        width: 85vw;
+        max-width: 320px;
+        height: 100vh;
+        transform: translateX(-100%);
+        transition: transform .25s cubic-bezier(.2,.8,.2,1);
+        z-index: 80;
+        box-shadow: 30px 0 60px rgba(15, 23, 42, 0.2);
+    }
+    html.ff-force-mobile .app-shell.sidebar-collapsed .app-sidebar { width: 85vw; max-width: 320px; }
+    html.ff-force-mobile .app-shell.sidebar-collapsed .sidebar-link { justify-content: flex-start; padding: 8px 14px; }
+    html.ff-force-mobile .app-shell.sidebar-collapsed .sidebar-link .sl-label,
+    html.ff-force-mobile .app-shell.sidebar-collapsed .sidebar-link .sl-badge,
+    html.ff-force-mobile .app-shell.sidebar-collapsed .sidebar-link .sl-chevron { display: inline-flex !important; }
+    html.ff-force-mobile .app-shell.sidebar-collapsed .sidebar-brand .brand-text { display: flex !important; }
+    html.ff-force-mobile .app-shell.sidebar-collapsed .sidebar-group-title { display: block !important; }
+    html.ff-force-mobile .app-shell.sidebar-collapsed .sidebar-sub { display: none; }
+    html.ff-force-mobile .app-shell.sidebar-collapsed .sidebar-group.open > .sidebar-sub { display: flex !important; }
+    html.ff-force-mobile .app-sidebar.open { transform: translateX(0); }
+    html.ff-force-mobile .mobile-menu-btn { display: none !important; }
+    html.ff-force-mobile .mobile-brand { display: inline-flex; }
+    html.ff-force-mobile .sidebar-collapse-btn { display: none; }
+    html.ff-force-mobile .sidebar-toggle-top { display: none !important; }
+    html.ff-force-mobile .user-chip .user-name { display: none; }
+    html.ff-force-mobile .user-chip { padding: 4px; }
+    html.ff-force-mobile .app-search { display: none; }
+    html.ff-force-mobile .bottom-nav { display: block; }
+    html.ff-force-mobile .app-main { padding: 16px 12px calc(var(--bottomnav-h) + 16px); min-width: 0; }
+    html.ff-force-mobile #networkStatus { bottom: calc(var(--bottomnav-h) + 10px); left: 12px; font-size: 11px; padding: 4px 9px; }
+    html.ff-force-mobile #chatButton { bottom: calc(var(--bottomnav-h) + 12px) !important; right: 12px !important; width: 52px !important; height: 52px !important; }
+    html.ff-force-mobile #toTopBtn {
+        display: flex; align-items: center; justify-content: center;
+        position: fixed; right: 12px; bottom: calc(var(--bottomnav-h) + 74px);
+        z-index: 1040; width: 44px; height: 44px; padding: 0;
+        border-radius: 50%; border: 2px solid #fff;
+        background: #1b5e20; color: #fff;
+        box-shadow: 0 4px 12px rgba(27, 94, 32, 0.28);
+        opacity: 0; pointer-events: none; transform: translateY(8px);
+        transition: opacity .2s ease, transform .2s ease;
+    }
+    html.ff-force-mobile #toTopBtn.is-on { opacity: 1; pointer-events: auto; transform: none; }
+    html.ff-force-mobile body.chat-open #toTopBtn { visibility: hidden; }
+    html.ff-force-mobile #chatWindow { bottom: calc(var(--bottomnav-h) + 12px) !important; right: 12px !important; left: 12px !important; width: auto !important; height: 70vh !important; }
     @media (max-width: 420px) {
         .user-chip { display: none; }
     }
@@ -1670,10 +1772,30 @@
                         <small>{{ current_user.role }}</small>
                     </span>
                 </div>
-                <ul class="dropdown-menu dropdown-menu-end shadow border-0" style="min-width:220px;border-radius:12px;">
+                <ul class="dropdown-menu dropdown-menu-end shadow border-0" style="min-width:260px;border-radius:12px;">
                     <li class="px-3 py-2">
                         <div class="fw-bold text-dark">{{ current_user.username }}</div>
                         <div class="small text-muted">Роль: {{ current_user.role }}</div>
+                    </li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li class="px-3 py-2">
+                        <div class="small fw-bold text-muted text-uppercase mb-1" style="letter-spacing:.04em;font-size:10px;">Версия экрана</div>
+                        <div class="btn-group w-100" role="group" aria-label="Версия экрана">
+                            <button type="button" class="btn btn-outline-success btn-sm ff-ui-mode-btn" data-mode="auto">Авто</button>
+                            <button type="button" class="btn btn-outline-success btn-sm ff-ui-mode-btn" data-mode="mobile">Телефон</button>
+                            <button type="button" class="btn btn-outline-success btn-sm ff-ui-mode-btn" data-mode="desktop">ПК</button>
+                        </div>
+                        <div class="form-text" style="font-size:11px;line-height:1.35;margin-top:6px;">
+                            Если приложение с домашнего экрана выглядит как ПК — выберите «Телефон».
+                        </div>
+                    </li>
+                    <li class="px-3 pb-2" id="ffInstallMenuItem" style="display:none;">
+                        <button type="button" class="btn btn-success btn-sm w-100" id="ffInstallAppBtn">
+                            <i class="fas fa-download me-1"></i> Установить приложение
+                        </button>
+                        <div class="form-text mt-1" id="ffInstallIosHint" style="display:none;font-size:11px;line-height:1.35;">
+                            iPhone: «Поделиться» → «На экран „Домой“».
+                        </div>
                     </li>
                     <li><hr class="dropdown-divider"></li>
                     <li><a class="dropdown-item" href="{{ url_for('main.guide') }}"><i class="fas fa-circle-question me-2 text-success"></i> Справка</a></li>
@@ -2721,7 +2843,9 @@
             // 1) Свёрнутый sidebar — только на десктопе. На мобиле «свернутый»
             // режим не имеет смысла (сайдбар и так выезжает по бургеру) и
             // дополнительно ломает сетку, оставляя 72px-колонку.
-            const isMobileViewport = window.matchMedia('(max-width: 991.98px)').matches;
+            const isMobileViewport =
+                document.documentElement.classList.contains('ff-force-mobile')
+                || window.matchMedia('(max-width: 991.98px)').matches;
             if (!isMobileViewport && localStorage.getItem('sidebarCollapsed') === '1') {
                 shell.classList.add('sidebar-collapsed');
             } else {
@@ -2877,6 +3001,79 @@
                 try { window.__restoreNavState(); } catch (e) {}
             }, 120);
         });
+    })();
+
+    // --- Режим экрана (авто / телефон / ПК) + установка PWA ---
+    (function () {
+        const KEY = 'ff_ui_mode';
+        function currentPref() {
+            try { return localStorage.getItem(KEY) || 'auto'; } catch (e) { return 'auto'; }
+        }
+        function paintModeButtons() {
+            const pref = currentPref();
+            document.querySelectorAll('.ff-ui-mode-btn').forEach((btn) => {
+                const on = btn.getAttribute('data-mode') === pref;
+                btn.classList.toggle('btn-success', on);
+                btn.classList.toggle('btn-outline-success', !on);
+                btn.classList.toggle('text-white', on);
+            });
+        }
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('.ff-ui-mode-btn');
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const mode = btn.getAttribute('data-mode') || 'auto';
+            try { localStorage.setItem(KEY, mode); } catch (err) {}
+            // Полная перезагрузка — чтобы ранний скрипт в <head> пересчитал viewport.
+            location.reload();
+        });
+        paintModeButtons();
+
+        let deferredPrompt = null;
+        const installItem = document.getElementById('ffInstallMenuItem');
+        const installBtn = document.getElementById('ffInstallAppBtn');
+        const iosHint = document.getElementById('ffInstallIosHint');
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+            || window.matchMedia('(display-mode: fullscreen)').matches
+            || window.navigator.standalone === true;
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.platform)
+            || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+
+        function showInstallUi(kind) {
+            if (!installItem || isStandalone) return;
+            installItem.style.display = 'block';
+            if (kind === 'ios' && iosHint) iosHint.style.display = 'block';
+        }
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            showInstallUi('chromium');
+        });
+
+        if (isIOS && !isStandalone) showInstallUi('ios');
+        // Уже установлено — прячем.
+        if (isStandalone && installItem) installItem.style.display = 'none';
+
+        if (installBtn) {
+            installBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!deferredPrompt) {
+                    if (isIOS && iosHint) {
+                        iosHint.style.display = 'block';
+                        return;
+                    }
+                    alert('Установка сейчас недоступна в этом браузере. Откройте сайт в Chrome или Яндекс и добавьте на домашний экран через меню браузера.');
+                    return;
+                }
+                deferredPrompt.prompt();
+                try { await deferredPrompt.userChoice; } catch (err) {}
+                deferredPrompt = null;
+                if (installItem) installItem.style.display = 'none';
+            });
+        }
     })();
 </script>
 

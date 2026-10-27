@@ -1222,8 +1222,6 @@ def vium_purchases():
         start=start,
         end=end,
         line_status_labels=LINE_STATUS_LABELS,
-        materials=ViumMaterial.query.filter_by(is_archived=False)
-            .order_by(ViumMaterial.name.asc()).limit(200).all(),
         **overview,
     )
 
