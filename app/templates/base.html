@@ -1380,6 +1380,10 @@
                         <span class="sl-icon"><i class="fas fa-boxes-stacked"></i></span>
                         <span class="sl-label">Остатки</span>
                     </a>
+                    <a class="sidebar-link {% if request.endpoint == 'stock.stock_receipts' %}active{% endif %}" href="{{ url_for('stock.stock_receipts') }}" data-hx-boost="false">
+                        <span class="sl-icon"><i class="fas fa-truck-ramp-box"></i></span>
+                        <span class="sl-label">Поступление растений</span>
+                    </a>
                     <a class="sidebar-link {% if request.endpoint == 'stock.documents' %}active{% endif %}" href="{{ url_for('stock.documents') }}" data-hx-boost="false">
                         <span class="sl-icon"><i class="fas fa-file-invoice"></i></span>
                         <span class="sl-label">Журнал документов</span>
@@ -1877,6 +1881,7 @@
             <div class="drawer-group-title">Склад</div>
             <a class="drawer-link" href="{{ url_for('stock.inventory_mobile') }}"><i class="fas fa-mobile-screen"></i> Моб. инвентаризация</a>
             <a class="drawer-link" href="{{ url_for('stock.stock_report') }}"><i class="fas fa-boxes-stacked"></i> Остатки</a>
+            <a class="drawer-link" href="{{ url_for('stock.stock_receipts') }}" data-hx-boost="false"><i class="fas fa-truck-ramp-box"></i> Поступление растений</a>
             <a class="drawer-link" href="{{ url_for('stock.documents') }}" data-hx-boost="false"><i class="fas fa-file-invoice"></i> Журнал документов</a>
             {% if current_user.role != 'user2' %}
             <a class="drawer-link" href="{{ url_for('finance.reports_turnover') }}"><i class="fas fa-exchange-alt"></i> Движение товара</a>
