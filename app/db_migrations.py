@@ -218,6 +218,7 @@ def ensure_legacy_schema(logger=None) -> None:
         db.session.rollback()
     _publish_invoice_drafts(logger)
     _ensure_changelog_releases(logger)
+    _ensure_container_budget_item(logger)
 
 
 def _publish_invoice_drafts(logger=None) -> None:
@@ -377,6 +378,38 @@ _CHANGELOG_RELEASES = (
         ),
     },
 )
+
+
+def _ensure_container_budget_item(logger=None) -> None:
+    """Одна статья «Контейнеры»: закупки горшков не входят в общий себес полей.
+
+    Повторный запуск ничего не меняет, если статья уже отмечена.
+    """
+    from app.models import BudgetItem
+
+    try:
+        marked = BudgetItem.query.filter_by(is_container_purchase=True).first()
+        if marked:
+            return
+        item = BudgetItem.query.filter_by(code='15').first()
+        if item is None:
+            item = BudgetItem(
+                code='15',
+                name='Контейнеры',
+                is_amortization=False,
+                is_vium_source=True,
+                is_container_purchase=True,
+            )
+            db.session.add(item)
+        else:
+            item.is_container_purchase = True
+        db.session.commit()
+        if logger:
+            logger.info('legacy schema: budget item %s «%s» is container purchase', item.code, item.name)
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: container budget item skipped — %s', exc)
+        db.session.rollback()
 
 
 def _ensure_changelog_releases(logger=None) -> None:
