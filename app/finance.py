@@ -6135,7 +6135,9 @@ def project_detail(project_id):
         'profit': eco['profit'],
         'margin': eco['margin'],
         'items_count': sum(i.quantity for i in project.items),
-        'cost_per_item': 0
+        'cost_per_item': 0,
+        'order_yard': eco.get('order_yard') or {},
+        'yard_scoped': eco.get('yard_scoped'),
     }
     
     if stats['items_count'] > 0:

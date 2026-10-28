@@ -41,7 +41,7 @@
             <div class="card-body py-2">
                 <small class="text-uppercase text-muted fw-bold">Выручка (План)</small>
                 <h4 class="mb-0 fw-bold text-success">{{ stats.revenue|money }}</h4>
-                <small class="text-muted">Заказов: {{ project.orders|length }}</small>
+                <small class="text-muted">{% if stats.yard_scoped %}Только позиции с площадки проекта{% else %}Заказов: {{ project.orders|length }}{% endif %}</small>
             </div>
         </div>
     </div>
@@ -114,7 +114,15 @@
                     </div>
                     <div class="d-flex align-items-center gap-2">
                         <span class="badge bg-light text-dark border">{{ o.status }}</span>
+                        {% if stats.yard_scoped %}
+                        {% set yard = stats.order_yard.get(o.id) %}
+                        <span class="text-end">
+                            <span class="fw-bold text-success">+ {{ (yard.revenue if yard else 0)|money }}</span>
+                            <span class="d-block text-muted" style="font-size:10px;">с площадки · заказ {{ o.total_sum|money }}</span>
+                        </span>
+                        {% else %}
                         <span class="fw-bold text-success">+ {{ o.total_sum|money }}</span>
+                        {% endif %}
                         
                         {% if project.status == 'active' %}
                         <form method="POST" onsubmit="return confirm('Отвязать заказ?');" class="m-0" hx-boost="false">

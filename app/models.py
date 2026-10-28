@@ -1057,53 +1057,15 @@ class Project(db.Model):
         from app.finance import _project_potting_stock_field_id
         from app.utils import msk_now
 
-        # 1. Выручка (Сумма активных заказов — наша часть без агентских)
-        revenue = sum(
-            o.net_sum for o in self.orders if o.status != 'canceled'
-        )
-        linked_order_ids = {o.id for o in self.orders if o.status != 'canceled'}
-
-        # Отгрузки с контейнерной площадки проекта, если заказ ещё не в выручке
+        # 1–3. Выручка и себестоимость — только позиции с площадки проекта.
+        # Привязанный заказ часто смешанный (поле + площадка): в маржу входит
+        # плановое количество строк, у которых поле = контейнерная площадка.
         yard_field_id = _project_potting_stock_field_id(self)
-        yard_extra_items = []
-        if yard_field_id:
-            if yard_rows_by_field is not None and yard_field_id in yard_rows_by_field:
-                yard_rows = yard_rows_by_field[yard_field_id]
-            else:
-                yard_rows = (
-                    db.session.query(OrderItem)
-                    .join(Order, OrderItem.order_id == Order.id)
-                    .filter(
-                        OrderItem.field_id == yard_field_id,
-                        Order.status != 'canceled',
-                        Order.is_deleted == False,
-                        OrderItem.shipped_quantity > 0,
-                    )
-                    .all()
-                )
-                if yard_rows_by_field is not None:
-                    yard_rows_by_field[yard_field_id] = yard_rows
-            for item in yard_rows:
-                if item.order_id in linked_order_ids:
-                    continue
-                shipped = Decimal(int(item.shipped_quantity or 0))
-                if shipped <= 0:
-                    continue
-                unit = Decimal(str(item.price or 0))
-                if item.order and item.order.agency_enabled:
-                    unit -= Decimal(str(item.agency_per_unit or 0))
-                revenue += unit * shipped
-                yard_extra_items.append(item)
-
-        # 2. Прямые расходы (Total Fact)
-        fact_expenses = sum(e.amount for e in self.expenses)
-
-        # 3. Себестоимость растений
+        order_yard = {}
+        revenue = Decimal(0)
         plants_cost_total = Decimal(0)
         if costs_cache is None:
             costs_cache = {}
-
-        # Кэш цен закупки (чтобы не дергать базу 1000 раз)
         if stock_prices is None:
             stock_prices = {
                 (sb.plant_id, sb.size_id, sb.field_id, sb.year): sb.purchase_price
@@ -1115,32 +1077,86 @@ class Project(db.Model):
                 c_data = calculate_cost_data(calc_basis_year)
                 costs_cache[calc_basis_year] = c_data['accumulated_costs_map']
 
-        for o in self.orders:
-            if o.status == 'canceled': continue
-            
-            # ВАЖНО: Берем расходы за ПРЕДЫДУЩИЙ год от даты заказа
-            calc_basis_year = o.date.year - 1
-            _ensure_cost_year(calc_basis_year)
-                
-            for item in o.items:
-                qty = Decimal(item.quantity) # Берем плановое количество (ведь выручка тоже плановая)
-                
-                # Цена закупки партии
-                purch = stock_prices.get((item.plant_id, item.size_id, item.field_id, item.year), Decimal(0))
-                
-                # Накопленная себестоимость (уход) за прошлые годы
-                accum = costs_cache[calc_basis_year].get(item.year, Decimal(0))
-                
-                plants_cost_total += (purch + accum) * qty
+        def _ensure_container_cost():
+            if '_container' not in costs_cache:
+                from app.services import (
+                    calculate_container_cost_data, get_cost_container_project_ids,
+                )
+                costs_cache['_container'] = calculate_container_cost_data(
+                    project_ids=get_cost_container_project_ids(),
+                    selected_year=msk_now().year,
+                )
+                costs_cache['_size_names'] = {
+                    s.id: s.name for s in Size.query.all()
+                }
+            return costs_cache['_container']
 
-        for item in yard_extra_items:
-            order = item.order
-            calc_basis_year = (order.date.year - 1) if order and order.date else (msk_now().year - 1)
-            _ensure_cost_year(calc_basis_year)
-            qty = Decimal(int(item.shipped_quantity or 0))
-            purch = stock_prices.get((item.plant_id, item.size_id, item.field_id, item.year), Decimal(0))
-            accum = costs_cache[calc_basis_year].get(item.year, Decimal(0))
-            plants_cost_total += (purch + accum) * qty
+        if yard_field_id:
+            if yard_rows_by_field is not None and yard_field_id in yard_rows_by_field:
+                yard_rows = yard_rows_by_field[yard_field_id]
+            else:
+                yard_rows = (
+                    db.session.query(OrderItem)
+                    .join(Order, OrderItem.order_id == Order.id)
+                    .filter(
+                        OrderItem.field_id == yard_field_id,
+                        Order.status != 'canceled',
+                        Order.is_deleted == False,
+                    )
+                    .all()
+                )
+                if yard_rows_by_field is not None:
+                    yard_rows_by_field[yard_field_id] = yard_rows
+            container_cd = _ensure_container_cost()
+            from app.services import container_code_from_size_name, container_rate_for
+            size_names = costs_cache.get('_size_names') or {}
+            for item in yard_rows:
+                qty_i = int(item.quantity or 0)
+                if qty_i <= 0:
+                    continue
+                qty = Decimal(qty_i)
+                unit = item.net_unit_price
+                line_rev = unit * qty
+                revenue += line_rev
+                slot = order_yard.setdefault(item.order_id, {
+                    'revenue': Decimal(0), 'qty': 0,
+                })
+                slot['revenue'] += line_rev
+                slot['qty'] += qty_i
+                purch = stock_prices.get(
+                    (item.plant_id, item.size_id, item.field_id, item.year),
+                    Decimal(0),
+                ) or Decimal(0)
+                accum = (container_cd.get('accum_opex_map') or {}).get(item.year, Decimal(0))
+                accum = Decimal(str(accum or 0))
+                accum += container_rate_for(
+                    container_code_from_size_name(size_names.get(item.size_id, '')),
+                    item.year,
+                    container_cd.get('container_rates') or {},
+                    msk_now().year,
+                )
+                plants_cost_total += (Decimal(str(purch)) + accum) * qty
+        else:
+            # Проект без площадки — как раньше, весь привязанный заказ.
+            revenue = sum(
+                (o.net_sum or Decimal(0)) for o in self.orders if o.status != 'canceled'
+            )
+            for o in self.orders:
+                if o.status == 'canceled':
+                    continue
+                calc_basis_year = o.date.year - 1
+                _ensure_cost_year(calc_basis_year)
+                for item in o.items:
+                    qty = Decimal(item.quantity or 0)
+                    purch = stock_prices.get(
+                        (item.plant_id, item.size_id, item.field_id, item.year),
+                        Decimal(0),
+                    ) or Decimal(0)
+                    accum = costs_cache[calc_basis_year].get(item.year, Decimal(0))
+                    plants_cost_total += (Decimal(str(purch)) + Decimal(str(accum or 0))) * qty
+
+        # 2. Прямые расходы (Total Fact)
+        fact_expenses = sum(e.amount for e in self.expenses)
 
         # 4. Итоговые показатели
         profit = revenue - plants_cost_total - fact_expenses
@@ -1163,7 +1179,9 @@ class Project(db.Model):
             'direct_expenses': fact_expenses,
             'profit': profit,
             'margin': margin,
-            'unallocated_fact': unallocated
+            'unallocated_fact': unallocated,
+            'order_yard': order_yard,
+            'yard_scoped': bool(yard_field_id),
         }
 
 class ProjectItem(db.Model):
