@@ -277,9 +277,135 @@ def get_container_stock_total_qty(field_id=None, as_of=None, selected_year=None)
     )
 
 
+_CONTAINER_CODE_RE = re.compile(r'(?i)(?<![A-Za-zА-Яа-яЁё0-9])C\s*(\d+(?:[.,]\d+)?)')
+
+
+def _canonical_container_code(raw: str) -> str | None:
+    """C5 / c7,5 / «Контейнер C10» → «C5», «C7.5», «C10». Без кода — None."""
+    text = (raw or '').strip()
+    if not text:
+        return None
+    m = _CONTAINER_CODE_RE.search(text.replace(' ', ''))
+    if not m:
+        m = _CONTAINER_CODE_RE.search(text)
+    if not m:
+        return None
+    num = m.group(1).replace(',', '.')
+    if '.' in num:
+        num = num.rstrip('0').rstrip('.')
+    return f'C{num}'
+
+
+def container_code_from_size_name(size_name: str) -> str | None:
+    """Код контейнера из размера площадки («Товарный · C5 · 20-30»)."""
+    from app.seedlings import parse_seedling_size
+    parsed = parse_seedling_size(size_name or '')
+    if not parsed:
+        return _canonical_container_code(size_name or '')
+    return _canonical_container_code(parsed.get('container') or '')
+
+
+def container_purchase_rates():
+    """Средневзвешенная цена контейнера по году из поступлений ВиУМ.
+
+    Материал попадает в расчёт, если в названии есть код C3 / C5 / C7.5…
+    Партии горшков не ведём: одна цена = сумма (qty × цена) / сумма qty за год.
+    """
+    from app.models import ViumMaterial, ViumOperation, ViumOperationLine
+
+    by_year: dict[int, dict[str, dict]] = {}
+    rows = (
+        db.session.query(
+            ViumMaterial.name,
+            ViumOperation.date,
+            ViumOperationLine.qty,
+            ViumOperationLine.unit_price,
+        )
+        .join(ViumOperationLine, ViumOperationLine.material_id == ViumMaterial.id)
+        .join(ViumOperation, ViumOperation.id == ViumOperationLine.operation_id)
+        .filter(ViumOperation.kind == 'intake')
+        .all()
+    )
+    for name, op_date, qty, price in rows:
+        code = _canonical_container_code(name)
+        if not code or not op_date:
+            continue
+        q = Decimal(str(qty or 0))
+        p = Decimal(str(price or 0))
+        if q <= 0 or p <= 0:
+            continue
+        year = int(op_date.year)
+        bucket = by_year.setdefault(year, {}).setdefault(code, {
+            'qty': Decimal(0), 'amount': Decimal(0),
+        })
+        bucket['qty'] += q
+        bucket['amount'] += q * p
+
+    rates = {}
+    spend_by_year = {}
+    summary = []
+    for year, codes in by_year.items():
+        rates[year] = {}
+        spend = Decimal(0)
+        for code, agg in sorted(codes.items()):
+            avg = (agg['amount'] / agg['qty']) if agg['qty'] else Decimal(0)
+            avg = avg.quantize(Decimal('0.01'))
+            rates[year][code] = avg
+            spend += agg['amount']
+            summary.append({
+                'year': year,
+                'code': code,
+                'qty': agg['qty'],
+                'unit_price': avg,
+                'amount': agg['amount'].quantize(Decimal('0.01')),
+            })
+        spend_by_year[year] = spend.quantize(Decimal('0.01'))
+    summary.sort(key=lambda r: (r['year'], r['code']))
+    return {
+        'by_year': rates,
+        'spend_by_year': spend_by_year,
+        'summary': summary,
+    }
+
+
+def container_rate_for(code: str | None, year, rates: dict | None, selected_year=None) -> Decimal:
+    """Цена кода за год партии; если в том году закупок не было — последняя известная не позже отчёта."""
+    if not code or not rates:
+        return Decimal(0)
+    by_year = (rates or {}).get('by_year') or rates or {}
+    if not isinstance(by_year, dict):
+        return Decimal(0)
+    try:
+        year = int(year)
+    except (TypeError, ValueError):
+        return Decimal(0)
+    cap = year
+    if selected_year is not None:
+        try:
+            cap = int(selected_year)
+        except (TypeError, ValueError):
+            cap = year
+    direct = (by_year.get(year) or {}).get(code)
+    if direct is not None:
+        return Decimal(direct)
+    candidates = []
+    for y, codes in by_year.items():
+        try:
+            yi = int(y)
+        except (TypeError, ValueError):
+            continue
+        if yi <= cap and isinstance(codes, dict) and code in codes:
+            candidates.append(yi)
+    if not candidates:
+        return Decimal(0)
+    return Decimal(by_year[max(candidates)][code])
+
+
 def build_container_cost_table_rows(container_cd, plant_ids=None):
     """Таблица контейнерной себестоимости: каждая позиция остатков (все размеры)."""
     accum_opex_map = container_cd.get('accum_opex_map') or {}
+    pot_rates = container_cd.get('container_rates') or {}
+    selected_year = container_cd.get('selected_year')
     stock_rows = get_container_stock_rows(
         container_cd.get('container_field_id'),
         selected_year=container_cd.get('selected_year'),
@@ -298,7 +424,9 @@ def build_container_cost_table_rows(container_cd, plant_ids=None):
         pp = r['purchase_price'] or Decimal(0)
         batch_year = r['year']
         ac_opex = accum_opex_map.get(batch_year, Decimal(0))
-        total_unit = pp + ac_opex
+        pot_code = container_code_from_size_name(r.get('size') or '')
+        pot_unit = container_rate_for(pot_code, batch_year, pot_rates, selected_year)
+        total_unit = pp + ac_opex + pot_unit
         total_cost = total_unit * Decimal(qty)
         rows.append({
             'name': r['name'],
@@ -308,6 +436,8 @@ def build_container_cost_table_rows(container_cd, plant_ids=None):
             'quantity': qty,
             'purchase_price': pp,
             'accum_opex': ac_opex,
+            'pot_code': pot_code,
+            'pot_unit': pot_unit,
             'total_unit_cost': total_unit,
             'total_cost': total_cost,
             'plant_id': r['plant_id'],
@@ -636,6 +766,7 @@ def calculate_container_cost_data(project_ids=None, selected_year=None, period=N
         container_field_id, as_of=stock_as_of, selected_year=selected_year,
     )
     expense_maps = _build_container_cost_expense_maps(project_ids, period=period, selected_year=selected_year)
+    pot_rates = container_purchase_rates()
     years = expense_maps['years']
     budget_items = expense_maps['budget_items']
     all_expenses = expense_maps['all_expenses']
@@ -654,11 +785,19 @@ def calculate_container_cost_data(project_ids=None, selected_year=None, period=N
     for y in years:
         qty_by_year[y] = current_qty
         op_sum = sum(detailed_expenses.get(y, {}).values())
+        pot_spend = pot_rates['spend_by_year'].get(y, Decimal(0))
+        # Закупка горшков не размазывается на все растения: вычитаем из котла,
+        # но не ниже нуля (если в проектах этой суммы не было).
+        op_net = op_sum - pot_spend
+        if op_net < 0:
+            op_net = Decimal(0)
         q = current_qty
-        calc_op_unit = op_sum / Decimal(q) if q > 0 else Decimal(0)
+        calc_op_unit = op_net / Decimal(q) if q > 0 else Decimal(0)
         unit_cost_by_year[y] = calc_op_unit
-        summary_totals[y]['op'] = op_sum
-        summary_totals[y]['total'] = op_sum
+        summary_totals[y]['op'] = op_net
+        summary_totals[y]['op_gross'] = op_sum
+        summary_totals[y]['pot_spend'] = pot_spend
+        summary_totals[y]['total'] = op_net
         summary_totals[y]['qty'] = q
         summary_totals[y]['op_unit'] = calc_op_unit
         summary_totals[y]['total_unit'] = calc_op_unit
@@ -693,6 +832,7 @@ def calculate_container_cost_data(project_ids=None, selected_year=None, period=N
         'project_ids': expense_maps['project_ids'],
         'project_totals': expense_maps['project_totals'],
         'cumulative_cost': accumulated_costs_map.get(2017, Decimal(0)),
+        'container_rates': pot_rates,
     }
 
 

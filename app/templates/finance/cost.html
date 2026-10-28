@@ -379,12 +379,27 @@
     <div class="alert alert-info py-2 small mb-3">
         <i class="fas fa-seedling me-1"></i>
         Себестоимость контейнерной посадки: <b>расходы</b> — из выбранных проектов (без амортизации).
+        Закупка контейнеров берётся из <a href="{{ url_for('vium.vium_report') }}">учёта ВиУМ</a>
+        (поступления материалов с кодом C3, C5, C7.5…): сумма года вычитается из общего котла,
+        на строку добавляется средневзвешенная цена её контейнера.
         <b>Количество и таблица</b> — остатки поля «{{ container_field_label or 'Контейнерная площадка' }}»
         на {{ container_cd.stock_as_of.strftime('%d.%m.%Y') if container_cd.stock_as_of else 'сегодня' }}
         (как <a href="{{ url_for('stock.stock_report') }}">/stock</a>, все размеры).
         Админ может править <b>цену закупки</b> в колонке и нажать «Сохранить изменения».
         Кнопки «тележка» и «пересчёт» в проектах на этот отчёт не влияют.
     </div>
+    {% set pot_summary = (container_cd.container_rates.summary if container_cd.container_rates is defined else []) or [] %}
+    {% if pot_summary %}
+    <div class="small text-muted mb-3">
+        Поступления ВиУМ:
+        {% for r in pot_summary if r.year == selected_year %}
+        <span class="badge bg-light text-dark border me-1">{{ r.code }} · {{ r.qty }} шт · {{ r.unit_price|money }}</span>
+        {% endfor %}
+        <span class="d-block mt-1">В материале ВиУМ в названии должен быть код контейнера, как в размере: C3, C5, C7.5. Цена — за штуку, количество — сколько купили.</span>
+    </div>
+    {% else %}
+    <div class="small text-muted mb-3">В ВиУМ пока нет поступлений контейнеров. Заведите материал с кодом в названии (например «C5») и проведите поступление: количество и цена за штуку.</div>
+    {% endif %}
 
     {% if current_user.role == 'admin' %}
     <div class="card mb-3 border-0 shadow-sm">
@@ -455,7 +470,8 @@
             <div>
                 <h6 class="mb-1 text-dark fw-bold">Контейнерная площадка — {{ selected_year }} год</h6>
                 <small class="text-muted">
-                    Расходы проектов: <b>{{ container_summary_card.year_cost|money }}</b> /
+                    Уход без контейнеров: <b>{{ container_summary_card.year_cost|money }}</b> /
+                    Контейнеры (ВиУМ): <b>{{ container_cd.summary_totals[selected_year]['pot_spend']|money }}</b> /
                     Кол-во на площадке: <b>{{ container_summary_card.total_qty }} шт.</b>
                     <span class="text-muted">(текущий остаток)</span>
                 </small>
@@ -500,8 +516,15 @@
                 {% else %}
                 <tr><td colspan="{{ 1 + visible_years|length * 2 }}" class="text-muted small ps-3">Нет расходов по выбранным проектам.</td></tr>
                 {% endfor %}
+                <tr>
+                    <td class="ps-3 text-muted">− контейнеры (ВиУМ, средневзвеш.)</td>
+                    {% for y in visible_years %}
+                    <td class="text-end text-muted">{{ container_cd.summary_totals[y]['pot_spend']|money }}</td>
+                    <td class="text-end text-muted" style="border-right: 2px solid #f3f4f6;">—</td>
+                    {% endfor %}
+                </tr>
                 <tr style="background-color: #ECFDF5; font-weight: bold;">
-                    <td class="ps-3 text-op">ИТОГО (без амортизации)</td>
+                    <td class="ps-3 text-op">ИТОГО уход (без контейнеров)</td>
                     {% for y in visible_years %}
                     <td class="text-end text-op">{{ container_cd.summary_totals[y]['total']|money }}</td>
                     <td class="text-end text-op" style="border-right: 2px solid #D1FAE5;">{{ container_cd.summary_totals[y]['total_unit']|money }}</td>
@@ -532,6 +555,7 @@
                     <th class="text-end">Кол-во</th>
                     <th class="text-end bg-warning bg-opacity-10">Закупка</th>
                     <th class="text-end text-muted">Накоп. (проекты)</th>
+                    <th class="text-end">Контейнер</th>
                     <th class="text-end fw-bold bg-light">Итого за ед.</th>
                     <th class="text-end fw-bold">Сумма</th>
                 </tr>
@@ -562,18 +586,21 @@
                         {% else %}{{ row.purchase_price|money }}{% endif %}
                     </td>
                     <td class="text-end text-muted">{{ row.accum_opex|money }}</td>
+                    <td class="text-end" title="{{ row.pot_code or 'контейнер в размере не распознан' }}">
+                        {% if row.pot_unit %}{{ row.pot_unit|money }}{% if row.pot_code %}<div class="small text-muted">{{ row.pot_code }}</div>{% endif %}{% else %}—{% endif %}
+                    </td>
                     <td class="text-end fw-bold bg-light">{{ row.total_unit_cost|money }}</td>
                     <td class="text-end fw-bold">{{ row.total_cost|money }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="8" class="text-muted small">На поле «Контейнерная площадка» нет остатков — проверьте отчёт <a href="{{ url_for('stock.stock_report') }}">Остатки</a> с фильтром по этому полю.</td></tr>
+                <tr><td colspan="9" class="text-muted small">На поле «Контейнерная площадка» нет остатков — проверьте отчёт <a href="{{ url_for('stock.stock_report') }}">Остатки</a> с фильтром по этому полю.</td></tr>
                 {% endfor %}
             </tbody>
             <tfoot>
                 <tr class="table-row-warm fw-bold">
                     <td colspan="3" class="text-end text-uppercase" style="color: #fff !important;">ИТОГО:</td>
                     <td class="text-end" style="color: #fff !important;">{{ container_total_qty }}</td>
-                    <td colspan="3"></td>
+                    <td colspan="4"></td>
                     <td class="text-end" style="color: #fff !important;">{{ container_table_total|money }}</td>
                 </tr>
             </tfoot>

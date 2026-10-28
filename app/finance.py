@@ -28,6 +28,7 @@ from app.services import (
     get_detailed_stock_at_year_end, get_bed_field_ids, get_container_field_ids,
     get_cost_container_project_ids, save_cost_container_project_ids,
     build_container_cost_table_rows,
+    container_code_from_size_name, container_rate_for,
 )
 
 bp = Blueprint('finance', __name__)
@@ -4973,6 +4974,8 @@ def save_cost_to_db():
     )
     container_accum_map = container_data['accumulated_costs_map']
     container_field_ids = get_container_field_ids()
+    container_rates = container_data.get('container_rates') or {}
+    size_names = {s.id: s.name for s in Size.query.all()}
     
     stocks = StockBalance.query.filter(StockBalance.quantity > 0).all()
     count = 0
@@ -4981,6 +4984,12 @@ def save_cost_to_db():
     for sb in stocks:
         if sb.field_id in container_field_ids:
             ac = container_accum_map.get(sb.year, Decimal(0))
+            ac += container_rate_for(
+                container_code_from_size_name(size_names.get(sb.size_id, '')),
+                sb.year,
+                container_rates,
+                calc_year,
+            )
             container_count += 1
         else:
             ac = accum_costs_map.get(sb.year, Decimal(0))

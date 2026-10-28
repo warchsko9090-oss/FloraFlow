@@ -1572,6 +1572,7 @@ def _container_yard_cost_maps(project, field_id: int, selected_year: int | None 
         selected_year=year,
     )
     accum_opex_map = container_cd.get('accum_opex_map') or {}
+    size_names = {s.id: s.name for s in Size.query.all()}
 
     # Цена закупа как в отчёте себестоимости (лоты → иначе StockBalance)
     purchase_by_key: dict[tuple, Decimal] = {}
@@ -1602,6 +1603,9 @@ def _container_yard_cost_maps(project, field_id: int, selected_year: int | None 
         'purchase_by_key': purchase_by_key,
         'income_keys': _journal_income_keys(field_id),
         'income_purchase_by_key': _journal_income_purchase_map(field_id),
+        'container_rates': container_cd.get('container_rates') or {},
+        'container_selected_year': year,
+        'size_names': size_names,
     }
 
 
@@ -1617,6 +1621,14 @@ def _yard_cost_parts(plant_id, size_id, field_id, year, cost_maps: dict) -> tupl
 
     key = (int(plant_id), int(size_id), int(field_id), int(year))
     additive = Decimal(str((cost_maps.get('accum_opex_map') or {}).get(int(year), 0) or 0))
+    from app.services import container_code_from_size_name, container_rate_for
+    size_name = (cost_maps.get('size_names') or {}).get(int(size_id), '')
+    additive += container_rate_for(
+        container_code_from_size_name(size_name),
+        int(year),
+        cost_maps.get('container_rates') or {},
+        cost_maps.get('container_selected_year'),
+    )
     purchase_map = cost_maps.get('purchase_by_key') or {}
     income_map = cost_maps.get('income_purchase_by_key') or {}
     has_income = key in (cost_maps.get('income_keys') or set())
