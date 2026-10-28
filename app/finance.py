@@ -1320,6 +1320,7 @@ def budget():
                 name=request.form.get('name'),
                 is_amortization=bool(request.form.get('is_amortization')),
                 is_vium_source=bool(request.form.get('is_vium_source')),
+                is_container_purchase=bool(request.form.get('is_container_purchase')),
             ))
             db.session.commit()
             flash('Статья добавлена')
@@ -1330,6 +1331,7 @@ def budget():
                 item.name = request.form.get('name')
                 item.is_amortization = bool(request.form.get('is_amortization'))
                 item.is_vium_source = bool(request.form.get('is_vium_source'))
+                item.is_container_purchase = bool(request.form.get('is_container_purchase'))
                 db.session.commit()
                 flash('Статья обновлена')
         elif act == 'delete_item':

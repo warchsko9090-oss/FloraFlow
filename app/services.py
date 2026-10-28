@@ -541,6 +541,9 @@ def _build_cost_expense_maps(period=None, selected_year=None):
         item = budget_items.get(item_id)
         if not item:
             continue
+        # Горшки живут в себесе площадки (по типу из ВиУМ), не в общем котле полей.
+        if getattr(item, 'is_container_purchase', False):
+            continue
         if item.is_amortization:
             raw_amort_source[year] += amount
             chunk = amount / 5
@@ -785,9 +788,16 @@ def calculate_container_cost_data(project_ids=None, selected_year=None, period=N
     for y in years:
         qty_by_year[y] = current_qty
         op_sum = sum(detailed_expenses.get(y, {}).values())
-        pot_spend = pot_rates['spend_by_year'].get(y, Decimal(0))
-        # Закупка горшков не размазывается на все растения: вычитаем из котла,
-        # но не ниже нуля (если в проектах этой суммы не было).
+        pot_booked = Decimal(0)
+        for item_id, amount in (detailed_expenses.get(y) or {}).items():
+            item = budget_items.get(item_id)
+            if item and getattr(item, 'is_container_purchase', False):
+                pot_booked += amount or Decimal(0)
+        pot_vium = pot_rates['spend_by_year'].get(y, Decimal(0))
+        # Из котла уходит сумма, которая реально в расходах проекта (статья
+        # «закупка контейнеров»). Если статью ещё не отметили — запасной
+        # ориентир: сумма поступлений ВиУМ, чтобы горшки не размазались поровну.
+        pot_spend = pot_booked if pot_booked > 0 else pot_vium
         op_net = op_sum - pot_spend
         if op_net < 0:
             op_net = Decimal(0)

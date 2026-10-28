@@ -748,9 +748,9 @@
                     <td class="col-sticky col-code bg-white">{{ item.code }}</td>
                     <td class="col-sticky col-name bg-white border-end">
                         <div class="d-flex justify-content-between align-items-center">
-                            <span class="text-truncate fw-bold text-dark" title="{{ item.name }}">{{ item.name }}</span>
+                            <span class="text-truncate fw-bold text-dark" title="{{ item.name }}">{{ item.name }}{% if item.is_container_purchase %} <span class="badge bg-light text-success border" style="font-size:10px;">контейнеры</span>{% endif %}</span>
                             {% if current_user.role == 'admin' %}
-                            <i class="fas fa-cog text-muted ms-2 opacity-25 hover-opacity-100 transition" style="cursor: pointer; font-size: 11px;" onclick="editItem({{ item.id }}, '{{ item.code }}', '{{ item.name }}', {{ 'true' if item.is_amortization else 'false' }}, {{ 'true' if item.is_vium_source else 'false' }})"></i>
+                            <i class="fas fa-cog text-muted ms-2 opacity-25 hover-opacity-100 transition" style="cursor: pointer; font-size: 11px;" onclick="editItem({{ item.id }}, '{{ item.code }}', '{{ item.name }}', {{ 'true' if item.is_amortization else 'false' }}, {{ 'true' if item.is_vium_source else 'false' }}, {{ 'true' if item.is_container_purchase else 'false' }})"></i>
                             {% endif %}
                         </div>
                     </td>
@@ -1054,6 +1054,16 @@
                     для оцифровки позиций.
                 </div>
             </div>
+            <div class="form-check form-switch mt-2">
+                <input class="form-check-input" type="checkbox" name="is_container_purchase" id="itemContainerPurchase">
+                <label class="form-check-label fw-bold" for="itemContainerPurchase">
+                    Закупка контейнеров
+                </label>
+                <div class="text-muted small">
+                    Не входит в общий себес полей. Сумму пишете в расходы и привязываете к проекту;
+                    на площадке она снимается с котла и добавляется по типу горшка из учёта ВиУМ.
+                </div>
+            </div>
           </div>
           <div class="modal-footer bg-white border-0 d-flex justify-content-between">
             <button type="submit" name="action" value="delete_item" class="btn btn-outline-danger" id="btnDelete" style="display:none;" onclick="return confirm('Точно удалить статью? Это невозможно отменить.')"><i class="fas fa-trash"></i> Удалить</button>
@@ -1133,7 +1143,7 @@
     }
 
     // Редактирование статьи
-    function editItem(id, code, name, amort, viumSource) {
+    function editItem(id, code, name, amort, viumSource, containerPurchase) {
         document.getElementById('itemAction').value = 'edit_item';
         document.getElementById('itemId').value = id;
         document.getElementById('itemCode').value = code;
@@ -1141,6 +1151,8 @@
         document.getElementById('itemAmort').checked = amort;
         var vsEl = document.getElementById('itemViumSource');
         if (vsEl) vsEl.checked = !!viumSource;
+        var cpEl = document.getElementById('itemContainerPurchase');
+        if (cpEl) cpEl.checked = !!containerPurchase;
         document.getElementById('btnDelete').style.display = 'block';
         new bootstrap.Modal(document.getElementById('addItemModal')).show();
     }

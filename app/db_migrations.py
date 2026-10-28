@@ -83,6 +83,7 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('competitor_row', 'reject_reasons', 'TEXT', 'TEXT'),
     ('competitor_snapshot', 'raw_ai_response', 'TEXT', 'TEXT'),
     ('budget_item', 'is_vium_source', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
+    ('budget_item', 'is_container_purchase', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
     ('payment_invoice', 'vium_intake_mode', 'VARCHAR(10)', 'VARCHAR(10)'),
     ('payment_invoice', 'summary', 'VARCHAR(500)', 'VARCHAR(500)'),
     ('payment_invoice', 'line_items', 'TEXT', 'TEXT'),

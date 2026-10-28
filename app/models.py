@@ -581,6 +581,9 @@ class BudgetItem(db.Model):
     # Если True — счёт по этой статье после оплаты автоматически отправляется
     # в очередь оцифровки в раздел «Учет ВиУМ».
     is_vium_source = db.Column(db.Boolean, default=False)
+    # Закупка горшков: не входит в общий себес полей. На площадке сумма
+    # вычитается из котла и добавляется по типу контейнера из учёта ВиУМ.
+    is_container_purchase = db.Column(db.Boolean, default=False)
 
 class BudgetPlan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
