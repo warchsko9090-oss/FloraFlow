@@ -1246,6 +1246,19 @@ def _should_skip_action(action_type: str, entities: dict, order: Order | None) -
     return False, ''
 
 
+def _action_deadline(action_type: str, day: date) -> date:
+    """Срок карточки на дашборде.
+
+    Заявка на закупку — до воскресенья следующей календарной недели
+    (не просрочивается на следующий день после появления в чате).
+    Остальное — день дайджеста.
+    """
+    if action_type == 'purchase_request':
+        end_this_week = day + timedelta(days=(6 - day.weekday()))
+        return end_this_week + timedelta(days=7)
+    return day
+
+
 def _title_for_action(action_type: str, entities: dict, order: Order | None) -> str:
     labels = {
         'payment_confirm': 'Провести оплату',
@@ -1419,6 +1432,11 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             task.action_payload = json.dumps(payload, ensure_ascii=False)
             if task.status == 'snoozed' and task.deadline and task.deadline <= day:
                 task.status = 'new'
+            # Закупкам держим длинный срок, даже если карточку уже создавали
+            want_deadline = _action_deadline(action_type, day)
+            if action_type == 'purchase_request':
+                if not task.deadline or task.deadline < want_deadline:
+                    task.deadline = want_deadline
             if draft and draft.status == 'pending':
                 draft.payload_json = json.dumps(payload, ensure_ascii=False)
                 draft.quote = _merge_quote(draft.quote or '', quote, channel)
@@ -1442,7 +1460,7 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             details=details[:4000],
             assignee_id=vlad.id if vlad else None,
             assignee_role='admin' if not vlad else None,
-            deadline=day,
+            deadline=_action_deadline(action_type, day),
             action_type=action_type,
             action_payload=json.dumps(payload, ensure_ascii=False),
             status='new',
@@ -2585,6 +2603,63 @@ def api_draft_ack(draft_id):
             t.completed_by_id = current_user.id
     db.session.commit()
     return _hx_ok('Отмечено вручную', success=True)
+
+
+def reject_ops_draft(
+    draft: OpsActionDraft,
+    *,
+    comment: str,
+    user_id: int | None,
+) -> dict:
+    """Админ: задача распознана неверно — закрыть и сохранить комментарий."""
+    comment = (comment or '').strip()
+    if len(comment) < 3:
+        return {'ok': False, 'error': 'Напишите коротко, почему задача не та'}
+    if draft.status == 'rejected':
+        return {'ok': True, 'status': 'already_rejected'}
+    if draft.action_type == 'purchase_request':
+        _sync_vium_purchase(draft, close=True)
+    draft.status = 'rejected'
+    draft.reject_comment = comment[:2000]
+    draft.rejected_at = msk_now()
+    draft.rejected_by_id = user_id
+    draft.updated_at = msk_now()
+    # payload: пометка для недельного разбора
+    pl = draft_payload(draft)
+    pl['rejected'] = True
+    pl['reject_comment'] = draft.reject_comment
+    draft.payload_json = json.dumps(pl, ensure_ascii=False)
+    if draft.task_id:
+        t = TgTask.query.get(draft.task_id)
+        if t and t.status in ('new', 'snoozed'):
+            t.status = 'done'
+            t.completed_at = msk_now()
+            t.completed_by_id = user_id
+            note = f'[не та] {comment}'
+            t.details = ((t.details or '') + '\n' + note).strip()[:4000]
+    db.session.commit()
+    try:
+        current_app.logger.info(
+            'ai_ops reject draft=%s type=%s channel=%s comment=%s',
+            draft.id, draft.action_type, draft.channel, comment[:200],
+        )
+    except Exception:
+        pass
+    return {'ok': True, 'status': 'rejected', 'draft_id': draft.id}
+
+
+@bp.route('/api/draft/<int:draft_id>/reject', methods=['POST'])
+@login_required
+@pilot_required
+def api_draft_reject(draft_id):
+    draft = OpsActionDraft.query.get_or_404(draft_id)
+    comment = (request.form.get('comment') or '').strip()
+    result = reject_ops_draft(draft, comment=comment, user_id=current_user.id)
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            return _hx_ok('Зафиксировано: задача не та', success=True)
+        return _hx_err(result.get('error') or 'Ошибка')
+    return jsonify(result), (200 if result.get('ok') else 400)
 
 
 def _render_purchase_checklist(draft: OpsActionDraft, *, card_id: str | None = None) -> str:

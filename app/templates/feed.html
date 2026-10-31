@@ -732,6 +732,24 @@
                                                 <button type="submit" class="btn btn-outline-success btn-sm fw-bold w-100"><i class="fas fa-check"></i> Готово</button>
                                             </form>
                                         </div>
+                                        {% if card.ops_draft %}
+                                        <details class="mt-2 ai-ops-reject">
+                                            <summary class="small text-danger" style="cursor:pointer;list-style:none;">
+                                                <i class="fas fa-flag me-1"></i> Не та задача
+                                            </summary>
+                                            <form hx-post="{{ url_for('ai_ops.api_draft_reject', draft_id=card.ops_draft.id) }}"
+                                                  hx-target="#card-{{ card.id }}" hx-swap="outerHTML"
+                                                  class="mt-2 p-2 border border-danger border-opacity-25 rounded bg-light">
+                                                <label class="small fw-bold text-danger">Что не так? (для правок агента)</label>
+                                                <textarea name="comment" class="form-control form-control-sm mb-2" rows="2"
+                                                          required minlength="3"
+                                                          placeholder="Напр.: это патент, не оплата заказа; это выкопка, не посадка"></textarea>
+                                                <button type="submit" class="btn btn-danger btn-sm w-100">
+                                                    Отклонить и сохранить комментарий
+                                                </button>
+                                            </form>
+                                        </details>
+                                        {% endif %}
 
                                     {% elif card.type == 'tg_task' %}
                                         <!-- КАРТОЧКА: ЗАДАЧА-ПОРУЧЕНИЕ -->

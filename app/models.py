@@ -2295,6 +2295,10 @@ class OpsActionDraft(db.Model):
     size_id = db.Column(db.Integer, db.ForeignKey('size.id'), nullable=True)
     posted_at = db.Column(db.DateTime, nullable=True)
     posted_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    # Обратная связь «Не та задача» — для правки эвристик/промпта
+    reject_comment = db.Column(db.Text, nullable=True)
+    rejected_at = db.Column(db.DateTime, nullable=True)
+    rejected_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -2303,3 +2307,4 @@ class OpsActionDraft(db.Model):
     client = db.relationship('Client', foreign_keys=[client_id])
     payment = db.relationship('Payment', foreign_keys=[payment_id])
     posted_by = db.relationship('User', foreign_keys=[posted_by_id])
+    rejected_by = db.relationship('User', foreign_keys=[rejected_by_id])

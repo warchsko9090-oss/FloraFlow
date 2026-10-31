@@ -84,6 +84,9 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('competitor_snapshot', 'raw_ai_response', 'TEXT', 'TEXT'),
     ('budget_item', 'is_vium_source', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
     ('budget_item', 'is_container_purchase', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'),
+    ('ops_action_draft', 'reject_comment', 'TEXT', 'TEXT'),
+    ('ops_action_draft', 'rejected_at', 'TIMESTAMP', 'DATETIME'),
+    ('ops_action_draft', 'rejected_by_id', 'INTEGER', 'INTEGER'),
     ('payment_invoice', 'vium_intake_mode', 'VARCHAR(10)', 'VARCHAR(10)'),
     ('payment_invoice', 'summary', 'VARCHAR(500)', 'VARCHAR(500)'),
     ('payment_invoice', 'line_items', 'TEXT', 'TEXT'),
@@ -219,6 +222,7 @@ def ensure_legacy_schema(logger=None) -> None:
     _publish_invoice_drafts(logger)
     _ensure_changelog_releases(logger)
     _ensure_container_budget_item(logger)
+    _extend_purchase_deadlines(logger)
 
 
 def _publish_invoice_drafts(logger=None) -> None:
@@ -378,6 +382,46 @@ _CHANGELOG_RELEASES = (
         ),
     },
 )
+
+
+def _extend_purchase_deadlines(logger=None) -> None:
+    """Открытые заявки на закупку: дедлайн = воскресенье следующей недели.
+
+    Раньше стоял день дайджеста — карточка на следующий день уже «просрочена».
+    """
+    try:
+        from datetime import timedelta
+        from app.models import TgTask
+        from app.utils import msk_today
+
+        today = msk_today()
+        open_tasks = (
+            TgTask.query
+            .filter(
+                TgTask.source == 'ai_ops',
+                TgTask.action_type == 'purchase_request',
+                TgTask.status.in_(['new', 'snoozed']),
+            )
+            .all()
+        )
+        changed = 0
+        for t in open_tasks:
+            origin = t.first_seen_at.date() if t.first_seen_at else (t.deadline or today)
+            end_origin_week = origin + timedelta(days=(6 - origin.weekday()))
+            target = end_origin_week + timedelta(days=7)
+            if t.deadline != target:
+                t.deadline = target
+                changed += 1
+        if changed:
+            db.session.commit()
+            if logger:
+                logger.info('legacy schema: extended %s purchase deadlines', changed)
+        else:
+            db.session.rollback()
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: purchase deadlines skipped — %s', exc)
+        db.session.rollback()
 
 
 def _ensure_container_budget_item(logger=None) -> None:
