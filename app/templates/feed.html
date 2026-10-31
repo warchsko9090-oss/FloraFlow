@@ -498,6 +498,29 @@
                                         {% with draft=card.ops_draft, card_id=card.id %}
                                         {% include 'ops/_purchase_checklist.html' %}
                                         {% endwith %}
+                                        {% elif card.ops_draft and card.ops_draft.action_type == 'potting_report' %}
+                                        {% if card.ops_draft.quote %}
+                                        <div class="bg-light p-2 rounded small text-dark mb-2 border fst-italic text-break" style="white-space:pre-wrap;max-height:7rem;overflow:auto;">{{ card.ops_draft.quote }}</div>
+                                        {% endif %}
+                                        <div class="border rounded p-2 mb-2 bg-white">
+                                            <div class="fw-bold text-dark mb-1">
+                                                <i class="fas fa-seedling text-success me-1"></i>
+                                                {{ card.ops_draft.potting_plant or 'Посадка' }}
+                                                {% if card.ops_draft.potting_qty %}
+                                                <span class="text-muted fw-normal">· {{ card.ops_draft.potting_qty }} шт</span>
+                                                {% endif %}
+                                            </div>
+                                            {% if card.ops_draft.potting_lines %}
+                                            <div class="d-flex flex-wrap gap-1">
+                                                {% for ln in card.ops_draft.potting_lines %}
+                                                <span class="badge bg-light text-dark border">{{ ln.container }} · {{ ln.qty }} шт</span>
+                                                {% endfor %}
+                                            </div>
+                                            {% endif %}
+                                            <div class="small mt-2">
+                                                <a href="{{ url_for('production.projects_list') }}" data-hx-boost="false">Открыть «Посадка в горшки»</a>
+                                            </div>
+                                        </div>
                                         {% elif card.details %}
                                         <div class="bg-light p-2 rounded small text-dark mb-3 border fst-italic">{{ card.details }}</div>
                                         {% endif %}

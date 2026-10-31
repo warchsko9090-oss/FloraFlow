@@ -227,7 +227,7 @@ def _overdue_digging_count(today):
 # Полевые типы задач, относящиеся к работе бригады. Менеджеру (user)
 # такие задачи в ленту не падают — даже если AI/ручной ввод по ошибке
 # поставил assignee_role='user'. Это защитный фильтр против мисклассификации.
-_TG_TASK_FIELD_TYPES = ('digging', 'watering', 'weeding')
+_TG_TASK_FIELD_TYPES = ('digging', 'watering', 'weeding', 'potting_report')
 
 # Допустимые значения scope для админа на дашборде. all/mine — «кто» (видимость),
 # sales/finance/field — «что» (тематика). Хранятся в cookie feed_scope.

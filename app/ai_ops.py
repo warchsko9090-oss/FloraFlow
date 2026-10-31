@@ -52,6 +52,7 @@ ACTION_TYPES = (
     'order_qty_change',
     'price_change',
     'purchase_request',
+    'potting_report',
 )
 
 
@@ -250,14 +251,25 @@ def _load_day_messages(day: date, channel: str | None = None) -> list[OpsChatMes
 
 
 def _build_channel_transcripts(rows: list[OpsChatMessage]) -> dict[str, str]:
+    """Собирает транскрипт, сохраняя переносы строк внутри сообщения.
+
+    Раньше \\n схлопывались в пробел — нумерованный список закупок и
+    отчёт посадки (строки «14 шт С5») становились одной строкой, эвристики
+    их не видели. Префикс времени/автора только у первой строки сообщения.
+    """
     by_ch: dict[str, list[str]] = {}
     for r in rows:
         t = r.tg_date.strftime('%H:%M') if r.tg_date else '??:??'
         who = r.sender_name or 'unknown'
         if r.is_bot:
             who = f'{who} [bot]'
-        body = (r.raw_text or '').replace('\n', ' ').strip()
-        by_ch.setdefault(r.channel or 'sales', []).append(f'{t} {who}: {body}')
+        body_lines = [ln.rstrip() for ln in (r.raw_text or '').splitlines()]
+        if not body_lines:
+            body_lines = ['']
+        chunk = [f'{t} {who}: {body_lines[0].strip()}']
+        for ln in body_lines[1:]:
+            chunk.append(ln if ln.strip() else '')
+        by_ch.setdefault(r.channel or 'sales', []).extend(chunk)
     out = {}
     for ch, lines in by_ch.items():
         text = '\n'.join(lines)
@@ -279,9 +291,9 @@ _DIGEST_PROMPT = (
     '   Если одна и та же тема (заказ / оплата / отгрузка) всплыла в нескольких чатах — '
     'в сводке один пункт с пометкой каналов (напр. «ИТР+Производство»), без дублей.\n'
     '2) Затем отдельной строкой ровно маркер <<<ACTIONS>>> и JSON-массив кандидатов:\n'
-    '[{{"type":"payment_confirm|shipment_confirm|order_create|order_qty_change|price_change|purchase_request",'
+    '[{{"type":"payment_confirm|shipment_confirm|order_create|order_qty_change|price_change|purchase_request|potting_report",'
     '"entities":{{"order_id":null,"client":null,"amount":null,"plant":null,"size":null,"qty":null,"price":null,'
-    '"items":[{{"text":"название","qty":"1"}}],"title":null}},'
+    '"items":[{{"text":"название","qty":"1"}}],"lines":[{{"container":"C5","qty":14}}],"title":null}},'
     '"quote":"...","confidence":0.0-1.0,"channel":"sales|hr|production|itr",'
     '"channels":["itr","production"]}}]\n'
     'КРИТИЧНО про ACTIONS:\n'
@@ -290,9 +302,15 @@ _DIGEST_PROMPT = (
     '- В channels перечисли все затронутые каналы; channel = основной (где впервые или полнее).\n'
     '- Речь из голосовых/видео/кружков помечена [голос]/[видео]/[кружок] — '
     'это полноценный текст, учитывай.\n'
-    '- purchase_request: список закупок/заявка «что купить» (часто производство). '
+    '- payment_confirm: только оплата ЗАКАЗА клиентом (продажи/ИТР). '
+    'НЕ патент, зарплата, больничный, кадры, ГСМ, личные переводы.\n'
+    '- purchase_request: нумерованный список закупок «что купить» (часто производство). '
     'В entities.items — нормализованные позиции (text, qty опц.), без выдуманных строк. '
     'Один список = один action, даже если нумерация 1,2,3…\n'
+    '- potting_report: отчёт посадки в горшки/контейнеры из производства '
+    '(«посатка/посадка», «шт С5/С10», название растения). '
+    'entities.plant, entities.qty (общее), entities.lines=[{{container,qty}}]. '
+    'Каждое растение/блок = отдельный action.\n'
     '- Если кандидатов нет — пустой массив [].\n'
     'Только факты из текста. Игнор болтовни про логины/стикеры.\n\n'
     'Сообщений: {message_count}\n\n'
@@ -412,37 +430,57 @@ def _parse_llm_digest(raw: str) -> tuple[str, list[dict]]:
     return summary, actions
 
 
+def _transcript_line_body(line: str) -> str:
+    """Снимает префикс «HH:MM Имя: »; иначе возвращает строку как есть.
+
+    Нельзя делать split(':', 1) — у времени тоже двоеточие (14:08 …).
+    """
+    m = re.match(r'^\d{1,2}:\d{2}\s+.+?:\s*(.*)$', line or '')
+    if m:
+        return (m.group(1) or '').strip()
+    return (line or '').strip()
+
+
 def _heuristic_actions(by_ch: dict[str, str]) -> list[dict]:
-    """Простые кандидаты без LLM — оплаты/отгрузки по ключевым словам."""
+    """Простые кандидаты без LLM — оплаты/отгрузки/закупки/посадка."""
     out = []
     order_re = re.compile(r'(?:заказ|#)\s*(\d{2,5})', re.I)
     amount_re = re.compile(r'(\d[\d\s]{2,})(?:\s*(?:р|руб|₽))?', re.I)
+    non_order_pay = (
+        'патент', 'зарплат', 'больнич', 'кадр', 'отпуск', 'гсм',
+        'аванс', 'преми', 'регистрац',
+    )
     for ch, transcript in by_ch.items():
         for line in (transcript or '').splitlines():
-            bl = line.lower()
-            quote = line.split(':', 1)[-1].strip()[:300]
+            body = _transcript_line_body(line)
+            bl = body.lower()
+            quote = body[:300]
             oid = None
-            m = order_re.search(line)
+            m = order_re.search(body)
             if m:
                 try:
                     oid = int(m.group(1))
                 except Exception:
                     oid = None
             amount = None
-            am = amount_re.search(line)
+            am = amount_re.search(body)
             if am:
                 try:
                     amount = float(am.group(1).replace(' ', '').replace('\xa0', ''))
                 except Exception:
                     amount = None
             if any(k in bl for k in ('оплат', 'перевод', 'платёж', 'платеж', 'пп ')):
-                out.append({
-                    'type': 'payment_confirm',
-                    'entities': {'order_id': oid, 'amount': amount, 'client': None},
-                    'quote': quote,
-                    'confidence': 0.45,
-                    'channel': ch,
-                })
+                # Кадры и «оплатил патент» — не оплата заказа в ERP.
+                if ch == 'hr' or any(k in bl for k in non_order_pay):
+                    pass
+                else:
+                    out.append({
+                        'type': 'payment_confirm',
+                        'entities': {'order_id': oid, 'amount': amount, 'client': None},
+                        'quote': quote,
+                        'confidence': 0.45,
+                        'channel': ch,
+                    })
             elif any(k in bl for k in ('отгруз', 'погруз', 'накладн')):
                 out.append({
                     'type': 'shipment_confirm',
@@ -475,12 +513,13 @@ def _heuristic_actions(by_ch: dict[str, str]) -> list[dict]:
                     'confidence': 0.35,
                     'channel': ch,
                 })
-            if len(out) >= 20:
-                return out
-        # Нумерованный список закупок (часто производство)
+            if len(out) >= 40:
+                break
         purchase = _heuristic_purchase_list(ch, transcript)
         if purchase:
             out.append(purchase)
+        for pot in _heuristic_potting_reports(ch, transcript):
+            out.append(pot)
     return out
 
 
@@ -542,40 +581,71 @@ def _merge_purchase_items(old_items, new_items) -> list[dict]:
     return merged[:40]
 
 
-def _heuristic_purchase_list(channel: str, transcript: str) -> dict | None:
-    """Ищет нумерованный список (1, … / 1. …) — заявка на закупку."""
-    lines = (transcript or '').splitlines()
+def _extract_numbered_items(text: str) -> list[str]:
+    """Достаёт пункты «1. … 2. …» из многострочного или однострочного текста."""
+    text = text or ''
     item_re = re.compile(
-        r'^\s*(?:\d{1,2})\s*[.,):\-–—]\s*(.+)$'
+        r'(?:^|\n)\s*(\d{1,2})\s*[.,):\-–—]\s*(.+?)(?=(?:\n\s*\d{1,2}\s*[.,):\-–—])|$)',
+        re.S,
     )
-    # Также «1, текст» как у Бехруза
-    item_re2 = re.compile(r'^\s*(\d{1,2})\s*,\s*(.+)$')
     collected: list[str] = []
-    start_idx = None
-    for idx, line in enumerate(lines):
-        body = line.split(':', 1)[-1].strip()
-        m = item_re.match(body) or item_re2.match(body)
-        if m:
-            text = (m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(1)).strip()
-            text = re.sub(r'\s+', ' ', text)
-            if len(text) >= 3:
-                if start_idx is None:
-                    start_idx = idx
-                collected.append(text[:300])
-            continue
-        # разрыв списка
-        if collected and len(collected) >= 2:
-            break
-        if collected and not m:
+    for m in item_re.finditer(text):
+        body = re.sub(r'\s+', ' ', (m.group(2) or '').strip())
+        if len(body) >= 3:
+            collected.append(body[:300])
+    if len(collected) >= 2:
+        return collected
+    # Запасной путь: бывший построчный разбор
+    line_re = re.compile(r'^\s*(\d{1,2})\s*[.,):\-–—]\s*(.+)$')
+    collected = []
+    for line in text.splitlines():
+        body = _transcript_line_body(line)
+        m = line_re.match(body)
+        if not m:
+            if collected and len(collected) >= 2:
+                break
             collected = []
-            start_idx = None
+            continue
+        body_txt = re.sub(r'\s+', ' ', m.group(2).strip())
+        if len(body_txt) >= 3:
+            collected.append(body_txt[:300])
+    return collected if len(collected) >= 2 else []
 
+
+def _heuristic_purchase_list(channel: str, transcript: str) -> dict | None:
+    """Ищет нумерованный список (1. … / 1, …) — заявка на закупку."""
+    lines = (transcript or '').splitlines()
+    # Собираем тела сообщений (без префикса времени) — список часто в одном msg.
+    bodies: list[str] = []
+    cur: list[str] = []
+    for line in lines:
+        if re.match(r'^\d{1,2}:\d{2}\s+', line or ''):
+            if cur:
+                bodies.append('\n'.join(cur))
+            cur = [_transcript_line_body(line)]
+        else:
+            cur.append(line)
+    if cur:
+        bodies.append('\n'.join(cur))
+
+    collected: list[str] = []
+    for body in bodies:
+        items = _extract_numbered_items(body)
+        if len(items) > len(collected):
+            collected = items
+    if len(collected) < 2:
+        # весь транскрипт канала целиком (на случай схлопнутых \\n)
+        collected = _extract_numbered_items(
+            '\n'.join(_transcript_line_body(ln) for ln in lines)
+        )
     if len(collected) < 2:
         return None
-    # Контекст: закуп/нужно рядом или канал production
-    window = '\n'.join(lines[max(0, (start_idx or 0) - 4):(start_idx or 0) + 1]).lower()
+    blob = '\n'.join(collected).lower()
     buyish = any(
-        k in window for k in ('закуп', 'купи', 'нужн', 'надо ', 'список', 'прин')
+        k in blob for k in (
+            'закуп', 'купи', 'салфет', 'упаков', 'порошок', 'масло',
+            'пнд', 'трактор', 'нужн', 'список',
+        )
     )
     if channel != 'production' and not buyish:
         return None
@@ -591,6 +661,194 @@ def _heuristic_purchase_list(channel: str, transcript: str) -> dict | None:
         'confidence': 0.55 if buyish else 0.4,
         'channel': channel or 'production',
     }
+
+
+_POTTING_HINT_RE = re.compile(
+    r'посатк|посадк|посадим|горшк|на\s+горш|в\s+горш|контейнер',
+    re.I,
+)
+_POTTING_C_LINE_RE = re.compile(
+    # C5 / С5 / c7,5 — латиница и кириллица явно (IGNORECASE в [] ненадёжен)
+    r'(?i)^\s*(\d+)\s*шт\.?\s*[CcСс]\s*(\d+(?:[.,]\d+)?)\s*$',
+)
+_POTTING_PLANT_TOTAL_RE = re.compile(
+    r'(?i)^\s*(?P<plant>.+?)\s+(?P<qty>\d+)\s*шт\.?\s*(?:общ\w*|обши)?\s*$',
+)
+_POTTING_SKIP_START = re.compile(
+    r'(?i)^(привет|спасибо|хорошо|да\b|нет\b|влад|кирилл|бехруз|ок\b|'
+    r'завтра|напишу|ещё\s+по|еще\s+по)',
+)
+
+
+def _canonical_pot_code(raw: str) -> str | None:
+    text = (raw or '').strip()
+    if not text:
+        return None
+    m = re.search(r'(?i)[CcСс]\s*(\d+(?:[.,]\d+)?)', text)
+    if m:
+        num = m.group(1).replace(',', '.')
+    elif re.fullmatch(r'\d+(?:[.,]\d+)?', text):
+        num = text.replace(',', '.')
+    else:
+        return None
+    if '.' in num:
+        num = num.rstrip('0').rstrip('.')
+    return f'C{num}'
+
+
+def _normalize_potting_lines(raw_lines) -> list[dict]:
+    out: list[dict] = []
+    for it in raw_lines or []:
+        if not isinstance(it, dict):
+            continue
+        code = _canonical_pot_code(str(it.get('container') or it.get('code') or ''))
+        if not code:
+            continue
+        try:
+            qty = int(it.get('qty') or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0:
+            continue
+        out.append({'container': code, 'qty': qty})
+        if len(out) >= 20:
+            break
+    return out
+
+
+def _heuristic_potting_reports(channel: str, transcript: str) -> list[dict]:
+    """Отчёты посадки в горшки из производственного чата.
+
+    Примеры:
+      посатка Гаршки / Тсуга … 29 шт обши / 14 шт С5 / …
+      Пихта Субальпийская / 19 шт С10 / 19 шт С5
+    """
+    if (channel or '') != 'production':
+        return []
+    lines = (transcript or '').splitlines()
+    bodies = [_transcript_line_body(ln) for ln in lines]
+
+    reports: list[dict] = []
+    i = 0
+    while i < len(bodies):
+        line = (bodies[i] or '').strip()
+        if not line:
+            i += 1
+            continue
+
+        plant = None
+        total = None
+        hint_here = bool(_POTTING_HINT_RE.search(line))
+        # «Тсуга … 29 шт обши»
+        m_tot = _POTTING_PLANT_TOTAL_RE.match(line)
+        if m_tot and not _POTTING_C_LINE_RE.match(line):
+            plant_cand = (m_tot.group('plant') or '').strip(' ,.-')
+            if plant_cand and not _POTTING_SKIP_START.match(plant_cand):
+                if not re.search(r'\d', plant_cand) or len(plant_cand) >= 4:
+                    plant = plant_cand[:120]
+                    try:
+                        total = int(m_tot.group('qty'))
+                    except Exception:
+                        total = None
+        # «Пихта Субальпийская» / «Пихта … на сегодня»
+        if plant is None and re.search(r'[A-Za-zА-Яа-яЁё]{3,}', line):
+            if not _POTTING_C_LINE_RE.match(line) and not re.match(r'^\d+', line):
+                if not _POTTING_SKIP_START.match(line):
+                    # убрать хвост «на сегодня»
+                    plant_cand = re.sub(
+                        r'(?i)\s+на\s+сегодня\s*$', '', line
+                    ).strip(' ,.-')
+                    if 3 <= len(plant_cand) <= 80 and not re.fullmatch(r'\d+', plant_cand):
+                        # заглянуть вперёд: есть ли строки C*
+                        look = bodies[i + 1:i + 8]
+                        if any(_POTTING_C_LINE_RE.match((x or '').strip()) for x in look):
+                            plant = plant_cand[:120]
+                            hint_here = hint_here or any(
+                                _POTTING_HINT_RE.search(x or '') for x in look
+                            )
+
+        # «Завтра напишу сколько посадим» — намёк, но не старт отчёта
+        hint_skip = bool(re.match(
+            r'(?i)^(завтра|напишу|ещё\s+по|еще\s+по)', line,
+        ))
+        if plant is None and hint_here and not hint_skip:
+            # «посатка Гаршки» — растение на следующей строке
+            for j in range(i + 1, min(i + 4, len(bodies))):
+                nxt = (bodies[j] or '').strip()
+                if not nxt:
+                    continue
+                m2 = _POTTING_PLANT_TOTAL_RE.match(nxt)
+                if m2 and not _POTTING_C_LINE_RE.match(nxt):
+                    plant = (m2.group('plant') or '').strip(' ,.-')[:120]
+                    try:
+                        total = int(m2.group('qty'))
+                    except Exception:
+                        total = None
+                    i = j
+                    break
+                if (
+                    re.search(r'[A-Za-zА-Яа-яЁё]{3,}', nxt)
+                    and not _POTTING_C_LINE_RE.match(nxt)
+                    and not _POTTING_SKIP_START.match(nxt)
+                ):
+                    plant = re.sub(r'(?i)\s+на\s+сегодня\s*$', '', nxt).strip(' ,.-')[:120]
+                    i = j
+                    break
+
+        if not plant:
+            i += 1
+            continue
+
+        lines_out: list[dict] = []
+        quote_lines = [line] if line else []
+        if bodies[i].strip() and bodies[i].strip() not in quote_lines:
+            quote_lines.append(bodies[i].strip())
+        j = i + 1
+        while j < len(bodies):
+            nxt = (bodies[j] or '').strip()
+            if not nxt:
+                j += 1
+                continue
+            cm = _POTTING_C_LINE_RE.match(nxt)
+            if cm:
+                lines_out.append({
+                    'container': _canonical_pot_code(cm.group(2)),
+                    'qty': int(cm.group(1)),
+                })
+                quote_lines.append(nxt)
+                j += 1
+                continue
+            if _POTTING_HINT_RE.search(nxt) and not lines_out:
+                quote_lines.append(nxt)
+                j += 1
+                continue
+            break
+
+        lines_out = _normalize_potting_lines(lines_out)
+        window_txt = ' '.join(quote_lines).lower()
+        strong = bool(_POTTING_HINT_RE.search(window_txt)) or bool(lines_out)
+        if not strong or (not lines_out and not total):
+            i += 1
+            continue
+        if not total and lines_out:
+            total = sum(int(x['qty']) for x in lines_out)
+        reports.append({
+            'type': 'potting_report',
+            'entities': {
+                'plant': plant,
+                'qty': total,
+                'lines': lines_out,
+                'title': 'Посадка в горшки',
+                'day': msk_today().isoformat(),
+            },
+            'quote': '\n'.join(quote_lines)[:1500],
+            'confidence': 0.7 if _POTTING_HINT_RE.search(window_txt) else 0.55,
+            'channel': 'production',
+        })
+        i = max(j, i + 1)
+        if len(reports) >= 12:
+            break
+    return reports
 
 
 def _stable_entity_key(action_type: str, entities: dict) -> str:
@@ -620,6 +878,10 @@ def _stable_entity_key(action_type: str, entities: dict) -> str:
         # Одна открытая заявка на день (склейка дописок в тот же чеклист)
         day = (entities.get('day') or msk_today().isoformat())[:10]
         return f'day={day}'
+    if action_type == 'potting_report':
+        plant = (entities.get('plant') or '').strip().lower()[:40]
+        day = (entities.get('day') or msk_today().isoformat())[:10]
+        return f'plant={plant or "?"}:day={day}'
     return f'raw={hash(json.dumps(entities, sort_keys=True, default=str)) % 10**8}'
 
 
@@ -670,6 +932,16 @@ def _normalize_and_merge_actions(actions: list[dict]) -> list[dict]:
                 entities['title'] = 'Заявка на закупку'
             if not entities['items']:
                 continue
+        if action_type == 'potting_report':
+            entities['lines'] = _normalize_potting_lines(entities.get('lines'))
+            entities['day'] = (entities.get('day') or msk_today().isoformat())[:10]
+            entities['plant'] = (entities.get('plant') or '').strip()[:120]
+            if not entities.get('title'):
+                entities['title'] = 'Посадка в горшки'
+            if not entities['plant'] and not entities['lines']:
+                continue
+            if entities.get('qty') in (None, ''):
+                entities['qty'] = sum(int(x['qty']) for x in entities['lines']) or None
 
         # Резолв заказа до ключа — иначе дубли «клиент+сумма» и «order=#» не схлопнутся
         cache_key = json.dumps(
@@ -732,6 +1004,19 @@ def _normalize_and_merge_actions(actions: list[dict]) -> list[dict]:
                 pe['day'] = entities.get('day') or pe.get('day')
                 if entities.get('title') and not pe.get('title'):
                     pe['title'] = entities['title']
+            elif action_type == 'potting_report':
+                old_lines = _normalize_potting_lines(pe.get('lines'))
+                new_lines = _normalize_potting_lines(entities.get('lines'))
+                if len(new_lines) >= len(old_lines):
+                    pe['lines'] = new_lines
+                if entities.get('qty') and (
+                    not pe.get('qty')
+                    or int(entities.get('qty') or 0) >= int(pe.get('qty') or 0)
+                ):
+                    pe['qty'] = entities.get('qty')
+                if entities.get('plant') and not pe.get('plant'):
+                    pe['plant'] = entities.get('plant')
+                pe['day'] = entities.get('day') or pe.get('day')
             else:
                 for k, v in entities.items():
                     if v is not None and v != '' and (pe.get(k) is None or pe.get(k) == ''):
@@ -952,6 +1237,12 @@ def _should_skip_action(action_type: str, entities: dict, order: Order | None) -
         if not items:
             return True, 'empty_purchase'
         return False, ''
+    if action_type == 'potting_report':
+        plant = (entities.get('plant') or '').strip()
+        lines = _normalize_potting_lines(entities.get('lines'))
+        if not plant and not lines:
+            return True, 'empty_potting'
+        return False, ''
     return False, ''
 
 
@@ -963,6 +1254,7 @@ def _title_for_action(action_type: str, entities: dict, order: Order | None) -> 
         'order_qty_change': 'Изменить количество',
         'price_change': 'Изменить цену',
         'purchase_request': 'Заявка на закупку',
+        'potting_report': 'Посадка в горшки',
     }
     base = labels.get(action_type, action_type)
     if action_type == 'purchase_request':
@@ -971,6 +1263,18 @@ def _title_for_action(action_type: str, entities: dict, order: Order | None) -> 
         done = sum(1 for x in items if x.get('done'))
         title = entities.get('title') or base
         return f'{title}: {done}/{n}' if n else str(title)
+    if action_type == 'potting_report':
+        plant = (entities.get('plant') or '').strip()
+        qty = entities.get('qty')
+        if not qty:
+            lines = _normalize_potting_lines(entities.get('lines'))
+            qty = sum(int(x['qty']) for x in lines) or None
+        title = entities.get('title') or base
+        if plant and qty:
+            return f'{title}: {plant} · {qty} шт'
+        if plant:
+            return f'{title}: {plant}'
+        return str(title)
     if order:
         client = order.client.name if order.client else ''
         return f'{base}: заказ #{order.id}' + (f' · {client}' if client else '')
@@ -1010,6 +1314,14 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             entities['day'] = (entities.get('day') or day.isoformat())[:10]
             if not entities.get('title'):
                 entities['title'] = 'Заявка на закупку'
+        if action_type == 'potting_report':
+            entities['lines'] = _normalize_potting_lines(entities.get('lines'))
+            entities['day'] = (entities.get('day') or day.isoformat())[:10]
+            entities['plant'] = (entities.get('plant') or '').strip()[:120]
+            if not entities.get('title'):
+                entities['title'] = 'Посадка в горшки'
+            if entities.get('qty') in (None, '') and entities['lines']:
+                entities['qty'] = sum(int(x['qty']) for x in entities['lines'])
 
         order = _find_order(entities)
         if order:
@@ -1055,10 +1367,18 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
                 + (f' ({it["qty"]})' if it.get('qty') else '')
                 for it in (entities.get('items') or [])
             ) or details
+        if action_type == 'potting_report':
+            plant = entities.get('plant') or '—'
+            lines = entities.get('lines') or []
+            detail_lines = [f'{plant}' + (f' · всего {entities.get("qty")} шт' if entities.get('qty') else '')]
+            for ln in lines:
+                detail_lines.append(f'• {ln.get("container")}: {ln.get("qty")} шт')
+            details = '\n'.join(detail_lines) or details
         payload = {
             'action_type': action_type,
             'entities': entities,
             'items': entities.get('items') if action_type == 'purchase_request' else None,
+            'lines': entities.get('lines') if action_type == 'potting_report' else None,
             'order_id': order.id if order else None,
             'client_id': order.client_id if order else None,
             'channel': channel,
@@ -1132,7 +1452,9 @@ def reconcile_and_upsert_tasks(actions: list[dict], day: date | None = None) -> 
             first_seen_at=now,
             last_seen_at=now,
             severity=(
-                'warning' if action_type in ('payment_confirm', 'purchase_request')
+                'warning' if action_type in (
+                    'payment_confirm', 'purchase_request', 'potting_report',
+                )
                 else 'info'
             ),
         )
@@ -1241,10 +1563,19 @@ def run_ops_digest(
             summary, actions = _parse_llm_digest(raw)
         else:
             summary = _fallback_multi_summary(day, by_ch, message_count)
-            actions = _heuristic_actions(by_ch)
+            actions = []
 
+        # Закупки и посадка в горшки — эвристики всегда, даже если LLM
+        # уже что-то вернул (раньше при любом ACTIONS эвристики молчали,
+        # и нумерованный список из производства пропадал).
+        heur = _heuristic_actions(by_ch)
         if not actions:
-            actions = _heuristic_actions(by_ch)
+            actions = heur
+        else:
+            actions = list(actions) + [
+                h for h in heur
+                if (h.get('type') or '') in ('purchase_request', 'potting_report')
+            ]
 
     # В reconcile — контекст открытых задач уже внутри; вчерашний дайджест
     # можно подмешать в details при необходимости.
@@ -1820,6 +2151,9 @@ def enrich_ops_draft_card(dr: OpsActionDraft, payload_order_id=None) -> dict:
         'purchase_done': 0,
         'purchase_total': 0,
         'purchase_title': '',
+        'potting_plant': '',
+        'potting_qty': None,
+        'potting_lines': [],
     }
     if dr.action_type == 'purchase_request':
         items = _normalize_purchase_items(pl.get('items') or ent.get('items'))
@@ -1829,6 +2163,13 @@ def enrich_ops_draft_card(dr: OpsActionDraft, payload_order_id=None) -> dict:
         result['purchase_title'] = (
             ent.get('title') or pl.get('title') or 'Заявка на закупку'
         )
+    if dr.action_type == 'potting_report':
+        lines = _normalize_potting_lines(pl.get('lines') or ent.get('lines'))
+        result['potting_plant'] = (ent.get('plant') or '').strip()
+        result['potting_qty'] = ent.get('qty')
+        result['potting_lines'] = lines
+        if not result['potting_qty'] and lines:
+            result['potting_qty'] = sum(int(x['qty']) for x in lines)
     return result
 
 
@@ -2296,6 +2637,44 @@ def api_run_digest():
     force = request.form.get('force') in ('1', 'true', 'yes')
     result = run_ops_digest(force=force, send=True)
     return jsonify(result)
+
+
+def backfill_ops_day(day: date | None = None) -> dict:
+    """Пересобрать кандидатов за день только эвристиками (без нового LLM-дайджеста).
+
+    Нужен, чтобы вытащить на дашборд пропущенные закупки/посадки после фикса.
+    """
+    day = day or msk_today()
+    rows = _load_day_messages(day)
+    by_ch = _build_channel_transcripts(rows)
+    actions = _heuristic_actions(by_ch)
+    # day в entities — день сообщения, не «сегодня»
+    for a in actions:
+        ent = dict(a.get('entities') or {})
+        ent['day'] = day.isoformat()
+        a['entities'] = ent
+    reconcile = reconcile_and_upsert_tasks(actions, day=day)
+    return {
+        'ok': True,
+        'day': day.isoformat(),
+        'message_count': len(rows),
+        'actions': len(actions),
+        'reconcile': reconcile,
+    }
+
+
+@bp.route('/api/backfill_day', methods=['POST'])
+@login_required
+@pilot_required
+def api_backfill_day():
+    raw = (request.form.get('day') or request.args.get('day') or '').strip()
+    day = msk_today()
+    if raw:
+        try:
+            day = date.fromisoformat(raw)
+        except ValueError:
+            return jsonify({'ok': False, 'error': 'bad day'}), 400
+    return jsonify(backfill_ops_day(day))
 
 
 @bp.route('/api/demo_seed', methods=['GET', 'POST'])
