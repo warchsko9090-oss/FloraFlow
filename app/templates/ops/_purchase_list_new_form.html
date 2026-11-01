@@ -1,0 +1,90 @@
+{# Фрагмент «Новый список закупки» для HTMX-модалки (#purchaseListModal). #}
+<form hx-post="{{ url_for('ai_ops.api_purchase_list_create') }}"
+      hx-swap="none"
+      class="p-3"
+      id="purchaseListNewForm">
+    <div class="mb-3">
+        <label class="form-label fw-bold">Название</label>
+        <input type="text" name="title" class="form-control" maxlength="200"
+               value="{{ default_title }}"
+               placeholder="Заявка на закупку">
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label fw-bold">Дата заявки</label>
+        <input type="date" name="day" class="form-control" value="{{ today }}">
+        <div class="form-text">Срок на дашборде — до воскресенья следующей недели.</div>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label fw-bold">Позиции *</label>
+        <textarea name="items" class="form-control font-monospace" rows="8" required
+                  placeholder="По одной на строку. Можно так:&#10;влажные салфетки - 5 упаковок&#10;порошок | 15 кг&#10;тройники ПНД д63"></textarea>
+        <div class="form-text">
+            Если привязываете существующую заявку ВиУМ и поле пустое — подтянутся её позиции.
+        </div>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label fw-bold">Учёт ВиУМ</label>
+        <div class="d-flex flex-column gap-2">
+            <label class="border rounded p-2 mb-0">
+                <input type="radio" name="vium_mode" value="create" class="form-check-input me-2" checked
+                       onchange="togglePurchaseViumLink(this.form)">
+                <span class="fw-bold">Создать новую заявку в ВиУМ</span>
+                <div class="small text-muted">Чеклист на дашборде + зеркало в «Закупки ВиУМ» для цен и сроков.</div>
+            </label>
+            <label class="border rounded p-2 mb-0">
+                <input type="radio" name="vium_mode" value="link" class="form-check-input me-2"
+                       onchange="togglePurchaseViumLink(this.form)">
+                <span class="fw-bold">Привязать к существующей</span>
+                <div class="small text-muted">Галочки и позиции синхронизируются с выбранной заявкой.</div>
+            </label>
+            <label class="border rounded p-2 mb-0">
+                <input type="radio" name="vium_mode" value="none" class="form-check-input me-2"
+                       onchange="togglePurchaseViumLink(this.form)">
+                <span class="fw-bold">Только дашборд</span>
+                <div class="small text-muted">Без записи в учёт ВиУМ.</div>
+            </label>
+        </div>
+    </div>
+
+    <div class="mb-3" id="purchaseViumLinkWrap" style="display:none;">
+        <label class="form-label fw-bold">Открытая заявка ВиУМ</label>
+        <select name="vium_purchase_id" class="form-select">
+            <option value="">— выберите —</option>
+            {% for p in open_purchases %}
+            <option value="{{ p.id }}">
+                #{{ p.id }} · {{ p.request_date.strftime('%d.%m.%Y') if p.request_date else '—' }}
+                · {{ p.title }}
+                ({{ p.lines|length }} поз.)
+            </option>
+            {% else %}
+            <option value="" disabled>Нет открытых заявок</option>
+            {% endfor %}
+        </select>
+        <div class="form-text">
+            <a href="{{ url_for('vium.vium_purchases') }}" data-hx-boost="false" target="_blank">Открыть Закупки ВиУМ</a>
+        </div>
+    </div>
+
+    <div class="d-flex justify-content-end gap-2 pt-2 border-top">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-success fw-bold">
+            <i class="fas fa-cart-plus me-1"></i> Создать список
+        </button>
+    </div>
+</form>
+<script>
+function togglePurchaseViumLink(form) {
+    if (!form) return;
+    var mode = (form.querySelector('input[name="vium_mode"]:checked') || {}).value;
+    var wrap = document.getElementById('purchaseViumLinkWrap');
+    if (wrap) wrap.style.display = (mode === 'link') ? '' : 'none';
+    var sel = form.querySelector('select[name="vium_purchase_id"]');
+    if (sel) sel.required = (mode === 'link');
+    var ta = form.querySelector('textarea[name="items"]');
+    if (ta) ta.required = (mode !== 'link');
+}
+togglePurchaseViumLink(document.getElementById('purchaseListNewForm'));
+</script>

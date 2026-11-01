@@ -2705,6 +2705,259 @@ def api_purchase_done(draft_id):
     return jsonify(result), (200 if result.get('ok') else 400)
 
 
+def _parse_manual_purchase_lines(raw: str) -> list[dict]:
+    """Строки «название» или «название | qty» / «название — qty» → items."""
+    items: list[dict] = []
+    for line in (raw or '').splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        # убрать ведущую нумерацию 1. / 1)
+        text = re.sub(r'^\d{1,2}\s*[.)\-–—]\s*', '', text).strip()
+        if not text:
+            continue
+        qty = None
+        for sep in ('|', ' — ', ' – ', ' - '):
+            if sep in text:
+                left, right = text.split(sep, 1)
+                left, right = left.strip(), right.strip()
+                if left and right and len(right) <= 40:
+                    text, qty = left, right
+                break
+        items.append({'text': text[:300], 'qty': qty})
+        if len(items) >= 40:
+            break
+    return _normalize_purchase_items(items)
+
+
+def create_manual_purchase_list(
+    *,
+    title: str,
+    items_raw: str,
+    user_id: int | None,
+    day: date | None = None,
+    vium_mode: str = 'create',
+    vium_purchase_id: int | None = None,
+) -> dict:
+    """Админ создаёт чеклист закупки на дашборде.
+
+    vium_mode:
+      none   — только дашборд, без ВиУМ;
+      create — новая заявка в учёте ВиУМ;
+      link   — привязать к существующей открытой заявке ВиУМ.
+    """
+    from app.models import ViumPurchase
+
+    day = day or msk_today()
+    title = (title or 'Заявка на закупку').strip()[:200] or 'Заявка на закупку'
+    vium_mode = (vium_mode or 'create').strip().lower()
+    if vium_mode not in ('none', 'create', 'link'):
+        vium_mode = 'create'
+
+    items = _parse_manual_purchase_lines(items_raw)
+    purchase = None
+    if vium_mode == 'link':
+        if not vium_purchase_id:
+            return {'ok': False, 'error': 'Выберите заявку ВиУМ'}
+        purchase = ViumPurchase.query.get(int(vium_purchase_id))
+        if not purchase:
+            return {'ok': False, 'error': 'Заявка ВиУМ не найдена'}
+        if not items:
+            # подтянуть позиции из ВиУМ
+            items = _normalize_purchase_items([
+                {
+                    'id': ln.external_key or f'i{i + 1}',
+                    'text': ln.title,
+                    'qty': ln.qty_text or (str(ln.qty) if ln.qty is not None else None),
+                    'done': (ln.status or '') in ('ordered', 'received'),
+                }
+                for i, ln in enumerate(purchase.lines or [])
+                if (ln.title or '').strip() and (ln.status or '') != 'cancelled'
+            ])
+        if purchase.title and title == 'Заявка на закупку':
+            title = purchase.title
+
+    if not items:
+        return {'ok': False, 'error': 'Добавьте хотя бы одну позицию'}
+
+    vlad = resolve_vlad_user()
+    now = msk_now()
+    deadline = _action_deadline('purchase_request', day)
+    # уникальный ключ: админ может завести несколько списков в один день
+    stamp = now.strftime('%H%M%S')
+    dedup_key = f'ai_ops:purchase_request:manual={day.isoformat()}:{stamp}:{user_id or 0}'
+
+    entities = {
+        'items': items,
+        'title': title,
+        'day': day.isoformat(),
+        'manual': True,
+        'vium_mode': vium_mode,
+        'vium_source': 'manual',
+    }
+    quote = '\n'.join(
+        f'{i + 1}. {it["text"]}' + (f' ({it["qty"]})' if it.get('qty') else '')
+        for i, it in enumerate(items)
+    )[:2000]
+    details = '\n'.join(
+        f'{"✓" if it.get("done") else "○"} {it.get("text")}'
+        + (f' ({it["qty"]})' if it.get('qty') else '')
+        for it in items
+    )
+    payload = {
+        'action_type': 'purchase_request',
+        'entities': entities,
+        'items': items,
+        'channel': 'manual',
+        'channels': ['manual'],
+        'quote': quote,
+        'confidence': 1.0,
+        'digest_date': day.isoformat(),
+        'vium_mode': vium_mode,
+        'vium_source': 'manual',
+        'created_by_user_id': user_id,
+    }
+    task_title = _title_for_action('purchase_request', entities, None)[:200]
+
+    task = TgTask(
+        raw_text=quote or title,
+        title=task_title,
+        details=details[:4000],
+        assignee_id=vlad.id if vlad else user_id,
+        assignee_role='admin' if not vlad else None,
+        deadline=deadline,
+        action_type='purchase_request',
+        action_payload=json.dumps(payload, ensure_ascii=False),
+        status='new',
+        sender_name='Админ',
+        source='ai_ops',
+        dedup_key=dedup_key,
+        first_seen_at=now,
+        last_seen_at=now,
+        severity='warning',
+        created_by_id=user_id,
+    )
+    db.session.add(task)
+    db.session.flush()
+
+    draft = OpsActionDraft(
+        task_id=task.id,
+        action_type='purchase_request',
+        status='pending',
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        channel='manual',
+        quote=quote,
+        confidence=Decimal('1.00'),
+        posted_by_id=user_id,
+    )
+    db.session.add(draft)
+    db.session.flush()
+
+    vium_id = None
+    vium_warn = None
+    if vium_mode in ('create', 'link'):
+        try:
+            from app.vium_purchases import upsert_purchase_from_ops_draft
+            vp = upsert_purchase_from_ops_draft(
+                draft,
+                purchase_id=purchase.id if purchase else None,
+                source='manual',
+            )
+            if vp:
+                vium_id = vp.id
+                pl = draft_payload(draft)
+                pl['vium_purchase_id'] = vp.id
+                ent = dict(pl.get('entities') or {})
+                ent['vium_purchase_id'] = vp.id
+                pl['entities'] = ent
+                draft.payload_json = json.dumps(pl, ensure_ascii=False)
+                task.action_payload = draft.payload_json
+            else:
+                vium_warn = 'Чеклист создан, но зеркало ВиУМ не создалось'
+        except Exception:
+            current_app.logger.exception('manual purchase vium sync failed')
+            vium_warn = 'Чеклист на дашборде есть, связь с ВиУМ не удалась'
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('manual purchase create failed')
+        return {'ok': False, 'error': 'Ошибка сохранения'}
+
+    return {
+        'ok': True,
+        'task_id': task.id,
+        'draft_id': draft.id,
+        'vium_purchase_id': vium_id,
+        'items': len(items),
+        'deadline': deadline.isoformat(),
+        'warning': vium_warn,
+    }
+
+
+@bp.route('/api/purchase_list/new_form', methods=['GET'])
+@login_required
+def api_purchase_list_new_form():
+    """Форма «Новый список закупки» для модалки дашборда."""
+    if current_user.role not in ('admin', 'executive') and not is_ai_ops_pilot(current_user):
+        return '<div class="alert alert-warning m-3">Недостаточно прав.</div>', 403
+    from app.models import ViumPurchase
+    open_purchases = (
+        ViumPurchase.query
+        .filter(ViumPurchase.status == 'open')
+        .order_by(ViumPurchase.request_date.desc(), ViumPurchase.id.desc())
+        .limit(40)
+        .all()
+    )
+    return render_template(
+        'ops/_purchase_list_new_form.html',
+        open_purchases=open_purchases,
+        today=msk_today().isoformat(),
+        default_title='Заявка на закупку',
+    )
+
+
+@bp.route('/api/purchase_list/create', methods=['POST'])
+@login_required
+def api_purchase_list_create():
+    if current_user.role not in ('admin', 'executive') and not is_ai_ops_pilot(current_user):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    title = (request.form.get('title') or '').strip()
+    items_raw = request.form.get('items') or ''
+    vium_mode = (request.form.get('vium_mode') or 'create').strip()
+    day_raw = (request.form.get('day') or '').strip()
+    day = msk_today()
+    if day_raw:
+        try:
+            day = date.fromisoformat(day_raw)
+        except ValueError:
+            return jsonify({'ok': False, 'error': 'Неверная дата'}), 400
+    vium_purchase_id = None
+    raw_pid = (request.form.get('vium_purchase_id') or '').strip()
+    if raw_pid:
+        try:
+            vium_purchase_id = int(raw_pid)
+        except ValueError:
+            vium_purchase_id = None
+    result = create_manual_purchase_list(
+        title=title,
+        items_raw=items_raw,
+        user_id=current_user.id,
+        day=day,
+        vium_mode=vium_mode,
+        vium_purchase_id=vium_purchase_id,
+    )
+    if request.headers.get('HX-Request'):
+        if result.get('ok'):
+            resp = jsonify(result)
+            resp.headers['HX-Trigger'] = 'tg-task-changed'
+            resp.headers['HX-Refresh'] = 'true'
+            return resp
+        return _hx_err(result.get('error') or 'Ошибка')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
 @bp.route('/api/run_digest', methods=['POST'])
 @login_required
 @pilot_required

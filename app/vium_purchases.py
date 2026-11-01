@@ -68,8 +68,14 @@ def upsert_purchase_from_ops_draft(
     draft: OpsActionDraft,
     *,
     close: bool = False,
+    purchase_id: int | None = None,
+    source: str | None = None,
 ) -> ViumPurchase | None:
-    """Создаёт/обновляет заявку ВиУМ по черновику AI Ops. Цены/сроки сохраняет."""
+    """Создаёт/обновляет заявку ВиУМ по черновику AI Ops. Цены/сроки сохраняет.
+
+    purchase_id — привязать к уже существующей заявке ВиУМ.
+    source — 'ai_ops' | 'manual' при создании новой (по умолчанию ai_ops).
+    """
     if not draft or draft.action_type != 'purchase_request':
         return None
 
@@ -81,21 +87,26 @@ def upsert_purchase_from_ops_draft(
     pl = draft_payload(draft)
     ent = pl.get('entities') or {}
     items = _draft_items(draft)
-    if not items and not close:
+    if not items and not close and not purchase_id:
         return None
 
     day = _parse_date(ent.get('day') or pl.get('digest_date')) or msk_today()
     title = (ent.get('title') or 'Заявка на закупку')[:200]
     channel = (draft.channel or pl.get('channel') or '')[:20] or None
     quote = (draft.quote or pl.get('quote') or '')[:4000] or None
+    src = (source or ent.get('vium_source') or pl.get('vium_source') or 'ai_ops')
+    if src not in ('ai_ops', 'manual'):
+        src = 'ai_ops'
 
     purchase = None
-    if draft.id:
+    if purchase_id:
+        purchase = ViumPurchase.query.get(int(purchase_id))
+    if purchase is None and draft.id:
         purchase = ViumPurchase.query.filter_by(ops_draft_id=draft.id).first()
     if purchase is None and draft.task_id:
         purchase = (
             ViumPurchase.query
-            .filter_by(task_id=draft.task_id, source='ai_ops')
+            .filter_by(task_id=draft.task_id)
             .order_by(ViumPurchase.id.desc())
             .first()
         )
@@ -105,15 +116,22 @@ def upsert_purchase_from_ops_draft(
             title=title,
             request_date=day,
             status='open',
-            source='ai_ops',
+            source=src,
             channel=channel,
             quote=quote,
             ops_draft_id=draft.id,
             task_id=draft.task_id,
+            created_by_user_id=getattr(draft, 'posted_by_id', None),
         )
         db.session.add(purchase)
         db.session.flush()
     else:
+        # unique ops_draft_id: если заявка была привязана к другому черновику — перевешиваем
+        if purchase.ops_draft_id and purchase.ops_draft_id != draft.id:
+            other = OpsActionDraft.query.get(purchase.ops_draft_id)
+            if other and other.id != draft.id:
+                # оставляем старый черновик без зеркала ВиУМ
+                pass
         purchase.title = title or purchase.title
         purchase.request_date = day or purchase.request_date
         purchase.channel = channel or purchase.channel
@@ -122,6 +140,8 @@ def upsert_purchase_from_ops_draft(
         purchase.ops_draft_id = draft.id
         purchase.task_id = draft.task_id or purchase.task_id
         purchase.updated_at = msk_now()
+        if not purchase.source:
+            purchase.source = src
 
     if close or draft.status in ('posted', 'rejected', 'skipped'):
         purchase.status = 'closed'

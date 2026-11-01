@@ -213,6 +213,18 @@
                 <i class="fas fa-calendar-alt me-1"></i> Календарь
             </a>
             {% endif %}
+            {% if current_user.role in ['admin', 'executive'] or show_ai_ops %}
+            <button type="button"
+                    class="btn btn-outline-success fw-bold"
+                    hx-get="{{ url_for('ai_ops.api_purchase_list_new_form') }}"
+                    hx-target="#purchaseListModalBody"
+                    hx-swap="innerHTML"
+                    data-bs-toggle="modal"
+                    data-bs-target="#purchaseListModal"
+                    title="Создать список закупки на дашборде">
+                <i class="fas fa-cart-plus me-1"></i> Список закупки
+            </button>
+            {% endif %}
             {% if current_user.role in ['admin', 'executive', 'user'] %}
             <button type="button"
                     class="btn btn-success fw-bold"
@@ -881,6 +893,21 @@
 </div>
 
 {# ========== Модалки TgTask v2 ========== #}
+{% if current_user.role in ['admin', 'executive'] or show_ai_ops %}
+<div class="modal fade" id="purchaseListModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-cart-plus me-1"></i> Новый список закупки</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body p-0" id="purchaseListModalBody">
+                <div class="text-center p-4 text-muted">Загрузка…</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 {# Создание новой задачи (для admin/executive/user) #}
 {% if current_user.role in ['admin', 'executive', 'user'] %}
 <div class="modal fade" id="newTaskModal" tabindex="-1" aria-hidden="true">
@@ -922,7 +949,7 @@
         var xhr = evt.detail && evt.detail.xhr;
         if (!xhr || !xhr.getResponseHeader) return;
         if (xhr.getResponseHeader('HX-Trigger') === 'tg-task-changed') {
-            ['newTaskModal', 'reassignModal'].forEach(function (id) {
+            ['newTaskModal', 'reassignModal', 'purchaseListModal'].forEach(function (id) {
                 var el = document.getElementById(id);
                 if (!el || !window.bootstrap) return;
                 var inst = window.bootstrap.Modal.getInstance(el);
