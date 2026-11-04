@@ -302,8 +302,13 @@ _DIGEST_PROMPT = (
     '- В channels перечисли все затронутые каналы; channel = основной (где впервые или полнее).\n'
     '- Речь из голосовых/видео/кружков помечена [голос]/[видео]/[кружок] — '
     'это полноценный текст, учитывай.\n'
-    '- payment_confirm: только оплата ЗАКАЗА клиентом (продажи/ИТР). '
-    'НЕ патент, зарплата, больничный, кадры, ГСМ, личные переводы.\n'
+    '- payment_confirm: только ФАКТ оплаты ЗАКАЗА («оплатил/оплачено/пришло»). '
+    'НЕ план («будет оплата/нужен счёт/после оплаты»), НЕ патент/ЗП/ГСМ/выставка/бронь.\n'
+    '- shipment_confirm: только ФАКТ («отгрузили/уехала/накладная»). '
+    'НЕ вопрос про дату и НЕ обсуждение сроков/копки.\n'
+    '- order_qty_change: правка qty в СУЩЕСТВУЮЩЕМ заказе. '
+    'НЕ «набрать/отобрать N шт» (это поручение менеджеру).\n'
+    '- price_change: правка прайса/цены в ERP. НЕ экскурсия и НЕ «цены не давали».\n'
     '- purchase_request: нумерованный список закупок «что купить» (часто производство). '
     'В entities.items — нормализованные позиции (text, qty опц.), без выдуманных строк. '
     'Один список = один action, даже если нумерация 1,2,3…\n'
@@ -441,15 +446,118 @@ def _transcript_line_body(line: str) -> str:
     return (line or '').strip()
 
 
+# Сигналы «это ещё не факт в ERP» — режем и LLM, и эвристики (дашборд без шума).
+_PAY_FACT_RE = re.compile(
+    r'(?i)(?:оплатил\w*|оплачен\w*|оплатили|пришл[оаи]\w*\s+(?:деньг|оплат|перевод)|'
+    r'поступил\w*|перевод\s+прошёл|деньги\s+пришл|уже\s+оплач)'
+)
+_PAY_PLAN_RE = re.compile(
+    r'(?i)(?:будет\s+оплат|оплат\w*\s+будет|после\s+оплат|нужен\s+сч[её]т|'
+    r'жду\s+сч[её]т|сч[её]т\s+нуж|оплатят|оплата\s+на\s+след|'
+    r'на\s+следующ\w*\s+недел|начн[её]м|в\s+процессе|обсужд)'
+)
+_PAY_NON_ORDER_RE = re.compile(
+    r'(?i)(?:патент|зарплат|больнич|кадр|отпуск|гсм|аванс|преми|регистрац|'
+    r'выставк|брон\w*|участ\w*\s+\d*\s*чел|квартир|ипотек)'
+)
+_SHIP_FACT_RE = re.compile(
+    r'(?i)(?:отгрузил\w*|отгружен\w*|уехал\w*|ушла\s+машин|машин\w*\s+ушл|'
+    r'погруз\w*\s+(?:заказ|машин)|накладн\w*\s+(?:готов|сдела|отдал)|'
+    r'уже\s+отгруз)'
+)
+_SHIP_PLAN_RE = re.compile(
+    r'(?i)(?:какая\s+дата\s+отгруз|когда\s+отгруз|дата\s+отгруз|'
+    r'состык\w*|сколько\s+.*выкоп|полива\w*\s+.*(?:копк|поле)|'
+    r'нужно\s+.*выкоп|обсужд|согласован)'
+)
+_QTY_SELECTION_RE = re.compile(
+    r'(?i)(?:набрать|отобрать|отобрал\w*|свободн\w+\s+\w+|наборк)'
+)
+_PRICE_NOISE_RE = re.compile(
+    r'(?i)(?:цен\w*\s+и\s+прайс\s+мы\s+ему\s+не\s+давал|не\s+давал\w*\s+прайс|'
+    r'экскурси|оценк[аеуи]\s*[:=]?\s*5|заинтерес)'
+)
+
+
+def _action_noise_reason(action: dict) -> str | None:
+    """Почему карточку не стоит класть на дашборд. None = оставляем."""
+    if not isinstance(action, dict):
+        return 'not_dict'
+    action_type = (action.get('type') or '').strip()
+    quote = (action.get('quote') or '')
+    q = quote.lower().replace('ё', 'е')
+    entities = action.get('entities') if isinstance(action.get('entities'), dict) else {}
+
+    if action_type == 'payment_confirm':
+        if _PAY_NON_ORDER_RE.search(quote):
+            return 'payment_non_order'
+        if _PAY_PLAN_RE.search(quote) and not _PAY_FACT_RE.search(quote):
+            return 'payment_plan_not_fact'
+        # «отобрали / оплачено по КП» без order_id — ещё обсуждение отбора, не проведение оплаты
+        if not entities.get('order_id') and _QTY_SELECTION_RE.search(quote):
+            return 'payment_selection_talk'
+        # Слабый сигнал без факта и без заказа
+        if not _PAY_FACT_RE.search(quote) and not entities.get('order_id'):
+            if re.search(r'(?i)(?:оплат|перевод|плат[её]ж)', quote):
+                return 'payment_weak_no_order'
+        return None
+
+    if action_type == 'shipment_confirm':
+        if _SHIP_PLAN_RE.search(quote) and not _SHIP_FACT_RE.search(quote):
+            return 'shipment_plan_not_fact'
+        if not _SHIP_FACT_RE.search(quote):
+            # вопрос про отгрузку / голос без факта
+            if '?' in quote or re.search(r'(?i)(?:какая|когда|состык|выкоп|полива)', quote):
+                return 'shipment_question_or_talk'
+            if not entities.get('order_id'):
+                return 'shipment_weak_no_order'
+        return None
+
+    if action_type == 'order_qty_change':
+        if _QTY_SELECTION_RE.search(quote):
+            return 'qty_is_selection_task'
+        if not entities.get('order_id'):
+            # «Количество 81 штука» без заказа — обычно кусок треда нового КП, не правка ERP
+            qstrip = quote.strip()
+            if re.match(r'(?i)^количество\s+\d+', qstrip) or (
+                len(qstrip) < 90
+                and re.search(r'(?i)\d+\s*шт', qstrip)
+                and not entities.get('plant')
+                and 'заказ' not in q
+            ):
+                return 'qty_bare_no_order'
+        return None
+
+    if action_type == 'price_change':
+        if _PRICE_NOISE_RE.search(quote):
+            return 'price_not_erp_change'
+        return None
+
+    return None
+
+
+def _filter_noisy_actions(actions: list[dict]) -> list[dict]:
+    kept: list[dict] = []
+    for a in actions or []:
+        reason = _action_noise_reason(a)
+        if reason:
+            try:
+                current_app.logger.info(
+                    'ai_ops drop noise type=%s reason=%s quote=%s',
+                    (a or {}).get('type'), reason, ((a or {}).get('quote') or '')[:120],
+                )
+            except Exception:
+                pass
+            continue
+        kept.append(a)
+    return kept
+
+
 def _heuristic_actions(by_ch: dict[str, str]) -> list[dict]:
     """Простые кандидаты без LLM — оплаты/отгрузки/закупки/посадка."""
     out = []
     order_re = re.compile(r'(?:заказ|#)\s*(\d{2,5})', re.I)
     amount_re = re.compile(r'(\d[\d\s]{2,})(?:\s*(?:р|руб|₽))?', re.I)
-    non_order_pay = (
-        'патент', 'зарплат', 'больнич', 'кадр', 'отпуск', 'гсм',
-        'аванс', 'преми', 'регистрац',
-    )
     for ch, transcript in by_ch.items():
         for line in (transcript or '').splitlines():
             body = _transcript_line_body(line)
@@ -470,25 +578,40 @@ def _heuristic_actions(by_ch: dict[str, str]) -> list[dict]:
                 except Exception:
                     amount = None
             if any(k in bl for k in ('оплат', 'перевод', 'платёж', 'платеж', 'пп ')):
-                # Кадры и «оплатил патент» — не оплата заказа в ERP.
-                if ch == 'hr' or any(k in bl for k in non_order_pay):
+                # Кадры / не-заказ / план без факта — не карточка оплаты.
+                if ch == 'hr' or _PAY_NON_ORDER_RE.search(body):
+                    pass
+                elif _PAY_PLAN_RE.search(body) and not _PAY_FACT_RE.search(body):
+                    pass
+                elif not _PAY_FACT_RE.search(body) and not oid:
                     pass
                 else:
-                    out.append({
+                    cand = {
                         'type': 'payment_confirm',
                         'entities': {'order_id': oid, 'amount': amount, 'client': None},
                         'quote': quote,
                         'confidence': 0.45,
                         'channel': ch,
-                    })
+                    }
+                    if not _action_noise_reason(cand):
+                        out.append(cand)
             elif any(k in bl for k in ('отгруз', 'погруз', 'накладн')):
-                out.append({
-                    'type': 'shipment_confirm',
-                    'entities': {'order_id': oid},
-                    'quote': quote,
-                    'confidence': 0.4,
-                    'channel': ch,
-                })
+                if _SHIP_PLAN_RE.search(body) and not _SHIP_FACT_RE.search(body):
+                    pass
+                elif not _SHIP_FACT_RE.search(body) and (
+                    '?' in body or not oid
+                ):
+                    pass
+                else:
+                    cand = {
+                        'type': 'shipment_confirm',
+                        'entities': {'order_id': oid},
+                        'quote': quote,
+                        'confidence': 0.4,
+                        'channel': ch,
+                    }
+                    if not _action_noise_reason(cand):
+                        out.append(cand)
             elif any(k in bl for k in ('новый заказ', 'сделай заказ', 'оформи заказ')):
                 out.append({
                     'type': 'order_create',
@@ -498,21 +621,29 @@ def _heuristic_actions(by_ch: dict[str, str]) -> list[dict]:
                     'channel': ch,
                 })
             elif any(k in bl for k in ('количеств', 'шт вместо', 'qty', 'поменяй qty')):
-                out.append({
-                    'type': 'order_qty_change',
-                    'entities': {'order_id': oid, 'qty': None},
-                    'quote': quote,
-                    'confidence': 0.35,
-                    'channel': ch,
-                })
-            elif any(k in bl for k in ('цен', 'прайс', 'измени цен')):
-                out.append({
+                if _QTY_SELECTION_RE.search(body):
+                    pass
+                else:
+                    cand = {
+                        'type': 'order_qty_change',
+                        'entities': {'order_id': oid, 'qty': None},
+                        'quote': quote,
+                        'confidence': 0.35,
+                        'channel': ch,
+                    }
+                    if not _action_noise_reason(cand):
+                        out.append(cand)
+            elif any(k in bl for k in ('измени цен', 'новую цен', 'цену на ')):
+                # Узже: голый «цен/прайс» давал экскурсии и оценки 5+
+                cand = {
                     'type': 'price_change',
                     'entities': {'plant': None, 'size': None, 'price': amount},
                     'quote': quote,
                     'confidence': 0.35,
                     'channel': ch,
-                })
+                }
+                if not _action_noise_reason(cand):
+                    out.append(cand)
             if len(out) >= 40:
                 break
         purchase = _heuristic_purchase_list(ch, transcript)
@@ -520,7 +651,7 @@ def _heuristic_actions(by_ch: dict[str, str]) -> list[dict]:
             out.append(purchase)
         for pot in _heuristic_potting_reports(ch, transcript):
             out.append(pot)
-    return out
+    return _filter_noisy_actions(out)
 
 
 def _normalize_purchase_items(raw_items) -> list[dict]:
@@ -918,6 +1049,8 @@ def _normalize_and_merge_actions(actions: list[dict]) -> list[dict]:
             continue
         action_type = (raw.get('type') or '').strip()
         if action_type not in ACTION_TYPES:
+            continue
+        if _action_noise_reason(raw):
             continue
         entities = raw.get('entities') or {}
         if not isinstance(entities, dict):
@@ -1594,6 +1727,8 @@ def run_ops_digest(
                 h for h in heur
                 if (h.get('type') or '') in ('purchase_request', 'potting_report')
             ]
+        # Post-filter: fact vs plan / не-заказ — без доп. вызова LLM (лимиты).
+        actions = _filter_noisy_actions(actions)
 
     # В reconcile — контекст открытых задач уже внутри; вчерашний дайджест
     # можно подмешать в details при необходимости.
