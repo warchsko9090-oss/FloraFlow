@@ -310,6 +310,27 @@ class ActionLog(db.Model):
     action = db.Column(db.String(500))
     user = db.relationship('User')
 
+# --- Теги заказов ---
+class OrderTag(db.Model):
+    """Справочник тегов заказов: короткое имя (2–3 слова) + цвет.
+
+    Один тег на заказ. Мягкая архивация (is_archived), если тег уже назначен;
+    жёсткое удаление — только если ни на одном заказе не используется.
+    """
+    __tablename__ = 'order_tag'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    color = db.Column(db.String(20), nullable=False, default='#6c757d')
+    is_archived = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    orders = db.relationship('Order', back_populates='tag')
+
+    __table_args__ = (
+        db.Index('idx_order_tag_archived', 'is_archived'),
+    )
+
+
 # --- Продажи ---
 class Order(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -354,9 +375,13 @@ class Order(db.Model):
     # Включённый флаг — только учёт в заказе; в расходы/приходы/финрез не идёт.
     agency_enabled = db.Column(db.Boolean, default=False)
 
+    # Один тег на заказ (необязательно). Справочник — OrderTag.
+    tag_id = db.Column(db.Integer, db.ForeignKey('order_tag.id'), nullable=True)
+
     client = db.relationship('Client', foreign_keys=[client_id])
     billing_client = db.relationship('Client', foreign_keys=[billing_client_id])
     buh_posted_by = db.relationship('User', foreign_keys=[buh_posted_by_id])
+    tag = db.relationship('OrderTag', back_populates='orders')
     items = db.relationship('OrderItem', backref='order', cascade="all, delete-orphan")
     payments = db.relationship('Payment', backref='order', cascade="all, delete-orphan")
 
@@ -366,6 +391,7 @@ class Order(db.Model):
         db.Index('idx_order_billing_client', 'billing_client_id'),
         db.Index('idx_order_status', 'status'),
         db.Index('idx_order_archived', 'archived_at'),
+        db.Index('idx_order_tag', 'tag_id'),
     )
 
     @property

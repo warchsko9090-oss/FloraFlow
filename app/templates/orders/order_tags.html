@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+    <div class="d-flex flex-column">
+        <div class="page-title">
+            <i class="fas fa-tags"></i>
+            Теги заказов
+        </div>
+        <div class="page-subtitle">
+            Короткое название (2–3 слова) и цвет. Один тег на заказ.
+        </div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('orders.orders_list') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="fas fa-arrow-left"></i> К заказам
+        </a>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-4">
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-white fw-bold">Новый тег</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="action" value="create">
+                    <div class="mb-3">
+                        <label class="form-label small text-muted">Название</label>
+                        <input type="text" name="name" class="form-control" maxlength="100"
+                               placeholder="Например: Срочный вывоз" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small text-muted">Цвет</label>
+                        <input type="color" name="color" class="form-control form-control-color w-100" value="#2E7D32">
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">
+                        <i class="fas fa-plus"></i> Создать
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                <span>Справочник</span>
+                <span class="badge bg-light text-dark">{{ tags|length }}</span>
+            </div>
+            <div class="card-body p-0">
+                {% if tags %}
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 48px;">Цвет</th>
+                                <th>Название</th>
+                                <th class="text-center">На заказах</th>
+                                <th class="text-center">Статус</th>
+                                <th class="text-end">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for t in tags %}
+                            <tr class="{% if t.is_archived %}table-secondary{% endif %}">
+                                <td>
+                                    <span class="d-inline-block rounded border"
+                                          style="width: 22px; height: 22px; background: {{ t.color }};"></span>
+                                </td>
+                                <td>
+                                    <form method="POST" class="d-flex gap-2 align-items-center flex-wrap">
+                                        <input type="hidden" name="action" value="edit">
+                                        <input type="hidden" name="tag_id" value="{{ t.id }}">
+                                        <input type="text" name="name" value="{{ t.name }}" class="form-control form-control-sm" style="max-width: 220px;" maxlength="100" required>
+                                        <input type="color" name="color" value="{{ t.color if t.color|length == 7 else '#6c757d' }}" class="form-control form-control-color form-control-sm" style="width: 42px; padding: 2px;">
+                                        <button type="submit" class="btn btn-outline-primary btn-sm" title="Сохранить">
+                                            <i class="fas fa-save"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                                <td class="text-center">{{ usage.get(t.id, 0) }}</td>
+                                <td class="text-center">
+                                    {% if t.is_archived %}
+                                    <span class="badge bg-secondary">Архив</span>
+                                    {% else %}
+                                    <span class="badge bg-success">Активен</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end text-nowrap">
+                                    {% if t.is_archived %}
+                                    <form method="POST" class="d-inline">
+                                        <input type="hidden" name="action" value="restore">
+                                        <input type="hidden" name="tag_id" value="{{ t.id }}">
+                                        <button class="btn btn-outline-success btn-sm" title="Восстановить">
+                                            <i class="fas fa-undo"></i>
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                    {% if usage.get(t.id, 0) == 0 %}
+                                    <form method="POST" class="d-inline" onsubmit="return confirm('Удалить тег навсегда?');">
+                                        <input type="hidden" name="action" value="delete">
+                                        <input type="hidden" name="tag_id" value="{{ t.id }}">
+                                        <button class="btn btn-outline-danger btn-sm" title="Удалить">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                    {% elif not t.is_archived %}
+                                    <form method="POST" class="d-inline" onsubmit="return confirm('Тег используется. Архивировать? Существующие назначения сохранятся.');">
+                                        <input type="hidden" name="action" value="archive">
+                                        <input type="hidden" name="tag_id" value="{{ t.id }}">
+                                        <button class="btn btn-outline-warning btn-sm" title="Архивировать">
+                                            <i class="fas fa-archive"></i>
+                                        </button>
+                                    </form>
+                                    {% else %}
+                                    <span class="small text-muted" title="Сначала снимите тег с заказов">занят</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-center text-muted">Пока нет тегов — создайте первый слева.</div>
+                {% endif %}
+            </div>
+        </div>
+        <p class="small text-muted mt-2 mb-0">
+            Если тег уже назначен на заказы — при удалении он архивируется (нельзя выбрать на новые,
+            назначения остаются до смены). Неиспользуемый тег удаляется полностью.
+        </p>
+    </div>
+</div>
+{% endblock %}

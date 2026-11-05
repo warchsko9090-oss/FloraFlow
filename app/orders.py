@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
-from app.models import db, Order, OrderItem, Client, Plant, Size, Field, Payment, StockBalance, Document, DocumentRow, OrderItemHistory, DiggingLog, ActionLog, User, TgTask
+from app.models import db, Order, OrderItem, OrderTag, Client, Plant, Size, Field, Payment, StockBalance, Document, DocumentRow, OrderItemHistory, DiggingLog, ActionLog, User, TgTask
 from app.utils import (
     msk_now,
     check_stock_availability,
@@ -28,6 +28,41 @@ from app.shop_prices import order_default_price, resolve_shop_price, get_shop_pr
 from app.models import Project
 
 bp = Blueprint('orders', __name__)
+
+
+def _can_manage_order_tags(user=None):
+    """Справочник и назначение тегов: только руководитель и admin."""
+    u = user if user is not None else current_user
+    return (getattr(u, 'role', None) or '') in ('admin', 'executive')
+
+
+def _order_is_done(o):
+    """Завершён = оплачен + всё отгружено + всё выкопано (как зелёный bucket / is_fully_done)."""
+    if o.status in ('canceled', 'ghost') or o.is_deleted:
+        return False
+    items = o.items or []
+    if not items:
+        return False
+    if o.payment_status != 'paid':
+        return False
+    return all(
+        (i.shipped_quantity or 0) >= (i.quantity or 0)
+        and (i.dug_total or 0) >= (i.quantity or 0)
+        for i in items
+    )
+
+
+def _normalize_tag_color(raw, default='#6c757d'):
+    color = (raw or '').strip() or default
+    if not color.startswith('#'):
+        color = '#' + color
+    if len(color) not in (4, 7):
+        return default
+    try:
+        int(color[1:], 16)
+    except ValueError:
+        return default
+    return color[:7] if len(color) == 7 else color
 
 from app.telegram import send_message as _tg_send_msg, send_photo as _tg_send_photo, send_photo_album as _tg_send_photo_album
 
@@ -820,7 +855,11 @@ def orders_list():
         v = (v or '').strip()
         if v.isdigit():
             f_ids.append(int(v))
-    sort = request.args.get('sort', 'date')  # По умолчанию — по дате создания
+    # Фильтр по тегу: '' = все, 'none' = без тега, иначе id тега.
+    f_tag = (request.args.get('filter_tag') or '').strip()
+    # По умолчанию завершённые (оплачен+отгружен+выкопан) скрыты в UI.
+    show_done = request.args.get('show_done') in ('1', 'true', 'yes', 'on')
+    sort = request.args.get('sort', 'date')  # date | name | tag
     archive_year_raw = (request.args.get('archive_year') or '').strip()
     archive_year = int(archive_year_raw) if archive_year_raw.isdigit() else None
     
@@ -868,6 +907,7 @@ def orders_list():
         Order.query.options(
             joinedload(Order.client),
             joinedload(Order.billing_client),
+            joinedload(Order.tag),
             joinedload(Order.items).joinedload(OrderItem.plant),
             joinedload(Order.items).joinedload(OrderItem.size),
         ),
@@ -884,10 +924,21 @@ def orders_list():
     if f_date_end: q = q.filter(func.date(Order.date) <= f_date_end)
     if f_ids:
         q = q.filter(Order.id.in_(f_ids))
+    if f_tag == 'none':
+        q = q.filter(Order.tag_id.is_(None))
+    elif f_tag.isdigit():
+        q = q.filter(Order.tag_id == int(f_tag))
 
     # Применяем сортировку
     if sort == 'date':
         orders = q.order_by((Order.status == 'canceled'), Order.date.desc()).all()
+    elif sort == 'tag':
+        orders = q.order_by((Order.status == 'canceled')).all()
+        orders.sort(key=lambda x: (
+            1 if not x.tag_id else 0,
+            natural_key(x.tag.name if x.tag else ''),
+            natural_key(x.client.name if x.client else ''),
+        ))
     else:  # sort == 'name'
         orders = q.order_by((Order.status == 'canceled')).all()
         # Сортируем по имени клиента в памяти, чтобы использовать natural_key
@@ -896,6 +947,11 @@ def orders_list():
     total_stats = {'sum': 0, 'shipped_fact': 0}
     orders_view = []
     for o in orders:
+        # Завершён = оплачен + отгружен + выкопан (как is_fully_done / зелёный bucket).
+        is_done = _order_is_done(o)
+        # Скрытие завершённых только в UI рабочего списка (не в архиве/скрытых, не в Excel).
+        if is_done and not show_done and not show_hidden and not show_archive:
+            continue
         if not o.items:
             orders_view.append({'order': o, 'rowspan': 1, 'order_items': [], 'is_done': False})
             continue
@@ -904,14 +960,6 @@ def orders_list():
             total_stats['shipped_fact'] += sum(i.shipped_quantity for i in o.items)
 
         o.items.sort(key=lambda x: natural_key(x.size.name))
-
-        # Полностью завершён = оплачен полностью + всё отгружено.
-        # Выкопка и наличие счёта не требуются: такие заказы уже «неактивны».
-        is_done = False
-        if o.status not in ('canceled', 'ghost') and not o.is_deleted and o.items:
-            fully_paid = (o.payment_status == 'paid')
-            fully_shipped = all((i.shipped_quantity or 0) >= (i.quantity or 0) for i in o.items)
-            is_done = fully_paid and fully_shipped
 
         orders_view.append({'order': o, 'rowspan': len(o.items), 'order_items': o.items, 'is_done': is_done})
 
@@ -944,24 +992,115 @@ def orders_list():
         for o in filter_orders_q.all()
     ]
 
+    all_tags = OrderTag.query.order_by(OrderTag.is_archived.asc(), OrderTag.name.asc()).all()
+
     return render_template('orders/orders.html',
                            orders=orders_view,
                            stats=total_stats,
                            site_badges=_site_request_badges(),
                            show_hidden=show_hidden,
+                           show_done=show_done,
                            all_clients=Client.query.all(),
                            all_orders_for_filter=all_orders_for_filter,
+                           all_tags=all_tags,
+                           can_manage_tags=_can_manage_order_tags(),
                            filters={
                                'clients': [int(f_client)] if f_client else [],
                                'statuses': [f_status] if f_status else [],
                                'start': f_date_start,
                                'end': f_date_end,
                                'ids': f_ids,
+                               'tag': f_tag,
                                'archive_year': archive_year,
                            },
                            sort=sort,
                            mode=mode,
                            show_archive=show_archive)
+
+
+@bp.route('/orders/tags', methods=['GET', 'POST'])
+@login_required
+def order_tags_manage():
+    """Справочник тегов заказов — create/edit/archive/delete (admin, executive)."""
+    if not _can_manage_order_tags():
+        flash('Доступ запрещен')
+        return redirect(url_for('orders.orders_list'))
+
+    if request.method == 'POST':
+        action = (request.form.get('action') or '').strip()
+        if action == 'create':
+            name = (request.form.get('name') or '').strip()
+            color = _normalize_tag_color(request.form.get('color'))
+            if not name:
+                flash('Укажите название тега (2–3 слова)')
+            elif len(name) > 100:
+                flash('Название слишком длинное')
+            else:
+                db.session.add(OrderTag(name=name, color=color, is_archived=False))
+                db.session.commit()
+                flash('Тег создан')
+                log_action(f'Создал тег заказа «{name}»')
+        elif action == 'edit':
+            tag = OrderTag.query.get(request.form.get('tag_id', type=int))
+            name = (request.form.get('name') or '').strip()
+            color = _normalize_tag_color(request.form.get('color'))
+            if not tag:
+                flash('Тег не найден')
+            elif not name:
+                flash('Укажите название тега')
+            else:
+                tag.name = name
+                tag.color = color
+                db.session.commit()
+                flash('Тег обновлён')
+                log_action(f'Изменил тег заказа #{tag.id}')
+        elif action == 'archive':
+            tag = OrderTag.query.get(request.form.get('tag_id', type=int))
+            if not tag:
+                flash('Тег не найден')
+            else:
+                in_use = Order.query.filter_by(tag_id=tag.id).count()
+                if in_use > 0:
+                    tag.is_archived = True
+                    db.session.commit()
+                    flash(f'Тег архивирован (назначен на {in_use} заказ.)')
+                    log_action(f'Архивировал тег заказа #{tag.id}')
+                else:
+                    db.session.delete(tag)
+                    db.session.commit()
+                    flash('Тег удалён')
+                    log_action('Удалил неиспользуемый тег заказа')
+        elif action == 'restore':
+            tag = OrderTag.query.get(request.form.get('tag_id', type=int))
+            if tag:
+                tag.is_archived = False
+                db.session.commit()
+                flash('Тег восстановлен из архива')
+        elif action == 'delete':
+            tag = OrderTag.query.get(request.form.get('tag_id', type=int))
+            if not tag:
+                flash('Тег не найден')
+            else:
+                in_use = Order.query.filter_by(tag_id=tag.id).count()
+                if in_use > 0:
+                    flash(f'Нельзя удалить: тег назначен на {in_use} заказ(ов). Сначала снимите или архивируйте.')
+                else:
+                    db.session.delete(tag)
+                    db.session.commit()
+                    flash('Тег удалён')
+                    log_action('Удалил тег заказа')
+        return redirect(url_for('orders.order_tags_manage'))
+
+    tags = OrderTag.query.order_by(OrderTag.is_archived.asc(), OrderTag.name.asc()).all()
+    usage = {
+        t.id: Order.query.filter_by(tag_id=t.id).count()
+        for t in tags
+    }
+    return render_template(
+        'orders/order_tags.html',
+        tags=tags,
+        usage=usage,
+    )
 
 
 @bp.route('/orders/client_drafts')
@@ -2702,6 +2841,18 @@ def order_detail(order_id):
             o.invoice_number = request.form.get('invoice_number')
             d = request.form.get('invoice_date')
             o.invoice_date = datetime.strptime(d, '%Y-%m-%d') if d else None
+
+            # Назначение тега — только executive/admin.
+            if current_user.role in ['admin', 'executive']:
+                raw_tag = (request.form.get('tag_id') or '').strip()
+                if raw_tag == '' or raw_tag == '0':
+                    o.tag_id = None
+                elif raw_tag.isdigit():
+                    tag = OrderTag.query.get(int(raw_tag))
+                    if tag and (not tag.is_archived or tag.id == o.tag_id):
+                        o.tag_id = tag.id
+                    elif not tag:
+                        flash('Тег не найден')
             
             if current_user.role == 'admin':
                 o.buh_exclude = request.form.get('buh_exclude') == 'on'
@@ -3658,6 +3809,11 @@ def order_detail(order_id):
         except Exception:
             current_app.logger.exception('order history invoices')
 
+    # Для назначения: активные теги + текущий (даже если архивный).
+    assignable_tags = OrderTag.query.filter_by(is_archived=False).order_by(OrderTag.name.asc()).all()
+    if o.tag_id and o.tag and o.tag.is_archived:
+        assignable_tags = list(assignable_tags) + [o.tag]
+
     return render_template('orders/order_detail.html', 
                            order=o, 
                            orders_data=orders_data, 
@@ -3666,6 +3822,8 @@ def order_detail(order_id):
                            sizes=Size.query.all(), 
                            fields=Field.query.all(), 
                            clients=sorted(Client.query.all(), key=lambda x: x.name),
+                           assignable_tags=assignable_tags,
+                           can_manage_tags=_can_manage_order_tags(),
                            current_year=msk_now().year,
                            order_paid_total=order_paid_total,
                            order_locked_for_manager=order_locked_for_manager,
@@ -4376,25 +4534,16 @@ def invoice_detail(client_id, invoice_number):
 def export_orders():
     """Excel-выгрузка списка заказов.
 
-    Учитывает все фильтры со страницы /orders (клиент, статус, даты, режим
-    активные/скрытые) плюс multi-select «По номеру заказа» (`filter_ids`).
-    Если пользователь отметил конкретные номера в фильтре — Excel выгрузит
-    только их. Иначе — все заказы по текущим фильтрам.
-
-    Дизайн копирует «красивый» отчёт `export_order_history`: для каждого
-    заказа собственная зелёная шапка, светло-зелёная подшапка с клиентом,
-    таблица позиций (без столбцов «Первоначально / Изменения» — мы хотим
-    видеть только фактические числа на момент выгрузки) и блок ИТОГО /
-    Оплачено / Остаток. Между заказами — пустая строка-разделитель.
-
-    В конце листа — общий итог по выгруженной выборке (кол-во заказов,
-    суммарная сумма, оплачено и остаток), чтобы при многозаказной выгрузке
-    сразу был виден сводный показатель.
+    Учитывает фильтры со страницы /orders (клиент, статус, даты, режим,
+    номера, тег). Завершённые (оплачен+отгружен+выкопан) всегда входят в
+    Excel — UI-переключатель «Показать завершённые» на выгрузку не влияет.
+    Строки завершённых заказов подсвечиваются зелёным.
     """
     f_client = request.args.get('filter_client')
     f_status = request.args.get('filter_status')
     f_date_start = parse_iso_date(request.args.get('start_date'))
     f_date_end = parse_iso_date(request.args.get('end_date'))
+    f_tag = (request.args.get('filter_tag') or '').strip()
     mode = request.args.get('mode', 'active')
 
     # Multi-select по номерам заказов из фильтра на /orders. Приходит как
@@ -4409,9 +4558,7 @@ def export_orders():
         if v.isdigit():
             selected_ids.append(int(v))
 
-    # Применяем тот же набор фильтров, что и на странице /orders, плюс
-    # фильтр по выбранным номерам. Это гарантирует, что Excel содержит
-    # ровно то, что сейчас видно в списке.
+    # Те же фильтры, что на /orders, НО без скрытия завершённых (полный список).
     archive_year_raw = (request.args.get('archive_year') or '').strip()
     archive_year = int(archive_year_raw) if archive_year_raw.isdigit() else None
     q = _apply_orders_visibility(Order.query, mode, archive_year)
@@ -4427,6 +4574,10 @@ def export_orders():
         q = q.filter(func.date(Order.date) <= f_date_end)
     if selected_ids:
         q = q.filter(Order.id.in_(selected_ids))
+    if f_tag == 'none':
+        q = q.filter(Order.tag_id.is_(None))
+    elif f_tag.isdigit():
+        q = q.filter(Order.tag_id == int(f_tag))
     orders = q.order_by(Order.date.desc()).all()
 
     wb = Workbook()
@@ -4439,6 +4590,7 @@ def export_orders():
     style_table_header = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
     style_total = PatternFill(start_color="F1F8E9", end_color="F1F8E9", fill_type="solid")
     style_grand_total = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
+    style_done_row = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
     font_order_header = Font(bold=True, color="FFFFFF", size=13)
     font_sub_header = Font(bold=True, color="1B5E20", size=11)
     font_table_header = Font(bold=True, color="000000")
@@ -4469,11 +4621,15 @@ def export_orders():
         if not o.items:
             continue
 
+        is_done = _order_is_done(o)
+        done_mark = ' ✓ ЗАВЕРШЁН' if is_done else ''
+        tag_mark = f' [{o.tag.name}]' if o.tag else ''
+
         # Шапка заказа (зелёная) — №, дата, статус
         ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=7)
         cell = ws.cell(
             row=row_idx, column=1,
-            value=f"Заказ №{o.id} от {o.date.strftime('%d.%m.%Y')}"
+            value=f"Заказ №{o.id} от {o.date.strftime('%d.%m.%Y')}{tag_mark}{done_mark}"
         )
         cell.fill = style_order_header
         cell.font = font_order_header
@@ -4529,28 +4685,42 @@ def export_orders():
             price = Decimal(str(item.price or 0))
             line_sum = price * Decimal(qty)
 
-            ws.cell(row=row_idx, column=1, value=plant_name).border = thin_border
-            ws.cell(row=row_idx, column=2, value=size_name).border = thin_border
+            cells = []
+            c1 = ws.cell(row=row_idx, column=1, value=plant_name)
+            c1.border = thin_border
+            cells.append(c1)
+            c2 = ws.cell(row=row_idx, column=2, value=size_name)
+            c2.border = thin_border
+            cells.append(c2)
             c_field = ws.cell(row=row_idx, column=3, value=field_name)
             c_field.border = thin_border
             c_field.alignment = align_center
+            cells.append(c_field)
 
             c_year = ws.cell(row=row_idx, column=4, value=item.year)
             c_year.border = thin_border
             c_year.alignment = align_center
+            cells.append(c_year)
 
             c_price = ws.cell(row=row_idx, column=5, value=float(price))
             c_price.border = thin_border
             c_price.number_format = '#,##0.00 "₽"'
+            cells.append(c_price)
 
             c_qty = ws.cell(row=row_idx, column=6, value=qty)
             c_qty.border = thin_border
             c_qty.alignment = align_center
+            cells.append(c_qty)
 
             c_sum = ws.cell(row=row_idx, column=7, value=float(line_sum))
             c_sum.border = thin_border
             c_sum.number_format = '#,##0.00 "₽"'
             c_sum.font = Font(bold=True)
+            cells.append(c_sum)
+
+            if is_done:
+                for c in cells:
+                    c.fill = style_done_row
 
             order_total_qty += qty
             order_total_sum += line_sum

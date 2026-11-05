@@ -3,6 +3,9 @@
 <div class="d-flex justify-content-between mb-3 align-items-center">
     <div>
         <h4 class="mb-0 d-inline-block me-3">Заказ №{{ order.id }}</h4>
+        {% if order.tag %}
+        <span class="badge fs-6 me-2" style="background: {{ order.tag.color }};">{{ order.tag.name }}</span>
+        {% endif %}
         {% set status_label = order.status %}
         {% set status_class = 'bg-primary' %}
         {% if order.is_fully_done %}
@@ -528,6 +531,25 @@
                                    onchange="document.getElementById('toggleBarterForm').submit()">
                             <label class="form-check-label text-warning fw-bold" for="is_barter_edit">Взаимозачет</label>
                         </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="small fw-bold"><i class="fas fa-tags text-secondary"></i> Тег</label>
+                        <select name="tag_id" class="form-select form-select-sm">
+                            <option value="">— Без тега —</option>
+                            {% for t in assignable_tags|default([]) %}
+                            <option value="{{ t.id }}" {% if order.tag_id == t.id %}selected{% endif %}>
+                                {{ t.name }}{% if t.is_archived %} (архив){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="mt-1">
+                            <a href="{{ url_for('orders.order_tags_manage') }}" class="small text-muted">Управление тегами</a>
+                        </div>
+                    </div>
+                    {% elif order.tag %}
+                    <div class="mb-2">
+                        <label class="small text-muted">Тег</label>
+                        <div><span class="badge" style="background: {{ order.tag.color }};">{{ order.tag.name }}</span></div>
                     </div>
                     {% endif %}
                     {% if current_user.role == 'admin' %}
