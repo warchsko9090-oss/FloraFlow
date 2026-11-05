@@ -85,11 +85,21 @@
     .status-canceled td:first-child { border-left-color: #f44336; }    /* Красный - отмена */
     .status-canceled td { background-color: #fcfcfc; opacity: 0.8; }
 
+    /* Тег: бледная заливка всей строки/карточки из tag.color (--tag-wash). */
+    tr.order-tagged td { background-color: var(--tag-wash) !important; }
+    tr.order-tagged:hover td { filter: brightness(0.97); }
+    .mobile-card.order-tagged {
+        background: var(--tag-wash);
+        border-color: color-mix(in srgb, var(--tag-wash) 70%, #999);
+    }
+    .mobile-card.order-tagged .mobile-card-header { background: var(--tag-wash); }
+
     /* ПОЛНОСТЬЮ ЗАВЕРШЁННЫЕ: оплачен + отгружен.
        Бледно-зелёная подсветка всех строк такого заказа, толстая зелёная полоса слева.
-       Всегда отображаются внизу списка (сортировка в orders_list). */
+       Всегда отображаются внизу списка (сортировка в orders_list).
+       Если заказ и tagged, и done — побеждает зелёный done (правила ниже перекрывают tag wash). */
     .order-done td { background-color: #e8f5e9 !important; }
-    .order-done:hover td { background-color: #dcedc8 !important; }
+    .order-done:hover td { background-color: #dcedc8 !important; filter: none; }
     .order-done.row-separator td:first-child { border-left: 5px solid #2E7D32 !important; }
     .mobile-card.order-done { background: #e8f5e9; border-color: #81C784; }
     .mobile-card.order-done .mobile-card-header { background: #e8f5e9; }
@@ -493,9 +503,11 @@
             {% set rows = item.order_items %}
             {% set rowspan = item.rowspan %}
             {% set done_cls = 'order-done' if item.is_done else '' %}
+            {% set tag_cls = 'order-tagged' if item.tag_wash else '' %}
+            {% set tag_style = ('--tag-wash: ' ~ item.tag_wash ~ ';') if item.tag_wash else '' %}
 
             <!-- ГЛАВНАЯ СТРОКА ЗАКАЗА (С row-separator) -->
-            <tr class="row-separator status-{{ o.status }} {{ done_cls }}">
+            <tr class="row-separator status-{{ o.status }} {{ done_cls }} {{ tag_cls }}"{% if tag_style %} style="{{ tag_style }}"{% endif %}>
                 <!-- Кнопки действий -->
                 <td rowspan="{{ rowspan }}" class="text-center">
                     <div class="d-flex flex-column gap-1 align-items-center">
@@ -623,7 +635,7 @@
 
             <!-- ОСТАЛЬНЫЕ ПОЗИЦИИ (Если есть) -->
             {% for i in range(1, rows|length) %}
-            <tr class="status-{{ o.status }} {{ done_cls }}">
+            <tr class="status-{{ o.status }} {{ done_cls }} {{ tag_cls }}"{% if tag_style %} style="{{ tag_style }}"{% endif %}>
                 {% set r = rows[i] %}
                 <td class="text-dark">{{ r.plant.name }}</td>
                 <td class="text-center text-muted small">{{ r.size.name }}</td>
@@ -648,7 +660,7 @@
 
             <!-- ИТОГО ПО ЗАКАЗУ -->
             {% if o.status != 'canceled' and not o.is_deleted and current_user.role != 'user2' %}
-            <tr class="status-{{ o.status }} {{ done_cls }}" style="background-color: {% if item.is_done %}#e8f5e9{% else %}#F8F9FA{% endif %};">
+            <tr class="status-{{ o.status }} {{ done_cls }} {{ tag_cls }}"{% if item.is_done %} style="background-color: #e8f5e9;"{% elif tag_style %} style="{{ tag_style }} background-color: var(--tag-wash);"{% else %} style="background-color: #F8F9FA;"{% endif %}>
                 <!-- Объединяем первые 9 колонок (до Цены включительно) для подписи -->
                 <td colspan="9" class="text-end small text-uppercase text-muted pt-2 pb-2 align-middle">
                     Итого заказ:
@@ -686,7 +698,7 @@
 <div class="d-lg-none">
     {% for item in orders %}
     {% set o = item.order %}
-    <div class="mobile-card shadow-sm {% if item.is_done %}order-done{% endif %}">
+    <div class="mobile-card shadow-sm {% if item.is_done %}order-done{% endif %}{% if item.tag_wash %} order-tagged{% endif %}"{% if item.tag_wash %} style="--tag-wash: {{ item.tag_wash }};"{% endif %}>
         <!-- Шапка карточки -->
         <div class="mobile-card-header collapsed" data-bs-toggle="collapse" data-bs-target="#order-{{ o.id }}">
             <div class="d-flex flex-column">

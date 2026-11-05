@@ -64,6 +64,20 @@ def _normalize_tag_color(raw, default='#6c757d'):
         return default
     return color[:7] if len(color) == 7 else color
 
+
+def _tag_wash_bg(raw, strength=0.14):
+    """Бледный фон строки из цвета тега (аналог #e8f5e9 для зелёного done)."""
+    color = _normalize_tag_color(raw)
+    h = color[1:]
+    if len(h) == 3:
+        h = ''.join(c * 2 for c in h)
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+    mix = lambda c: int(round(255 * (1 - strength) + c * strength))
+    return f'#{mix(r):02x}{mix(g):02x}{mix(b):02x}'
+
 from app.telegram import send_message as _tg_send_msg, send_photo as _tg_send_photo, send_photo_album as _tg_send_photo_album
 
 def send_tg_message_orders(text):
@@ -952,8 +966,16 @@ def orders_list():
         # Скрытие завершённых только в UI рабочего списка (не в архиве/скрытых, не в Excel).
         if is_done and not show_done and not show_hidden and not show_archive:
             continue
+        # Заливка тега только если заказ не completed: done-зелёный важнее.
+        tag_wash = None
+        if o.tag and not is_done:
+            tag_wash = _tag_wash_bg(o.tag.color)
+
         if not o.items:
-            orders_view.append({'order': o, 'rowspan': 1, 'order_items': [], 'is_done': False})
+            orders_view.append({
+                'order': o, 'rowspan': 1, 'order_items': [],
+                'is_done': False, 'tag_wash': tag_wash,
+            })
             continue
         if o.status != 'canceled' and not o.is_deleted:
             total_stats['sum'] += o.total_sum
@@ -961,7 +983,10 @@ def orders_list():
 
         o.items.sort(key=lambda x: natural_key(x.size.name))
 
-        orders_view.append({'order': o, 'rowspan': len(o.items), 'order_items': o.items, 'is_done': is_done})
+        orders_view.append({
+            'order': o, 'rowspan': len(o.items), 'order_items': o.items,
+            'is_done': is_done, 'tag_wash': tag_wash,
+        })
 
     # Финальный порядок: сначала активные незавершённые (в выбранном порядке),
     # затем полностью завершённые зелёные, затем отменённые/скрытые.
