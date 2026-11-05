@@ -10,11 +10,16 @@ from typing import Iterable
 
 import requests
 
+# Порядок: сначала lite / стабильные (реже 429), затем «полные» flash.
+# 429/503/404 на одной модели не должны ронять всю сводку — см. gemini_generate_text.
 _DEFAULT_MODELS = (
-    'gemini-3.8-flash',
-    'gemini-3-flash-preview',
+    'gemini-flash-lite-latest',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
     'gemini-flash-latest',
+    'gemini-3-flash-preview',
     'gemini-3.5-flash',
+    'gemini-3.8-flash',
 )
 
 
@@ -45,7 +50,7 @@ def gemini_generate_text(
     timeout_sec: float = 60.0,
     models: Iterable[str] | None = None,
 ) -> str:
-    """generateContent. Пробует модели по очереди при 404/503."""
+    """generateContent. Пробует модели по очереди при 404/429/503 и прочих сбоях."""
     api_key = gemini_api_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY не задан')
@@ -61,6 +66,9 @@ def gemini_generate_text(
     if system.strip():
         body['systemInstruction'] = {'parts': [{'text': system.strip()}]}
 
+    # Эти коды часто квотные / временные — идём к следующей модели, не валим весь digest.
+    _retryable = {404, 408, 429, 500, 502, 503, 504}
+
     last_err: Exception | None = None
     for model in (list(models) if models is not None else gemini_models_for_text()):
         url = (
@@ -74,11 +82,16 @@ def gemini_generate_text(
                 json=body,
                 timeout=timeout_sec,
             )
-            if resp.status_code in (404, 503):
-                last_err = RuntimeError(f'{model}: HTTP {resp.status_code} {resp.text[:180]}')
+            if resp.status_code in _retryable:
+                last_err = RuntimeError(
+                    f'{model}: HTTP {resp.status_code} {resp.text[:180]}'
+                )
                 continue
             if resp.status_code >= 400:
-                raise RuntimeError(f'{model}: HTTP {resp.status_code} {resp.text[:300]}')
+                last_err = RuntimeError(
+                    f'{model}: HTTP {resp.status_code} {resp.text[:300]}'
+                )
+                continue
             data = resp.json()
             cands = data.get('candidates') or []
             if not cands:
