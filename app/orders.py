@@ -37,7 +37,11 @@ def _can_manage_order_tags(user=None):
 
 
 def _order_is_done(o):
-    """Завершён = оплачен + всё отгружено + всё выкопано (как зелёный bucket / is_fully_done)."""
+    """Завершён = полностью оплачен + всё отгружено (старый зелёный bucket).
+
+    Выкопка не требуется: такие заказы уже «неактивны» для списка.
+    Используется для скрытия по умолчанию, зелёного bucket и Excel.
+    """
     if o.status in ('canceled', 'ghost') or o.is_deleted:
         return False
     items = o.items or []
@@ -45,11 +49,7 @@ def _order_is_done(o):
         return False
     if o.payment_status != 'paid':
         return False
-    return all(
-        (i.shipped_quantity or 0) >= (i.quantity or 0)
-        and (i.dug_total or 0) >= (i.quantity or 0)
-        for i in items
-    )
+    return all((i.shipped_quantity or 0) >= (i.quantity or 0) for i in items)
 
 
 def _normalize_tag_color(raw, default='#6c757d'):
@@ -857,7 +857,7 @@ def orders_list():
             f_ids.append(int(v))
     # Фильтр по тегу: '' = все, 'none' = без тега, иначе id тега.
     f_tag = (request.args.get('filter_tag') or '').strip()
-    # По умолчанию завершённые (оплачен+отгружен+выкопан) скрыты в UI.
+    # По умолчанию завершённые (оплачен+отгружен) скрыты в UI.
     show_done = request.args.get('show_done') in ('1', 'true', 'yes', 'on')
     sort = request.args.get('sort', 'date')  # date | name | tag
     archive_year_raw = (request.args.get('archive_year') or '').strip()
@@ -947,7 +947,7 @@ def orders_list():
     total_stats = {'sum': 0, 'shipped_fact': 0}
     orders_view = []
     for o in orders:
-        # Завершён = оплачен + отгружен + выкопан (как is_fully_done / зелёный bucket).
+        # Завершён = оплачен + отгружен (зелёный bucket / скрытие по умолчанию).
         is_done = _order_is_done(o)
         # Скрытие завершённых только в UI рабочего списка (не в архиве/скрытых, не в Excel).
         if is_done and not show_done and not show_hidden and not show_archive:
@@ -4535,7 +4535,7 @@ def export_orders():
     """Excel-выгрузка списка заказов.
 
     Учитывает фильтры со страницы /orders (клиент, статус, даты, режим,
-    номера, тег). Завершённые (оплачен+отгружен+выкопан) всегда входят в
+    номера, тег). Завершённые (оплачен+отгружен) всегда входят в
     Excel — UI-переключатель «Показать завершённые» на выгрузку не влияет.
     Строки завершённых заказов подсвечиваются зелёным.
     """
