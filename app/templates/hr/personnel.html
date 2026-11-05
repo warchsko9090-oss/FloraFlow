@@ -31,8 +31,11 @@
     .hr-stat-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
     .hr-label { color: #888; }
     .hr-val { font-weight: 600; color: #333; }
+    /* Меню сотрудников выше KPI «Заработано / Долг / выплаты» */
+    .hr-emp-filter { position: relative; z-index: 30; }
     .hr-emp-filter .dropdown-menu {
         min-width: 260px; max-height: 320px; overflow-y: auto; padding: 10px;
+        z-index: 1080 !important;
     }
     @media (max-width: 767.98px) {
         .hr-emp-filter { width: 100%; }
@@ -96,7 +99,9 @@
         </select>
         {% if active_tab in ['summary', 'adjustments'] %}
         <div class="dropdown hr-emp-filter">
-            <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+            <button class="btn btn-light btn-sm dropdown-toggle border" type="button"
+                    data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                    data-bs-popper-config='{"strategy":"fixed"}'>
                 Сотрудники{% if filter_emp_ids %} ({{ filter_emp_ids|length }}){% endif %}
             </button>
             <div class="dropdown-menu dropdown-check-list shadow">

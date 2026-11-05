@@ -696,6 +696,10 @@
         border: 1px solid var(--c-border);
         box-shadow: var(--shadow-xs);
         margin-bottom: 1.25rem;
+        /* backdrop-filter создаёт stacking context — без z-index выпадающие
+           фильтры уходят под KPI-карточки ниже (сводка кадров и др.). */
+        position: relative;
+        z-index: 20;
     }
     .filter-panel form {
         display: flex; flex-wrap: wrap;
