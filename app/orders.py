@@ -974,12 +974,13 @@ def orders_list():
         orders = q.order_by((Order.status == 'canceled')).all()
         orders.sort(key=lambda x: natural_key(x.client.name))
     else:  # workflow
+        # Внутри группы (без тега / тег / долг) — сначала новые, потом старые.
         orders = q.order_by((Order.status == 'canceled')).all()
         orders.sort(key=lambda x: (
             0 if not x.tag_id else 1,
             int(getattr(x.tag, 'sort_order', 0) or 0) if x.tag else 0,
-            x.date or datetime.min,
-            x.id or 0,
+            -(x.date.timestamp() if x.date else 0),
+            -(x.id or 0),
         ))
 
     total_stats = {'sum': 0, 'shipped_fact': 0}
