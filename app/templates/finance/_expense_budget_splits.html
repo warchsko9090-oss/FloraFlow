@@ -19,7 +19,7 @@
     </div>
     <div class="exp-split-rows"></div>
     <div class="small text-muted exp-split-hint mt-1">
-        Последняя строка подхватывает остаток автоматически.
+        Все суммы можно править. Остаток: <span class="exp-split-remain fw-semibold">—</span>
     </div>
     <template class="exp-split-options">
         <option value="">— статья —</option>
@@ -60,25 +60,43 @@
       function rowCount() {
         return rowsEl.querySelectorAll('.exp-split-row').length;
       }
-      function recalc() {
-        var rows = Array.prototype.slice.call(rowsEl.querySelectorAll('.exp-split-row'));
-        if (!rows.length) return;
-        var total = totalVal();
-        var sumPrev = 0;
-        rows.forEach(function(row, idx) {
-          var amt = row.querySelector('.exp-split-amt');
-          var isLast = idx === rows.length - 1;
-          amt.readOnly = isLast && rows.length > 1;
-          if (isLast) {
-            var rem = Math.round((total - sumPrev) * 100) / 100;
-            if (rem < 0) rem = 0;
-            amt.value = money(rem);
-            amt.classList.toggle('bg-light', rows.length > 1);
-          } else {
-            sumPrev += parseFloat(amt.value || '0') || 0;
-            amt.classList.remove('bg-light');
-          }
+      function parseAmt(el) {
+        var v = parseFloat(String((el && el.value) || '0').replace(/\s/g, '').replace(',', '.'));
+        return isNaN(v) ? 0 : Math.round(v * 100) / 100;
+      }
+      function sumRows() {
+        var sum = 0;
+        rowsEl.querySelectorAll('.exp-split-amt').forEach(function(el) {
+          sum += parseAmt(el);
         });
+        return Math.round(sum * 100) / 100;
+      }
+      function remain() {
+        return Math.round((totalVal() - sumRows()) * 100) / 100;
+      }
+      function updateHint() {
+        var el = root.querySelector('.exp-split-remain');
+        if (!el) return;
+        var rem = remain();
+        if (Math.abs(rem) < 0.005) {
+          el.textContent = 'сходится';
+          el.className = 'exp-split-remain fw-semibold text-success';
+        } else if (rem > 0) {
+          el.textContent = rem.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' ₽';
+          el.className = 'exp-split-remain fw-semibold text-warning';
+        } else {
+          el.textContent = 'перебор ' + Math.abs(rem).toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' ₽';
+          el.className = 'exp-split-remain fw-semibold text-danger';
+        }
+      }
+      function recalc() {
+        // Все суммы редактируемые — только обновляем подсказку остатка.
+        rowsEl.querySelectorAll('.exp-split-amt').forEach(function(amt) {
+          amt.readOnly = false;
+          amt.removeAttribute('readonly');
+          amt.classList.remove('bg-light');
+        });
+        updateHint();
       }
       // skipRecalc: при массовой загрузке initial не затирать суммы до всех строк
       function addRow(preset, skipRecalc) {
@@ -90,7 +108,7 @@
             '<select name="split_item_id" class="form-select form-select-sm exp-split-item" required></select>' +
           '</div>' +
           '<div class="col-4 col-md-3">' +
-            '<input type="number" step="0.01" min="0" name="split_amount" class="form-control form-control-sm exp-split-amt" required placeholder="0.00">' +
+            '<input type="number" step="0.01" min="0" name="split_amount" class="form-control form-control-sm exp-split-amt" required placeholder="0.00" inputmode="decimal">' +
           '</div>' +
           '<div class="col-1 text-end">' +
             '<button type="button" class="btn btn-link text-danger btn-sm p-0 exp-split-del" title="Убрать">&times;</button>' +
@@ -100,7 +118,13 @@
         if (preset.budget_item_id) sel.value = String(preset.budget_item_id);
         else if (!rowCount() && suggested) sel.value = String(suggested);
         var amt = div.querySelector('.exp-split-amt');
-        if (preset.amount != null && preset.amount !== '') amt.value = money(preset.amount);
+        if (preset.amount != null && preset.amount !== '') {
+          amt.value = money(preset.amount);
+        } else if (!skipRecalc && rowCount() >= 1) {
+          // Новая строка — подставить текущий остаток, пользователь может править.
+          var rem = remain();
+          if (rem > 0) amt.value = money(rem);
+        }
         div.querySelector('.exp-split-del').addEventListener('click', function() {
           if (rowCount() <= 1) return;
           if (window.jQuery) {
@@ -109,10 +133,9 @@
           div.remove();
           recalc();
         });
-        amt.addEventListener('input', function() {
-          recalc();
-        });
-        sel.addEventListener('change', function() { recalc(); });
+        amt.addEventListener('input', function() { updateHint(); });
+        amt.addEventListener('change', function() { updateHint(); });
+        sel.addEventListener('change', function() { updateHint(); });
         rowsEl.appendChild(div);
         if (window.jQuery && jQuery.fn.select2) {
           try {
