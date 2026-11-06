@@ -299,7 +299,40 @@ def _ensure_expense_budget_lines(logger=None) -> None:
         return
 
     try:
+        is_pg = db.engine.dialect.name == 'postgresql'
+        # Два воркера gunicorn могли одновременно вставить по строке на расход —
+        # сначала снимаем полные дубликаты (одна статья, сумма = expense.amount).
+        if is_pg:
+            db.session.execute(text("SELECT pg_advisory_xact_lock(87231401)"))
+        dup = db.session.execute(text(
+            '''
+            DELETE FROM expense_budget_line
+            WHERE id IN (
+                SELECT id FROM (
+                    SELECT l.id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY l.expense_id, l.budget_item_id, l.amount
+                               ORDER BY l.id
+                           ) AS rn
+                    FROM expense_budget_line l
+                    JOIN expense e ON e.id = l.expense_id
+                    WHERE l.amount = e.amount
+                ) t
+                WHERE t.rn > 1
+            )
+            '''
+        ))
+        n_dup = dup.rowcount or 0
+        if n_dup:
+            db.session.commit()
+            if logger:
+                logger.info('legacy schema: removed %s duplicate expense_budget_line row(s)', n_dup)
+        else:
+            db.session.commit()
+
         # SQLite/PG: вставить одну строку там, где её ещё нет
+        if is_pg:
+            db.session.execute(text("SELECT pg_advisory_xact_lock(87231401)"))
         result = db.session.execute(text(
             '''
             INSERT INTO expense_budget_line (expense_id, budget_item_id, amount, sort_order)
