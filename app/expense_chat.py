@@ -92,15 +92,28 @@ from app.utils import msk_now, msk_today, MONTH_NAMES
 #  сумма разделитель        описание    тип оплаты
 
 # Сумма: цифры с возможными пробелами/точками-разделителями, затем маркер
-# валюты («р», «р.», «руб», «рубл.», «₽»). Пример: «19 913р», «1.500руб», «3 550р».
+# валюты («р», «р.», «руб», «₽») или тысяч («т», «тр», «тыс»).
+# Пример: «19 913р», «1.500руб», «180т», «5 тр».
 _AMOUNT_RE = re.compile(
     r"""^\s*
         (?P<num>\d[\d\s\.\,]*?)           # цифры (возможны пробелы/точки/запятые)
         \s*
-        (?:р\.?|руб(?:\.|лей|ля)?|₽)     # р / р. / руб / руб. / рублей / ₽
-        \b
+        (?:
+            (?P<thousands>т(?:ыс(?:яч\w*)?|р)?)\b   # 180т / 5 тр / 12 тыс
+            |
+            (?:р\.?|руб(?:\.|лей|ля)?|₽)\b          # р / руб / ₽
+        )
     """,
     re.IGNORECASE | re.VERBOSE,
+)
+
+# Смешанный расход: в тексте есть зп/аванс, но ещё и обычная статья.
+_MIXED_EXPENSE_HINT_RE = re.compile(
+    r"(?i)\b("
+    r"патент\w*|доставк\w*|гсм|топлив\w*|интернет\w*|аренд\w*|билет\w*|"
+    r"офис\w*|закуп\w*|материал\w*|услуг\w*|ремонт\w*|груш\w*|сетк\w*|"
+    r"удобрен\w*|чоп\w*|хоз\w*|инструмент\w*|представит\w*|видеограф\w*"
+    r")\b",
 )
 
 # Тип оплаты: ищем отдельно «безнал» (и его формы) и «нал». ВНИМАНИЕ к порядку:
@@ -179,6 +192,8 @@ def parse_expense_text(text: str) -> dict | None:
     amount = _clean_amount(m.group("num"))
     if amount is None:
         return None
+    if m.groupdict().get("thousands"):
+        amount = (amount * Decimal(1000)).quantize(Decimal("0.01"))
 
     # Всё после суммы → хвост, из которого вытащим тип оплаты.
     tail = first_line[m.end():]
@@ -451,6 +466,13 @@ def is_payroll_chat_text(text: str | None) -> bool:
     return bool(_PAYROLL_RE.search(text or ''))
 
 
+def is_pure_payroll_chat_text(text: str | None) -> bool:
+    """Только ЗП/аванс. «патент, зп Влада, доставка» — смешанный расход → на дашборд."""
+    if not is_payroll_chat_text(text):
+        return False
+    return not _MIXED_EXPENSE_HINT_RE.search(text or '')
+
+
 def parse_payroll_month_year(text: str | None, ref_date: date | None = None) -> tuple[int, int]:
     ref = ref_date or msk_today()
     blob = text or ''
@@ -615,7 +637,8 @@ def ingest_message(msg: dict) -> dict:
             msg_dt.date(),
             parsed["payment_type"],
         )
-        if is_payroll_chat_text(parsed["description"] or text):
+        desc_for_payroll = parsed["description"] or text
+        if is_pure_payroll_chat_text(desc_for_payroll):
             if payroll:
                 row.status = "matched"
                 row.expense_id = payroll["expense"].id if payroll.get("expense") else None
@@ -627,11 +650,37 @@ def ingest_message(msg: dict) -> dict:
                     "status": "payroll_matched",
                     "chat_expense_id": row.id,
                 }
-            row.status = "payroll"
+            # ЗП в чате есть, в ERP покрытия нет — на дашборд, иначе сумма теряется.
+            row.status = "pending"
+            suggested_id, source = classify_budget_item(parsed["description"])
+            row.suggested_budget_item_id = suggested_id
+            task = _create_task_for_chat_expense(row, source=source or "payroll")
             db.session.add(row)
+            db.session.flush()
+            if task is not None:
+                task.title = f"ЗП/аванс из ТГ: {parsed['amount']:.0f} ₽"
+                task.action_payload = json.dumps({
+                    "chat_expense_id": row.id,
+                    "url": f"/expenses/chat/{row.id}",
+                    "amount": str(parsed["amount"]),
+                    "description": parsed["description"],
+                    "payment_type": parsed["payment_type"],
+                    "suggested_budget_item_id": suggested_id,
+                    "classifier_source": "payroll",
+                    "tg_chat_id": tg_chat_id,
+                    "tg_message_id": tg_message_id,
+                    "sender": sender,
+                }, ensure_ascii=False)
+                db.session.add(task)
+                db.session.flush()
+                row.task_id = task.id
             db.session.commit()
-            _safe_react(tg_chat_id, tg_message_id, None)
-            return {"ok": True, "status": "payroll", "chat_expense_id": row.id}
+            return {
+                "ok": True,
+                "status": "pending",
+                "chat_expense_id": row.id,
+                "payroll_uncovered": True,
+            }
 
         # 1) Уже есть такой расход в БД — ставим реакцию и закрываем.
         dup = find_duplicate_expense(
@@ -1176,10 +1225,14 @@ def reconcile_chat_expense_row(row: ChatExpenseMessage) -> dict:
             row.expense_id = hit['expense'].id
         _safe_react(row.tg_chat_id, row.tg_message_id, None)
     elif hit['reason'] == 'payroll_wait':
-        _close_chat_task(row)
-        if row.status not in ('imported', 'matched'):
+        # Без покрытия в ERP карточку не прячем — иначе ЗП/аванс из чата
+        # пропадает с дашборда. Статус payroll оставляем только как метку.
+        if row.status in ('imported', 'matched', 'rejected'):
+            pass
+        elif row.task_id:
+            row.status = 'pending'
+        else:
             row.status = 'payroll'
-        _safe_react(row.tg_chat_id, row.tg_message_id, None)
     return hit
 
 
@@ -1210,6 +1263,110 @@ def reconcile_payroll_for_month(month: int, year: int) -> int:
     else:
         end = date(year, month + 1, 1) - timedelta(days=1)
     return reconcile_chat_expenses_period(start, end)
+
+
+def heal_missed_chat_expenses(days: int = 21) -> dict:
+    """Разово чинит пропуски: т/тр, смешанные «патент+зп», ЗП без покрытия,
+    чеки с done-задачей без импорта. Не коммитит снаружи — коммитит сама.
+    """
+    since = msk_now() - timedelta(days=days)
+    stats = {
+        'thousands_reparsed': 0,
+        'mixed_reopened': 0,
+        'payroll_opened': 0,
+        'ghost_receipts_rejected': 0,
+    }
+    rows = (
+        ChatExpenseMessage.query
+        .filter(ChatExpenseMessage.created_at >= since)
+        .order_by(ChatExpenseMessage.id.asc())
+        .all()
+    )
+    for row in rows:
+        raw = row.raw_text or ''
+        # 1) unparseable с т/тр → переразбор
+        if (row.status or '') == 'unparseable':
+            parsed = parse_expense_text(raw.split('\n', 1)[0] if raw else '')
+            if not parsed:
+                continue
+            row.parsed_amount = parsed['amount']
+            row.parsed_description = parsed['description']
+            row.parsed_payment_type = parsed['payment_type']
+            row.status = 'pending'
+            if not row.task_id:
+                task = _create_task_for_chat_expense(row, source='heal')
+                if task is not None:
+                    db.session.add(task)
+                    db.session.flush()
+                    task.action_payload = json.dumps({
+                        'chat_expense_id': row.id,
+                        'url': f'/expenses/chat/{row.id}',
+                        'amount': str(parsed['amount']),
+                        'description': parsed['description'],
+                        'payment_type': parsed['payment_type'],
+                        'classifier_source': 'heal',
+                        'tg_chat_id': row.tg_chat_id,
+                        'tg_message_id': row.tg_message_id,
+                        'sender': row.sender_name,
+                    }, ensure_ascii=False)
+                    row.task_id = task.id
+            stats['thousands_reparsed'] += 1
+            continue
+
+        # 2) payroll без покрытия / смешанный → на дашборд
+        if (row.status or '') == 'payroll' and row.parsed_amount is not None:
+            ref = row.tg_date or row.created_at or msk_now()
+            ref_day = ref.date() if hasattr(ref, 'date') else msk_today()
+            cover = find_payroll_cover(
+                row.parsed_amount,
+                row.parsed_description or raw,
+                ref_day,
+                row.parsed_payment_type,
+            )
+            mixed = not is_pure_payroll_chat_text(row.parsed_description or raw)
+            if cover and not mixed:
+                continue
+            row.status = 'pending'
+            old = TgTask.query.get(row.task_id) if row.task_id else None
+            if old is not None and old.status == 'done':
+                old.status = 'new'
+                old.completed_at = None
+                stats['mixed_reopened' if mixed else 'payroll_opened'] += 1
+            elif old is None:
+                task = _create_task_for_chat_expense(row, source='payroll')
+                if task is not None:
+                    db.session.add(task)
+                    db.session.flush()
+                    task.title = (
+                        f"Расход из ТГ: {row.parsed_amount:.0f} ₽"
+                        if mixed else
+                        f"ЗП/аванс из ТГ: {row.parsed_amount:.0f} ₽"
+                    )
+                    task.action_payload = json.dumps({
+                        'chat_expense_id': row.id,
+                        'url': f'/expenses/chat/{row.id}',
+                        'amount': str(row.parsed_amount),
+                        'description': row.parsed_description,
+                        'payment_type': row.parsed_payment_type,
+                        'classifier_source': 'heal',
+                        'tg_chat_id': row.tg_chat_id,
+                        'tg_message_id': row.tg_message_id,
+                        'sender': row.sender_name,
+                    }, ensure_ascii=False)
+                    row.task_id = task.id
+                    stats['mixed_reopened' if mixed else 'payroll_opened'] += 1
+            continue
+
+        # 3) pending + задача done (обычно «Сделано» по чеку) → rejected
+        if (row.status or '') in ('pending', 'invoice_match') and row.task_id:
+            task = TgTask.query.get(row.task_id)
+            if task is not None and task.status == 'done':
+                row.status = 'rejected'
+                stats['ghost_receipts_rejected'] += 1
+
+    if any(stats.values()):
+        db.session.commit()
+    return stats
 
 
 def analyze_unrecorded_chat_expenses(start: date, end: date) -> dict:

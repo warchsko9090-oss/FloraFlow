@@ -234,6 +234,7 @@ def ensure_legacy_schema(logger=None) -> None:
     _backfill_order_tag_sort_order(logger)
     _ensure_bare_root_sizes(logger)
     _close_fulfilled_pay_plans(logger)
+    _heal_missed_chat_expenses(logger)
 
 
 def _ensure_bare_root_sizes(logger=None) -> None:
@@ -271,6 +272,19 @@ def _close_fulfilled_pay_plans(logger=None) -> None:
     except Exception as exc:
         if logger:
             logger.warning('legacy schema: close fulfilled pay plans skipped — %s', exc)
+        db.session.rollback()
+
+
+def _heal_missed_chat_expenses(logger=None) -> None:
+    """Вернуть на дашборд пропуски чата расходов (т/тр, смешанные зп, ЗП без ERP)."""
+    try:
+        from app.expense_chat import heal_missed_chat_expenses
+        stats = heal_missed_chat_expenses(days=21)
+        if logger and any(stats.values()):
+            logger.info('legacy schema: healed chat expenses %s', stats)
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: heal chat expenses skipped — %s', exc)
         db.session.rollback()
 
 
@@ -414,6 +428,17 @@ def _publish_invoice_drafts(logger=None) -> None:
 
 
 _CHANGELOG_RELEASES = (
+    {
+        'version': 'v1.5.2',
+        'date': '2026-11-06',
+        'content': (
+            'Исправлено:\n'
+            'Чат расходов: суммы вида «180т» / «5 тр» снова попадают на дашборд.\n'
+            'Смешанные сообщения («патент, зп, доставка») и ЗП/аванс без покрытия в ERP '
+            'больше не проглатываются молча — уходят карточкой админу.\n'
+            '«Сделано» по карточке расхода из ТГ закрывает и само сообщение, а не только задачу.'
+        ),
+    },
     {
         'version': 'v1.5.1',
         'date': '2026-11-06',

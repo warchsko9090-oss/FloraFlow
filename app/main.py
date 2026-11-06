@@ -1850,11 +1850,33 @@ def complete_tg_task():
         task.status = 'done'
         task.completed_at = msk_now()
         task.completed_by_id = current_user.id
+        # Расход из ТГ: «Сделано» без импорта раньше оставляло ChatExpenseMessage
+        # в pending — карточка пропадала с дашборда, а в inbox висела вечно.
+        # Сначала коммитим закрытие задачи, затем синхронизируем ChatExpenseMessage.
         try:
             db.session.commit()
         except Exception:
             db.session.rollback()
             current_app.logger.exception('complete_tg_task commit failed')
+            return done_html
+        if (task.action_type or '') == 'chat_expense':
+            try:
+                from app.expense_chat import reject_chat_expense
+                from app.models import ChatExpenseMessage
+                msg = ChatExpenseMessage.query.filter_by(task_id=task.id).first()
+                if msg is None:
+                    try:
+                        pl = json.loads(task.action_payload or '{}')
+                        cid = pl.get('chat_expense_id')
+                        if cid:
+                            msg = ChatExpenseMessage.query.get(int(cid))
+                    except Exception:
+                        msg = None
+                if msg is not None and (msg.status or '') in ('pending', 'invoice_match'):
+                    reject_chat_expense(msg.id, current_user)
+            except Exception:
+                current_app.logger.exception('complete_tg_task: sync chat_expense reject')
+        return done_html
     return done_html
 
 
