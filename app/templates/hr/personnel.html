@@ -84,9 +84,6 @@
 <div class="filter-panel">
     <form method="GET" class="d-flex gap-2 align-items-center flex-wrap w-100" hx-boost="false">
         <input type="hidden" name="tab" value="{{ active_tab }}">
-        {% if active_tab == 'timesheet' and show_hidden_emps %}
-        <input type="hidden" name="hidden" value="1">
-        {% endif %}
         <select name="month" class="form-select form-select-sm" style="width: 120px;" onchange="this.form.submit()">
             {% for m_num, m_name in month_names.items() %}
             <option value="{{ m_num }}" {% if m_num == month %}selected{% endif %}>{{ m_name }}</option>
@@ -126,7 +123,14 @@
 <ul class="nav nav-tabs mb-3 flex-nowrap text-nowrap overflow-auto" style="scrollbar-width: none; -ms-overflow-style: none;">
   <li class="nav-item"><a class="nav-link {% if active_tab == 'summary' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='summary') }}">Сводная ведомость</a></li>
   {% if current_user.role != 'user' %}
-  <li class="nav-item"><a class="nav-link {% if active_tab == 'timesheet' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='timesheet', hidden='1' if show_hidden_emps else None) }}">Табель (Календарь)</a></li>
+  <li class="nav-item"><a class="nav-link {% if active_tab == 'timesheet' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='timesheet') }}">Табель (Календарь)</a></li>
+  {% endif %}
+  {% if current_user.role in ['admin', 'executive', 'brigadier'] %}
+  <li class="nav-item">
+    <a class="nav-link {% if active_tab == 'archive' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='archive') }}">
+      Архив{% if archived_employees|default([]) %} ({{ archived_employees|length }}){% endif %}
+    </a>
+  </li>
   {% endif %}
   {% if current_user.role == 'admin' %}
   <li class="nav-item"><a class="nav-link {% if active_tab == 'adjustments' %}active{% endif %}" href="{{ url_for('hr.personnel', year=year, month=month, tab='adjustments') }}">Корректировки</a></li>
@@ -432,16 +436,57 @@
 </div>
 {% endif %}
 
+<!-- ВКЛАДКА: АРХИВ (восстановление) -->
+{% if active_tab == 'archive' %}
+<div class="alert alert-secondary py-2 small mb-3">
+    <i class="fas fa-archive me-1"></i>
+    Архив: не в сводной ведомости, не в табеле, без напоминаний по патентам.
+    Часы и карточки сохранены — «Вернуть» снова покажет человека в работе.
+</div>
+<div class="card shadow-sm border-0">
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th class="ps-3">Сотрудник</th>
+                    <th>Роль</th>
+                    <th class="text-end pe-3" style="width: 180px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for emp in archived_employees|default([]) %}
+                <tr>
+                    <td class="ps-3 fw-bold">{{ emp.name }}</td>
+                    <td class="text-muted small">{{ roles.get(emp.role, emp.role) }}</td>
+                    <td class="text-end pe-3">
+                        <form method="POST" class="d-inline">
+                            <input type="hidden" name="action" value="restore_employee">
+                            <input type="hidden" name="employee_id" value="{{ emp.id }}">
+                            <button type="submit" class="btn btn-success btn-sm">
+                                <i class="fas fa-undo me-1"></i>Вернуть
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="3" class="text-muted text-center py-4">Архив пуст</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
 <!-- ВКЛАДКА: ТАБЕЛЬ (ПК - ИСХОДНЫЙ ВАРИАНТ) -->
 {% if active_tab == 'timesheet' %}
-{% if current_user.role in ['admin', 'brigadier'] %}
+{% if current_user.role in ['admin', 'executive', 'brigadier'] %}
 <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-    {% if show_hidden_emps %}
-    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('hr.personnel', year=year, month=month, tab='timesheet') }}"><i class="fas fa-arrow-left me-1"></i>К активным</a>
-    <span class="small text-muted">Скрытые сотрудники — «Вернуть» снова покажет их в табеле</span>
-    {% else %}
-    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('hr.personnel', year=year, month=month, tab='timesheet', hidden=1) }}"><i class="fas fa-eye-slash me-1"></i>Скрытые сотрудники</a>
-    {% endif %}
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('hr.personnel', year=year, month=month, tab='archive') }}">
+        <i class="fas fa-archive me-1"></i>Архив{% if archived_employees|default([]) %} ({{ archived_employees|length }}){% endif %}
+    </a>
+    <span class="small text-muted">Убрать из табеля и сводной — иконка глаза у ФИО; вернуть — во вкладке Архив</span>
 </div>
 {% endif %}
 <div class="d-none d-md-block">
@@ -462,12 +507,13 @@
                     <div class="d-flex align-items-center gap-1">
                     <i class="fas fa-plus-square toggle-btn" onclick="toggleTimesheetDetails({{ row.emp.id }}, this)"></i>
                     <span class="text-truncate">{{ row.emp.name }}</span>
-                    {% if current_user.role in ['admin', 'brigadier'] %}
+                    {% if current_user.role in ['admin', 'executive', 'brigadier'] %}
                     <form method="POST" class="ms-auto mb-0" onclick="event.stopPropagation();">
-                        <input type="hidden" name="action" value="{{ 'restore_employee' if show_hidden_emps else 'hide_employee' }}">
+                        <input type="hidden" name="action" value="hide_employee">
                         <input type="hidden" name="employee_id" value="{{ row.emp.id }}">
-                        <button type="submit" class="btn btn-link btn-sm p-0 text-muted" title="{{ 'Вернуть в табель' if show_hidden_emps else 'Скрыть из табеля' }}" {% if not show_hidden_emps %}onclick="return confirm('Скрыть сотрудника из табеля? Часы сохранятся, его можно будет вернуть.');"{% endif %}>
-                            <i class="fas fa-{{ 'undo' if show_hidden_emps else 'eye-slash' }}"></i>
+                        <button type="submit" class="btn btn-link btn-sm p-0 text-muted" title="В архив"
+                                onclick="return confirm('Отправить в архив? Исчезнет из табеля и сводной. Часы и карточка сохранятся — вернуть можно во вкладке Архив.');">
+                            <i class="fas fa-eye-slash"></i>
                         </button>
                     </form>
                     {% endif %}
@@ -498,7 +544,7 @@
             {% else %}
             <tr>
                 <td colspan="{{ 1 + days_in_month|length }}" class="text-muted text-center py-3">
-                    {% if show_hidden_emps %}Нет скрытых сотрудников{% else %}Нет сотрудников в табеле{% endif %}
+                    Нет сотрудников в табеле
                 </td>
             </tr>
             {% endfor %}
@@ -733,9 +779,8 @@
                 <label class="form-check-label" for="empActive">В табеле (на работе)</label>
             </div>
             <div class="form-text small text-muted mt-1">
-                Снимите галочку при увольнении / конце сезона: человек пропадёт из табеля, дашбордов патентов и TG-напоминаний.
-                Карточка, документы, патенты и регистрации <strong>не удаляются</strong> — в следующем году снова включите галочку
-                или откройте «Скрытые сотрудники» / «Архив» у иностранных.
+                Снимите галочку при увольнении / конце сезона: человек пропадёт из сводной ведомости, табеля, дашбордов патентов и TG-напоминаний.
+                Карточка и документы <strong>не удаляются</strong> — вернуть во вкладке <strong>Архив</strong> (табель) или снова включить галочку.
             </div>
         </div>
         <div class="modal-footer py-1">
@@ -990,8 +1035,7 @@
 
     // === JS ДЛЯ МОБИЛЬНОГО (Генерация списка) ===
     // Используем window.* чтобы скрипт не ломался при "тихих" обновлениях страницы HTMX
-    window.hrCanHideEmp = {{ 'true' if current_user.role in ['admin', 'brigadier'] else 'false' }};
-    window.hrShowHiddenEmps = {{ 'true' if show_hidden_emps else 'false' }};
+    window.hrCanHideEmp = {{ 'true' if current_user.role in ['admin', 'executive', 'brigadier'] else 'false' }};
     window.hrEmployees =[
         {% for e in timesheet_employees %}
         { id: {{ e.id }}, name: "{{ e.name|replace("'", "\\'") }}", role: "{{ e.role }}" },
@@ -1102,15 +1146,12 @@
 
             var hideBtn = '';
             if (window.hrCanHideEmp) {
-                var hideAction = window.hrShowHiddenEmps ? 'restore_employee' : 'hide_employee';
-                var hideTitle = window.hrShowHiddenEmps ? 'Вернуть в табель' : 'Скрыть из табеля';
-                var hideIcon = window.hrShowHiddenEmps ? 'undo' : 'eye-slash';
-                var hideConfirm = window.hrShowHiddenEmps ? '' : ' onclick="return confirm(\'Скрыть сотрудника из табеля? Часы сохранятся, его можно будет вернуть.\');"';
                 hideBtn = '<form method="POST" class="mb-0" onclick="event.stopPropagation();">'
-                    + '<input type="hidden" name="action" value="' + hideAction + '">'
+                    + '<input type="hidden" name="action" value="hide_employee">'
                     + '<input type="hidden" name="employee_id" value="' + emp.id + '">'
-                    + '<button type="submit" class="btn btn-link btn-sm p-0 text-muted" title="' + hideTitle + '"' + hideConfirm + '>'
-                    + '<i class="fas fa-' + hideIcon + '"></i></button></form>';
+                    + '<button type="submit" class="btn btn-link btn-sm p-0 text-muted" title="В архив"'
+                    + ' onclick="return confirm(\'Отправить в архив? Исчезнет из табеля и сводной. Вернуть — вкладка Архив.\');">'
+                    + '<i class="fas fa-eye-slash"></i></button></form>';
             }
             
             card.innerHTML = '<div class="d-flex align-items-center gap-2"><div class="fw-bold text-dark">' + emp.name + '</div>' + hideBtn + '</div><div>' + hoursDisplay + '</div>';

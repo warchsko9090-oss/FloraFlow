@@ -222,6 +222,8 @@ def personnel():
     active_tab = request.args.get('tab', 'summary')
     if active_tab == 'adjustments' and current_user.role != 'admin':
         active_tab = 'summary'
+    if active_tab == 'archive' and current_user.role not in ('admin', 'executive', 'brigadier'):
+        active_tab = 'summary'
     # Печать / user1 — только сводная ведомость
     if request.args.get('export') == 'print' or (
         _is_crew_summary_user() and active_tab != 'summary'
@@ -278,16 +280,15 @@ def personnel():
     if request.method == 'POST':
         action = request.form.get('action')
         
-        if action in ('hide_employee', 'restore_employee') and current_user.role in ('admin', 'brigadier'):
+        if action in ('hide_employee', 'restore_employee') and current_user.role in ('admin', 'executive', 'brigadier'):
             emp = Employee.query.get(request.form.get('employee_id'))
             if emp:
                 emp.is_active = action == 'restore_employee'
                 db.session.commit()
-                flash('Сотрудник снова в табеле' if emp.is_active else 'Сотрудник скрыт из табеля')
-            hidden_flag = '1' if action == 'restore_employee' else None
+                flash('Сотрудник снова в табеле и сводной' if emp.is_active else 'Сотрудник в архиве: скрыт из табеля и сводной ведомости')
             return redirect(url_for(
                 'hr.personnel', year=selected_year, month=selected_month,
-                tab='timesheet', hidden=hidden_flag,
+                tab='archive',
             ))
 
         # --- ИНДИВИДУАЛЬНАЯ ВЫПЛАТА ЗП ---
@@ -706,7 +707,7 @@ def personnel():
             redir_kw['employee_id'] = filter_emp_ids
         return redirect(url_for('hr.personnel', **redir_kw))
         
-    emp_query = Employee.query
+    emp_query = Employee.query.filter(Employee.is_active.is_(True))
     if active_tab == 'summary' and filter_emp_ids:
         emp_query = emp_query.filter(Employee.id.in_(filter_emp_ids))
     
@@ -718,21 +719,19 @@ def personnel():
         
     employees = emp_query.order_by(Employee.name).all()
     
-    # Скрываем их и из выпадающего списка фильтра
+    # Активные — для сводной/табеля/фильтров; архив — отдельная вкладка восстановления
+    active_list_q = Employee.query.filter(Employee.is_active.is_(True))
+    archived_list_q = Employee.query.filter(Employee.is_active.is_(False))
     if _is_crew_summary_user():
-        all_employees_list = Employee.query.filter(
-            Employee.role.in_(CREW_EMPLOYEE_ROLES)
-        ).order_by(Employee.name).all()
+        active_list_q = active_list_q.filter(Employee.role.in_(CREW_EMPLOYEE_ROLES))
+        archived_list_q = archived_list_q.filter(Employee.role.in_(CREW_EMPLOYEE_ROLES))
     elif current_user.role not in ['admin', 'executive', 'shop_manager']:
-        all_employees_list = Employee.query.filter(Employee.role != 'manager').order_by(Employee.name).all()
-    else:
-        all_employees_list = Employee.query.order_by(Employee.name).all()
-
-    show_hidden_emps = request.args.get('hidden') == '1'
-    if show_hidden_emps:
-        timesheet_employees = [e for e in all_employees_list if e.is_active is False]
-    else:
-        timesheet_employees = [e for e in all_employees_list if e.is_active is not False]
+        active_list_q = active_list_q.filter(Employee.role != 'manager')
+        archived_list_q = archived_list_q.filter(Employee.role != 'manager')
+    all_employees_list = active_list_q.order_by(Employee.name).all()
+    archived_employees = archived_list_q.order_by(Employee.name).all()
+    timesheet_employees = all_employees_list
+    show_hidden_emps = False
     
     rates_db = SalaryRate.query.filter_by(year=selected_year).all()
     rates_map = {} 
@@ -965,6 +964,7 @@ def personnel():
                            year=selected_year, month=selected_month, 
                            employees=all_employees_list,
                            timesheet_employees=timesheet_employees,
+                           archived_employees=archived_employees,
                            show_hidden_emps=show_hidden_emps, 
                            filter_emp_ids=filter_emp_ids, 
                            rates_map=rates_map, 
