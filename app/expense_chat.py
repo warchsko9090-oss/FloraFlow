@@ -1064,7 +1064,9 @@ def confirm_chat_expense(
 
 def reject_chat_expense(msg_id: int, user: User) -> tuple[bool, str]:
     """Админ пометил «не расход» / дубль, импортировать не нужно.
-    Закрываем TgTask, ставим реакцию-крестик (❌), alias НЕ трогаем.
+
+    Всегда status=rejected (в т.ч. для авансов/ЗП). Раньше payroll-тексты
+    уходили в status=payroll, а heal снова поднимал задачу на дашборд.
     """
     row = ChatExpenseMessage.query.get(msg_id)
     if row is None:
@@ -1073,11 +1075,7 @@ def reject_chat_expense(msg_id: int, user: User) -> tuple[bool, str]:
         return False, f"already_{row.status}"
 
     try:
-        desc = row.parsed_description or row.raw_text or ''
-        if is_payroll_chat_text(desc):
-            row.status = "payroll"
-        else:
-            row.status = "rejected"
+        row.status = "rejected"
         if row.task_id:
             task = TgTask.query.get(row.task_id)
             if task is not None and task.status != "done":
@@ -1093,10 +1091,7 @@ def reject_chat_expense(msg_id: int, user: User) -> tuple[bool, str]:
             pass
         return False, str(exc)
 
-    if row.status == "payroll":
-        _safe_react(row.tg_chat_id, row.tg_message_id, None)
-    else:
-        _safe_react(row.tg_chat_id, row.tg_message_id, "👀")
+    _safe_react(row.tg_chat_id, row.tg_message_id, "👀")
     return True, "ok"
 
 
@@ -1226,11 +1221,15 @@ def reconcile_chat_expense_row(row: ChatExpenseMessage) -> dict:
         _safe_react(row.tg_chat_id, row.tg_message_id, None)
     elif hit['reason'] == 'payroll_wait':
         # Без покрытия в ERP карточку не прячем — иначе ЗП/аванс из чата
-        # пропадает с дашборда. Статус payroll оставляем только как метку.
+        # пропадает с дашборда. Явный reject админа не трогаем.
         if row.status in ('imported', 'matched', 'rejected'):
             pass
         elif row.task_id:
-            row.status = 'pending'
+            task = TgTask.query.get(row.task_id)
+            if task is not None and task.status == 'done':
+                row.status = 'rejected'
+            else:
+                row.status = 'pending'
         else:
             row.status = 'payroll'
     return hit
@@ -1326,13 +1325,14 @@ def heal_missed_chat_expenses(days: int = 21) -> dict:
             mixed = not is_pure_payroll_chat_text(row.parsed_description or raw)
             if cover and not mixed:
                 continue
-            row.status = 'pending'
             old = TgTask.query.get(row.task_id) if row.task_id else None
+            # Задача уже закрыта (часто бывший баг «Не расход»→payroll) — не воскрешаем
             if old is not None and old.status == 'done':
-                old.status = 'new'
-                old.completed_at = None
-                stats['mixed_reopened' if mixed else 'payroll_opened'] += 1
-            elif old is None:
+                row.status = 'rejected'
+                stats['ghost_receipts_rejected'] += 1
+                continue
+            row.status = 'pending'
+            if old is None:
                 task = _create_task_for_chat_expense(row, source='payroll')
                 if task is not None:
                     db.session.add(task)
