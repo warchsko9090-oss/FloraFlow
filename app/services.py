@@ -512,19 +512,12 @@ def _build_cost_expense_maps(period=None, selected_year=None):
     years = _cost_years(selected_year)
     period_start, period_end = _parse_cost_period(period, selected_year)
 
-    all_expenses_query = db.session.query(
-        func.extract('year', Expense.date).label('year'),
-        Expense.budget_item_id,
-        func.sum(Expense.amount),
-    ).filter(
-        Expense.order_id.is_(None),
-        Expense.project_id.is_(None),
+    from app.expense_splits import cost_expense_rows_by_year
+    all_expenses = cost_expense_rows_by_year(
+        period_start=period_start,
+        period_end=period_end,
+        general_only=True,
     )
-    if period_start and period_end:
-        all_expenses_query = all_expenses_query.filter(
-            Expense.date >= period_start, Expense.date <= period_end,
-        )
-    all_expenses = all_expenses_query.group_by('year', Expense.budget_item_id).all()
 
     budget_items = {i.id: i for i in BudgetItem.query.all()}
     overrides_db = UnitCostOverride.query.all()
@@ -725,18 +718,12 @@ def _build_container_cost_expense_maps(project_ids, period=None, selected_year=N
             'project_ids': project_ids,
         }
 
-    query = db.session.query(
-        func.extract('year', Expense.date).label('year'),
-        Expense.budget_item_id,
-        Expense.project_id,
-        func.sum(Expense.amount),
-    ).filter(
-        Expense.order_id.is_(None),
-        Expense.project_id.in_(project_ids),
+    from app.expense_splits import cost_expense_rows_by_year
+    rows = cost_expense_rows_by_year(
+        period_start=period_start,
+        period_end=period_end,
+        project_ids=project_ids,
     )
-    if period_start and period_end:
-        query = query.filter(Expense.date >= period_start, Expense.date <= period_end)
-    rows = query.group_by('year', Expense.budget_item_id, Expense.project_id).all()
 
     for year, item_id, _project_id, amount in rows:
         year = int(year)

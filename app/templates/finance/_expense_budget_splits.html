@@ -80,7 +80,8 @@
           }
         });
       }
-      function addRow(preset) {
+      // skipRecalc: при массовой загрузке initial не затирать суммы до всех строк
+      function addRow(preset, skipRecalc) {
         preset = preset || {};
         var div = document.createElement('div');
         div.className = 'exp-split-row row g-1 align-items-center mb-1';
@@ -102,11 +103,13 @@
         if (preset.amount != null && preset.amount !== '') amt.value = money(preset.amount);
         div.querySelector('.exp-split-del').addEventListener('click', function() {
           if (rowCount() <= 1) return;
+          if (window.jQuery) {
+            try { jQuery(sel).select2('destroy'); } catch (e) {}
+          }
           div.remove();
           recalc();
         });
         amt.addEventListener('input', function() {
-          // при правке не-последней — пересчёт остатка
           recalc();
         });
         sel.addEventListener('change', function() { recalc(); });
@@ -122,30 +125,43 @@
             });
           } catch (e) {}
         }
-        recalc();
+        if (!skipRecalc) recalc();
       }
 
-      addBtn.addEventListener('click', function() {
-        // при добавлении второй+ строки: если была одна на всю сумму —
-        // оставляем первую редактируемой, остаток уйдёт на новую
-        addRow({});
-        recalc();
-      });
-
-      var tsel = totalSel();
-      if (tsel) {
-        var tel = document.querySelector(tsel);
-        if (tel) tel.addEventListener('input', recalc);
+      if (!root._expSplitBound) {
+        root._expSplitBound = true;
+        addBtn.addEventListener('click', function() {
+          addRow({});
+        });
+        var tsel = totalSel();
+        if (tsel) {
+          var tel = document.querySelector(tsel);
+          if (tel) tel.addEventListener('input', recalc);
+        }
       }
 
       if (initial.length) {
-        initial.forEach(function(r) { addRow(r); });
+        initial.forEach(function(r) { addRow(r, true); });
       } else {
-        addRow({ budget_item_id: suggested || '', amount: totalVal() || '' });
+        addRow({ budget_item_id: suggested || '', amount: totalVal() || '' }, true);
       }
       recalc();
       root.recalcExpenseSplits = recalc;
       root.addExpenseSplitRow = addRow;
+    },
+    /** Переинициализация (модалка редактирования): сброс строк и initial. */
+    reset: function(root, splits) {
+      if (!root) return;
+      var rowsEl = root.querySelector('.exp-split-rows');
+      if (rowsEl) {
+        if (window.jQuery) {
+          try { jQuery(rowsEl).find('select').select2('destroy'); } catch (e) {}
+        }
+        rowsEl.innerHTML = '';
+      }
+      root._expSplitReady = false;
+      root.setAttribute('data-initial', JSON.stringify(splits || []));
+      window.ExpenseBudgetSplits.init(root);
     },
     initAll: function(scope) {
       (scope || document).querySelectorAll('.expense-budget-splits').forEach(function(el) {

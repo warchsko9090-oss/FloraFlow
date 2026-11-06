@@ -759,14 +759,26 @@ def expenses_export():
         )
     if f_type: query = query.filter(Expense.payment_type == f_type)
     
-    expenses = query.order_by(Expense.date.desc()).all()
+    from sqlalchemy.orm import selectinload, joinedload
+    expenses = (
+        query.options(
+            selectinload(Expense.budget_lines).joinedload(ExpenseBudgetLine.item),
+            joinedload(Expense.item),
+            joinedload(Expense.employee),
+        )
+        .order_by(Expense.date.desc())
+        .all()
+    )
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Расходы"
 
     # Шапка
-    headers = ["Дата", "Статья бюджета", "Код", "Сумма", "Тип", "Сотрудник", "Проект", "Заказ", "Описание"]
+    headers = [
+        "Дата", "Статья бюджета", "Код", "Сумма", "Тип",
+        "Сотрудник", "Проект", "Заказ", "Описание", "Расход №", "Часть",
+    ]
     ws.append(headers)
     
     # Стили шапки
@@ -775,21 +787,26 @@ def expenses_export():
         cell.fill = header_fill
         cell.font = Font(bold=True)
 
-    for e in expenses:
+    from app.expense_splits import expand_expenses_for_list
+    for row in expand_expenses_for_list(expenses):
+        e = row['expense']
+        item = row.get('line_item') or e.item
         emp_name = e.employee.name if e.employee else ""
         proj_name = e.project_link.name if e.project_id else ""
         ord_name = str(e.order_id) if e.order_id else ""
-        
+        part = f"{row['part']}/{row['parts']}" if row.get('is_split') else ""
         ws.append([
             e.date.strftime('%d.%m.%Y'),
-            e.item.name,
-            e.item.code,
-            float(e.amount),
-            'Нал' if e.payment_type == 'cash' else 'Безнал',
+            item.name if item else "",
+            item.code if item else "",
+            float(row['line_amount'] or 0),
+            'Нал' if e.payment_type == 'cash' else ('Взаимозачет' if e.payment_type == 'barter' else 'Безнал'),
             emp_name,
             proj_name,
             ord_name,
-            e.description
+            e.description if row.get('show_actions') else "",
+            e.id,
+            part,
         ])
 
     # Ширина колонок

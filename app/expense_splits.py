@@ -229,3 +229,74 @@ def budget_fact_rows_for_year(year: int):
             key = (int(bid), int(month))
             rows[key] = rows.get(key, Decimal('0')) + money2(amt)
     return [(bid, month, amt) for (bid, month), amt in rows.items()]
+
+
+def cost_expense_rows_by_year(
+    *,
+    period_start=None,
+    period_end=None,
+    project_ids=None,
+    general_only: bool = False,
+):
+    """Факт расходов по (год, статья[, project_id]) с учётом разбивки.
+
+    general_only=True — только общие (без order/project), как себестоимость полей.
+    project_ids — фильтр проектов (себестоимость контейнеров).
+    Возвращает list[(year, budget_item_id, amount)] или
+    list[(year, budget_item_id, project_id, amount)] если project_ids задан.
+    """
+    from sqlalchemy import func
+
+    year_col = func.extract('year', Expense.date).label('year')
+    filters = [Expense.order_id.is_(None)]
+    if general_only:
+        filters.append(Expense.project_id.is_(None))
+    if project_ids is not None:
+        filters.append(Expense.project_id.in_([int(x) for x in project_ids]))
+    if period_start and period_end:
+        filters.extend([Expense.date >= period_start, Expense.date <= period_end])
+
+    with_project = project_ids is not None
+    line_cols = [year_col, ExpenseBudgetLine.budget_item_id]
+    orphan_cols = [year_col, Expense.budget_item_id]
+    group_line = [year_col, ExpenseBudgetLine.budget_item_id]
+    group_orphan = [year_col, Expense.budget_item_id]
+    if with_project:
+        line_cols.append(Expense.project_id)
+        orphan_cols.append(Expense.project_id)
+        group_line.append(Expense.project_id)
+        group_orphan.append(Expense.project_id)
+
+    with_lines = (
+        db.session.query(
+            *line_cols,
+            func.sum(ExpenseBudgetLine.amount).label('amount'),
+        )
+        .join(Expense, Expense.id == ExpenseBudgetLine.expense_id)
+        .filter(*filters)
+        .group_by(*group_line)
+    )
+    orphan = (
+        db.session.query(
+            *orphan_cols,
+            func.sum(Expense.amount).label('amount'),
+        )
+        .outerjoin(ExpenseBudgetLine, ExpenseBudgetLine.expense_id == Expense.id)
+        .filter(*filters, ExpenseBudgetLine.id.is_(None))
+        .group_by(*group_orphan)
+    )
+
+    out: list[tuple] = []
+    for q in (with_lines, orphan):
+        for row in q.all():
+            if with_project:
+                year, bid, pid, amt = row
+                if bid is None or year is None:
+                    continue
+                out.append((int(year), int(bid), int(pid) if pid is not None else None, money2(amt)))
+            else:
+                year, bid, amt = row
+                if bid is None or year is None:
+                    continue
+                out.append((int(year), int(bid), money2(amt)))
+    return out

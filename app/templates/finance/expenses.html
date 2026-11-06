@@ -1061,24 +1061,15 @@
         const radio = document.querySelector('#editExpenseModal input[name="payment_type"][value="' + ptype + '"]');
         if (radio) radio.checked = true;
 
-        // Пересобрать разбивку по статьям из data-splits
+        // Пересобрать разбивку по статьям из data-splits (без затирания сумм)
         var splitRoot = document.getElementById('editExpSplit');
         if (splitRoot && window.ExpenseBudgetSplits) {
-            var rowsEl = splitRoot.querySelector('.exp-split-rows');
-            if (rowsEl) {
-                if (window.jQuery) {
-                    try { jQuery(rowsEl).find('select').select2('destroy'); } catch (e) {}
-                }
-                rowsEl.innerHTML = '';
-            }
-            splitRoot._expSplitReady = false;
             var splits = [];
             try { splits = JSON.parse(ds.splits || '[]') || []; } catch (e) { splits = []; }
             if (!splits.length && ds.budgetItem) {
                 splits = [{ budget_item_id: parseInt(ds.budgetItem, 10), amount: parseFloat(ds.amount || '0') }];
             }
-            splitRoot.setAttribute('data-initial', JSON.stringify(splits));
-            window.ExpenseBudgetSplits.init(splitRoot);
+            window.ExpenseBudgetSplits.reset(splitRoot, splits);
         }
 
         fillProjectBudgetSelect(ds.project || '', ds.projectBudget || '');
