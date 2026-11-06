@@ -233,6 +233,7 @@ def ensure_legacy_schema(logger=None) -> None:
     _ensure_expense_budget_lines(logger)
     _backfill_order_tag_sort_order(logger)
     _ensure_bare_root_sizes(logger)
+    _close_fulfilled_pay_plans(logger)
 
 
 def _ensure_bare_root_sizes(logger=None) -> None:
@@ -245,6 +246,31 @@ def _ensure_bare_root_sizes(logger=None) -> None:
     except Exception as exc:
         if logger:
             logger.warning('legacy schema: bare-root sizes skipped — %s', exc)
+        db.session.rollback()
+
+
+def _close_fulfilled_pay_plans(logger=None) -> None:
+    """Закрыть планы ТГ-оплат, где факт уже >= плана (залипшие «перчатки» и т.п.)."""
+    try:
+        from app.models import PaymentInvoice
+        from app.invoice_files import close_plan_if_fulfilled
+        rows = (
+            PaymentInvoice.query
+            .filter_by(kind='plan')
+            .filter(PaymentInvoice.status != 'paid')
+            .all()
+        )
+        n = 0
+        for inv in rows:
+            if close_plan_if_fulfilled(inv):
+                n += 1
+        if n:
+            db.session.commit()
+            if logger:
+                logger.info('legacy schema: closed %s fulfilled pay plans', n)
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: close fulfilled pay plans skipped — %s', exc)
         db.session.rollback()
 
 
@@ -388,6 +414,16 @@ def _publish_invoice_drafts(logger=None) -> None:
 
 
 _CHANGELOG_RELEASES = (
+    {
+        'version': 'v1.5.1',
+        'date': '2026-11-06',
+        'content': (
+            'Сделано:\n'
+            'В ТГ «Оплата»: недоплаченный или переплаченный план можно убрать из приложения и плана недели '
+            'кнопкой «Убрать из плана» — расходы и факты оплаты в базе остаются.\n'
+            'Если факт уже покрыл план, строка закрывается сама и больше не висит в списке.'
+        ),
+    },
     {
         'version': 'v1.5.0',
         'date': '2026-11-06',

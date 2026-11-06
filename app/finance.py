@@ -286,12 +286,19 @@ def expenses():
                 except Exception:
                     current_app.logger.exception('plan week for pin')
                 if action == 'delete':
-                    from app.invoice_files import delete_unpaid_invoice
+                    from app.invoice_files import discard_pay_invoice, plan_has_execution
                     name = inv.original_name
-                    err = delete_unpaid_invoice(inv)
+                    was_plan_clear = (
+                        (getattr(inv, 'kind', None) or '') == 'plan'
+                        and (plan_has_execution(inv) or (inv.status or '') == 'paid')
+                    )
+                    err = discard_pay_invoice(inv)
                     delete_err = err
                     if err:
                         flash(err)
+                    elif was_plan_clear:
+                        flash('Убрано из плана и ТГ-оплат (расходы в базе сохранены)')
+                        log_action(f"Убрал план из ТГ-оплат: {name}")
                     else:
                         flash('Счет полностью удален')
                         log_action(f"Удалил счет: {name}")

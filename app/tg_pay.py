@@ -41,6 +41,7 @@ from app.telegram import (
 from app.invoice_files import (
     invoice_bytes, receipt_bytes, has_file as invoice_has_file, has_receipt as invoice_has_receipt,
     attach_file, attach_receipt, flask_send, flask_send_receipt, delete_unpaid_invoice,
+    discard_pay_invoice, clear_plan_from_pay_app, close_plan_if_fulfilled, plan_has_execution,
 )
 
 bp = Blueprint('tg_pay', __name__, url_prefix='/tg/pay')
@@ -972,6 +973,7 @@ def _week_plan_rows(week_start: date) -> list[PaymentInvoice]:
 
 
 def _serialize_week_plan_item(inv: PaymentInvoice) -> dict:
+    has_fact = plan_has_execution(inv)
     return {
         'id': inv.id,
         'summary': _purpose(inv),
@@ -982,9 +984,8 @@ def _serialize_week_plan_item(inv: PaymentInvoice) -> dict:
         'has_budget': bool(
             inv.budget_item_id and (not inv.item or inv.item.code != 'UNASSIGNED')
         ),
-        'has_fact': bool(list(getattr(inv, 'fact_invoices', None) or [])) or (
-            invoice_has_file(inv) and float(inv.amount or 0) > 0
-        ),
+        'has_fact': has_fact,
+        'can_clear': has_fact,
         'status': inv.status,
     }
 
@@ -1244,6 +1245,15 @@ def serialize_invoice(inv: PaymentInvoice, *, detail: bool = False) -> dict:
         'source': inv.source or 'web',
         'has_file': invoice_has_file(file_src),
         'created_by_user_id': inv.created_by_user_id,
+        'has_fact': (
+            plan_has_execution(inv) if (inv.kind or '') == 'plan'
+            else bool(fact > 0)
+        ),
+        'can_clear': (
+            (inv.kind or '') == 'plan'
+            and (inv.status or '') != 'paid'
+            and plan_has_execution(inv)
+        ),
     }
     if detail:
         data['has_receipt'] = invoice_has_receipt(inv)
@@ -1863,11 +1873,22 @@ def api_save(user: User, inv_id: int):
         if inv.status != 'new':
             became_new = True
         inv.status = 'new'
+    closed = close_plan_if_fulfilled(inv)
     if became_new or body.get('confirm'):
         db.session.commit()
         _notify_watchers(inv, except_user=user)
+        if closed:
+            try:
+                refresh_week_plan_pin(plan_week_for_pin(inv))
+            except Exception:
+                current_app.logger.exception('refresh week plan pin after save close')
         return jsonify(serialize_invoice(inv, detail=True))
     db.session.commit()
+    if closed:
+        try:
+            refresh_week_plan_pin(plan_week_for_pin(inv))
+        except Exception:
+            current_app.logger.exception('refresh week plan pin after save close')
     return jsonify(serialize_invoice(inv, detail=True))
 
 
@@ -1963,6 +1984,19 @@ def api_week_plan_get(_user: User):
         week = _monday(week)
     except ValueError:
         week = _default_plan_week()
+    # Закрыть «залипшие» планы, где факт уже покрыл сумму (перчатки и т.п.).
+    healed = False
+    for inv in PaymentInvoice.query.filter_by(kind='plan', week_start=week).filter(
+        PaymentInvoice.status != 'paid'
+    ).all():
+        if close_plan_if_fulfilled(inv):
+            healed = True
+    if healed:
+        db.session.commit()
+        try:
+            refresh_week_plan_pin(week)
+        except Exception:
+            current_app.logger.exception('refresh week plan pin after heal')
     rows = _week_plan_rows(week)
     items = [_serialize_week_plan_item(inv) for inv in rows]
     pins = _load_week_pin_map(week)
@@ -2036,6 +2070,10 @@ def api_week_plan_save(user: User):
             inv.kind = 'plan'
             if inv.status == 'draft':
                 inv.status = 'new'
+            close_plan_if_fulfilled(inv)
+            if (inv.status or '') == 'paid':
+                # Уже закрыт фактом — не держим в редакторе недели.
+                continue
             kept_ids.add(inv.id)
         else:
             stamp = f"plan_{int(msk_now().timestamp())}_{len(normalized)}"
@@ -2068,12 +2106,8 @@ def api_week_plan_save(user: User):
     for oid, inv in existing.items():
         if oid in kept_ids:
             continue
-        facts = list(getattr(inv, 'fact_invoices', None) or [])
-        if facts or (invoice_has_file(inv) and float(inv.amount or 0) > 0):
-            # Исполнение уже есть — строку учёта не удаляем.
-            # В закрепе останется только неоплаченный остаток.
-            continue
-        err = delete_unpaid_invoice(inv)
+        # С фактом — убрать из плана/ТГ (расходы остаются); без факта — стереть строку.
+        err = discard_pay_invoice(inv)
         if err:
             current_app.logger.warning('week-plan skip delete id=%s err=%s', oid, err)
 
@@ -2161,7 +2195,11 @@ def api_discard(user: User, inv_id: int):
     else:
         return jsonify({'error': 'forbidden'}), 403
     pin_week = plan_week_for_pin(inv)
-    err = delete_unpaid_invoice(inv)
+    cleared = (
+        (getattr(inv, 'kind', None) or '') == 'plan'
+        and (plan_has_execution(inv) or (inv.status or '') == 'paid')
+    )
+    err = discard_pay_invoice(inv)
     if err:
         return jsonify({'error': 'locked', 'hint': err}), 400
     db.session.commit()
@@ -2170,7 +2208,27 @@ def api_discard(user: User, inv_id: int):
             refresh_week_plan_pin(pin_week)
         except Exception:
             current_app.logger.exception('refresh week plan pin after discard')
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'cleared': cleared})
+
+
+@bp.route('/api/invoices/<int:inv_id>/clear-from-app', methods=['POST'])
+@require_user
+def api_clear_from_app(user: User, inv_id: int):
+    """Убрать недоплаченный/переплаченный план из ТГ и плана недели; база расходов цела."""
+    if not _can_edit(user):
+        return jsonify({'error': 'forbidden'}), 403
+    inv = PaymentInvoice.query.get_or_404(inv_id)
+    pin_week = plan_week_for_pin(inv)
+    err = clear_plan_from_pay_app(inv)
+    if err:
+        return jsonify({'error': 'bad_request', 'hint': err}), 400
+    db.session.commit()
+    if pin_week:
+        try:
+            refresh_week_plan_pin(pin_week)
+        except Exception:
+            current_app.logger.exception('refresh week plan pin after clear')
+    return jsonify({'ok': True, 'id': inv_id, 'cleared': True})
 
 
 @bp.route('/api/invoices/<int:inv_id>/mark-paid', methods=['POST'])

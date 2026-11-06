@@ -563,7 +563,10 @@
                   <input id="fAttach" class="file-proxy" type="file" accept="application/pdf,image/*,.pdf,.jpg,.jpeg,.png,.webp,.heic" data-replace="${inv.has_file ? '1' : '0'}">
                 </label>
               </div>
-              <button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>`
+              ${inv.can_clear
+                ? `<button class="btn btn-ghost" type="button" id="btnClearPlan">Убрать из плана</button>
+                   <p class="hint">Недоплата или переплата: уйдёт из ТГ и плана недели, расход в базе останется.</p>`
+                : '<button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>'}`
             : ''}
         </div>
       `;
@@ -643,6 +646,20 @@
       view.classList.add('busy');
       try {
         await api('/tg/pay/api/invoices/' + inv.id + '/discard', { method: 'POST' });
+        haptic('medium');
+        location.hash = '#/';
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        view.classList.remove('busy');
+      }
+    };
+    const clearPlan = document.getElementById('btnClearPlan');
+    if (clearPlan) clearPlan.onclick = async () => {
+      if (!confirm('Убрать из приложения и плана недели? Расход и оплата в базе останутся.')) return;
+      view.classList.add('busy');
+      try {
+        await api('/tg/pay/api/invoices/' + inv.id + '/clear-from-app', { method: 'POST' });
         haptic('medium');
         location.hash = '#/';
       } catch (e) {
@@ -1095,7 +1112,7 @@
   function weekPlanRowHtml(item, idx, canEdit) {
     const id = item.id || '';
     const ptype = item.payment_type === 'cash' ? 'cash' : 'cashless';
-    const locked = item.has_fact ? ' data-locked="1"' : '';
+    const canClear = !!(item.has_fact || item.can_clear);
     if (!canEdit) {
       const open = id ? ` href="#/inv/${id}"` : '';
       return `<a class="week-row"${open}>
@@ -1103,7 +1120,7 @@
         <div class="muted">${ptype === 'cash' ? 'нал' : 'безнал'}${item.budget_name ? ' · ' + esc(item.budget_name) : ' · ⚠ нет статьи'}${item.has_fact ? ' · есть факт' : ''}${id ? ' · открыть' : ''}</div>
       </a>`;
     }
-    return `<div class="week-row" data-idx="${idx}"${locked}>
+    return `<div class="week-row" data-idx="${idx}"${canClear ? ' data-clear="1"' : ''}>
       <input type="hidden" class="wp-id" value="${id}">
       <div class="week-row-grid">
         <input class="wp-amt" inputmode="decimal" placeholder="сумма" value="${item.planned_amount || ''}">
@@ -1116,7 +1133,7 @@
       <div class="field" style="margin-top:8px"><label>Статья бюджета</label>
         ${budgetPickerHtml('wpBudget' + idx, item.budget_item_id)}
       </div>
-      <button type="button" class="btn btn-ghost week-del" ${item.has_fact ? 'disabled title="Есть исполнение — нельзя удалить"' : ''}>Удалить</button>
+      <button type="button" class="btn btn-ghost week-del" title="${canClear ? 'Убрать из плана: расход в базе останется' : 'Удалить строку'}">${canClear ? 'Убрать из плана' : 'Удалить'}</button>
     </div>`;
   }
 
@@ -1228,9 +1245,21 @@
 
   function bindWeekRowDeletes() {
     view.querySelectorAll('.week-del').forEach((btn) => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         const row = btn.closest('.week-row');
-        if (!row || row.dataset.locked === '1') return;
+        if (!row) return;
+        const id = ((row.querySelector('.wp-id') || {}).value || '').trim();
+        if (row.dataset.clear === '1') {
+          if (!confirm('Убрать из плана и ТГ? Расход и оплата в базе останутся.')) return;
+          if (id) {
+            try {
+              await api('/tg/pay/api/invoices/' + id + '/clear-from-app', { method: 'POST' });
+            } catch (e) {
+              alert(e.message || 'Не удалось убрать');
+              return;
+            }
+          }
+        }
         row.remove();
       };
     });

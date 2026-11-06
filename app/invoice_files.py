@@ -150,6 +150,61 @@ def flask_send(inv: PaymentInvoice, *, as_attachment: bool = True):
     )
 
 
+def plan_has_execution(inv: PaymentInvoice) -> bool:
+    """Есть ли по плану уже оплата (дочерний факт или свой файл со суммой)."""
+    kids = list(getattr(inv, 'fact_invoices', None) or [])
+    if kids:
+        return True
+    if not kids:
+        kids = PaymentInvoice.query.filter_by(plan_id=inv.id).limit(1).all()
+        if kids:
+            return True
+    return bool(has_file(inv) and float(inv.amount or 0) > 0)
+
+
+def clear_plan_from_pay_app(inv: PaymentInvoice) -> str | None:
+    """Убирает строку плана из ТГ и плана недели. Расходы и факты в БД не трогает.
+
+    Не коммитит. None = ок.
+    """
+    if (getattr(inv, 'kind', None) or '') != 'plan':
+        return 'Убрать из плана можно только строку плана'
+    if (inv.status or '') == 'paid':
+        return None
+    inv.status = 'paid'
+    return None
+
+
+def close_plan_if_fulfilled(inv: PaymentInvoice) -> bool:
+    """Если факт уже покрыл план — закрывает строку (status=paid). Не коммитит."""
+    from decimal import Decimal
+
+    if (getattr(inv, 'kind', None) or '') != 'plan':
+        return False
+    if (inv.status or '') == 'paid':
+        return False
+    planned = Decimal(str(inv.planned_amount or 0))
+    if planned <= 0:
+        return False
+    paid = invoice_paid_amount(inv)
+    if paid + Decimal('0.009') >= planned:
+        inv.status = 'paid'
+        return True
+    return False
+
+
+def discard_pay_invoice(inv: PaymentInvoice) -> str | None:
+    """Удаление из ТГ-оплат / плана: пустой план — стереть; с фактом — только убрать из приложения.
+
+    Расходы и оплаченные факты при очистке остаются в базе. Не коммитит. None = ок.
+    """
+    if (getattr(inv, 'kind', None) or '') == 'plan':
+        if plan_has_execution(inv) or (inv.status or '') == 'paid':
+            return clear_plan_from_pay_app(inv)
+        return delete_unpaid_invoice(inv)
+    return delete_unpaid_invoice(inv)
+
+
 def delete_unpaid_invoice(inv: PaymentInvoice) -> str | None:
     """Удаляет неоплаченный счёт и привязанные факты. Не коммитит. None = ок."""
     if (inv.status or '') == 'paid':
