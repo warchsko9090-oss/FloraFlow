@@ -161,8 +161,9 @@ def _aggregate_stock_by_pair_and_bucket(reserved_map):
 
 
 def _is_excluded_size_name(name: str) -> bool:
-    from app.seedlings import is_excluded_from_product_stock
-    return is_excluded_from_product_stock(name)
+    """Витрина/сайт: нетов + голый корень (ERP-прайс голый корень показывает)."""
+    from app.seedlings import is_excluded_from_shop
+    return is_excluded_from_shop(name)
 
 
 def _is_seedling_size_name(name: str) -> bool:

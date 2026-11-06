@@ -779,7 +779,7 @@
         </div>
         <div class="page-subtitle">
             {% if report_mode == 'fields' %}
-            Все остатки по полям: товарные и нетоварные, с размерами.
+            Все остатки по полям: товарные, голый корень и нетоварные, с размерами.
             {% else %}
             Текущие остатки, резервы и свободный товар по всем полям и партиям.
             {% endif %}
@@ -1073,8 +1073,8 @@
 {% endif %}
 {% if report_mode == 'fields' %}
 <script type="application/json" id="stockRowPricesData">{{ stock_row_prices|tojson }}</script>
-<p class="d-none d-lg-block stock-fields-hint-desk no-print">Товарные и нетоварные, с размерами. Нажмите поле — откроются позиции. Excel выгружает этот вид.</p>
-<p class="stock-fields-hint no-print">Товарные и нетоварные. Поля по возрастанию — нажмите, чтобы увидеть растения и размеры.</p>
+<p class="d-none d-lg-block stock-fields-hint-desk no-print">Товарные, голый корень и нетоварные, с размерами. Нажмите поле — откроются позиции. Excel выгружает этот вид. Голый корень есть в выгрузке прайса, на сайте не показывается.</p>
+<p class="stock-fields-hint no-print">Товарные, голый корень и нетоварные. Поля по возрастанию — нажмите, чтобы увидеть растения и размеры.</p>
 <div class="stock-desk-shell table-responsive d-none d-lg-block">
     <table class="table table-sm table-hover table-1c table-stock bg-white mb-0" id="stockFieldsTable" data-price-mode="retail">
         <thead class="table-light">

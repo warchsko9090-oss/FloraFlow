@@ -32,10 +32,14 @@ SEEDLING_SEP = ' · '
 STAGE_NETOV = 'Нетов'
 STAGE_SAZHENCY = 'Товарный'
 STAGE_SAZHENCY_LEGACY = 'Саженцы'
+# Третья товарность: продаваемый мелкий без кома/контейнера (не на сайте, да в ERP/прайсе).
+STAGE_BARE_ROOT = 'Голый корень'
 # PDF остатков / Excel проектов и площадки: стадия всегда как «Саженцы».
 STAGE_SAZHENCY_EXPORT = 'Саженцы'
 # Подпись в UI менеджера (если в БД ещё лежит legacy «Саженцы»).
 STAGE_SAZHENCY_UI = 'Товарный'
+# Типовые промеры голого корня (создаются миграцией при отсутствии).
+DEFAULT_BARE_ROOT_GRADES = ('0-30', '30-40', '40-60')
 
 DEFAULT_CONTAINERS = (
     'C2', 'C3', 'C5', 'C7.5', 'C10', 'C15', 'C20', 'C25', 'C35', 'C50',
@@ -61,6 +65,62 @@ def is_bare_sazhency_name(name: str) -> bool:
     """Голый размер товарной стадии: «Товарный» или legacy «Саженцы»."""
     low = (name or '').strip().lower()
     return low in ('товарный', 'саженцы')
+
+
+def _bare_root_stage_token(token: str) -> bool:
+    """Ровно «Голый корень» / «ГК» (без промера в том же токене)."""
+    low = re.sub(r'[\s.·]+', '', (token or '').lower().replace('ё', 'е'))
+    return low in ('голыйкорень', 'гк')
+
+
+def is_bare_root_size_name(name: str) -> bool:
+    """Размер линейки «Голый корень · 0-30» (товарный склад, не витрина)."""
+    raw = (name or '').strip()
+    if not raw:
+        return False
+    if _bare_root_stage_token(raw):
+        return True
+    parts = [p.strip() for p in raw.split(SEEDLING_SEP) if p.strip()]
+    if parts and _bare_root_stage_token(parts[0]):
+        return True
+    # «Голый корень 0-30» без разделителя ·
+    low = raw.lower().replace('ё', 'е')
+    return low.startswith('голый корень ') or low.startswith('гк ')
+
+
+def format_bare_root_size(grade: str) -> str:
+    grade = normalize_grade(grade)
+    if not grade:
+        return STAGE_BARE_ROOT
+    return f'{STAGE_BARE_ROOT}{SEEDLING_SEP}{grade}'
+
+
+def get_or_create_bare_root_size(grade: str) -> Size:
+    return get_or_create_size_by_name(format_bare_root_size(grade))
+
+
+def ensure_bare_root_sizes() -> list[Size]:
+    """Гарантирует типовые размеры голого корня в справочнике."""
+    created = []
+    for grade in DEFAULT_BARE_ROOT_GRADES:
+        name = format_bare_root_size(grade)
+        existing = Size.query.filter_by(name=name).first()
+        if existing:
+            created.append(existing)
+            continue
+        size = Size(name=name)
+        db.session.add(size)
+        created.append(size)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        created = [
+            Size.query.filter_by(name=format_bare_root_size(g)).first()
+            for g in DEFAULT_BARE_ROOT_GRADES
+        ]
+        created = [s for s in created if s]
+    return created
 
 
 def _is_sazhency_stage_token(token: str) -> bool:
@@ -162,12 +222,12 @@ def stage_export_label(stage: str) -> str:
 
 
 def parse_seedling_size(name: str) -> Optional[dict]:
-    """Разбирает Size.name саженцевой линейки.
+    """Разбирает Size.name саженцевой линейки или голого корня.
 
     Returns:
-      None — не саженцевая линейка контейнеров.
-      dict: stage ('Нетов'|'Товарный'), container, grade (или None),
-            measured (bool), bare (bool для голых «Товарный»/«Нетов» / legacy «Саженцы»).
+      None — обычный полевой размер (100-120 и т.п.).
+      dict: stage ('Нетов'|'Товарный'|'Голый корень'), container, grade,
+            measured, bare (голые «Товарный»/«Нетов» без контейнера).
     """
     raw = (name or '').strip()
     if not raw:
@@ -189,8 +249,38 @@ def parse_seedling_size(name: str) -> Optional[dict]:
             'measured': False,
             'bare': True,
         }
+    if _bare_root_stage_token(raw):
+        return {
+            'stage': STAGE_BARE_ROOT,
+            'container': None,
+            'grade': None,
+            'measured': False,
+            'bare': False,
+        }
 
     parts = [p.strip() for p in raw.split(SEEDLING_SEP) if p.strip()]
+    if parts and _bare_root_stage_token(parts[0]):
+        grade = normalize_grade(SEEDLING_SEP.join(parts[1:])) if len(parts) >= 2 else None
+        return {
+            'stage': STAGE_BARE_ROOT,
+            'container': None,
+            'grade': grade or None,
+            'measured': bool(grade),
+            'bare': False,
+        }
+    # Без « · »: «Голый корень 0-30»
+    low_full = raw.lower().replace('ё', 'е')
+    for prefix in ('голый корень ', 'гк '):
+        if low_full.startswith(prefix):
+            grade = normalize_grade(raw[len(prefix):])
+            return {
+                'stage': STAGE_BARE_ROOT,
+                'container': None,
+                'grade': grade or None,
+                'measured': bool(grade),
+                'bare': False,
+            }
+
     if len(parts) < 2:
         return None
 
@@ -232,13 +322,20 @@ def format_seedling_size(stage: str, container: str, grade: str | None = None) -
 
 
 def is_seedling_size_name(name: str) -> bool:
-    """Любой размер саженцевого контура (вкл. голые «Саженцы»/«Нетов»)."""
-    return parse_seedling_size(name) is not None
+    """Саженцевый контур Нетов/Товарный (без «Голый корень»)."""
+    parsed = parse_seedling_size(name)
+    if not parsed:
+        return False
+    return parsed.get('stage') != STAGE_BARE_ROOT
 
 
 def is_measured_seedling_size_name(name: str) -> bool:
     parsed = parse_seedling_size(name)
-    return bool(parsed and parsed.get('measured'))
+    return bool(
+        parsed
+        and parsed.get('measured')
+        and parsed.get('stage') == STAGE_SAZHENCY
+    )
 
 
 def is_product_seedling_size_name(name: str) -> bool:
@@ -246,9 +343,12 @@ def is_product_seedling_size_name(name: str) -> bool:
 
     Примеры товарных: «Саженцы · C5», «Саженцы · C5 · 20-30».
     Нетоварные: «Нетов · C5», голый «Саженцы» / «Нетов» без контейнера.
+    Голый корень — отдельная товарность, сюда не входит.
     """
     parsed = parse_seedling_size(name)
     if not parsed or parsed.get('bare'):
+        return False
+    if parsed.get('stage') == STAGE_BARE_ROOT:
         return False
     return bool(
         parsed.get('stage') == STAGE_SAZHENCY
@@ -257,13 +357,16 @@ def is_product_seedling_size_name(name: str) -> bool:
 
 
 def is_excluded_from_product_stock(name: str) -> bool:
-    """Что скрываем из «товарных» остатков/обычного прайса и витрины.
+    """Что скрываем из «товарных» остатков и выгрузки прайса ERP.
 
-    Товарные саженцы (Саженцы · контейнер [· промер]) — НЕ исключаем.
+    Товарные саженцы и голый корень — НЕ исключаем.
     Нетов (в т.ч. «Нетов · C5», «Нетов (без контейнера)») — всегда исключаем.
+    Витрину сайта см. is_excluded_from_shop().
     """
     raw = (name or '').strip()
     if not raw:
+        return False
+    if is_bare_root_size_name(raw):
         return False
     if is_bare_netov_name(raw) or is_bare_sazhency_name(raw):
         return True
@@ -274,9 +377,22 @@ def is_excluded_from_product_stock(name: str) -> bool:
     parsed = parse_seedling_size(raw)
     if not parsed:
         return False
+    if parsed.get('stage') == STAGE_BARE_ROOT:
+        return False
     if is_product_seedling_size_name(raw):
         return False
     return True
+
+
+def is_excluded_from_shop(name: str) -> bool:
+    """Скрыто с сайта / витрины / PDF товарных остатков на сайте.
+
+    Нетов + голый корень. Товарные саженцы и полевые размеры — видны
+    (с учётом карточки витрины).
+    """
+    if is_bare_root_size_name(name):
+        return True
+    return is_excluded_from_product_stock(name)
 
 def allows_order_deficit(size_name: str) -> bool:
     """Минус в заказе разрешён только для размеров-саженцев."""

@@ -480,9 +480,13 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
             group['rows'].sort(key=lambda x: (natural_key(x['size']), x['fields_str']))
         sorted_groups.append({'name': p_name, 'data': group})
 
-    # Товарный режим: сначала грунт, затем товарные саженцы (Саженцы + контейнер).
+    # Товарный режим: грунт → голый корень → товарные саженцы → нетоварные.
     if report_mode == 'product':
-        from app.seedlings import is_product_seedling_size_name, is_seedling_size_name
+        from app.seedlings import (
+            is_bare_root_size_name,
+            is_product_seedling_size_name,
+            is_seedling_size_name,
+        )
 
         def _empty_totals():
             return {'sum': 0, 'free_sum': 0, 'income': 0, 'reserved': 0, 'free': 0, 'shipped': 0, 'qty': 0}
@@ -523,15 +527,19 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
             }
 
         ground_groups = []
+        bare_root_groups = []
         container_groups = []
         raw_groups = []
         for g in sorted_groups:
             ground_rows = []
+            bare_root_rows = []
             container_rows = []
             raw_rows = []
             for row in g['data']['rows']:
                 sn = row.get('size') or ''
-                if is_product_seedling_size_name(sn):
+                if is_bare_root_size_name(sn):
+                    bare_root_rows.append(row)
+                elif is_product_seedling_size_name(sn):
                     container_rows.append(row)
                 elif is_seedling_size_name(sn):
                     raw_rows.append(row)
@@ -540,6 +548,8 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
             latin = g['data'].get('latin_name') or ''
             if ground_rows:
                 ground_groups.append(_recalc_group(g['name'], latin, ground_rows))
+            if bare_root_rows:
+                bare_root_groups.append(_recalc_group(g['name'], latin, bare_root_rows))
             if raw_rows:
                 raw_groups.append(_recalc_group(g['name'], latin, raw_rows))
             if container_rows:
@@ -549,6 +559,14 @@ def build_stock_report_data(report_mode, end_date, selected_fields=None, selecte
         if ground_groups:
             sorted_groups.append(_section_marker('ground', 'Растения в грунте', ground_groups))
             sorted_groups.extend(ground_groups)
+        if bare_root_groups:
+            sorted_groups.append(_section_marker(
+                'bare_root',
+                'Голый корень',
+                bare_root_groups,
+                print_include=True,
+            ))
+            sorted_groups.extend(bare_root_groups)
         if container_groups:
             sorted_groups.append(_section_marker('containers', 'Товарные саженцы', container_groups))
             sorted_groups.extend(container_groups)

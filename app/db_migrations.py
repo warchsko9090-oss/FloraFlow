@@ -232,6 +232,20 @@ def ensure_legacy_schema(logger=None) -> None:
     _extend_purchase_deadlines(logger)
     _ensure_expense_budget_lines(logger)
     _backfill_order_tag_sort_order(logger)
+    _ensure_bare_root_sizes(logger)
+
+
+def _ensure_bare_root_sizes(logger=None) -> None:
+    """Типовые размеры «Голый корень · 0-30/30-40/40-60» в справочнике Size."""
+    try:
+        from app.seedlings import ensure_bare_root_sizes
+        rows = ensure_bare_root_sizes()
+        if logger and rows:
+            logger.info('legacy schema: bare-root sizes ready (%s)', len(rows))
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: bare-root sizes skipped — %s', exc)
+        db.session.rollback()
 
 
 def _backfill_order_tag_sort_order(logger=None) -> None:
@@ -374,6 +388,17 @@ def _publish_invoice_drafts(logger=None) -> None:
 
 
 _CHANGELOG_RELEASES = (
+    {
+        'version': 'v1.5.0',
+        'date': '2026-11-06',
+        'content': (
+            'Сделано:\n'
+            'Третья товарность — «Голый корень»: размеры вида «Голый корень · 0-30 / 30-40 / 40-60». '
+            'В остатках ERP и в выгрузке прайса из программы видны, на сайте и в PDF витрины — нет. '
+            'Поступление как у обычных растений: выбираете культуру и размер голого корня.\n'
+            'В товарном отчёте остатков отдельный блок «Голый корень» между грунтом и товарными саженцами.'
+        ),
+    },
     {
         'version': 'v1.4.3',
         'date': '2026-09-29',
