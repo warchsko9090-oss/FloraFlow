@@ -135,6 +135,58 @@ def ensure_legacy_line(expense: Expense) -> None:
     ))
 
 
+def expand_expenses_for_list(expenses: list) -> list[dict]:
+    """Один расход с N статьями → N строк журнала (для UI).
+
+    У каждой строки: expense, line_item, line_amount, is_split, part/parts,
+    split_tag, show_actions (кнопки только на первой части).
+    """
+    rows: list[dict] = []
+    for e in expenses or []:
+        lines = sorted(
+            list(getattr(e, 'budget_lines', None) or []),
+            key=lambda x: (x.sort_order or 0, x.id or 0),
+        )
+        if len(lines) > 1:
+            n = len(lines)
+            for i, ln in enumerate(lines):
+                rows.append({
+                    'expense': e,
+                    'line': ln,
+                    'line_item': ln.item,
+                    'line_amount': ln.amount,
+                    'is_split': True,
+                    'part': i + 1,
+                    'parts': n,
+                    'split_tag': f'Σ#{e.id}',
+                    'show_actions': i == 0,
+                })
+        else:
+            ln = lines[0] if lines else None
+            rows.append({
+                'expense': e,
+                'line': ln,
+                'line_item': (ln.item if ln and ln.item else e.item),
+                'line_amount': (ln.amount if ln is not None else e.amount),
+                'is_split': False,
+                'part': 1,
+                'parts': 1,
+                'split_tag': '',
+                'show_actions': True,
+            })
+    return rows
+
+
+def multi_split_expense_ids_subquery():
+    """expense_id с более чем одной строкой разбивки."""
+    from sqlalchemy import func
+    return (
+        db.session.query(ExpenseBudgetLine.expense_id)
+        .group_by(ExpenseBudgetLine.expense_id)
+        .having(func.count(ExpenseBudgetLine.id) > 1)
+    )
+
+
 def budget_fact_rows_for_year(year: int):
     """Факт бюджета по статьям/месяцам с учётом разбивки.
 

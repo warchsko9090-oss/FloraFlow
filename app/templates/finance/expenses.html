@@ -48,6 +48,15 @@
         .exp-filter-fold[open] > form > div:has(> input),
         .exp-filter-fold[open] > form > div:has(> select) { flex: 1 1 100%; }
     }
+    /* Разбитые расходы: общий мягкий фон + тег связки */
+    tr.exp-split-row > td { background-color: #eef6f1 !important; }
+    .exp-split-card { background-color: #eef6f1; border: 1px solid #d7e3d9 !important; }
+    .exp-split-tag {
+        display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+        padding: 2px 7px; border-radius: 6px; background: #d9ebe0; color: #1b5e20;
+        white-space: nowrap;
+    }
+    .exp-split-part { font-size: 10px; color: #5a7a62; }
 </style>
 <div class="page-header">
     <div>
@@ -238,6 +247,7 @@
             <details class="exp-fold exp-filter-fold" id="expFilterFold" open>
             <summary><span><i class="fas fa-sliders-h me-1"></i> Фильтры</span></summary>
             <form method="GET" class="d-flex gap-2 flex-wrap align-items-center" id="filterForm" hx-boost="false">
+                <input type="hidden" name="tab" value="expenses">
                 <div>
                     <input type="date" name="start_date" value="{{ filters.start or '' }}" class="form-control form-control-sm">
                 </div>
@@ -260,6 +270,13 @@
                         <option value="cash" {% if filters.type == 'cash' %}selected{% endif %}>Нал</option>
                     </select>
                 </div>
+                <div>
+                    <select name="filter_split" class="form-select form-select-sm" title="Разбивка по статьям">
+                        <option value="" {% if not filters.split %}selected{% endif %}>Все расходы</option>
+                        <option value="split" {% if filters.split == 'split' %}selected{% endif %}>Только разбивки</option>
+                        <option value="single" {% if filters.split == 'single' %}selected{% endif %}>Без разбивки</option>
+                    </select>
+                </div>
                 <button class="btn btn-primary btn-sm">Поиск</button>
                 <a href="{{ url_for('finance.expenses') }}" class="btn btn-outline-secondary btn-sm">Сброс</a>
             </form>
@@ -277,10 +294,11 @@
                     <tr>
                         <th class="text-muted small">Ввод</th>
                         <th>Дата платежа</th>
+                        <th>Метка</th>
                         <th>Код</th>
                         <th>Статья</th>
                         <th>Сотрудник</th>
-                        <th>Проект</th> 
+                        <th>Проект</th>
                         <th>Описание</th>
                         <th>Тип</th>
                         <th class="text-end">Сумма</th>
@@ -288,24 +306,25 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for e in expenses %}
-                    <tr>
-                        <td class="text-muted small">{{ e.created_at.strftime('%d.%m %H:%M') }}</td>
-                        <td>{{ e.date.strftime('%d.%m.%Y') }}</td>
-                        <td>{{ e.item.code }}{% if e.budget_lines and e.budget_lines|length > 1 %}<span class="badge bg-secondary ms-1">{{ e.budget_lines|length }}</span>{% endif %}</td>
+                    {% for row in expense_rows %}
+                    {% set e = row.expense %}
+                    {% set it = row.line_item %}
+                    <tr class="{% if row.is_split %}exp-split-row{% endif %}">
+                        <td class="text-muted small">{% if row.show_actions %}{{ e.created_at.strftime('%d.%m %H:%M') }}{% endif %}</td>
+                        <td>{% if row.show_actions %}{{ e.date.strftime('%d.%m.%Y') }}{% endif %}</td>
                         <td>
-                            {% if e.budget_lines and e.budget_lines|length > 1 %}
-                              {% for ln in e.budget_lines %}
-                              <div class="small{% if not loop.first %} text-muted{% endif %}">{{ ln.item.name if ln.item else '—' }} <span class="text-muted">({{ ln.amount|money }})</span></div>
-                              {% endfor %}
+                            {% if row.is_split %}
+                            <span class="exp-split-tag" title="Части одного расхода #{{ e.id }}, всего {{ e.amount|money }}">{{ row.split_tag }}</span>
+                            <div class="exp-split-part">{{ row.part }}/{{ row.parts }} · всего {{ e.amount|money }}</div>
                             {% else %}
-                              {{ e.item.name }}
+                            <span class="text-muted small">—</span>
                             {% endif %}
                         </td>
-                        <td class="text-primary fw-bold small">{{ e.employee.name if e.employee else '' }}</td>
-                        
-                        <!-- ЯЧЕЙКА ПРИВЯЗКИ -->
+                        <td>{{ it.code if it else (e.item.code if e.item else '') }}</td>
+                        <td>{{ it.name if it else (e.item.name if e.item else '—') }}</td>
+                        <td class="text-primary fw-bold small">{% if row.show_actions %}{{ e.employee.name if e.employee else '' }}{% endif %}</td>
                         <td>
+                            {% if row.show_actions %}
                             {% if e.project_id %}
                                 <a href="{{ url_for('finance.project_detail', project_id=e.project_id) }}" class="badge bg-primary text-decoration-none d-block mb-1">
                                     <i class="fas fa-seedling"></i> {{ e.project_link.name|truncate(10) }}
@@ -319,10 +338,11 @@
                             {% if not e.project_id and not e.order_id %}
                                 <span class="text-muted small">-</span>
                             {% endif %}
+                            {% endif %}
                         </td>
-
-                        <td>{{ e.description }}</td>
+                        <td>{% if row.show_actions %}{{ e.description }}{% endif %}</td>
                         <td>
+                            {% if row.show_actions %}
                             {% if e.payment_type == 'cash' %}
                             <span class="badge bg-warning text-dark">Нал</span>
                             {% elif e.payment_type == 'barter' %}
@@ -330,9 +350,11 @@
                             {% else %}
                             <span class="badge bg-info text-dark">Безнал</span>
                             {% endif %}
+                            {% endif %}
                         </td>
-                        <td class="text-end fw-bold">{{ e.amount|money }}</td>
+                        <td class="text-end fw-bold">{{ row.line_amount|money }}</td>
                         <td class="text-end text-nowrap">
+                            {% if row.show_actions %}
                             {% if e.invoice_id %}
                             <a href="{{ url_for('finance.invoice_download', inv_id=e.invoice_id) }}" class="btn btn-link text-secondary p-0 btn-sm me-2" title="Скачать счёт"><i class="fas fa-file-invoice"></i></a>
                             {% endif %}
@@ -356,14 +378,17 @@
                                     data-barter-order="{{ e.barter_order_id or '' }}"
                                     data-invoice="{{ e.invoice_id or '' }}"
                                     title="Редактировать"><i class="fas fa-pen"></i></button>
-                            <form method="POST" class="d-inline" onsubmit="return confirm('Удалить этот расход?');">
+                            <form method="POST" class="d-inline" onsubmit="return confirm('Удалить этот расход целиком (все части разбивки)?');">
                                 <input type="hidden" name="delete_expense" value="1">
                                 <input type="hidden" name="expense_id" value="{{ e.id }}">
                                 <button class="btn btn-link text-danger p-0 btn-sm"><i class="fas fa-times"></i></button>
                             </form>
                             {% endif %}
+                            {% endif %}
                         </td>
                     </tr>
+                    {% else %}
+                    <tr><td colspan="11" class="text-center text-muted py-4">Расходов нет</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -371,30 +396,38 @@
 
         <!-- МОБИЛЬНАЯ ВЕРСИЯ (КАРТОЧКИ) -->
         <div class="d-md-none mt-3">
-            {% for e in expenses %}
-            <div class="card shadow-sm mb-3 border-0">
+            {% for row in expense_rows %}
+            {% set e = row.expense %}
+            {% set it = row.line_item %}
+            <div class="card shadow-sm mb-3 border-0 {% if row.is_split %}exp-split-card{% endif %}">
                 <div class="card-body p-3">
                     <div class="d-flex justify-content-between align-items-center mb-2">
-                        <span class="badge {% if e.payment_type == 'cash' %}bg-warning text-dark{% elif e.payment_type == 'barter' %}bg-secondary text-white{% else %}bg-info text-dark{% endif %}">
-                            {% if e.payment_type == 'cash' %}Нал{% elif e.payment_type == 'barter' %}Взаимозачет{% else %}Безнал{% endif %}
-                        </span>
-                        <span class="text-muted small">{{ e.date.strftime('%d.%m.%Y') }}</span>
+                        <div class="d-flex gap-1 flex-wrap align-items-center">
+                            {% if row.is_split %}
+                            <span class="exp-split-tag">{{ row.split_tag }} · {{ row.part }}/{{ row.parts }}</span>
+                            {% endif %}
+                            {% if row.show_actions %}
+                            <span class="badge {% if e.payment_type == 'cash' %}bg-warning text-dark{% elif e.payment_type == 'barter' %}bg-secondary text-white{% else %}bg-info text-dark{% endif %}">
+                                {% if e.payment_type == 'cash' %}Нал{% elif e.payment_type == 'barter' %}Взаимозачет{% else %}Безнал{% endif %}
+                            </span>
+                            {% endif %}
+                        </div>
+                        <span class="text-muted small">{% if row.show_actions %}{{ e.date.strftime('%d.%m.%Y') }}{% endif %}</span>
                     </div>
-                    
-                    <div class="fw-bold fs-5 text-danger mb-1">- {{ e.amount|money }}</div>
-                    {% if e.budget_lines and e.budget_lines|length > 1 %}
-                    <div class="fw-bold text-dark">Разбивка ({{ e.budget_lines|length }})</div>
-                    {% for ln in e.budget_lines %}
-                    <div class="small">{{ ln.item.name if ln.item else '—' }} — {{ ln.amount|money }}</div>
-                    {% endfor %}
-                    {% else %}
-                    <div class="fw-bold text-dark">{{ e.item.name }} <span class="text-muted small">({{ e.item.code }})</span></div>
+
+                    <div class="fw-bold fs-5 text-danger mb-1">- {{ row.line_amount|money }}</div>
+                    {% if row.is_split %}
+                    <div class="small text-muted mb-1">из {{ e.amount|money }}</div>
                     {% endif %}
-                    
-                    {% if e.employee %}
+                    <div class="fw-bold text-dark">{{ it.name if it else (e.item.name if e.item else '—') }}
+                        <span class="text-muted small">({{ it.code if it else (e.item.code if e.item else '') }})</span>
+                    </div>
+
+                    {% if row.show_actions and e.employee %}
                     <div class="small text-primary mt-1"><i class="fas fa-user-tie"></i> {{ e.employee.name }}</div>
                     {% endif %}
-                    
+
+                    {% if row.show_actions %}
                     <div class="mt-2">
                         {% if e.project_id %}
                             <a href="{{ url_for('finance.project_detail', project_id=e.project_id) }}" class="badge bg-primary text-decoration-none mb-1 d-inline-block">
@@ -407,12 +440,12 @@
                             </a>
                         {% endif %}
                     </div>
-
                     {% if e.description %}
                     <div class="small text-muted mt-2 border-top pt-2">{{ e.description }}</div>
                     {% endif %}
-                    
-                    {% if e.invoice_id or current_user.role == 'admin' %}
+                    {% endif %}
+
+                    {% if row.show_actions and (e.invoice_id or current_user.role == 'admin') %}
                     <div class="text-end mt-2 pt-2 border-top d-flex justify-content-end gap-2">
                         {% if e.invoice_id %}
                         <a href="{{ url_for('finance.invoice_download', inv_id=e.invoice_id) }}" class="btn btn-outline-secondary btn-sm py-0 px-2">
@@ -440,7 +473,7 @@
                                 data-invoice="{{ e.invoice_id or '' }}">
                             <i class="fas fa-pen"></i> Редактировать
                         </button>
-                        <form method="POST" onsubmit="return confirm('Удалить этот расход?');" class="m-0">
+                        <form method="POST" onsubmit="return confirm('Удалить этот расход целиком (все части разбивки)?');" class="m-0">
                             <input type="hidden" name="delete_expense" value="1">
                             <input type="hidden" name="expense_id" value="{{ e.id }}">
                             <button class="btn btn-outline-danger btn-sm py-0 px-2"><i class="fas fa-trash"></i> Удалить</button>

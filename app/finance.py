@@ -95,6 +95,9 @@ def expenses():
     end_date = request.args.get('end_date')
     f_item = request.args.get('filter_item')
     f_type = request.args.get('filter_type')
+    f_split = (request.args.get('filter_split') or '').strip().lower()
+    if f_split not in ('split', 'single'):
+        f_split = ''
     export = request.args.get('export')
 
     # Подготовка данных из счета для быстрого создания расхода
@@ -209,7 +212,14 @@ def expenses():
             )
         if f_type:
             query = query.filter(Expense.payment_type == f_type)
-        
+        if f_split:
+            from app.expense_splits import multi_split_expense_ids_subquery
+            multi_ids = multi_split_expense_ids_subquery()
+            if f_split == 'split':
+                query = query.filter(Expense.id.in_(multi_ids))
+            elif f_split == 'single':
+                query = query.filter(~Expense.id.in_(multi_ids))
+
         from sqlalchemy.orm import joinedload, selectinload
         expenses_list = (
             query.options(
@@ -575,9 +585,13 @@ def expenses():
     # Загружаем проекты и их бюджетные статьи (для JS)
     active_projects = Project.query.filter_by(status='active').order_by(Project.name).all()
 
+    from app.expense_splits import expand_expenses_for_list
+    expense_rows = expand_expenses_for_list(expenses_list) if tab == 'expenses' else []
+
     return render_template('finance/expenses.html', 
                            active_tab=tab,
-                           expenses=expenses_list, 
+                           expenses=expenses_list,
+                           expense_rows=expense_rows,
                            invoices=invoices,
                            invoice_summary=invoice_summary,
                            budget_items=sorted(BudgetItem.query.all(), key=natural_key),
@@ -587,7 +601,10 @@ def expenses():
                            active_projects=active_projects, 
                            today=msk_today(), 
                            prefill_invoice=prefill_invoice,
-                           filters={'start': start_date, 'end': end_date, 'item': f_item, 'type': f_type})
+                           filters={
+                               'start': start_date, 'end': end_date,
+                               'item': f_item, 'type': f_type, 'split': f_split,
+                           })
 
 
 def _parse_gap_date(raw, fallback: date) -> date:
