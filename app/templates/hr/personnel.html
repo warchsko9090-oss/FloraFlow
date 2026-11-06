@@ -100,8 +100,7 @@
         {% if active_tab in ['summary', 'adjustments'] %}
         <div class="dropdown hr-emp-filter">
             <button class="btn btn-light btn-sm dropdown-toggle border" type="button"
-                    data-bs-toggle="dropdown" data-bs-auto-close="outside"
-                    data-bs-popper-config='{"strategy":"fixed"}'>
+                    data-bs-toggle="dropdown" data-bs-auto-close="outside">
                 Сотрудники{% if filter_emp_ids %} ({{ filter_emp_ids|length }}){% endif %}
             </button>
             <div class="dropdown-menu dropdown-check-list shadow">

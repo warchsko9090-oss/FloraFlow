@@ -697,9 +697,11 @@
         box-shadow: var(--shadow-xs);
         margin-bottom: 1.25rem;
         /* backdrop-filter создаёт stacking context — без z-index выпадающие
-           фильтры уходят под KPI-карточки ниже (сводка кадров и др.). */
+           фильтры уходят под KPI-карточки ниже (сводка кадров и др.).
+           overflow:visible — меню сотрудников не обрезается панелью. */
         position: relative;
         z-index: 20;
+        overflow: visible;
     }
     .filter-panel form {
         display: flex; flex-wrap: wrap;
