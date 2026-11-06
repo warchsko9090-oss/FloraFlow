@@ -457,7 +457,7 @@ def _collect_kpis(user, today):
     prev_first, prev_last = _prev_month_bounds(today)
 
     # ----- Поступления денег за месяц (admin/executive/user) -----
-    # Логика: сумма всех Payment.amount за календарный месяц.
+    # Payment − агентские (_cash_in_for): агентскую долю на счёте не видим.
     if is_boss or is_manager:
         try:
             cur = _cash_in_for(first_day, last_day)
@@ -709,7 +709,13 @@ def _grouped_month_sums(rows):
 
 
 def _plan_fact_for_period(period):
-    """План бюджета и план поступлений против факта по выбранным месяцам."""
+    """План бюджета и план поступлений против факта по выбранным месяцам.
+
+    Факт поступлений = оплаты клиентов − агентские (как Cashflow / _month_payments):
+    агентскую долю мы не видим на счёте.
+    """
+    from app.finance import _month_payments
+
     year = period['year']
     months = period['months']
     plan_out = _grouped_month_sums(
@@ -732,16 +738,9 @@ def _plan_fact_for_period(period):
         .group_by(actual_month)
         .all()
     )
-    fact_in = _grouped_month_sums(
-        db.session.query(func.extract('month', Payment.date), func.sum(Payment.amount))
-        .filter(
-            func.extract('year', Payment.date) == year,
-            func.extract('month', Payment.date).in_(months),
-            Payment.cash_inflow_filter(),
-        )
-        .group_by(func.extract('month', Payment.date))
-        .all()
-    )
+    # Единый источник с финпланом: Payment − агентские по отгрузке
+    net_in = _month_payments(year)
+    fact_in = {m: _safe_float(net_in.get(m, 0)) for m in range(1, 13)}
     series = []
     for m in months:
         series.append({

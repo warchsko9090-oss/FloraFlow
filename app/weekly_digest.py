@@ -183,14 +183,8 @@ def _cashflow_month_progress(monday, sunday, plans):
         start = date(year, month, 1)
         month_end = date(year, month, calendar.monthrange(year, month)[1])
         end = sunday if sunday < month_end else month_end
-        fact = _safe_float(
-            db.session.query(func.coalesce(func.sum(Payment.amount), 0))
-            .filter(
-                Payment.date >= start,
-                Payment.date <= end,
-                Payment.cash_inflow_filter(),
-            ).scalar() or 0
-        )
+        from app.main import _cash_in_for
+        fact = _safe_float(_cash_in_for(start, end))
         lines.append({
             'year': year,
             'month': month,
@@ -239,14 +233,8 @@ def _shipment_totals(start, end):
 
 
 def _collect_week_metrics(monday, sunday):
-    cash_in = _safe_float(
-        db.session.query(func.coalesce(func.sum(Payment.amount), 0))
-        .filter(
-            Payment.date >= monday,
-            Payment.date <= sunday,
-            Payment.cash_inflow_filter(),
-        ).scalar() or 0
-    )
+    from app.main import _cash_in_for
+    cash_in = _safe_float(_cash_in_for(monday, sunday))
     expenses = _safe_float(
         db.session.query(func.coalesce(func.sum(Expense.amount), 0))
         .filter(Expense.date >= monday, Expense.date <= sunday).scalar() or 0

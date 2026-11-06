@@ -351,25 +351,48 @@ def tool_get_expenses(category_name=None, month=None, year=None, description_con
 
 
 def tool_get_cash_in(month=None, year=None, client_name=None):
-    """Поступления денег за период (Payment по Payment.date, без writeoff)."""
+    """Поступления денег за период: Payment − агентские (без writeoff)."""
     first, last = _parse_period(month=month, year=year)
-    q = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).select_from(Payment)
-    q = q.filter(Payment.cash_inflow_filter())
     if client_name:
         client, cands = _find_one(Client, client_name)
         if not client:
             if cands: return _ambig('клиентов', cands)
             return _err(f'Клиент "{client_name}" не найден')
+        q = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).select_from(Payment)
+        q = q.filter(Payment.cash_inflow_filter())
         q = q.join(Order, Payment.order_id == Order.id).filter(Order.client_id == client.id)
-    if first: q = q.filter(Payment.date >= first)
-    if last:  q = q.filter(Payment.date <= last)
-    total = _safe_float(q.scalar() or 0)
+        if first: q = q.filter(Payment.date >= first)
+        if last:  q = q.filter(Payment.date <= last)
+        pay = _safe_float(q.scalar() or 0)
+        from app.finance import _agency_unit_sql
+        agency_sql = _agency_unit_sql()
+        aq = (
+            db.session.query(func.coalesce(func.sum(OrderItem.shipped_quantity * agency_sql), 0))
+            .join(Order, OrderItem.order_id == Order.id)
+            .filter(
+                Order.client_id == client.id,
+                Order.status != 'canceled',
+                Order.is_deleted == False,
+                Order.agency_enabled.is_(True),
+            )
+        )
+        if first: aq = aq.filter(Order.date >= first)
+        if last:  aq = aq.filter(Order.date <= last)
+        total = pay - _safe_float(aq.scalar() or 0)
+    else:
+        from app.main import _cash_in_for
+        if not first or not last:
+            from app.utils import msk_today
+            today = msk_today()
+            first = first or today.replace(day=1)
+            last = last or today
+        total = _safe_float(_cash_in_for(first, last))
 
     period_label = ''
     if first and last:
         period_label = first.strftime('%m.%Y') if first == last.replace(day=1) else f'{first}–{last}'
     return _ok(
-        f'Поступило: {_money(total)}'
+        f'Поступило (наш ДС, минус агентские): {_money(total)}'
         + (f' за {period_label}' if period_label else '')
         + (f' от клиента «{client_name}»' if client_name else ''),
         data={'total': round(total, 2), 'period_from': first.isoformat() if first else None,

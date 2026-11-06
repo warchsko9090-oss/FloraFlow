@@ -5,7 +5,8 @@
 
 План — CashflowPlan на этот месяц (тот же, что на вкладке кешфлоу).
 Факт — оплаты по заказам (Payment) с начала месяца по сегодня,
-без списаний долга (writeoff). Нал, безнал и бартер входят в факт.
+без списаний долга (writeoff), минус агентские (их на счёте нет).
+Нал, безнал и бартер входят в факт.
 
 Перенос недовыполнения задаётся вручную в админке и живёт отдельно:
 в CashflowPlan и на экране кешфлоу он не пишется, виден только в этом сообщении.
@@ -193,13 +194,19 @@ def month_snapshot(as_of: date | None = None) -> dict:
     ).group_by(func.coalesce(Payment.payment_type, 'cashless')).all()
 
     by_type = []
-    fact = Decimal(0)
+    gross = Decimal(0)
     for ptype, amount in rows:
         amt = _dec(amount)
         if amt == 0:
             continue
-        fact += amt
+        gross += amt
         by_type.append((str(ptype or 'cashless'), amt))
+
+    from app.main import _cash_in_for
+    fact = _dec(_cash_in_for(start, as_of))
+    agency = gross - fact
+    if agency > 0:
+        by_type.append(('agency', -agency))
 
     def _sort_key(item):
         name = item[0]

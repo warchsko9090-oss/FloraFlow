@@ -246,7 +246,7 @@
         {% if analytics.show_revenue_chart %}
         <div class="chart-card">
             <h6>Поступления: план и факт</h6>
-            <div class="chart-sub">План — CashflowPlan, факт — платежи клиентов · {{ analytics.period.label }}</div>
+            <div class="chart-sub">План — CashflowPlan, факт — оплаты минус агентские · {{ analytics.period.label }}</div>
             <div class="chart-box">
                 <canvas id="chartRevenue"></canvas>
             </div>
