@@ -521,6 +521,15 @@
     const chatBtn = inv.has_file && (can || isPlan)
       ? `<button class="btn btn-quiet" type="button" id="btnOpen">Счёт в чат</button>`
       : '';
+    // Недоплата/переплата: кнопку держим на карточке, не внизу «Ещё».
+    const canClearPlan = !!(
+      inv.can_clear
+      || (isPlan && factPaid > 0 && inv.status !== 'paid')
+    );
+    const clearPlanBtn = (can && canClearPlan)
+      ? `<button class="btn btn-ghost" type="button" id="btnClearPlan">Убрать из плана</button>
+         <p class="hint">Уйдёт из ТГ и плана недели. Расход ${money(factPaid)} в базе останется.</p>`
+      : '';
     let editPanel = '';
     if (can) {
       editPanel = `
@@ -563,10 +572,7 @@
                   <input id="fAttach" class="file-proxy" type="file" accept="application/pdf,image/*,.pdf,.jpg,.jpeg,.png,.webp,.heic" data-replace="${inv.has_file ? '1' : '0'}">
                 </label>
               </div>
-              ${inv.can_clear
-                ? `<button class="btn btn-ghost" type="button" id="btnClearPlan">Убрать из плана</button>
-                   <p class="hint">Недоплата или переплата: уйдёт из ТГ и плана недели, расход в базе останется.</p>`
-                : '<button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>'}`
+              ${canClearPlan ? '' : '<button class="btn btn-ghost" type="button" id="btnDrop">Удалить</button>'}`
             : ''}
         </div>
       `;
@@ -597,6 +603,7 @@
         ${payHint}
         ${downloadBtn}
         ${payPanel}
+        ${clearPlanBtn}
         ${editPanel}
         ${isPlan ? '' : lines}
       </div>
