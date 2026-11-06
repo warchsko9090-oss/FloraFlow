@@ -312,6 +312,12 @@ def personnel():
                     target_year=selected_year
                 )
                 db.session.add(ex)
+                db.session.flush()
+                try:
+                    from app.expense_splits import apply_budget_lines, money2
+                    apply_budget_lines(ex, [{'budget_item_id': b_item_id, 'amount': money2(amount)}])
+                except Exception:
+                    current_app.logger.exception('expense split line for individual pay')
                 db.session.commit()
                 try:
                     from app.expense_chat import reconcile_payroll_for_month
@@ -445,7 +451,19 @@ def personnel():
                     target_year=selected_year
                 )
                 db.session.add(ex_brig)
-                
+
+            db.session.flush()
+            try:
+                from app.expense_splits import apply_budget_lines, money2
+                for pending in db.session.new:
+                    if isinstance(pending, Expense) and not pending.budget_lines:
+                        apply_budget_lines(
+                            pending,
+                            [{'budget_item_id': pending.budget_item_id, 'amount': money2(pending.amount)}],
+                        )
+            except Exception:
+                current_app.logger.exception('expense split lines for bulk pay')
+
             db.session.commit()
             try:
                 from app.expense_chat import reconcile_payroll_for_month

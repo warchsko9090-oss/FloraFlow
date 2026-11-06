@@ -354,17 +354,18 @@
                                         {% endif %}
                                         {% if ce.amount %}
                                         <form hx-post="/api/expenses/chat/{{ ce.id }}/import" hx-target="#card-{{ card.id }}" hx-swap="outerHTML swap:0.3s" class="m-0">
-                                            <div class="d-flex gap-2 align-items-center mb-2">
-                                                <label class="small fw-bold text-muted mb-0" for="ce-item-{{ ce.id }}">Статья:</label>
-                                                <select name="budget_item_id" id="ce-item-{{ ce.id }}" class="form-select form-select-sm flex-grow-1" required>
-                                                    <option value="">— выбрать —</option>
-                                                    {% for item in all_budget_items or [] %}
-                                                    <option value="{{ item.id }}" {% if ce.suggested_budget_item_id and item.id == ce.suggested_budget_item_id %}selected{% endif %}>
-                                                        {% if item.code %}{{ item.code }} · {% endif %}{{ item.name }}
-                                                    </option>
-                                                    {% endfor %}
-                                                </select>
-                                            </div>
+                                            <input type="hidden" name="amount" id="ce-amt-{{ ce.id }}" value="{{ '%.2f'|format(ce.amount|float) }}">
+                                            {% set prefix = 'ceSplit' ~ ce.id %}
+                                            {% set items = all_budget_items or [] %}
+                                            {% set total_input_selector = '#ce-amt-' ~ ce.id %}
+                                            {% set suggested_item_id = ce.suggested_budget_item_id or '' %}
+                                            {% if ce.suggested_budget_item_id %}
+                                              {% set initial_json = '[{"budget_item_id":' ~ ce.suggested_budget_item_id ~ ',"amount":' ~ ('%.2f'|format(ce.amount|float)) ~ '}]' %}
+                                            {% else %}
+                                              {% set initial_json = '[]' %}
+                                            {% endif %}
+                                            {% set compact = true %}
+                                            {% include 'finance/_expense_budget_splits.html' %}
                                             {% if ce.classifier_source == 'alias' %}
                                             <div class="small text-success mb-2"><i class="fas fa-graduation-cap me-1"></i> Статья предложена по прошлым подтверждениям.</div>
                                             {% elif ce.classifier_source == 'llm' %}

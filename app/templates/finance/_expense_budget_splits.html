@@ -1,0 +1,163 @@
+{# Разбивка расхода по статьям бюджета.
+   Параметры:
+     prefix — уникальный id контейнера (new / edit / ce-123)
+     items — iterable BudgetItem
+     total_input_selector — CSS selector поля общей суммы (опционально, можно передать позже)
+     initial_json — JSON-строка [{budget_item_id, amount}] или пусто
+     suggested_item_id — для дашборда
+     compact — bool, компактный вид для карточки дашборда
+#}
+{% set prefix = prefix or 'expSplit' %}
+{% set compact = compact or false %}
+<div class="expense-budget-splits" id="{{ prefix }}"
+     data-total-selector="{{ total_input_selector or '' }}"
+     data-initial='{{ initial_json or "[]" }}'
+     data-suggested="{{ suggested_item_id or '' }}">
+    <div class="d-flex justify-content-between align-items-center mb-1">
+        <label class="small text-muted fw-bold mb-0">Статьи бюджета</label>
+        <button type="button" class="btn btn-link btn-sm p-0 exp-split-add">+ статья</button>
+    </div>
+    <div class="exp-split-rows"></div>
+    <div class="small text-muted exp-split-hint mt-1">
+        Последняя строка подхватывает остаток автоматически.
+    </div>
+    <template class="exp-split-options">
+        <option value="">— статья —</option>
+        {% for item in items %}
+        <option value="{{ item.id }}">{% if item.code %}{{ item.code }} · {% endif %}{{ item.name }}</option>
+        {% endfor %}
+    </template>
+</div>
+<script>
+(function() {
+  if (window.ExpenseBudgetSplits) return;
+  window.ExpenseBudgetSplits = {
+    init: function(root) {
+      if (!root || root._expSplitReady) return;
+      root._expSplitReady = true;
+      var rowsEl = root.querySelector('.exp-split-rows');
+      var optTpl = root.querySelector('.exp-split-options');
+      var addBtn = root.querySelector('.exp-split-add');
+      var suggested = root.getAttribute('data-suggested') || '';
+      var initial = [];
+      try { initial = JSON.parse(root.getAttribute('data-initial') || '[]') || []; } catch (e) { initial = []; }
+
+      function totalSel() {
+        return root.getAttribute('data-total-selector') || '';
+      }
+      function totalVal() {
+        var sel = totalSel();
+        if (!sel) return 0;
+        var el = document.querySelector(sel);
+        if (!el) return 0;
+        var v = parseFloat(String(el.value || '0').replace(',', '.'));
+        return isNaN(v) ? 0 : Math.round(v * 100) / 100;
+      }
+      function money(n) {
+        var x = Math.round((Number(n) || 0) * 100) / 100;
+        return x.toFixed(2);
+      }
+      function rowCount() {
+        return rowsEl.querySelectorAll('.exp-split-row').length;
+      }
+      function recalc() {
+        var rows = Array.prototype.slice.call(rowsEl.querySelectorAll('.exp-split-row'));
+        if (!rows.length) return;
+        var total = totalVal();
+        var sumPrev = 0;
+        rows.forEach(function(row, idx) {
+          var amt = row.querySelector('.exp-split-amt');
+          var isLast = idx === rows.length - 1;
+          amt.readOnly = isLast && rows.length > 1;
+          if (isLast) {
+            var rem = Math.round((total - sumPrev) * 100) / 100;
+            if (rem < 0) rem = 0;
+            amt.value = money(rem);
+            amt.classList.toggle('bg-light', rows.length > 1);
+          } else {
+            sumPrev += parseFloat(amt.value || '0') || 0;
+            amt.classList.remove('bg-light');
+          }
+        });
+      }
+      function addRow(preset) {
+        preset = preset || {};
+        var div = document.createElement('div');
+        div.className = 'exp-split-row row g-1 align-items-center mb-1';
+        div.innerHTML =
+          '<div class="col-7 col-md-8">' +
+            '<select name="split_item_id" class="form-select form-select-sm exp-split-item" required></select>' +
+          '</div>' +
+          '<div class="col-4 col-md-3">' +
+            '<input type="number" step="0.01" min="0" name="split_amount" class="form-control form-control-sm exp-split-amt" required placeholder="0.00">' +
+          '</div>' +
+          '<div class="col-1 text-end">' +
+            '<button type="button" class="btn btn-link text-danger btn-sm p-0 exp-split-del" title="Убрать">&times;</button>' +
+          '</div>';
+        var sel = div.querySelector('select');
+        sel.innerHTML = optTpl.innerHTML;
+        if (preset.budget_item_id) sel.value = String(preset.budget_item_id);
+        else if (!rowCount() && suggested) sel.value = String(suggested);
+        var amt = div.querySelector('.exp-split-amt');
+        if (preset.amount != null && preset.amount !== '') amt.value = money(preset.amount);
+        div.querySelector('.exp-split-del').addEventListener('click', function() {
+          if (rowCount() <= 1) return;
+          div.remove();
+          recalc();
+        });
+        amt.addEventListener('input', function() {
+          // при правке не-последней — пересчёт остатка
+          recalc();
+        });
+        sel.addEventListener('change', function() { recalc(); });
+        rowsEl.appendChild(div);
+        if (window.jQuery && jQuery.fn.select2) {
+          try {
+            jQuery(sel).select2({
+              theme: 'bootstrap-5',
+              width: '100%',
+              dropdownParent: jQuery(root).closest('.modal').length
+                ? jQuery(root).closest('.modal')
+                : jQuery(document.body)
+            });
+          } catch (e) {}
+        }
+        recalc();
+      }
+
+      addBtn.addEventListener('click', function() {
+        // при добавлении второй+ строки: если была одна на всю сумму —
+        // оставляем первую редактируемой, остаток уйдёт на новую
+        addRow({});
+        recalc();
+      });
+
+      var tsel = totalSel();
+      if (tsel) {
+        var tel = document.querySelector(tsel);
+        if (tel) tel.addEventListener('input', recalc);
+      }
+
+      if (initial.length) {
+        initial.forEach(function(r) { addRow(r); });
+      } else {
+        addRow({ budget_item_id: suggested || '', amount: totalVal() || '' });
+      }
+      recalc();
+      root.recalcExpenseSplits = recalc;
+      root.addExpenseSplitRow = addRow;
+    },
+    initAll: function(scope) {
+      (scope || document).querySelectorAll('.expense-budget-splits').forEach(function(el) {
+        window.ExpenseBudgetSplits.init(el);
+      });
+    }
+  };
+  document.addEventListener('DOMContentLoaded', function() {
+    window.ExpenseBudgetSplits.initAll(document);
+  });
+  document.addEventListener('htmx:afterSwap', function(evt) {
+    window.ExpenseBudgetSplits.initAll(evt.detail && evt.detail.elt ? evt.detail.elt : document);
+  });
+})();
+</script>

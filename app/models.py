@@ -795,6 +795,8 @@ class Expense(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     date = db.Column(db.Date, nullable=False)
+    # Первая/основная статья (для совместимости и быстрых фильтров).
+    # Полная разбивка — в expense_budget_line (сумма строк = amount).
     budget_item_id = db.Column(db.Integer, db.ForeignKey('budget_item.id'), nullable=False) # Общая статья
     description = db.Column(db.String(500))
     amount = db.Column(db.Numeric(10, 2), nullable=False)
@@ -818,10 +820,36 @@ class Expense(db.Model):
     order = db.relationship('Order', foreign_keys=[order_id], backref='project_expenses')
     barter_order = db.relationship('Order', foreign_keys=[barter_order_id], backref='barter_expenses')
     project_budget_item = db.relationship('ProjectBudget')
+    budget_lines = db.relationship(
+        'ExpenseBudgetLine',
+        back_populates='expense',
+        cascade='all, delete-orphan',
+        order_by='ExpenseBudgetLine.sort_order',
+    )
     __table_args__ = (
         db.Index('idx_expense_date_budget', 'date', 'budget_item_id'),
         db.Index('idx_expense_employee', 'employee_id'),
         db.Index('idx_expense_invoice', 'invoice_id'),
+    )
+
+
+class ExpenseBudgetLine(db.Model):
+    """Доля расхода по статье бюджета. Сумма строк = Expense.amount."""
+    __tablename__ = 'expense_budget_line'
+    id = db.Column(db.Integer, primary_key=True)
+    expense_id = db.Column(
+        db.Integer, db.ForeignKey('expense.id', ondelete='CASCADE'), nullable=False, index=True
+    )
+    budget_item_id = db.Column(
+        db.Integer, db.ForeignKey('budget_item.id'), nullable=False, index=True
+    )
+    amount = db.Column(db.Numeric(10, 2), nullable=False)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+    expense = db.relationship('Expense', back_populates='budget_lines')
+    item = db.relationship('BudgetItem')
+    __table_args__ = (
+        db.Index('idx_exp_line_item', 'budget_item_id'),
     )
 
 class UnitCostOverride(db.Model):

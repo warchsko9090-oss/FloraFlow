@@ -1993,8 +1993,12 @@ def chat_expense_import(msg_id):
     budget_item_id = request.form.get('budget_item_id', type=int)
     try:
         from app.expense_chat import confirm_chat_expense
+        from app.expense_splits import parse_split_lines_from_form
+        split_lines = parse_split_lines_from_form(request.form)
         ok, msg = confirm_chat_expense(
-            msg_id, current_user, budget_item_id=budget_item_id,
+            msg_id, current_user,
+            budget_item_id=budget_item_id,
+            split_lines=split_lines or None,
         )
     except Exception:
         current_app.logger.exception('chat_expense_import failed')

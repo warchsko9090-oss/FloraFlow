@@ -920,11 +920,16 @@ def confirm_chat_expense(
     user: User,
     budget_item_id: int | None = None,
     expense_date: date | None = None,
+    split_lines: list[dict] | None = None,
 ) -> tuple[bool, str]:
     """Админ подтвердил, что это реальный расход. Создаём Expense в БД,
     обучаем классификатор (алиас), закрываем TgTask, ставим реакцию.
     Возвращает (ok, message).
+
+    split_lines — опционально [{budget_item_id, amount}, ...] на несколько статей.
     """
+    from app.expense_splits import apply_budget_lines, money2, parse_split_lines_from_form
+
     row = ChatExpenseMessage.query.get(msg_id)
     if row is None:
         return False, "not_found"
@@ -933,9 +938,21 @@ def confirm_chat_expense(
     if row.parsed_amount is None:
         return False, "unparseable"
 
-    final_item_id = budget_item_id or row.suggested_budget_item_id
-    if not final_item_id:
-        return False, "budget_item_required"
+    total = money2(row.parsed_amount)
+    lines = list(split_lines) if split_lines else parse_split_lines_from_form()
+    if not lines:
+        final_item_id = budget_item_id or row.suggested_budget_item_id
+        if not final_item_id:
+            return False, "budget_item_required"
+        lines = [{'budget_item_id': int(final_item_id), 'amount': total}]
+    else:
+        # если в форме одна статья без суммы — добить остатком
+        for ln in lines:
+            ln['amount'] = money2(ln.get('amount'))
+        if len(lines) == 1 and lines[0]['amount'] <= 0:
+            lines[0]['amount'] = total
+
+    final_item_id = int(lines[0]['budget_item_id'])
     item = BudgetItem.query.get(final_item_id)
     if item is None:
         return False, "budget_item_not_found"
@@ -948,12 +965,13 @@ def confirm_chat_expense(
             date=use_date,
             budget_item_id=final_item_id,
             description=row.parsed_description or row.raw_text[:500],
-            amount=row.parsed_amount,
+            amount=total,
             payment_type=payment_type,
             invoice_id=row.matched_invoice_id,
         )
         db.session.add(expense)
         db.session.flush()
+        apply_budget_lines(expense, lines)
 
         row.expense_id = expense.id
         row.status = "imported"
@@ -969,7 +987,7 @@ def confirm_chat_expense(
                 except Exception:
                     current_app.logger.exception("vium_inbox after chat-invoice match")
 
-        # Обучаем классификатор.
+        # Обучаем классификатор по первой (основной) статье.
         alias_key = _normalize_alias_key(row.parsed_description or "")
         if alias_key:
             _bump_alias(alias_key, final_item_id, user_id=getattr(user, "id", None))

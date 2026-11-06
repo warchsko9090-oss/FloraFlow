@@ -104,18 +104,22 @@
                     </div>
                     <div class="col-6">
                         <label class="small text-muted fw-bold">Сумма</label>
-                        <input type="number" step="0.01" name="amount" class="form-control form-control-sm" required placeholder="0.00" value="{{ prefill_invoice.amount if prefill_invoice else '' }}">
+                        <input type="number" step="0.01" name="amount" id="newExpenseAmount" class="form-control form-control-sm" required placeholder="0.00" value="{{ prefill_invoice.amount if prefill_invoice else '' }}">
                     </div>
                 </div>
-                
+
                 <div class="mb-2">
-                    <label class="small text-muted fw-bold">Общая статья</label>
-                    <select name="budget_item" class="form-select form-select-sm select-search" required>
-                        <option value="" selected disabled>Выберите...</option>
-                        {% for item in budget_items %}
-                        <option value="{{ item.id }}" {% if prefill_invoice and prefill_invoice.budget_item_id == item.id %}selected{% endif %}>{{ item.name }} ({{ item.code }})</option>
-                        {% endfor %}
-                    </select>
+                    {% set prefix = 'newExpSplit' %}
+                    {% set items = budget_items %}
+                    {% set total_input_selector = '#newExpenseAmount' %}
+                    {% if prefill_invoice and prefill_invoice.budget_item_id %}
+                      {% set initial_json = '[{"budget_item_id":' ~ prefill_invoice.budget_item_id ~ ',"amount":' ~ ('%.2f'|format(prefill_invoice.amount|float)) ~ '}]' %}
+                      {% set suggested_item_id = prefill_invoice.budget_item_id %}
+                    {% else %}
+                      {% set initial_json = '[]' %}
+                      {% set suggested_item_id = '' %}
+                    {% endif %}
+                    {% include 'finance/_expense_budget_splits.html' %}
                 </div>
                 
                 <div class="mb-2">
@@ -288,8 +292,16 @@
                     <tr>
                         <td class="text-muted small">{{ e.created_at.strftime('%d.%m %H:%M') }}</td>
                         <td>{{ e.date.strftime('%d.%m.%Y') }}</td>
-                        <td>{{ e.item.code }}</td>
-                        <td>{{ e.item.name }}</td>
+                        <td>{{ e.item.code }}{% if e.budget_lines and e.budget_lines|length > 1 %}<span class="badge bg-secondary ms-1">{{ e.budget_lines|length }}</span>{% endif %}</td>
+                        <td>
+                            {% if e.budget_lines and e.budget_lines|length > 1 %}
+                              {% for ln in e.budget_lines %}
+                              <div class="small{% if not loop.first %} text-muted{% endif %}">{{ ln.item.name if ln.item else '—' }} <span class="text-muted">({{ ln.amount|money }})</span></div>
+                              {% endfor %}
+                            {% else %}
+                              {{ e.item.name }}
+                            {% endif %}
+                        </td>
                         <td class="text-primary fw-bold small">{{ e.employee.name if e.employee else '' }}</td>
                         
                         <!-- ЯЧЕЙКА ПРИВЯЗКИ -->
@@ -332,6 +344,7 @@
                                     data-date="{{ e.date.strftime('%Y-%m-%d') }}"
                                     data-amount="{{ '%.2f'|format(e.amount|float) }}"
                                     data-budget-item="{{ e.budget_item_id or '' }}"
+                                    data-splits='[{% if e.budget_lines %}{% for ln in e.budget_lines %}{"budget_item_id":{{ ln.budget_item_id }},"amount":{{ '%.2f'|format(ln.amount|float) }}}{% if not loop.last %},{% endif %}{% endfor %}{% else %}{"budget_item_id":{{ e.budget_item_id or 0 }},"amount":{{ '%.2f'|format(e.amount|float) }}}{% endif %}]'
                                     data-description="{{ e.description or '' }}"
                                     data-payment-type="{{ e.payment_type or 'cashless' }}"
                                     data-employee="{{ e.employee_id or '' }}"
@@ -369,7 +382,14 @@
                     </div>
                     
                     <div class="fw-bold fs-5 text-danger mb-1">- {{ e.amount|money }}</div>
+                    {% if e.budget_lines and e.budget_lines|length > 1 %}
+                    <div class="fw-bold text-dark">Разбивка ({{ e.budget_lines|length }})</div>
+                    {% for ln in e.budget_lines %}
+                    <div class="small">{{ ln.item.name if ln.item else '—' }} — {{ ln.amount|money }}</div>
+                    {% endfor %}
+                    {% else %}
                     <div class="fw-bold text-dark">{{ e.item.name }} <span class="text-muted small">({{ e.item.code }})</span></div>
+                    {% endif %}
                     
                     {% if e.employee %}
                     <div class="small text-primary mt-1"><i class="fas fa-user-tie"></i> {{ e.employee.name }}</div>
@@ -407,6 +427,7 @@
                                 data-date="{{ e.date.strftime('%Y-%m-%d') }}"
                                 data-amount="{{ '%.2f'|format(e.amount|float) }}"
                                 data-budget-item="{{ e.budget_item_id or '' }}"
+                                data-splits='[{% if e.budget_lines %}{% for ln in e.budget_lines %}{"budget_item_id":{{ ln.budget_item_id }},"amount":{{ '%.2f'|format(ln.amount|float) }}}{% if not loop.last %},{% endif %}{% endfor %}{% else %}{"budget_item_id":{{ e.budget_item_id or 0 }},"amount":{{ '%.2f'|format(e.amount|float) }}}{% endif %}]'
                                 data-description="{{ e.description or '' }}"
                                 data-payment-type="{{ e.payment_type or 'cashless' }}"
                                 data-employee="{{ e.employee_id or '' }}"
@@ -460,14 +481,13 @@
                         </div>
                     </div>
 
-                    <div class="mb-2">
-                        <label class="small text-muted fw-bold">Общая статья</label>
-                        <select name="budget_item" id="editExpenseBudgetItem" class="form-select form-select-sm select-search" required>
-                            <option value="" disabled>Выберите...</option>
-                            {% for item in budget_items %}
-                            <option value="{{ item.id }}">{{ item.name }} ({{ item.code }})</option>
-                            {% endfor %}
-                        </select>
+                    <div class="mb-2" id="editExpenseSplitsWrap">
+                        {% set prefix = 'editExpSplit' %}
+                        {% set items = budget_items %}
+                        {% set total_input_selector = '#editExpenseAmount' %}
+                        {% set initial_json = '[]' %}
+                        {% set suggested_item_id = '' %}
+                        {% include 'finance/_expense_budget_splits.html' %}
                     </div>
 
                     <div class="mb-2">
@@ -995,7 +1015,6 @@
         document.getElementById('editExpenseId').value = ds.id || '';
         document.getElementById('editExpenseDate').value = ds.date || '';
         document.getElementById('editExpenseAmount').value = ds.amount || '';
-        document.getElementById('editExpenseBudgetItem').value = ds.budgetItem || '';
         document.getElementById('editExpenseDescription').value = ds.description || '';
         document.getElementById('editExpenseEmployee').value = ds.employee || '';
         document.getElementById('editExpenseTargetMonth').value = ds.targetMonth || '';
@@ -1009,11 +1028,30 @@
         const radio = document.querySelector('#editExpenseModal input[name="payment_type"][value="' + ptype + '"]');
         if (radio) radio.checked = true;
 
+        // Пересобрать разбивку по статьям из data-splits
+        var splitRoot = document.getElementById('editExpSplit');
+        if (splitRoot && window.ExpenseBudgetSplits) {
+            var rowsEl = splitRoot.querySelector('.exp-split-rows');
+            if (rowsEl) {
+                if (window.jQuery) {
+                    try { jQuery(rowsEl).find('select').select2('destroy'); } catch (e) {}
+                }
+                rowsEl.innerHTML = '';
+            }
+            splitRoot._expSplitReady = false;
+            var splits = [];
+            try { splits = JSON.parse(ds.splits || '[]') || []; } catch (e) { splits = []; }
+            if (!splits.length && ds.budgetItem) {
+                splits = [{ budget_item_id: parseInt(ds.budgetItem, 10), amount: parseFloat(ds.amount || '0') }];
+            }
+            splitRoot.setAttribute('data-initial', JSON.stringify(splits));
+            window.ExpenseBudgetSplits.init(splitRoot);
+        }
+
         fillProjectBudgetSelect(ds.project || '', ds.projectBudget || '');
         syncTargetPeriodVisibility();
         syncBarterVisibility();
 
-        // Подсветим select-search через jQuery если используется select2
         if (window.jQuery) {
             jQuery('#editExpenseModal select.select-search').trigger('change');
         }

@@ -133,6 +133,8 @@ _LEGACY_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_expense_date_budget ON expense (date, budget_item_id)',
     'CREATE INDEX IF NOT EXISTS idx_expense_employee ON expense (employee_id)',
     'CREATE INDEX IF NOT EXISTS idx_expense_invoice ON expense (invoice_id)',
+    'CREATE INDEX IF NOT EXISTS idx_expense_budget_line_expense ON expense_budget_line (expense_id)',
+    'CREATE INDEX IF NOT EXISTS idx_exp_line_item ON expense_budget_line (budget_item_id)',
     'CREATE INDEX IF NOT EXISTS idx_timelog_date ON time_log (date)',
     'CREATE INDEX IF NOT EXISTS idx_order_created_by ON "order" (created_by_user_id)',
     'CREATE INDEX IF NOT EXISTS idx_order_billing_client ON "order" (billing_client_id)',
@@ -226,6 +228,74 @@ def ensure_legacy_schema(logger=None) -> None:
     _ensure_changelog_releases(logger)
     _ensure_container_budget_item(logger)
     _extend_purchase_deadlines(logger)
+    _ensure_expense_budget_lines(logger)
+
+
+def _ensure_expense_budget_lines(logger=None) -> None:
+    """Таблица разбивки расхода по статьям + бэкап одной строки на старые расходы."""
+    try:
+        insp = inspect(db.engine)
+        if not insp.has_table('expense_budget_line'):
+            # create_all обычно уже создал; на всякий случай — явный DDL
+            is_pg = db.engine.dialect.name == 'postgresql'
+            amount_t = 'NUMERIC(10, 2)' if is_pg else 'NUMERIC(10, 2)'
+            db.session.execute(text(
+                f'''
+                CREATE TABLE IF NOT EXISTS expense_budget_line (
+                    id SERIAL PRIMARY KEY,
+                    expense_id INTEGER NOT NULL REFERENCES expense(id) ON DELETE CASCADE,
+                    budget_item_id INTEGER NOT NULL REFERENCES budget_item(id),
+                    amount {amount_t} NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0
+                )
+                ''' if is_pg else f'''
+                CREATE TABLE IF NOT EXISTS expense_budget_line (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    expense_id INTEGER NOT NULL REFERENCES expense(id) ON DELETE CASCADE,
+                    budget_item_id INTEGER NOT NULL REFERENCES budget_item(id),
+                    amount {amount_t} NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0
+                )
+                '''
+            ))
+            db.session.execute(text(
+                'CREATE INDEX IF NOT EXISTS idx_expense_budget_line_expense '
+                'ON expense_budget_line (expense_id)'
+            ))
+            db.session.execute(text(
+                'CREATE INDEX IF NOT EXISTS idx_exp_line_item '
+                'ON expense_budget_line (budget_item_id)'
+            ))
+            db.session.commit()
+            if logger:
+                logger.info('legacy schema: created expense_budget_line')
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: expense_budget_line create skipped — %s', exc)
+        db.session.rollback()
+        return
+
+    try:
+        # SQLite/PG: вставить одну строку там, где её ещё нет
+        result = db.session.execute(text(
+            '''
+            INSERT INTO expense_budget_line (expense_id, budget_item_id, amount, sort_order)
+            SELECT e.id, e.budget_item_id, e.amount, 0
+            FROM expense e
+            WHERE e.budget_item_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM expense_budget_line l WHERE l.expense_id = e.id
+              )
+            '''
+        ))
+        n = result.rowcount or 0
+        db.session.commit()
+        if n and logger:
+            logger.info('legacy schema: backfilled %s expense_budget_line row(s)', n)
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: expense_budget_line backfill skipped — %s', exc)
+        db.session.rollback()
 
 
 def _publish_invoice_drafts(logger=None) -> None:

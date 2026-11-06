@@ -237,6 +237,11 @@ def ensure_expense_for_paid_invoice(inv: PaymentInvoice):
     )
     db.session.add(exp)
     db.session.flush()
+    try:
+        from app.expense_splits import apply_budget_lines, money2
+        apply_budget_lines(exp, [{'budget_item_id': budget_id, 'amount': money2(amt)}])
+    except Exception:
+        pass
     return exp
 
 

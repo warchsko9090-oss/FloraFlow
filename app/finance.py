@@ -13,7 +13,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 from app.models import (
-    db, Expense, BudgetItem, BudgetPlan, CashflowPlan, Employee, UnitCostOverride, 
+    db, Expense, ExpenseBudgetLine, BudgetItem, BudgetPlan, CashflowPlan, Employee, UnitCostOverride,
     Plant, StockBalance, Order, OrderItem, Field, Payment, Document, DocumentRow, Size,
     Client, PaymentInvoice, Project, ProjectItem, ProjectPottingLog, ProjectPottingDayMeta,
     ProjectPottingRecountLine, ProjectBudget, ChatExpenseMessage, AppSetting,
@@ -196,16 +196,27 @@ def expenses():
         if end_date:
             query = query.filter(func.date(Expense.date) <= end_date)
         if f_item:
-            query = query.filter(Expense.budget_item_id == int(f_item))
+            fid = int(f_item)
+            query = query.filter(
+                or_(
+                    Expense.budget_item_id == fid,
+                    Expense.id.in_(
+                        db.session.query(ExpenseBudgetLine.expense_id).filter(
+                            ExpenseBudgetLine.budget_item_id == fid
+                        )
+                    ),
+                )
+            )
         if f_type:
             query = query.filter(Expense.payment_type == f_type)
         
-        from sqlalchemy.orm import joinedload
+        from sqlalchemy.orm import joinedload, selectinload
         expenses_list = (
             query.options(
                 joinedload(Expense.item),
                 joinedload(Expense.employee),
                 joinedload(Expense.project_link),
+                selectinload(Expense.budget_lines).joinedload(ExpenseBudgetLine.item),
             )
             .order_by(Expense.date.desc())
             .all()
@@ -370,9 +381,6 @@ def expenses():
                     return redirect(url_for('finance.expenses', tab='expenses'))
                 exp.date = datetime.strptime(date_str, '%Y-%m-%d')
 
-                bi = request.form.get('budget_item')
-                if bi:
-                    exp.budget_item_id = int(bi)
                 exp.description = request.form.get('description') or exp.description
                 amount_raw = request.form.get('amount')
                 if amount_raw not in (None, ''):
@@ -397,6 +405,17 @@ def expenses():
                 exp.barter_order_id = _opt_int('barter_order_id')
                 exp.target_month = _opt_int('target_month')
                 exp.target_year = _opt_int('target_year')
+
+                from app.expense_splits import apply_budget_lines, parse_split_lines_from_form
+                split_lines = parse_split_lines_from_form(request.form)
+                if not split_lines:
+                    flash('Укажите хотя бы одну статью бюджета с суммой')
+                    return redirect(url_for('finance.expenses', tab='expenses'))
+                try:
+                    apply_budget_lines(exp, split_lines)
+                except ValueError as ve:
+                    flash(str(ve))
+                    return redirect(url_for('finance.expenses', tab='expenses'))
 
                 inv_id_raw = request.form.get('invoice_id')
                 old_invoice_id = exp.invoice_id
@@ -472,12 +491,20 @@ def expenses():
                 t_month = request.form.get('target_month')
                 t_year = request.form.get('target_year')
 
+                from app.expense_splits import apply_budget_lines, parse_split_lines_from_form
+                amount_val = float(request.form.get('amount') or 0)
+                split_lines = parse_split_lines_from_form(request.form)
+                if not split_lines:
+                    flash('Укажите хотя бы одну статью бюджета с суммой')
+                    return redirect(url_for('finance.expenses', tab='expenses'))
+
+                # budget_item_id временно из первой строки — apply_budget_lines подтвердит
                 exp = Expense(
-                    date=date_val, 
-                    budget_item_id=int(request.form.get('budget_item')), 
-                    description=request.form.get('description'), 
-                    amount=float(request.form.get('amount')), 
-                    payment_type=request.form.get('payment_type'), 
+                    date=date_val,
+                    budget_item_id=int(split_lines[0]['budget_item_id']),
+                    description=request.form.get('description'),
+                    amount=amount_val,
+                    payment_type=request.form.get('payment_type'),
                     employee_id=(int(request.form.get('employee_id')) if request.form.get('employee_id') else None),
                     order_id=(int(oid) if oid else None),
                     project_id=(int(pid) if pid else None),
@@ -493,6 +520,13 @@ def expenses():
                         exp.invoice_id = inv.id
 
                 db.session.add(exp)
+                db.session.flush()
+                try:
+                    apply_budget_lines(exp, split_lines)
+                except ValueError as ve:
+                    db.session.rollback()
+                    flash(str(ve))
+                    return redirect(url_for('finance.expenses', tab='expenses'))
                 db.session.commit()
                 try:
                     from app.expense_chat import reconcile_chat_expenses_period
@@ -663,8 +697,12 @@ def expenses_import():
             elif tv_str == '2' or tv_str.lower() == 'безнал':
                 p_type = 'cashless'
             
-            exp = Expense(date=final_date, budget_item_id=b_item_id, description=desc, amount=float(amount), payment_type=p_type, employee_id=None)
+            from app.expense_splits import apply_budget_lines, money2
+            amt = float(amount)
+            exp = Expense(date=final_date, budget_item_id=b_item_id, description=desc, amount=amt, payment_type=p_type, employee_id=None)
             db.session.add(exp)
+            db.session.flush()
+            apply_budget_lines(exp, [{'budget_item_id': b_item_id, 'amount': money2(amt)}])
             count += 1
             
         db.session.commit()
@@ -690,7 +728,18 @@ def expenses_export():
     query = Expense.query
     if start_date: query = query.filter(func.date(Expense.date) >= start_date)
     if end_date: query = query.filter(func.date(Expense.date) <= end_date)
-    if f_item: query = query.filter(Expense.budget_item_id == int(f_item))
+    if f_item:
+        fid = int(f_item)
+        query = query.filter(
+            or_(
+                Expense.budget_item_id == fid,
+                Expense.id.in_(
+                    db.session.query(ExpenseBudgetLine.expense_id).filter(
+                        ExpenseBudgetLine.budget_item_id == fid
+                    )
+                ),
+            )
+        )
     if f_type: query = query.filter(Expense.payment_type == f_type)
     
     expenses = query.order_by(Expense.date.desc()).all()
@@ -1397,11 +1446,8 @@ def budget():
     actual_month = func.coalesce(Expense.target_month, func.extract('month', Expense.date))
     actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
     
-    expenses_q = db.session.query(
-        Expense.budget_item_id, 
-        actual_month.label('month'), 
-        func.sum(Expense.amount)
-    ).filter(actual_year == year).group_by(Expense.budget_item_id, actual_month).all()
+    from app.expense_splits import budget_fact_rows_for_year
+    expenses_q = budget_fact_rows_for_year(year)
 
     # Структура данных
     # data = { item_id: { item: Obj, months: {1:..., 2:...}, total: {...} } }
@@ -1685,13 +1731,8 @@ def budget_export():
     items = sorted(BudgetItem.query.all(), key=natural_key)
     plans = BudgetPlan.query.filter_by(year=year).all()
 
-    actual_month = func.coalesce(Expense.target_month, func.extract('month', Expense.date))
-    actual_year = func.coalesce(Expense.target_year, func.extract('year', Expense.date))
-    expenses_q = db.session.query(
-        Expense.budget_item_id,
-        actual_month.label('month'),
-        func.sum(Expense.amount)
-    ).filter(actual_year == year).group_by(Expense.budget_item_id, actual_month).all()
+    from app.expense_splits import budget_fact_rows_for_year
+    expenses_q = budget_fact_rows_for_year(year)
 
     data = {
         i.id: {
