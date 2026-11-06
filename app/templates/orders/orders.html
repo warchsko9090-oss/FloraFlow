@@ -104,6 +104,13 @@
     .mobile-card.order-done { background: #e8f5e9; border-color: #81C784; }
     .mobile-card.order-done .mobile-card-header { background: #e8f5e9; }
 
+    /* Отгружен полностью, но есть долг: фон как у тега «ЧАСТИЧНО» (.pay-partial). */
+    .order-shipped-debt td { background-color: #fffde7 !important; }
+    .order-shipped-debt:hover td { background-color: #fff8c4 !important; filter: none; }
+    .order-shipped-debt.row-separator td:first-child { border-left: 5px solid #FBC02D !important; }
+    .mobile-card.order-shipped-debt { background: #fffde7; border-color: #FBC02D; }
+    .mobile-card.order-shipped-debt .mobile-card-header { background: #fffde7; }
+
     .order-tag-chip {
         display: inline-block;
         margin-top: 4px;
@@ -503,11 +510,12 @@
             {% set rows = item.order_items %}
             {% set rowspan = item.rowspan %}
             {% set done_cls = 'order-done' if item.is_done else '' %}
+            {% set debt_cls = 'order-shipped-debt' if item.is_shipped_debt else '' %}
             {% set tag_cls = 'order-tagged' if item.tag_wash else '' %}
             {% set tag_style = ('--tag-wash: ' ~ item.tag_wash ~ ';') if item.tag_wash else '' %}
 
             <!-- ГЛАВНАЯ СТРОКА ЗАКАЗА (С row-separator) -->
-            <tr class="row-separator status-{{ o.status }} {{ done_cls }} {{ tag_cls }}"{% if tag_style %} style="{{ tag_style }}"{% endif %}>
+            <tr class="row-separator status-{{ o.status }} {{ done_cls }} {{ debt_cls }} {{ tag_cls }}"{% if tag_style %} style="{{ tag_style }}"{% endif %}>
                 <!-- Кнопки действий -->
                 <td rowspan="{{ rowspan }}" class="text-center">
                     <div class="d-flex flex-column gap-1 align-items-center">
@@ -617,6 +625,8 @@
                 <td rowspan="{{ rowspan }}" class="text-center align-middle" style="min-width: 110px;">
                     {% if item.is_done %}
                         <div class="text-success fw-bold" style="font-size: 12px;"><i class="fas fa-check-circle"></i> Оплачен+отгружен</div>
+                    {% elif item.is_shipped_debt %}
+                        <div class="fw-bold" style="font-size: 12px; color: #8a6d00;"><i class="fas fa-truck"></i> Отгружен · долг</div>
                     {% elif o.is_deleted %}
                         <small class="text-muted">В архиве</small>
                     {% elif o.status == 'shipped' %}
@@ -635,7 +645,7 @@
 
             <!-- ОСТАЛЬНЫЕ ПОЗИЦИИ (Если есть) -->
             {% for i in range(1, rows|length) %}
-            <tr class="status-{{ o.status }} {{ done_cls }} {{ tag_cls }}"{% if tag_style %} style="{{ tag_style }}"{% endif %}>
+            <tr class="status-{{ o.status }} {{ done_cls }} {{ debt_cls }} {{ tag_cls }}"{% if tag_style %} style="{{ tag_style }}"{% endif %}>
                 {% set r = rows[i] %}
                 <td class="text-dark">{{ r.plant.name }}</td>
                 <td class="text-center text-muted small">{{ r.size.name }}</td>
@@ -660,7 +670,7 @@
 
             <!-- ИТОГО ПО ЗАКАЗУ -->
             {% if o.status != 'canceled' and not o.is_deleted and current_user.role != 'user2' %}
-            <tr class="status-{{ o.status }} {{ done_cls }} {{ tag_cls }}"{% if item.is_done %} style="background-color: #e8f5e9;"{% elif tag_style %} style="{{ tag_style }} background-color: var(--tag-wash);"{% else %} style="background-color: #F8F9FA;"{% endif %}>
+            <tr class="status-{{ o.status }} {{ done_cls }} {{ debt_cls }} {{ tag_cls }}"{% if item.is_done %} style="background-color: #e8f5e9;"{% elif item.is_shipped_debt %} style="background-color: #fffde7;"{% elif tag_style %} style="{{ tag_style }} background-color: var(--tag-wash);"{% else %} style="background-color: #F8F9FA;"{% endif %}>
                 <!-- Объединяем первые 9 колонок (до Цены включительно) для подписи -->
                 <td colspan="9" class="text-end small text-uppercase text-muted pt-2 pb-2 align-middle">
                     Итого заказ:
@@ -698,7 +708,7 @@
 <div class="d-lg-none">
     {% for item in orders %}
     {% set o = item.order %}
-    <div class="mobile-card shadow-sm {% if item.is_done %}order-done{% endif %}{% if item.tag_wash %} order-tagged{% endif %}"{% if item.tag_wash %} style="--tag-wash: {{ item.tag_wash }};"{% endif %}>
+    <div class="mobile-card shadow-sm {% if item.is_done %}order-done{% elif item.is_shipped_debt %}order-shipped-debt{% endif %}{% if item.tag_wash %} order-tagged{% endif %}"{% if item.tag_wash %} style="--tag-wash: {{ item.tag_wash }};"{% endif %}>
         <!-- Шапка карточки -->
         <div class="mobile-card-header collapsed" data-bs-toggle="collapse" data-bs-target="#order-{{ o.id }}">
             <div class="d-flex flex-column">

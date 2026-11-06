@@ -36,20 +36,35 @@ def _can_manage_order_tags(user=None):
     return (getattr(u, 'role', None) or '') in ('admin', 'executive')
 
 
+def _order_is_fully_shipped(o):
+    """Все позиции отгружены (qty > 0 и shipped >= quantity)."""
+    if o.status in ('canceled', 'ghost') or o.is_deleted:
+        return False
+    items = o.items or []
+    if not items:
+        return False
+    return all(
+        (i.quantity or 0) > 0 and (i.shipped_quantity or 0) >= (i.quantity or 0)
+        for i in items
+    )
+
+
 def _order_is_done(o):
     """Завершён = полностью оплачен + всё отгружено (старый зелёный bucket).
 
     Выкопка не требуется: такие заказы уже «неактивны» для списка.
     Используется для скрытия по умолчанию, зелёного bucket и Excel.
     """
-    if o.status in ('canceled', 'ghost') or o.is_deleted:
+    if not _order_is_fully_shipped(o):
         return False
-    items = o.items or []
-    if not items:
+    return o.payment_status == 'paid'
+
+
+def _order_is_shipped_debt(o):
+    """Полностью отгружен, но ещё не до конца оплачен (долг / частичная оплата)."""
+    if not _order_is_fully_shipped(o):
         return False
-    if o.payment_status != 'paid':
-        return False
-    return all((i.shipped_quantity or 0) >= (i.quantity or 0) for i in items)
+    return o.payment_status != 'paid'
 
 
 def _normalize_tag_color(raw, default='#6c757d'):
@@ -963,18 +978,20 @@ def orders_list():
     for o in orders:
         # Завершён = оплачен + отгружен (зелёный bucket / скрытие по умолчанию).
         is_done = _order_is_done(o)
+        # Отгружен полностью, но есть долг — жёлтая заливка как у тега «ЧАСТИЧНО».
+        is_shipped_debt = (not is_done) and _order_is_shipped_debt(o)
         # Скрытие завершённых только в UI рабочего списка (не в архиве/скрытых, не в Excel).
         if is_done and not show_done and not show_hidden and not show_archive:
             continue
-        # Заливка тега только если заказ не completed: done-зелёный важнее.
+        # Заливка тега только если нет done/shipped-debt: они важнее.
         tag_wash = None
-        if o.tag and not is_done:
+        if o.tag and not is_done and not is_shipped_debt:
             tag_wash = _tag_wash_bg(o.tag.color)
 
         if not o.items:
             orders_view.append({
                 'order': o, 'rowspan': 1, 'order_items': [],
-                'is_done': False, 'tag_wash': tag_wash,
+                'is_done': False, 'is_shipped_debt': False, 'tag_wash': tag_wash,
             })
             continue
         if o.status != 'canceled' and not o.is_deleted:
@@ -985,7 +1002,7 @@ def orders_list():
 
         orders_view.append({
             'order': o, 'rowspan': len(o.items), 'order_items': o.items,
-            'is_done': is_done, 'tag_wash': tag_wash,
+            'is_done': is_done, 'is_shipped_debt': is_shipped_debt, 'tag_wash': tag_wash,
         })
 
     # Финальный порядок: сначала активные незавершённые (в выбранном порядке),
