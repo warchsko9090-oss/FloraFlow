@@ -342,9 +342,39 @@ def _digest_provider_order() -> list[str]:
     return out
 
 
-def _llm_raw(prompt: str) -> str:
+def _looks_like_ops_summary(text: str) -> bool:
+    """Отсекаем «мысли» модели и обрывки промпта вместо сводки."""
+    t = (text or '').strip()
+    if len(t) < 80:
+        return False
+    low = t.lower()
+    bad_markers = (
+        'одна крупица факта',
+        '<<<actions>>>',
+        'entities.items',
+        'purchase_request',
+        'potting_report',
+        'if it\'s single list',
+        'let\'s make it',
+        'обычно 1 action',
+    )
+    if sum(1 for m in bad_markers if m in low) >= 2:
+        return False
+    # Нормальная сводка — заголовок/секции или маркированный список
+    good = (
+        'сводк' in low or 'продаж' in low or 'производ' in low
+        or 'кадр' in low or 'итр' in low or '•' in t or '*' in t
+        or 'заказ' in low
+    )
+    return good
+
+
+def _llm_raw(prompt: str) -> tuple[str, str]:
+    """Возвращает (text, error_reason). text пустой → нужен fallback."""
     providers = _digest_provider_order()
-    errors = []
+    if not providers:
+        return '', 'нет GROQ_API_KEY и GEMINI_API_KEY'
+    errors: list[str] = []
     for name in providers:
         try:
             if name == 'gemini':
@@ -353,8 +383,8 @@ def _llm_raw(prompt: str) -> str:
                     prompt=prompt,
                     system=_DIGEST_SYSTEM,
                     temperature=0.2,
-                    max_output_tokens=3072,
-                    timeout_sec=60.0,
+                    max_output_tokens=8192,
+                    timeout_sec=90.0,
                 )
             else:
                 from groq import Groq
@@ -369,20 +399,36 @@ def _llm_raw(prompt: str) -> str:
                     temperature=0.2,
                 )
                 text = (resp.choices[0].message.content or '').strip()
+            if text and _looks_like_ops_summary(text):
+                return text, ''
             if text:
-                return text
-            errors.append(f'{name}: empty')
+                errors.append(f'{name}: ответ не похож на сводку')
+                try:
+                    current_app.logger.warning(
+                        'ai_ops llm %s junk head=%s', name, text[:180],
+                    )
+                except Exception:
+                    pass
+            else:
+                errors.append(f'{name}: empty')
         except Exception as exc:
             errors.append(f'{name}: {str(exc)[:160]}')
             try:
                 current_app.logger.exception('ai_ops llm %s failed', name)
             except Exception:
                 pass
-    return ''
+    return '', '; '.join(errors)[:300]
 
 
-def _fallback_multi_summary(day: date, by_ch: dict[str, str], message_count: int) -> str:
+def _fallback_multi_summary(
+    day: date,
+    by_ch: dict[str, str],
+    message_count: int,
+    reason: str = '',
+) -> str:
     parts = [f'Сводка AI Ops за {day.isoformat()} ({message_count} сообщ.)', '[авто без LLM]']
+    if reason:
+        parts.append(f'(причина: {reason[:220]})')
     keys = (
         'заказ', 'отгруз', 'оплат', 'счёт', 'счет', 'выкоп', 'копк', 'кадр',
         'отпуск', 'больнич', 'производ', 'план', 'час', 'бригад',
@@ -1709,11 +1755,19 @@ def run_ops_digest(
             message_count=message_count,
             transcript_block=transcript_block,
         )
-        raw = _llm_raw(prompt)
+        raw, llm_err = _llm_raw(prompt)
         if raw:
             summary, actions = _parse_llm_digest(raw)
+            if not _looks_like_ops_summary(summary):
+                summary = _fallback_multi_summary(
+                    day, by_ch, message_count,
+                    reason=llm_err or 'LLM вернул неразборчивый текст',
+                )
+                actions = []
         else:
-            summary = _fallback_multi_summary(day, by_ch, message_count)
+            summary = _fallback_multi_summary(
+                day, by_ch, message_count, reason=llm_err or 'LLM недоступен',
+            )
             actions = []
 
         # Закупки и посадка в горшки — эвристики всегда, даже если LLM

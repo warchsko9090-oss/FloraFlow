@@ -12,12 +12,14 @@ import requests
 
 # Порядок: сначала lite / стабильные (реже 429), затем «полные» flash.
 # 429/503/404 на одной модели не должны ронять всю сводку — см. gemini_generate_text.
+# Без thinking: иначе maxOutputTokens уходит в «мысли» и текст сводки пустой → «авто без LLM».
 _DEFAULT_MODELS = (
     'gemini-flash-lite-latest',
+    'gemini-2.5-flash-lite',
+    'gemini-3.1-flash-lite',
     'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
+    'gemini-2.5-flash',
     'gemini-flash-latest',
-    'gemini-3-flash-preview',
     'gemini-3.5-flash',
     'gemini-3.8-flash',
 )
@@ -55,56 +57,89 @@ def gemini_generate_text(
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY не задан')
 
-    # systemInstruction + user content
-    body: dict = {
-        'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
-        'generationConfig': {
-            'temperature': temperature,
-            'maxOutputTokens': max_output_tokens,
-        },
+    # thinkingConfig: выключаем «мысли», иначе при maxOutputTokens=2–3k
+    # модель тратит бюджет на reasoning и отдаёт пустой text (finishReason=MAX_TOKENS).
+    # Сводки/классификаторы от этого падают в «авто без LLM».
+    gen_cfg_base = {
+        'temperature': temperature,
+        'maxOutputTokens': max_output_tokens,
     }
-    if system.strip():
-        body['systemInstruction'] = {'parts': [{'text': system.strip()}]}
+    thinking_variants = (
+        {'thinkingConfig': {'thinkingBudget': 0}},
+        {'thinkingConfig': {'thinkingLevel': 'minimal'}},
+        {},  # модели без thinking / отвергают thinkingConfig
+    )
 
-    # Эти коды часто квотные / временные — идём к следующей модели, не валим весь digest.
+    system_part = (
+        {'systemInstruction': {'parts': [{'text': system.strip()}]}}
+        if system.strip() else {}
+    )
+
     _retryable = {404, 408, 429, 500, 502, 503, 504}
-
     last_err: Exception | None = None
+
     for model in (list(models) if models is not None else gemini_models_for_text()):
         url = (
             f'https://generativelanguage.googleapis.com/v1beta/models/'
             f'{model}:generateContent'
         )
-        try:
-            resp = requests.post(
-                url,
-                params={'key': api_key},
-                json=body,
-                timeout=timeout_sec,
-            )
+        for think in thinking_variants:
+            body: dict = {
+                'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
+                'generationConfig': {**gen_cfg_base, **think},
+                **system_part,
+            }
+            try:
+                resp = requests.post(
+                    url,
+                    params={'key': api_key},
+                    json=body,
+                    timeout=timeout_sec,
+                )
+            except requests.RequestException as exc:
+                last_err = exc
+                break  # сеть — следующая модель
+
+            if resp.status_code == 400 and think:
+                last_err = RuntimeError(
+                    f'{model}: HTTP 400 thinking {resp.text[:120]}'
+                )
+                continue  # другой thinkingConfig
             if resp.status_code in _retryable:
                 last_err = RuntimeError(
                     f'{model}: HTTP {resp.status_code} {resp.text[:180]}'
                 )
-                continue
+                break
             if resp.status_code >= 400:
                 last_err = RuntimeError(
                     f'{model}: HTTP {resp.status_code} {resp.text[:300]}'
                 )
-                continue
+                break
+
             data = resp.json()
             cands = data.get('candidates') or []
             if not cands:
-                last_err = RuntimeError(f'{model}: пустой candidates')
-                continue
-            parts = ((cands[0].get('content') or {}).get('parts')) or []
-            text = ''.join((p.get('text') or '') for p in parts).strip()
+                last_err = RuntimeError(
+                    f'{model}: пустой candidates {str(data.get("promptFeedback") or "")[:120]}'
+                )
+                break
+
+            cand0 = cands[0] or {}
+            parts = ((cand0.get('content') or {}).get('parts')) or []
+            text = ''.join(
+                (p.get('text') or '') for p in parts if not p.get('thought')
+            ).strip()
+            if not text:
+                text = ''.join((p.get('text') or '') for p in parts).strip()
             if text:
                 return text
-            last_err = RuntimeError(f'{model}: пустой текст')
-        except requests.RequestException as exc:
-            last_err = exc
-            continue
+
+            reason = cand0.get('finishReason') or '?'
+            last_err = RuntimeError(f'{model}: пустой текст finish={reason}')
+            if reason == 'MAX_TOKENS' and think:
+                continue  # thinking съел бюджет — другой конфиг
+            break
+
     raise RuntimeError(str(last_err) if last_err else 'Gemini: все модели недоступны')
 
 
