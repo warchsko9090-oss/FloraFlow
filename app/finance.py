@@ -3355,6 +3355,7 @@ def reports_reconciliation():
     t_credit = Decimal(0)
     client_name = ''
     barter_orders = []
+    barter_totals = {'total': Decimal(0), 'paid': Decimal(0), 'remaining': Decimal(0)}
     writeoff_orders = []
     
     current_url = request.url
@@ -3370,14 +3371,18 @@ def reports_reconciliation():
             # Получаем бартерные заказы клиента (при агентских — только наша часть)
             b_orders = Order.query.filter(Order.client_id == int(cid), Order.is_barter == True, Order.status != 'canceled', Order.is_deleted == False).all()
             for bo in b_orders:
-                bo_total = bo.net_sum if bo.agency_enabled else bo.total_sum
-                bo_paid = sum(e.amount for e in bo.barter_expenses)
+                bo_total = Decimal(str(bo.net_sum if bo.agency_enabled else bo.total_sum or 0))
+                bo_paid = sum((Decimal(str(e.amount or 0)) for e in bo.barter_expenses), Decimal(0))
+                bo_remaining = bo_total - bo_paid
                 barter_orders.append({
                     'order': bo,
                     'total': bo_total,
                     'paid': bo_paid,
-                    'remaining': bo_total - bo_paid
+                    'remaining': bo_remaining
                 })
+                barter_totals['total'] += bo_total
+                barter_totals['paid'] += bo_paid
+                barter_totals['remaining'] += bo_remaining
             writeoff_orders = _client_orders_with_debt(int(cid))
         except Exception as e:
             flash(f"Ошибка: {str(e)}")
@@ -3391,6 +3396,7 @@ def reports_reconciliation():
                            zero_opening=zero_opening,
                            current_url=current_url,
                            barter_orders=barter_orders,
+                           barter_totals=barter_totals,
                            writeoff_orders=writeoff_orders)
 
 def _order_open_debt(order):

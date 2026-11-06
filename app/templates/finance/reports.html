@@ -396,8 +396,18 @@
     
     {% if barter_orders %}
     <div class="card shadow-sm border-0 mt-4">
-        <div class="card-header bg-warning bg-opacity-25 fw-bold d-flex justify-content-between align-items-center py-3">
+        <div class="card-header bg-warning bg-opacity-25 fw-bold d-flex justify-content-between align-items-center py-3 flex-wrap gap-2">
             <span><i class="fas fa-handshake text-warning me-2"></i> Взаимозачеты клиента</span>
+            {% set bt = barter_totals|default({'total': 0, 'paid': 0, 'remaining': 0}) %}
+            <span class="badge {% if bt.remaining > 0 %}bg-danger{% elif bt.remaining < 0 %}bg-secondary{% else %}bg-success{% endif %} fs-6">
+                {% if bt.remaining > 0 %}
+                    Долг клиента: {{ bt.remaining|money }}
+                {% elif bt.remaining < 0 %}
+                    Перекрыто сверх: {{ (-bt.remaining)|money }}
+                {% else %}
+                    Закрыто
+                {% endif %}
+            </span>
         </div>
         <div class="card-body p-0">
             <div class="table-responsive">
@@ -426,6 +436,16 @@
                         </tr>
                         {% endfor %}
                     </tbody>
+                    <tfoot class="bg-light border-top border-2">
+                        <tr class="align-middle">
+                            <td colspan="2" class="ps-3 fw-bold text-uppercase py-3">Итого</td>
+                            <td class="text-end fw-bold text-warning py-3">{{ bt.total|money }}</td>
+                            <td class="text-end fw-bold text-success py-3">{{ bt.paid|money }}</td>
+                            <td class="text-end fw-bold py-3 {% if bt.remaining > 0 %}text-danger{% else %}text-secondary{% endif %}" style="background-color: #fff;">
+                                {{ bt.remaining|money }}
+                            </td>
+                        </tr>
+                    </tfoot>
                 </table>
             </div>
         </div>
