@@ -888,7 +888,7 @@ def orders_list():
     f_tag = (request.args.get('filter_tag') or '').strip()
     # По умолчанию завершённые (оплачен+отгружен) скрыты в UI.
     show_done = request.args.get('show_done') in ('1', 'true', 'yes', 'on')
-    sort = request.args.get('sort', 'date')  # date | name | tag
+    sort = request.args.get('sort', 'workflow')  # workflow | date | name | tag
     archive_year_raw = (request.args.get('archive_year') or '').strip()
     archive_year = int(archive_year_raw) if archive_year_raw.isdigit() else None
     
@@ -958,21 +958,30 @@ def orders_list():
     elif f_tag.isdigit():
         q = q.filter(Order.tag_id == int(f_tag))
 
-    # Применяем сортировку
+    # Применяем сортировку (внутри bucket'ов ниже).
+    # workflow (по умолчанию): без тега → теги по sort_order → дата внутри группы.
     if sort == 'date':
         orders = q.order_by((Order.status == 'canceled'), Order.date.desc()).all()
     elif sort == 'tag':
         orders = q.order_by((Order.status == 'canceled')).all()
         orders.sort(key=lambda x: (
-            1 if not x.tag_id else 0,
+            0 if not x.tag_id else 1,
+            int(getattr(x.tag, 'sort_order', 0) or 0) if x.tag else 0,
             natural_key(x.tag.name if x.tag else ''),
             natural_key(x.client.name if x.client else ''),
         ))
-    else:  # sort == 'name'
+    elif sort == 'name':
         orders = q.order_by((Order.status == 'canceled')).all()
-        # Сортируем по имени клиента в памяти, чтобы использовать natural_key
         orders.sort(key=lambda x: natural_key(x.client.name))
-    
+    else:  # workflow
+        orders = q.order_by((Order.status == 'canceled')).all()
+        orders.sort(key=lambda x: (
+            0 if not x.tag_id else 1,
+            int(getattr(x.tag, 'sort_order', 0) or 0) if x.tag else 0,
+            x.date or datetime.min,
+            x.id or 0,
+        ))
+
     total_stats = {'sum': 0, 'shipped_fact': 0}
     orders_view = []
     for o in orders:
@@ -991,7 +1000,7 @@ def orders_list():
         if not o.items:
             orders_view.append({
                 'order': o, 'rowspan': 1, 'order_items': [],
-                'is_done': False, 'is_shipped_debt': False, 'tag_wash': tag_wash,
+                'is_done': is_done, 'is_shipped_debt': is_shipped_debt, 'tag_wash': tag_wash,
             })
             continue
         if o.status != 'canceled' and not o.is_deleted:
@@ -1005,14 +1014,19 @@ def orders_list():
             'is_done': is_done, 'is_shipped_debt': is_shipped_debt, 'tag_wash': tag_wash,
         })
 
-    # Финальный порядок: сначала активные незавершённые (в выбранном порядке),
-    # затем полностью завершённые зелёные, затем отменённые/скрытые.
-    # Внутри каждой группы исходный порядок сохраняется (stable partition).
+    # Финальный порядок списка:
+    # 0 — рабочие (без тега / по порядку тегов),
+    # 1 — отгружены полностью, но есть долг (жёлтые),
+    # 2 — завершённые (зелёные),
+    # 3 — отменённые / скрытые.
+    # Внутри группы сохраняется порядок выбранной сортировки (stable).
     def _bucket(v):
         o = v['order']
         if o.status == 'canceled' or o.is_deleted:
-            return 2
+            return 3
         if v['is_done']:
+            return 2
+        if v['is_shipped_debt']:
             return 1
         return 0
     orders_view.sort(key=_bucket)
@@ -1034,7 +1048,11 @@ def orders_list():
         for o in filter_orders_q.all()
     ]
 
-    all_tags = OrderTag.query.order_by(OrderTag.is_archived.asc(), OrderTag.name.asc()).all()
+    all_tags = OrderTag.query.order_by(
+        OrderTag.is_archived.asc(),
+        OrderTag.sort_order.asc(),
+        OrderTag.id.asc(),
+    ).all()
 
     return render_template('orders/orders.html',
                            orders=orders_view,
@@ -1078,7 +1096,11 @@ def order_tags_manage():
             elif len(name) > 100:
                 flash('Название слишком длинное')
             else:
-                db.session.add(OrderTag(name=name, color=color, is_archived=False))
+                max_so = db.session.query(func.max(OrderTag.sort_order)).scalar()
+                next_so = int(max_so or 0) + 1
+                db.session.add(OrderTag(
+                    name=name, color=color, is_archived=False, sort_order=next_so,
+                ))
                 db.session.commit()
                 flash('Тег создан')
                 log_action(f'Создал тег заказа «{name}»')
@@ -1096,6 +1118,32 @@ def order_tags_manage():
                 db.session.commit()
                 flash('Тег обновлён')
                 log_action(f'Изменил тег заказа #{tag.id}')
+        elif action == 'move_up' or action == 'move_down':
+            tag = OrderTag.query.get(request.form.get('tag_id', type=int))
+            if not tag or tag.is_archived:
+                flash('Тег не найден или в архиве')
+            else:
+                active = (
+                    OrderTag.query
+                    .filter_by(is_archived=False)
+                    .order_by(OrderTag.sort_order.asc(), OrderTag.id.asc())
+                    .all()
+                )
+                ids = [t.id for t in active]
+                try:
+                    idx = ids.index(tag.id)
+                except ValueError:
+                    idx = -1
+                swap_idx = idx - 1 if action == 'move_up' else idx + 1
+                if idx < 0 or swap_idx < 0 or swap_idx >= len(active):
+                    flash('Уже на краю списка')
+                else:
+                    active[idx], active[swap_idx] = active[swap_idx], active[idx]
+                    for i, t in enumerate(active):
+                        t.sort_order = i + 1
+                    db.session.commit()
+                    flash('Порядок тегов обновлён')
+                    log_action(f'Изменил порядок тега заказа #{tag.id}')
         elif action == 'archive':
             tag = OrderTag.query.get(request.form.get('tag_id', type=int))
             if not tag:
@@ -1115,7 +1163,9 @@ def order_tags_manage():
         elif action == 'restore':
             tag = OrderTag.query.get(request.form.get('tag_id', type=int))
             if tag:
+                max_so = db.session.query(func.max(OrderTag.sort_order)).scalar()
                 tag.is_archived = False
+                tag.sort_order = int(max_so or 0) + 1
                 db.session.commit()
                 flash('Тег восстановлен из архива')
         elif action == 'delete':
@@ -1133,15 +1183,23 @@ def order_tags_manage():
                     log_action('Удалил тег заказа')
         return redirect(url_for('orders.order_tags_manage'))
 
-    tags = OrderTag.query.order_by(OrderTag.is_archived.asc(), OrderTag.name.asc()).all()
+    tags = OrderTag.query.order_by(
+        OrderTag.is_archived.asc(),
+        OrderTag.sort_order.asc(),
+        OrderTag.id.asc(),
+    ).all()
     usage = {
         t.id: Order.query.filter_by(tag_id=t.id).count()
         for t in tags
     }
+    active_tags = [t for t in tags if not t.is_archived]
+    tag_rank = {t.id: i for i, t in enumerate(active_tags)}
     return render_template(
         'orders/order_tags.html',
         tags=tags,
         usage=usage,
+        tag_rank=tag_rank,
+        active_tag_count=len(active_tags),
     )
 
 
@@ -3852,7 +3910,9 @@ def order_detail(order_id):
             current_app.logger.exception('order history invoices')
 
     # Для назначения: активные теги + текущий (даже если архивный).
-    assignable_tags = OrderTag.query.filter_by(is_archived=False).order_by(OrderTag.name.asc()).all()
+    assignable_tags = OrderTag.query.filter_by(is_archived=False).order_by(
+        OrderTag.sort_order.asc(), OrderTag.id.asc(),
+    ).all()
     if o.tag_id and o.tag and o.tag.is_archived:
         assignable_tags = list(assignable_tags) + [o.tag]
 

@@ -8,6 +8,7 @@
         </div>
         <div class="page-subtitle">
             Короткое название (2–3 слова) и цвет. Один тег на заказ.
+            Порядок стрелками задаёт блоки в списке заказов: сначала без тега, затем теги сверху вниз.
         </div>
     </div>
     <div class="page-actions">
@@ -53,6 +54,7 @@
                     <table class="table table-hover mb-0 align-middle">
                         <thead class="table-light">
                             <tr>
+                                <th style="width: 72px;" class="text-center">Порядок</th>
                                 <th style="width: 48px;">Цвет</th>
                                 <th>Название</th>
                                 <th class="text-center">На заказах</th>
@@ -63,6 +65,32 @@
                         <tbody>
                             {% for t in tags %}
                             <tr class="{% if t.is_archived %}table-secondary{% endif %}">
+                                <td class="text-center text-nowrap">
+                                    {% if not t.is_archived %}
+                                    {% set a_idx = tag_rank.get(t.id, 0) %}
+                                    <form method="POST" class="d-inline">
+                                        <input type="hidden" name="action" value="move_up">
+                                        <input type="hidden" name="tag_id" value="{{ t.id }}">
+                                        <button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                                                title="Выше в списке заказов"
+                                                {% if a_idx == 0 %}disabled{% endif %}>
+                                            <i class="fas fa-chevron-up"></i>
+                                        </button>
+                                    </form>
+                                    <form method="POST" class="d-inline">
+                                        <input type="hidden" name="action" value="move_down">
+                                        <input type="hidden" name="tag_id" value="{{ t.id }}">
+                                        <button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                                                title="Ниже в списке заказов"
+                                                {% if a_idx >= (active_tag_count - 1) %}disabled{% endif %}>
+                                            <i class="fas fa-chevron-down"></i>
+                                        </button>
+                                    </form>
+                                    <div class="small text-muted">{{ a_idx + 1 }}</div>
+                                    {% else %}
+                                    <span class="small text-muted">—</span>
+                                    {% endif %}
+                                </td>
                                 <td>
                                     <span class="d-inline-block rounded border"
                                           style="width: 22px; height: 22px; background: {{ t.color }};"></span>
@@ -129,6 +157,7 @@
         <p class="small text-muted mt-2 mb-0">
             Если тег уже назначен на заказы — при удалении он архивируется (нельзя выбрать на новые,
             назначения остаются до смены). Неиспользуемый тег удаляется полностью.
+            В списке заказов после блоков тегов в конце идут полностью отгруженные с долгом оплаты.
         </p>
     </div>
 </div>

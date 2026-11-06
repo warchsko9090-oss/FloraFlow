@@ -316,18 +316,21 @@ class OrderTag(db.Model):
 
     Один тег на заказ. Мягкая архивация (is_archived), если тег уже назначен;
     жёсткое удаление — только если ни на одном заказе не используется.
+    sort_order — порядок блока в списке заказов (меньше = выше; после «без тега»).
     """
     __tablename__ = 'order_tag'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     color = db.Column(db.String(20), nullable=False, default='#6c757d')
     is_archived = db.Column(db.Boolean, default=False, nullable=False)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
     created_at = db.Column(db.DateTime, default=datetime.now)
 
     orders = db.relationship('Order', back_populates='tag')
 
     __table_args__ = (
         db.Index('idx_order_tag_archived', 'is_archived'),
+        db.Index('idx_order_tag_sort', 'sort_order'),
     )
 
 

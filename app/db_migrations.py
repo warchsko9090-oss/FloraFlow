@@ -124,6 +124,7 @@ _LEGACY_COLUMNS: list[tuple[str, str, str, str]] = [
     ('shop_plant_card', 'seedling_display_order', 'INTEGER DEFAULT 0', 'INTEGER DEFAULT 0'),
     ('foreign_employee_profile', 'registration_end_date', 'DATE', 'DATE'),
     ('"order"', 'tag_id', 'INTEGER', 'INTEGER'),
+    ('order_tag', 'sort_order', 'INTEGER DEFAULT 0', 'INTEGER DEFAULT 0'),
 ]
 
 _LEGACY_INDEXES = [
@@ -142,6 +143,7 @@ _LEGACY_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_order_archived ON "order" (archived_at)',
     'CREATE INDEX IF NOT EXISTS idx_order_tag ON "order" (tag_id)',
     'CREATE INDEX IF NOT EXISTS idx_order_tag_archived ON order_tag (is_archived)',
+    'CREATE INDEX IF NOT EXISTS idx_order_tag_sort ON order_tag (sort_order)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_dedup ON tg_task (dedup_key)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_source ON tg_task (source)',
     'CREATE INDEX IF NOT EXISTS idx_tgtask_status_deadline ON tg_task (status, deadline)',
@@ -229,6 +231,27 @@ def ensure_legacy_schema(logger=None) -> None:
     _ensure_container_budget_item(logger)
     _extend_purchase_deadlines(logger)
     _ensure_expense_budget_lines(logger)
+    _backfill_order_tag_sort_order(logger)
+
+
+def _backfill_order_tag_sort_order(logger=None) -> None:
+    """Проставить sort_order тегам, где 0 у всех / ещё не задан осмысленно."""
+    try:
+        from app.models import OrderTag
+        tags = OrderTag.query.order_by(OrderTag.id.asc()).all()
+        if not tags:
+            return
+        # Если все нули — пронумеровать по id (стабильный старт).
+        if all(int(getattr(t, 'sort_order', 0) or 0) == 0 for t in tags):
+            for i, t in enumerate(tags):
+                t.sort_order = i + 1
+            db.session.commit()
+            if logger:
+                logger.info('legacy schema: backfilled sort_order for %s order tags', len(tags))
+    except Exception as exc:
+        if logger:
+            logger.warning('legacy schema: order_tag sort_order backfill skipped — %s', exc)
+        db.session.rollback()
 
 
 def _ensure_expense_budget_lines(logger=None) -> None:

@@ -429,6 +429,11 @@
         
         <!-- Кнопки сортировки: сохраняем filter_ids / filter_tag / show_done. -->
         <div class="btn-group btn-group-sm">
+            <a href="{{ url_for('orders.orders_list', mode=mode, archive_year=filters.archive_year, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids, filter_tag=filters.tag, show_done=(1 if show_done else None), sort='workflow') }}"
+               class="btn {% if sort == 'workflow' or not sort %}btn-primary text-white{% else %}btn-light border{% endif %}"
+               title="Без тега → теги по порядку → отгруженные с долгом в конце">
+               <i class="fas fa-stream"></i> По порядку
+            </a>
             <a href="{{ url_for('orders.orders_list', mode=mode, archive_year=filters.archive_year, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids, filter_tag=filters.tag, show_done=(1 if show_done else None), sort='name') }}"
                class="btn {% if sort == 'name' %}btn-primary text-white{% else %}btn-light border{% endif %}"
                title="Сортировка по алфавиту">
@@ -441,7 +446,7 @@
             </a>
             <a href="{{ url_for('orders.orders_list', mode=mode, archive_year=filters.archive_year, filter_client=filters.clients[0] if filters.clients else '', filter_status=filters.statuses[0] if filters.statuses else '', start_date=filters.start, end_date=filters.end, filter_ids=filters.ids, filter_tag=filters.tag, show_done=(1 if show_done else None), sort='tag') }}"
                class="btn {% if sort == 'tag' %}btn-primary text-white{% else %}btn-light border{% endif %}"
-               title="Сортировка по тегу">
+               title="Сортировка по порядку тегов">
                <i class="fas fa-tags"></i> По тегу
             </a>
         </div>
