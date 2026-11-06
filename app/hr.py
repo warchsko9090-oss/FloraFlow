@@ -515,15 +515,23 @@ def personnel():
             role = request.form.get('role')
             if e_id: 
                 emp = Employee.query.get(e_id)
+                was_active = bool(emp.is_active)
                 emp.name = request.form.get('name')
                 emp.is_salary = bool(request.form.get('is_salary'))
                 emp.fixed_salary = float(request.form.get('fixed_salary') or 0)
                 emp.is_active = bool(request.form.get('is_active'))
                 emp.role = role
+                db.session.commit()
+                if was_active and not emp.is_active:
+                    flash('Сотрудник в архиве: скрыт из табеля и напоминаний. Карточка, патенты и документы сохранены — вернуть можно в любой момент.')
+                elif (not was_active) and emp.is_active:
+                    flash('Сотрудник снова в табеле и в рабочих списках')
+                else:
+                    flash('Сотрудник сохранен')
             else: 
                 db.session.add(Employee(name=request.form.get('name'), is_salary=bool(request.form.get('is_salary')), fixed_salary=float(request.form.get('fixed_salary') or 0), is_active=bool(request.form.get('is_active')), role=role))
-            db.session.commit()
-            flash('Сотрудник сохранен')
+                db.session.commit()
+                flash('Сотрудник сохранен')
 
         elif action == 'delete_employee' and current_user.role == 'admin':
             emp_id = request.form.get('employee_id')
@@ -980,9 +988,26 @@ def foreign_employees():
     if not _ensure_hr_access():
         return redirect(url_for('main.index'))
 
-    employees = Employee.query.options(
-        joinedload(Employee.foreign_profile)
-    ).filter_by(is_active=True).order_by(Employee.name).all()
+    show_archived = request.args.get('archived') == '1'
+    # Активные — как раньше (все в табеле). Архив — скрытые с карточкой ИН / патентом
+    # (данные не удаляются; в следующем сезоне можно вернуть галочкой «В табеле»).
+    emp_q = Employee.query.options(joinedload(Employee.foreign_profile))
+    if show_archived:
+        emp_q = emp_q.filter(
+            Employee.is_active.is_(False),
+            or_(Employee.foreign_profile.has(), Employee.patent_periods.any()),
+        )
+    else:
+        emp_q = emp_q.filter(Employee.is_active.is_(True))
+    employees = emp_q.order_by(Employee.name).all()
+    archived_count = (
+        Employee.query
+        .filter(
+            Employee.is_active.is_(False),
+            or_(Employee.foreign_profile.has(), Employee.patent_periods.any()),
+        )
+        .count()
+    )
 
     # Pre-load current patent periods for all employees in one query
     current_periods = PatentPeriod.query.filter_by(is_current=True).order_by(PatentPeriod.end_date.desc()).all()
@@ -1010,7 +1035,13 @@ def foreign_employees():
             'reg_days_left': reg_days_left,
         })
     rows.sort(key=lambda x: natural_key(x['employee'].name))
-    return render_template('hr/foreign_employees.html', rows=rows, today=today)
+    return render_template(
+        'hr/foreign_employees.html',
+        rows=rows,
+        today=today,
+        show_archived=show_archived,
+        archived_count=archived_count,
+    )
 
 
 @bp.route('/personnel/foreign/registration-digest', methods=['POST'])
@@ -1269,6 +1300,16 @@ def foreign_employee_card(employee_id):
                 db.session.add(renewal)
                 db.session.commit()
                 flash('Продление регистрации сохранено')
+
+            elif action in ('archive_employee', 'restore_employee'):
+                if current_user.role not in ('admin', 'executive', 'brigadier'):
+                    raise ValueError('Недостаточно прав')
+                employee.is_active = action == 'restore_employee'
+                db.session.commit()
+                if employee.is_active:
+                    flash('Сотрудник снова в табеле, списках и напоминаниях')
+                else:
+                    flash('Сотрудник в архиве: скрыт из табеля и напоминаний. Карточка и документы сохранены.')
             else:
                 flash('Неизвестное действие')
         except Exception as e:

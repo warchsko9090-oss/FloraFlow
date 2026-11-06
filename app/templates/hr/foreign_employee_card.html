@@ -8,10 +8,37 @@
         </div>
         <div class="page-subtitle">{{ employee.name }}</div>
     </div>
-    <div class="page-actions">
+    <div class="page-actions d-flex flex-wrap gap-2">
+        {% if employee.is_active %}
         <a href="{{ url_for('hr.foreign_employees') }}" class="btn btn-outline-secondary btn-sm">Назад к списку</a>
+        {% else %}
+        <a href="{{ url_for('hr.foreign_employees', archived=1) }}" class="btn btn-outline-secondary btn-sm">Назад к архиву</a>
+        {% endif %}
+        {% if current_user.role in ('admin', 'executive', 'brigadier') %}
+        <form method="POST" class="d-inline">
+            <input type="hidden" name="action" value="{{ 'restore_employee' if not employee.is_active else 'archive_employee' }}">
+            {% if employee.is_active %}
+            <button type="submit" class="btn btn-outline-secondary btn-sm"
+                    onclick="return confirm('Убрать из табеля и напоминаний? Карточка и документы останутся в архиве.');">
+                <i class="fas fa-archive me-1"></i>В архив
+            </button>
+            {% else %}
+            <button type="submit" class="btn btn-success btn-sm">
+                <i class="fas fa-undo me-1"></i>Вернуть в табель
+            </button>
+            {% endif %}
+        </form>
+        {% endif %}
     </div>
 </div>
+
+{% if not employee.is_active %}
+<div class="alert alert-secondary py-2 small mb-3">
+    <i class="fas fa-archive me-1"></i>
+    Сотрудник в архиве: не в табеле, без TG-напоминаний по патенту и регистрации.
+    Все данные сохранены — нажмите «Вернуть в табель», когда понадобится снова.
+</div>
+{% endif %}
 
 <div class="row g-3">
     <div class="col-lg-6">

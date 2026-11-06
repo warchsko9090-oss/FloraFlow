@@ -66,8 +66,17 @@
         </div>
         <div class="page-subtitle">Карточки сотрудников, документы, сроки патента и регистрации. Авто-напоминания в Telegram — ежедневно в 9:00 МСК.</div>
     </div>
-    <div class="page-actions">
-        {% if current_user.role in ('admin', 'executive', 'user2') %}
+    <div class="page-actions d-flex flex-wrap gap-2 align-items-center">
+        {% if show_archived %}
+        <a href="{{ url_for('hr.foreign_employees') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="fas fa-users me-1"></i>К рабочим
+        </a>
+        {% else %}
+        <a href="{{ url_for('hr.foreign_employees', archived=1) }}" class="btn btn-outline-secondary btn-sm">
+            <i class="fas fa-archive me-1"></i>Архив{% if archived_count %} ({{ archived_count }}){% endif %}
+        </a>
+        {% endif %}
+        {% if current_user.role in ('admin', 'executive', 'user2') and not show_archived %}
         <form method="POST" action="{{ url_for('hr.foreign_registration_digest') }}" class="d-inline"
               onsubmit="return confirm('Отправить актуальную сводку по регистрациям в Telegram-чат патентов?');">
             <button type="submit" class="btn btn-outline-primary btn-sm">
@@ -78,11 +87,27 @@
     </div>
 </div>
 
+{% if show_archived %}
+<div class="alert alert-secondary py-2 small mb-3">
+    <i class="fas fa-archive me-1"></i>
+    Архив: сняты с табеля. Карточки и документы на месте, напоминания не уходят.
+    Чтобы вернуть в сезон — откройте карточку и нажмите «Вернуть в табель», либо включите галочку в карточке сотрудника.
+</div>
+{% endif %}
+
 <div class="card section-card p-3">
     <div class="d-lg-none">
+        {% if not rows %}
+        <div class="text-muted small py-3 text-center">
+            {% if show_archived %}В архиве пока никого нет{% else %}Нет сотрудников в списке{% endif %}
+        </div>
+        {% endif %}
         {% for row in rows %}
         <div class="fe-card">
-            <div class="fw-bold">{{ row.profile.full_name if row.profile else row.employee.name }}</div>
+            <div class="fw-bold">
+                {{ row.profile.full_name if row.profile else row.employee.name }}
+                {% if show_archived %}<span class="badge bg-secondary ms-1">Архив</span>{% endif %}
+            </div>
             {% if row.profile and row.profile.full_name and row.profile.full_name != row.employee.name %}
             <div class="muted">{{ row.employee.name }}</div>
             {% endif %}
@@ -121,10 +146,20 @@
                 </tr>
             </thead>
             <tbody>
+                {% if not rows %}
+                <tr>
+                    <td colspan="8" class="text-muted text-center py-4">
+                        {% if show_archived %}В архиве пока никого нет{% else %}Нет сотрудников в списке{% endif %}
+                    </td>
+                </tr>
+                {% endif %}
                 {% for row in rows %}
                 <tr>
                     <td>
-                        <div class="fw-bold">{{ row.profile.full_name if row.profile else row.employee.name }}</div>
+                        <div class="fw-bold">
+                            {{ row.profile.full_name if row.profile else row.employee.name }}
+                            {% if show_archived %}<span class="badge bg-secondary ms-1">Архив</span>{% endif %}
+                        </div>
                         <div class="small text-muted">{{ row.employee.name }}</div>
                     </td>
                     <td>{{ row.profile.phone if row.profile else '-' }}</td>

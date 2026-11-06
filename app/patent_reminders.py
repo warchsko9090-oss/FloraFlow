@@ -87,7 +87,17 @@ def run_patent_reminders_job():
     today = msk_today()
     notify_rows = []
 
-    for period in PatentPeriod.query.filter_by(is_current=True, status='active').all():
+    periods = (
+        PatentPeriod.query
+        .join(Employee, Employee.id == PatentPeriod.employee_id)
+        .filter(
+            PatentPeriod.is_current.is_(True),
+            PatentPeriod.status == 'active',
+            Employee.is_active.is_(True),
+        )
+        .all()
+    )
+    for period in periods:
         if not period.end_date:
             continue
         delta = (period.end_date - today).days
