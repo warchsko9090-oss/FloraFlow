@@ -5,6 +5,7 @@
 
 * `GET  /vium`                           — отчёт остатков
 * `GET/POST /vium/inventory`             — инвентаризация (учёт ↔ факт → adjust)
+* `GET/POST /vium/inventory/<id>/edit`   — правка уже проведённой инвентаризации
 * `GET  /vium/operations`                — журнал операций (с фильтрами)
 * `GET  /vium/material/<id>`             — карточка материала (партии + история)
 * `POST /vium/material/new`              — создать материал
@@ -165,6 +166,133 @@ def vium_report():
 # Инвентаризация (как пересчёт по полю: учёт → факт → одна корректировка)
 # ---------------------------------------------------------------------------
 
+def _is_inventory_adjust(op: ViumOperation) -> bool:
+    """Корректировка из формы инвентаризации (или с пометкой в комментарии/note)."""
+    if not op or op.kind != 'adjust':
+        return False
+    blob = ((op.comment or '') + ' ' + ' '.join(
+        (ln.note or '') for ln in (op.lines or [])
+    )).lower().replace('ё', 'е')
+    return 'инвентаризац' in blob
+
+
+def _adjust_delta_by_material(op: ViumOperation) -> dict[int, Decimal]:
+    out: dict[int, Decimal] = {}
+    for ln in (op.lines or []):
+        mid = int(ln.material_id)
+        out[mid] = out.get(mid, Decimal('0')) + (_parse_decimal(ln.qty, Decimal('0')) or Decimal('0'))
+    return out
+
+
+def _inventory_materials(include_ids: set[int] | None = None) -> list[ViumMaterial]:
+    """Активные материалы + явно нужные id (позиции из правимой инвентаризации)."""
+    q = ViumMaterial.query.filter(ViumMaterial.is_archived == False)  # noqa: E712
+    materials = q.order_by(ViumMaterial.name.asc()).all()
+    by_id = {m.id: m for m in materials}
+    for mid in (include_ids or set()):
+        if mid not in by_id:
+            m = ViumMaterial.query.get(mid)
+            if m:
+                by_id[mid] = m
+    return sorted(by_id.values(), key=lambda m: (m.name or '').lower())
+
+
+def _inventory_build_rows(
+    materials: list[ViumMaterial],
+    overview: dict,
+    only_nonzero: bool,
+    *,
+    book_override: dict[int, Decimal] | None = None,
+    fact_override: dict[int, Decimal] | None = None,
+) -> list[dict]:
+    out = []
+    for m in materials:
+        info = overview.get(m.id, {
+            'qty': Decimal('0'),
+            'avg_price': Decimal('0'),
+            'lots': 0,
+            'value': Decimal('0'),
+        })
+        live_qty = info.get('qty') or Decimal('0')
+        book = book_override.get(m.id, live_qty) if book_override is not None else live_qty
+        fact = fact_override.get(m.id, book) if fact_override is not None else book
+        if only_nonzero and book <= 0 and fact <= 0:
+            continue
+        out.append({
+            'material': m,
+            'qty': book,
+            'fact': fact,
+            'avg_price': info.get('avg_price') or Decimal('0'),
+            'lots': info.get('lots') or 0,
+        })
+    return out
+
+
+def _inventory_collect_deltas(
+    raw_ids: list,
+    raw_facts: list,
+    live: dict,
+    allowed_ids: set[int],
+) -> tuple[list[tuple[int, Decimal, Decimal, Decimal]] | None, str | None]:
+    """Парсит факт из формы. Возвращает (deltas, error) или (None, error)."""
+    deltas: list[tuple[int, Decimal, Decimal, Decimal]] = []
+    seen: set[int] = set()
+    for idx, mid_raw in enumerate(raw_ids):
+        mid_raw = (mid_raw or '').strip()
+        if not mid_raw:
+            continue
+        try:
+            mid = int(mid_raw)
+        except ValueError:
+            continue
+        if mid in seen or mid not in allowed_ids:
+            continue
+        seen.add(mid)
+
+        fact = _parse_decimal(
+            raw_facts[idx] if idx < len(raw_facts) else None,
+            default=None,
+        )
+        if fact is None:
+            continue
+        if fact < 0:
+            return None, f'Факт не может быть отрицательным (материал #{mid}).'
+
+        book = (live.get(mid) or {}).get('qty') or Decimal('0')
+        delta = fact - book
+        if abs(delta) < vium_service.QTY_EPS:
+            continue
+        deltas.append((mid, book, fact, delta))
+    return deltas, None
+
+
+def _inventory_create_adjust(
+    *,
+    op_date,
+    comment: str,
+    deltas: list[tuple[int, Decimal, Decimal, Decimal]],
+) -> ViumOperation:
+    op = ViumOperation(
+        kind='adjust',
+        date=op_date,
+        comment=comment,
+        created_by_user_id=getattr(current_user, 'id', None),
+    )
+    db.session.add(op)
+    db.session.flush()
+    for mid, book, fact, delta in deltas:
+        db.session.add(ViumOperationLine(
+            operation_id=op.id,
+            material_id=mid,
+            qty=delta,
+            unit_price=None,
+            note=f'инвентаризация: было {book:g} → стало {fact:g}',
+        ))
+    db.session.flush()
+    vium_service.apply_operation(op)
+    return op
+
+
 @bp.route('/inventory', methods=['GET', 'POST'])
 @login_required
 def vium_inventory():
@@ -178,34 +306,8 @@ def vium_inventory():
         return deny
 
     only_nonzero = request.values.get('only_nonzero') == '1'
-
-    materials = (
-        ViumMaterial.query
-        .filter(ViumMaterial.is_archived == False)  # noqa: E712
-        .order_by(ViumMaterial.name.asc())
-        .all()
-    )
+    materials = _inventory_materials()
     overview = vium_service.materials_overview()
-
-    def _build_rows():
-        out = []
-        for m in materials:
-            info = overview.get(m.id, {
-                'qty': Decimal('0'),
-                'avg_price': Decimal('0'),
-                'lots': 0,
-                'value': Decimal('0'),
-            })
-            qty = info['qty'] or Decimal('0')
-            if only_nonzero and qty <= 0:
-                continue
-            out.append({
-                'material': m,
-                'qty': qty,
-                'avg_price': info.get('avg_price') or Decimal('0'),
-                'lots': info.get('lots') or 0,
-            })
-        return out
 
     if request.method == 'POST':
         op_date = _parse_date(request.form.get('date'))
@@ -213,47 +315,19 @@ def vium_inventory():
         if not comment:
             comment = f'Инвентаризация ВиУМ {op_date.strftime("%d.%m.%Y")}'
 
-        raw_ids = request.form.getlist('material_id[]')
-        raw_facts = request.form.getlist('fact_qty[]')
-
-        # Перечитываем остатки на момент проведения (не доверяем «было» с клиента).
         live = vium_service.materials_overview()
-        active_ids = {m.id for m in materials}
-
-        deltas: list[tuple[int, Decimal, Decimal, Decimal]] = []
-        # (material_id, book, fact, delta)
-        seen: set[int] = set()
-        for idx, mid_raw in enumerate(raw_ids):
-            mid_raw = (mid_raw or '').strip()
-            if not mid_raw:
-                continue
-            try:
-                mid = int(mid_raw)
-            except ValueError:
-                continue
-            if mid in seen or mid not in active_ids:
-                continue
-            seen.add(mid)
-
-            fact = _parse_decimal(
-                raw_facts[idx] if idx < len(raw_facts) else None,
-                default=None,
-            )
-            if fact is None:
-                continue
-            if fact < 0:
-                flash(f'Факт не может быть отрицательным (материал #{mid}).', 'danger')
-                return redirect(url_for(
-                    'vium.vium_inventory',
-                    only_nonzero=1 if only_nonzero else 0,
-                ))
-
-            book = (live.get(mid) or {}).get('qty') or Decimal('0')
-            delta = fact - book
-            if abs(delta) < vium_service.QTY_EPS:
-                continue
-            deltas.append((mid, book, fact, delta))
-
+        deltas, err = _inventory_collect_deltas(
+            request.form.getlist('material_id[]'),
+            request.form.getlist('fact_qty[]'),
+            live,
+            {m.id for m in materials},
+        )
+        if err:
+            flash(err, 'danger')
+            return redirect(url_for(
+                'vium.vium_inventory',
+                only_nonzero=1 if only_nonzero else 0,
+            ))
         if not deltas:
             flash('Нет расхождений: факт совпадает с учётом по всем строкам.')
             return redirect(url_for(
@@ -261,30 +335,12 @@ def vium_inventory():
                 only_nonzero=1 if only_nonzero else 0,
             ))
 
-        op = ViumOperation(
-            kind='adjust',
-            date=op_date,
-            comment=comment,
-            created_by_user_id=getattr(current_user, 'id', None),
-        )
-        db.session.add(op)
-        db.session.flush()
-
-        for mid, book, fact, delta in deltas:
-            note = (
-                f'инвентаризация: было {book:g} → стало {fact:g}'
-            )
-            db.session.add(ViumOperationLine(
-                operation_id=op.id,
-                material_id=mid,
-                qty=delta,
-                unit_price=None,
-                note=note,
-            ))
-
         try:
-            db.session.flush()
-            vium_service.apply_operation(op)
+            op = _inventory_create_adjust(
+                op_date=op_date,
+                comment=comment,
+                deltas=deltas,
+            )
             db.session.commit()
         except ValueError as e:
             db.session.rollback()
@@ -308,12 +364,119 @@ def vium_inventory():
         )
         return redirect(url_for('vium.vium_operation_view', op_id=op.id))
 
-    rows = _build_rows()
+    rows = _inventory_build_rows(materials, overview, only_nonzero)
     return render_template(
         'vium/vium_inventory.html',
         rows=rows,
         only_nonzero=only_nonzero,
         today=msk_now().date(),
+        edit_op=None,
+        form_action=url_for('vium.vium_inventory'),
+    )
+
+
+@bp.route('/inventory/<int:op_id>/edit', methods=['GET', 'POST'])
+@login_required
+def vium_inventory_edit(op_id: int):
+    """Правка проведённой инвентаризации: откат + повторное проведение.
+
+    В колонке «Было» — остаток без этой инвентаризации, в «Стало» — целевой факт.
+    Можно менять количества, убирать позиции (факт = было) и добавлять новые.
+    """
+    deny = _check_access()
+    if deny is not None:
+        return deny
+
+    op = ViumOperation.query.get_or_404(op_id)
+    if op.kind != 'adjust':
+        flash('Редактировать как инвентаризацию можно только корректировки.')
+        return redirect(url_for('vium.vium_operation_view', op_id=op_id))
+
+    can_reverse, reverse_reason = vium_service.can_reverse_operation(op)
+    if not can_reverse:
+        flash(f'Правка невозможна: {reverse_reason}', 'danger')
+        return redirect(url_for('vium.vium_operation_view', op_id=op_id))
+
+    only_nonzero = request.values.get('only_nonzero') == '1'
+    op_deltas = _adjust_delta_by_material(op)
+    materials = _inventory_materials(set(op_deltas.keys()))
+
+    if request.method == 'POST':
+        op_date = _parse_date(request.form.get('date'))
+        comment = (request.form.get('comment') or '').strip()
+        if not comment:
+            comment = f'Инвентаризация ВиУМ {op_date.strftime("%d.%m.%Y")}'
+
+        old_id = op.id
+        try:
+            vium_service.reverse_operation(op)
+            db.session.flush()
+
+            live = vium_service.materials_overview()
+            deltas, err = _inventory_collect_deltas(
+                request.form.getlist('material_id[]'),
+                request.form.getlist('fact_qty[]'),
+                live,
+                {m.id for m in materials},
+            )
+            if err:
+                raise ValueError(err)
+
+            if not deltas:
+                db.session.commit()
+                flash(
+                    f'Инвентаризация #{old_id} отменена без замены '
+                    f'(все факты совпали с учётом).'
+                )
+                return redirect(url_for('vium.vium_operations', kind='adjust'))
+
+            new_op = _inventory_create_adjust(
+                op_date=op_date,
+                comment=comment,
+                deltas=deltas,
+            )
+            db.session.commit()
+        except ValueError as e:
+            db.session.rollback()
+            flash(f'Не удалось сохранить правку: {e}', 'danger')
+            return redirect(url_for('vium.vium_inventory_edit', op_id=op_id))
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.exception('vium inventory edit failed')
+            flash(f'Ошибка правки инвентаризации: {e}', 'danger')
+            return redirect(url_for('vium.vium_operation_view', op_id=op_id))
+
+        flash(
+            f'Инвентаризация обновлена (было #{old_id} → #{new_op.id}), '
+            f'позиций: {len(deltas)}.'
+        )
+        return redirect(url_for('vium.vium_operation_view', op_id=new_op.id))
+
+    # GET: «было» = остаток без этой операции; «стало» = текущий (уже с ней).
+    overview = vium_service.materials_overview()
+    book_override: dict[int, Decimal] = {}
+    fact_override: dict[int, Decimal] = {}
+    for m in materials:
+        live_qty = (overview.get(m.id) or {}).get('qty') or Decimal('0')
+        delta = op_deltas.get(m.id, Decimal('0'))
+        book_override[m.id] = live_qty - delta
+        fact_override[m.id] = live_qty
+
+    rows = _inventory_build_rows(
+        materials,
+        overview,
+        only_nonzero,
+        book_override=book_override,
+        fact_override=fact_override,
+    )
+    return render_template(
+        'vium/vium_inventory.html',
+        rows=rows,
+        only_nonzero=only_nonzero,
+        today=op.date or msk_now().date(),
+        edit_op=op,
+        form_action=url_for('vium.vium_inventory_edit', op_id=op.id),
+        prefill_comment=op.comment or '',
     )
 
 
@@ -393,7 +556,9 @@ def vium_operation_view(op_id: int):
         })
 
     can_reverse, reverse_reason = vium_service.can_reverse_operation(op)
-    can_edit = can_reverse and op.kind == 'intake'
+    can_edit_intake = can_reverse and op.kind == 'intake'
+    can_edit_inventory = can_reverse and op.kind == 'adjust'
+    is_inventory = _is_inventory_adjust(op)
 
     return render_template(
         'vium/vium_operation_view.html',
@@ -402,7 +567,9 @@ def vium_operation_view(op_id: int):
         kind_label=vium_service.op_kind_label(op.kind),
         can_reverse=can_reverse,
         reverse_reason=reverse_reason,
-        can_edit=can_edit,
+        can_edit=can_edit_intake,
+        can_edit_inventory=can_edit_inventory,
+        is_inventory=is_inventory,
     )
 
 

@@ -40,7 +40,11 @@
       <a class="btn btn-light" href="{{ url_for('vium.vium_operations') }}">
         <i class="fas fa-arrow-left"></i> К журналу
       </a>
-      {% if can_edit %}
+      {% if can_edit_inventory %}
+      <a class="btn btn-outline-primary" href="{{ url_for('vium.vium_inventory_edit', op_id=op.id) }}">
+        <i class="fas fa-pen"></i> {% if is_inventory %}Править инвентаризацию{% else %}Править корректировку{% endif %}
+      </a>
+      {% elif can_edit %}
       <a class="btn btn-outline-primary" href="{{ url_for('vium.vium_operation_edit', op_id=op.id) }}">
         <i class="fas fa-pen"></i> Редактировать
       </a>

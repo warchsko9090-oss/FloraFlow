@@ -49,26 +49,42 @@
   .empty { text-align: center; color: #94a3b8; padding: 36px; }
 </style>
 
+{% set is_edit = edit_op is not none %}
+
 <div class="vium-wrap">
   <div class="vium-head">
     <div>
+      {% if is_edit %}
+      <h4><i class="fas fa-pen me-2 text-primary"></i>Правка инвентаризации #{{ edit_op.id }}</h4>
+      <span class="text-muted small">
+        Старый документ будет отменён и проведён заново. «Было» — остаток без этой инвентаризации,
+        «Стало» — целевой факт. Можно менять количества, убирать и добавлять позиции.
+      </span>
+      {% else %}
       <h4><i class="fas fa-clipboard-check me-2 text-success"></i>Инвентаризация ВиУМ</h4>
       <span class="text-muted small">
         Как пересчёт по полю: слева учётный остаток, справа факт после подсчёта.
         Расхождения проводятся одной корректировкой.
       </span>
+      {% endif %}
     </div>
     <div class="d-flex gap-2 flex-wrap">
+      {% if is_edit %}
+      <a class="btn-sec" href="{{ url_for('vium.vium_operation_view', op_id=edit_op.id) }}">
+        <i class="fas fa-arrow-left"></i> К документу
+      </a>
+      {% else %}
       <a class="btn-sec" href="{{ url_for('vium.vium_report') }}">
         <i class="fas fa-arrow-left"></i> К остаткам
       </a>
+      {% endif %}
       <a class="btn-sec" href="{{ url_for('vium.vium_operations', kind='adjust') }}">
         <i class="fas fa-list"></i> Журнал корректировок
       </a>
     </div>
   </div>
 
-  <form method="POST" id="viumInventoryForm">
+  <form method="POST" action="{{ form_action }}" id="viumInventoryForm">
     <input type="hidden" name="only_nonzero" value="{{ 1 if only_nonzero else 0 }}">
 
     <div class="inv-meta">
@@ -81,13 +97,15 @@
         <div class="col-md-6">
           <label class="form-label small text-muted mb-1">Комментарий</label>
           <input type="text" name="comment" class="form-control form-control-sm"
-                 maxlength="500" placeholder="Например: инвентаризация склада упаковки">
+                 maxlength="500"
+                 value="{{ prefill_comment or '' }}"
+                 placeholder="Например: инвентаризация склада упаковки">
         </div>
         <div class="col-md-3">
           <div class="form-check form-switch mt-3">
             <input class="form-check-input" type="checkbox" role="switch" id="onlyNonzero"
                    {% if only_nonzero %}checked{% endif %}
-                   onchange="window.location='{{ url_for('vium.vium_inventory') }}' + (this.checked ? '?only_nonzero=1' : '')">
+                   onchange="window.location='{% if is_edit %}{{ url_for('vium.vium_inventory_edit', op_id=edit_op.id) }}{% else %}{{ url_for('vium.vium_inventory') }}{% endif %}' + (this.checked ? '?only_nonzero=1' : '')">
             <label class="form-check-label small" for="onlyNonzero">Только с остатком &gt; 0</label>
           </div>
         </div>
@@ -111,11 +129,15 @@
           <tbody>
             {% for r in rows %}
             {% set book_f = r.qty|float %}
-            <tr data-book="{{ book_f }}">
+            {% set fact_f = (r.fact if r.fact is defined else r.qty)|float %}
+            <tr data-book="{{ book_f }}" data-orig-fact="{{ fact_f }}">
               <td class="text-center text-muted small">{{ loop.index }}</td>
               <td>
                 <span class="fw-semibold">{{ r.material.name }}</span>
                 <input type="hidden" name="material_id[]" value="{{ r.material.id }}">
+                {% if r.material.is_archived %}
+                <span class="badge bg-secondary ms-1">архив</span>
+                {% endif %}
                 {% if r.material.description %}
                 <div class="small text-muted">{{ r.material.description }}</div>
                 {% endif %}
@@ -125,7 +147,7 @@
               <td class="num">
                 <input type="number" name="fact_qty[]" class="form-control form-control-sm fact"
                        min="0" step="0.001" required
-                       value="{{ ('%.3f'|format(book_f)).rstrip('0').rstrip('.') if book_f else '0' }}"
+                       value="{{ ('%.3f'|format(fact_f)).rstrip('0').rstrip('.') if fact_f else '0' }}"
                        inputmode="decimal">
               </td>
               <td class="num delta">0</td>
@@ -156,12 +178,17 @@
     {% if rows %}
     <div class="inv-foot">
       <div class="inv-hint" id="diffHint">
-        Расхождений: <strong id="diffCount">0</strong>
+        Расхождений с учётом: <strong id="diffCount">0</strong>
+        {% if is_edit %}
+        · если все факты = «было», документ будет просто отменён
+        {% else %}
         · меняются только строки, где факт ≠ учёту
+        {% endif %}
       </div>
       <button type="submit" class="btn-prim" id="invSubmit"
               onclick="return confirmInventorySubmit()">
-        <i class="fas fa-save"></i> Провести инвентаризацию
+        <i class="fas fa-save"></i>
+        {% if is_edit %}Сохранить изменения{% else %}Провести инвентаризацию{% endif %}
       </button>
     </div>
     {% endif %}
@@ -170,6 +197,7 @@
 
 <script>
 (function () {
+  var isEdit = {{ 'true' if is_edit else 'false' }};
   function parseNum(v) {
     if (v == null || v === '') return NaN;
     return parseFloat(String(v).replace(',', '.').replace(/\s/g, ''));
@@ -182,9 +210,10 @@
   function refresh() {
     var tbody = document.querySelector('#viumInventoryTable tbody');
     if (!tbody) return;
-    var sumBook = 0, sumFact = 0, diffs = 0;
+    var sumBook = 0, sumFact = 0, diffs = 0, changed = 0;
     tbody.querySelectorAll('tr').forEach(function (tr) {
       var book = parseNum(tr.getAttribute('data-book'));
+      var orig = parseNum(tr.getAttribute('data-orig-fact'));
       var inp = tr.querySelector('input.fact');
       var fact = parseNum(inp && inp.value);
       if (!isFinite(fact) || fact < 0) fact = book;
@@ -201,6 +230,7 @@
           diffs += 1;
         }
       }
+      if (isFinite(orig) && Math.abs(fact - orig) >= 0.0005) changed += 1;
       if (isFinite(book)) sumBook += book;
       if (isFinite(fact)) sumFact += fact;
     });
@@ -213,15 +243,30 @@
     if (elD) elD.textContent = fmt(sumFact - sumBook);
     if (elC) elC.textContent = String(diffs);
     var btn = document.getElementById('invSubmit');
-    if (btn) btn.disabled = diffs === 0;
+    if (btn) {
+      // Новая: нужны расхождения. Правка: всегда можно сохранить
+      // (в т.ч. обнулить все Δ = отменить документ).
+      btn.disabled = isEdit ? false : (diffs === 0);
+    }
+    window.__invDiffs = diffs;
+    window.__invChanged = changed;
   }
   window.confirmInventorySubmit = function () {
-    var n = parseInt((document.getElementById('diffCount') || {}).textContent || '0', 10) || 0;
-    if (n <= 0) {
+    if (isEdit) {
+      var n = window.__invDiffs || 0;
+      if (n <= 0) {
+        return confirm('Все факты совпадают с учётом. Отменить инвентаризацию #' +
+          {{ edit_op.id if is_edit else 0 }} + ' без замены?');
+      }
+      return confirm('Сохранить правку инвентаризации? Старый документ #' +
+        {{ edit_op.id if is_edit else 0 }} + ' будет заменён (' + n + ' позиций).');
+    }
+    var n2 = window.__invDiffs || 0;
+    if (n2 <= 0) {
       alert('Нет расхождений для проведения.');
       return false;
     }
-    return confirm('Провести инвентаризацию по ' + n + ' позициям? Остатки изменятся.');
+    return confirm('Провести инвентаризацию по ' + n2 + ' позициям? Остатки изменятся.');
   };
   document.addEventListener('input', function (e) {
     if (e.target && e.target.classList && e.target.classList.contains('fact')) refresh();
