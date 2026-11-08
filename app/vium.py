@@ -4,6 +4,7 @@
 Маршруты:
 
 * `GET  /vium`                           — отчёт остатков
+* `GET/POST /vium/inventory`             — инвентаризация (учёт ↔ факт → adjust)
 * `GET  /vium/operations`                — журнал операций (с фильтрами)
 * `GET  /vium/material/<id>`             — карточка материала (партии + история)
 * `POST /vium/material/new`              — создать материал
@@ -157,6 +158,162 @@ def vium_report():
         rows=rows,
         total_value=total_value,
         show_archived=show_archived,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Инвентаризация (как пересчёт по полю: учёт → факт → одна корректировка)
+# ---------------------------------------------------------------------------
+
+@bp.route('/inventory', methods=['GET', 'POST'])
+@login_required
+def vium_inventory():
+    """Полный список материалов: «было» из остатков, «стало» вводим вручную.
+
+    Проведение создаёт одну операцию kind=adjust со строками-дельтой
+    (fact − book). Строки без изменения пропускаются.
+    """
+    deny = _check_access()
+    if deny is not None:
+        return deny
+
+    only_nonzero = request.values.get('only_nonzero') == '1'
+
+    materials = (
+        ViumMaterial.query
+        .filter(ViumMaterial.is_archived == False)  # noqa: E712
+        .order_by(ViumMaterial.name.asc())
+        .all()
+    )
+    overview = vium_service.materials_overview()
+
+    def _build_rows():
+        out = []
+        for m in materials:
+            info = overview.get(m.id, {
+                'qty': Decimal('0'),
+                'avg_price': Decimal('0'),
+                'lots': 0,
+                'value': Decimal('0'),
+            })
+            qty = info['qty'] or Decimal('0')
+            if only_nonzero and qty <= 0:
+                continue
+            out.append({
+                'material': m,
+                'qty': qty,
+                'avg_price': info.get('avg_price') or Decimal('0'),
+                'lots': info.get('lots') or 0,
+            })
+        return out
+
+    if request.method == 'POST':
+        op_date = _parse_date(request.form.get('date'))
+        comment = (request.form.get('comment') or '').strip()
+        if not comment:
+            comment = f'Инвентаризация ВиУМ {op_date.strftime("%d.%m.%Y")}'
+
+        raw_ids = request.form.getlist('material_id[]')
+        raw_facts = request.form.getlist('fact_qty[]')
+
+        # Перечитываем остатки на момент проведения (не доверяем «было» с клиента).
+        live = vium_service.materials_overview()
+        active_ids = {m.id for m in materials}
+
+        deltas: list[tuple[int, Decimal, Decimal, Decimal]] = []
+        # (material_id, book, fact, delta)
+        seen: set[int] = set()
+        for idx, mid_raw in enumerate(raw_ids):
+            mid_raw = (mid_raw or '').strip()
+            if not mid_raw:
+                continue
+            try:
+                mid = int(mid_raw)
+            except ValueError:
+                continue
+            if mid in seen or mid not in active_ids:
+                continue
+            seen.add(mid)
+
+            fact = _parse_decimal(
+                raw_facts[idx] if idx < len(raw_facts) else None,
+                default=None,
+            )
+            if fact is None:
+                continue
+            if fact < 0:
+                flash(f'Факт не может быть отрицательным (материал #{mid}).', 'danger')
+                return redirect(url_for(
+                    'vium.vium_inventory',
+                    only_nonzero=1 if only_nonzero else 0,
+                ))
+
+            book = (live.get(mid) or {}).get('qty') or Decimal('0')
+            delta = fact - book
+            if abs(delta) < vium_service.QTY_EPS:
+                continue
+            deltas.append((mid, book, fact, delta))
+
+        if not deltas:
+            flash('Нет расхождений: факт совпадает с учётом по всем строкам.')
+            return redirect(url_for(
+                'vium.vium_inventory',
+                only_nonzero=1 if only_nonzero else 0,
+            ))
+
+        op = ViumOperation(
+            kind='adjust',
+            date=op_date,
+            comment=comment,
+            created_by_user_id=getattr(current_user, 'id', None),
+        )
+        db.session.add(op)
+        db.session.flush()
+
+        for mid, book, fact, delta in deltas:
+            note = (
+                f'инвентаризация: было {book:g} → стало {fact:g}'
+            )
+            db.session.add(ViumOperationLine(
+                operation_id=op.id,
+                material_id=mid,
+                qty=delta,
+                unit_price=None,
+                note=note,
+            ))
+
+        try:
+            db.session.flush()
+            vium_service.apply_operation(op)
+            db.session.commit()
+        except ValueError as e:
+            db.session.rollback()
+            flash(f'Не удалось провести инвентаризацию: {e}', 'danger')
+            return redirect(url_for(
+                'vium.vium_inventory',
+                only_nonzero=1 if only_nonzero else 0,
+            ))
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.exception('vium inventory failed')
+            flash(f'Ошибка инвентаризации: {e}', 'danger')
+            return redirect(url_for(
+                'vium.vium_inventory',
+                only_nonzero=1 if only_nonzero else 0,
+            ))
+
+        flash(
+            f'Инвентаризация проведена: операция #{op.id}, '
+            f'изменено позиций: {len(deltas)}.'
+        )
+        return redirect(url_for('vium.vium_operation_view', op_id=op.id))
+
+    rows = _build_rows()
+    return render_template(
+        'vium/vium_inventory.html',
+        rows=rows,
+        only_nonzero=only_nonzero,
+        today=msk_now().date(),
     )
 
 

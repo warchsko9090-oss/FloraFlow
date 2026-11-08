@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .vium-wrap { max-width: 1100px; margin: 0 auto; padding-bottom: 100px; }
+  .vium-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }
+  .vium-head h4 { margin: 0; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+  .vium-head .btn-sec, .vium-head .btn-prim {
+    border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: .9rem;
+    text-decoration: none !important; display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid #e2e8f0; background: #fff; color: #0f172a; cursor: pointer;
+  }
+  .vium-head .btn-sec:hover { background: #f1f5f9; }
+  .vium-head .btn-prim { background: #2E7D32; color: #fff; border-color: #2E7D32; }
+  .vium-head .btn-prim:hover { background: #1B5E20; }
+  .vium-head .btn-prim:disabled { opacity: .55; cursor: not-allowed; }
+
+  .inv-meta {
+    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .inv-table-wrap {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;
+  }
+  .inv-table { width: 100%; margin: 0; }
+  .inv-table th, .inv-table td {
+    padding: 9px 12px; vertical-align: middle; border-bottom: 1px solid #f1f5f9;
+  }
+  .inv-table thead th {
+    font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+    color: #475569; background: #f8fafc; font-weight: 700;
+  }
+  .inv-table .num { text-align: center; font-variant-numeric: tabular-nums; }
+  .inv-table .book { font-size: 1.05rem; font-weight: 800; color: #0f172a; }
+  .inv-table input.fact {
+    max-width: 120px; margin: 0 auto; text-align: center; font-weight: 700;
+    font-size: 1rem; border-color: #93c5fd;
+  }
+  .inv-table tr.diff { background: #fffbeb; }
+  .inv-table tr.diff td.delta-pos { color: #15803d; font-weight: 700; }
+  .inv-table tr.diff td.delta-neg { color: #b91c1c; font-weight: 700; }
+  .inv-foot {
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+    gap: 10px; margin-top: 14px;
+  }
+  .inv-hint { font-size: .85rem; color: #64748b; }
+  .empty { text-align: center; color: #94a3b8; padding: 36px; }
+</style>
+
+<div class="vium-wrap">
+  <div class="vium-head">
+    <div>
+      <h4><i class="fas fa-clipboard-check me-2 text-success"></i>Инвентаризация ВиУМ</h4>
+      <span class="text-muted small">
+        Как пересчёт по полю: слева учётный остаток, справа факт после подсчёта.
+        Расхождения проводятся одной корректировкой.
+      </span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn-sec" href="{{ url_for('vium.vium_report') }}">
+        <i class="fas fa-arrow-left"></i> К остаткам
+      </a>
+      <a class="btn-sec" href="{{ url_for('vium.vium_operations', kind='adjust') }}">
+        <i class="fas fa-list"></i> Журнал корректировок
+      </a>
+    </div>
+  </div>
+
+  <form method="POST" id="viumInventoryForm">
+    <input type="hidden" name="only_nonzero" value="{{ 1 if only_nonzero else 0 }}">
+
+    <div class="inv-meta">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label small text-muted mb-1">Дата</label>
+          <input type="date" name="date" class="form-control form-control-sm"
+                 value="{{ today.isoformat() }}" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small text-muted mb-1">Комментарий</label>
+          <input type="text" name="comment" class="form-control form-control-sm"
+                 maxlength="500" placeholder="Например: инвентаризация склада упаковки">
+        </div>
+        <div class="col-md-3">
+          <div class="form-check form-switch mt-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="onlyNonzero"
+                   {% if only_nonzero %}checked{% endif %}
+                   onchange="window.location='{{ url_for('vium.vium_inventory') }}' + (this.checked ? '?only_nonzero=1' : '')">
+            <label class="form-check-label small" for="onlyNonzero">Только с остатком &gt; 0</label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="inv-table-wrap">
+      {% if rows %}
+      <div class="table-responsive">
+        <table class="inv-table table align-middle mb-0" id="viumInventoryTable">
+          <thead>
+            <tr>
+              <th class="text-center" style="width:44px;">№</th>
+              <th>Материал</th>
+              <th class="text-center" style="width:70px;">Ед.</th>
+              <th class="num" style="width:110px;">Было</th>
+              <th class="num" style="width:130px;">Стало (факт)</th>
+              <th class="num" style="width:100px;">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+            {% set book_f = r.qty|float %}
+            <tr data-book="{{ book_f }}">
+              <td class="text-center text-muted small">{{ loop.index }}</td>
+              <td>
+                <span class="fw-semibold">{{ r.material.name }}</span>
+                <input type="hidden" name="material_id[]" value="{{ r.material.id }}">
+                {% if r.material.description %}
+                <div class="small text-muted">{{ r.material.description }}</div>
+                {% endif %}
+              </td>
+              <td class="text-center text-muted">{{ r.material.unit }}</td>
+              <td class="num book">{{ '{:,.3f}'.format(book_f).rstrip('0').rstrip('.') }}</td>
+              <td class="num">
+                <input type="number" name="fact_qty[]" class="form-control form-control-sm fact"
+                       min="0" step="0.001" required
+                       value="{{ ('%.3f'|format(book_f)).rstrip('0').rstrip('.') if book_f else '0' }}"
+                       inputmode="decimal">
+              </td>
+              <td class="num delta">0</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot class="table-light">
+            <tr>
+              <td colspan="3" class="text-end fw-bold small text-secondary">Итого:</td>
+              <td class="num fw-bolder" id="sumBook">0</td>
+              <td class="num fw-bolder text-primary" id="sumFact">0</td>
+              <td class="num fw-bolder" id="sumDelta">0</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+        {% if only_nonzero %}
+          Нет материалов с остатком. Снимите фильтр или оформите поступление.
+        {% else %}
+          Справочник пуст — сначала добавьте материалы на странице остатков.
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    {% if rows %}
+    <div class="inv-foot">
+      <div class="inv-hint" id="diffHint">
+        Расхождений: <strong id="diffCount">0</strong>
+        · меняются только строки, где факт ≠ учёту
+      </div>
+      <button type="submit" class="btn-prim" id="invSubmit"
+              onclick="return confirmInventorySubmit()">
+        <i class="fas fa-save"></i> Провести инвентаризацию
+      </button>
+    </div>
+    {% endif %}
+  </form>
+</div>
+
+<script>
+(function () {
+  function parseNum(v) {
+    if (v == null || v === '') return NaN;
+    return parseFloat(String(v).replace(',', '.').replace(/\s/g, ''));
+  }
+  function fmt(n) {
+    if (!isFinite(n)) return '—';
+    var s = (Math.round(n * 1000) / 1000).toFixed(3).replace(/\.?0+$/, '');
+    return s;
+  }
+  function refresh() {
+    var tbody = document.querySelector('#viumInventoryTable tbody');
+    if (!tbody) return;
+    var sumBook = 0, sumFact = 0, diffs = 0;
+    tbody.querySelectorAll('tr').forEach(function (tr) {
+      var book = parseNum(tr.getAttribute('data-book'));
+      var inp = tr.querySelector('input.fact');
+      var fact = parseNum(inp && inp.value);
+      if (!isFinite(fact) || fact < 0) fact = book;
+      var delta = (isFinite(fact) && isFinite(book)) ? (fact - book) : 0;
+      var cell = tr.querySelector('td.delta');
+      tr.classList.toggle('diff', Math.abs(delta) >= 0.0005);
+      if (cell) {
+        cell.classList.remove('delta-pos', 'delta-neg');
+        if (Math.abs(delta) < 0.0005) {
+          cell.textContent = '0';
+        } else {
+          cell.textContent = (delta > 0 ? '+' : '') + fmt(delta);
+          cell.classList.add(delta > 0 ? 'delta-pos' : 'delta-neg');
+          diffs += 1;
+        }
+      }
+      if (isFinite(book)) sumBook += book;
+      if (isFinite(fact)) sumFact += fact;
+    });
+    var elB = document.getElementById('sumBook');
+    var elF = document.getElementById('sumFact');
+    var elD = document.getElementById('sumDelta');
+    var elC = document.getElementById('diffCount');
+    if (elB) elB.textContent = fmt(sumBook);
+    if (elF) elF.textContent = fmt(sumFact);
+    if (elD) elD.textContent = fmt(sumFact - sumBook);
+    if (elC) elC.textContent = String(diffs);
+    var btn = document.getElementById('invSubmit');
+    if (btn) btn.disabled = diffs === 0;
+  }
+  window.confirmInventorySubmit = function () {
+    var n = parseInt((document.getElementById('diffCount') || {}).textContent || '0', 10) || 0;
+    if (n <= 0) {
+      alert('Нет расхождений для проведения.');
+      return false;
+    }
+    return confirm('Провести инвентаризацию по ' + n + ' позициям? Остатки изменятся.');
+  };
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('fact')) refresh();
+  });
+  refresh();
+})();
+</script>
+{% endblock %}
