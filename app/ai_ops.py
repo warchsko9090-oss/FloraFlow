@@ -342,21 +342,52 @@ def _digest_provider_order() -> list[str]:
     return out
 
 
-def _looks_like_ops_summary(text: str) -> bool:
-    """Отсекаем «мысли» модели и обрывки промпта вместо сводки."""
+def _digest_summary_body(text: str) -> str:
+    """Только текстовая сводка без блока ACTIONS/хвостового JSON."""
     t = (text or '').strip()
-    if len(t) < 80:
+    if not t:
+        return ''
+    # Модели иногда оборачивают рассуждения в think-теги — убираем.
+    t = re.sub(r'<think>[\s\S]*?</think>', '', t, flags=re.I).strip()
+    t = re.sub(r'<thinking>[\s\S]*?</thinking>', '', t, flags=re.I).strip()
+    marker = '<<<ACTIONS>>>'
+    if marker in t:
+        t = t.split(marker, 1)[0].strip()
+    # Хвостовой JSON-массив кандидатов без маркера
+    m = re.search(r'\n\s*\[[\s\S]*\]\s*$', t)
+    if m:
+        try:
+            parsed = json.loads(m.group(0).strip())
+            if isinstance(parsed, list):
+                t = t[:m.start()].strip()
+        except Exception:
+            pass
+    return t
+
+
+def _looks_like_ops_summary(text: str) -> bool:
+    """Отсекаем «мысли» модели и обрывки промпта вместо сводки.
+
+    Важно: валидируем только текстовую часть (без <<<ACTIONS>>>/JSON).
+    Иначе нормальный ответ с purchase_request в ACTIONS ложно шёл в
+    «авто без LLM» / «не похож на сводку».
+    """
+    t = _digest_summary_body(text)
+    if len(t) < 40:
         return False
     low = t.lower()
+    # Только утечки инструкции / англ. reasoning — НЕ имена типов actions
     bad_markers = (
         'одна крупица факта',
-        '<<<actions>>>',
+        'критично про actions',
+        'если кандидатов нет',
         'entities.items',
-        'purchase_request',
-        'potting_report',
         'if it\'s single list',
         'let\'s make it',
         'обычно 1 action',
+        'you are an assistant',
+        'i need to extract',
+        'the user wants',
     )
     if sum(1 for m in bad_markers if m in low) >= 2:
         return False
@@ -364,9 +395,10 @@ def _looks_like_ops_summary(text: str) -> bool:
     good = (
         'сводк' in low or 'продаж' in low or 'производ' in low
         or 'кадр' in low or 'итр' in low or '•' in t or '*' in t
-        or 'заказ' in low
+        or 'заказ' in low or 'отгруз' in low or 'оплат' in low
+        or '-' in t[:200]
     )
-    return good
+    return bool(good)
 
 
 def _llm_raw(prompt: str) -> tuple[str, str]:
@@ -398,14 +430,21 @@ def _llm_raw(prompt: str) -> tuple[str, str]:
                     ],
                     temperature=0.2,
                 )
-                text = (resp.choices[0].message.content or '').strip()
+                msg = resp.choices[0].message
+                text = (getattr(msg, 'content', None) or '').strip()
+                # gpt-oss иногда кладёт текст в reasoning / отдельно
+                if not text:
+                    text = (getattr(msg, 'reasoning', None) or '').strip()
+            text = (text or '').strip()
+            summary_body = _digest_summary_body(text)
             if text and _looks_like_ops_summary(text):
                 return text, ''
             if text:
                 errors.append(f'{name}: ответ не похож на сводку')
                 try:
                     current_app.logger.warning(
-                        'ai_ops llm %s junk head=%s', name, text[:180],
+                        'ai_ops llm %s junk head=%s summary_len=%s',
+                        name, text[:180], len(summary_body),
                     )
                 except Exception:
                     pass
@@ -453,6 +492,8 @@ def _fallback_multi_summary(
 
 def _parse_llm_digest(raw: str) -> tuple[str, list[dict]]:
     text = (raw or '').strip()
+    text = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.I).strip()
+    text = re.sub(r'<thinking>[\s\S]*?</thinking>', '', text, flags=re.I).strip()
     actions: list[dict] = []
     summary = text
     marker = '<<<ACTIONS>>>'
