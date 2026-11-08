@@ -55,7 +55,10 @@
             <td>
               <select name="mat_{{ ln.id }}" class="form-select form-select-sm">
                 {% for m in materials %}
-                  <option value="{{ m.id }}" {% if m.id == ln.material_id %}selected{% endif %}>{{ m.name }} ({{ m.unit }})</option>
+                  {% set st = (stock_by_id or {}).get(m.id) %}
+                  <option value="{{ m.id }}" {% if m.id == ln.material_id %}selected{% endif %}>
+                    {{ m.name }} ({{ m.unit }}){% if st and st.qty %} · ост. {{ '%.3g'|format(st.qty) }} · {{ '{:,.0f}'.format(st.avg_price).replace(',', ' ') }} ₽{% endif %}
+                  </option>
                 {% endfor %}
               </select>
             </td>
@@ -99,7 +102,10 @@
       <select name="new_mat___NID__" class="form-select form-select-sm">
         <option value="">— материал —</option>
         {% for m in materials %}
-          <option value="{{ m.id }}">{{ m.name }} ({{ m.unit }})</option>
+          {% set st = (stock_by_id or {}).get(m.id) %}
+          <option value="{{ m.id }}">
+            {{ m.name }} ({{ m.unit }}){% if st and st.qty %} · ост. {{ '%.3g'|format(st.qty) }} · {{ '{:,.0f}'.format(st.avg_price).replace(',', ' ') }} ₽{% endif %}
+          </option>
         {% endfor %}
       </select>
     </td>

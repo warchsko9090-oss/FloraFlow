@@ -97,6 +97,23 @@ def _parse_date(raw):
         return msk_now().date()
 
 
+def _stock_by_material_id() -> dict:
+    """Остатки и средневзвешенная цена закупки по материалам (для селектов форм).
+
+    Ключ — id материала. Значения сериализуемы в JSON для data-* и подсказок.
+    """
+    raw = vium_service.materials_overview()
+    out = {}
+    for mid, info in raw.items():
+        out[int(mid)] = {
+            'qty': float(info.get('qty') or 0),
+            'avg_price': float(info.get('avg_price') or 0),
+            'lots': int(info.get('lots') or 0),
+            'value': float(info.get('value') or 0),
+        }
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Отчёт остатков
 # ---------------------------------------------------------------------------
@@ -187,9 +204,11 @@ def vium_operations():
     operations = q.order_by(ViumOperation.date.desc(), ViumOperation.id.desc()).limit(500).all()
 
     materials = ViumMaterial.query.order_by(ViumMaterial.name.asc()).all()
+    stock_by_id = _stock_by_material_id()
 
     return render_template(
         'vium/vium_operations.html',
+        stock_by_id=stock_by_id,
         operations=operations,
         materials=materials,
         kind_choices=KIND_CHOICES,
@@ -292,6 +311,7 @@ def vium_operation_edit(op_id: int):
         return render_template(
             'vium/vium_operation_form.html',
             materials=materials,
+            stock_by_id=_stock_by_material_id(),
             kind_choices=KIND_CHOICES,
             prefill_kind='intake',
             today=op.date or msk_now().date(),
@@ -514,6 +534,7 @@ def vium_operation_new():
         return render_template(
             'vium/vium_operation_form.html',
             materials=materials,
+            stock_by_id=_stock_by_material_id(),
             kind_choices=KIND_CHOICES,
             prefill_kind=prefill_kind,
             today=msk_now().date(),
@@ -744,6 +765,7 @@ def vium_inbox_view(item_id: int):
         .order_by(ViumMaterial.name.asc())
         .all()
     )
+    stock_by_id = _stock_by_material_id()
 
     parsed_lines = []
     payload = item.parsed_payload
@@ -775,6 +797,7 @@ def vium_inbox_view(item_id: int):
         'vium/vium_inbox_card.html',
         item=item,
         materials=materials,
+        stock_by_id=stock_by_id,
         parsed_lines=parsed_lines,
         suggested=suggested,
     )
@@ -946,6 +969,7 @@ def vium_techcard_edit(plant_id: int, size_id: int):
     return render_template(
         'vium/techcard_edit.html',
         plant=plant, size=size, lines=lines, materials=materials,
+        stock_by_id=_stock_by_material_id(),
     )
 
 

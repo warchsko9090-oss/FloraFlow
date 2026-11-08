@@ -70,8 +70,9 @@
         <select name="material_id" class="form-select form-select-sm">
           <option value="">Все</option>
           {% for m in materials %}
+          {% set st = (stock_by_id or {}).get(m.id) %}
           <option value="{{ m.id }}" {% if f_material|string == m.id|string %}selected{% endif %}>
-            {{ m.name }}
+            {{ m.name }}{% if st and st.qty %} · ост. {{ '%.3g'|format(st.qty) }} · {{ '{:,.0f}'.format(st.avg_price).replace(',', ' ') }} ₽{% endif %}
           </option>
           {% endfor %}
         </select>

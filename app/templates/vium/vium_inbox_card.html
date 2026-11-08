@@ -127,15 +127,20 @@
               <input type="hidden" name="description[]" value="{{ ln.description }}">
             </td>
             <td>
-              <select class="form-select form-select-sm" name="material_id[]">
+              <select class="form-select form-select-sm material-pick" name="material_id[]">
                 <option value="">— выберите —</option>
                 {% for m in materials %}
+                {% set st = (stock_by_id or {}).get(m.id) %}
                 <option value="{{ m.id }}"
+                        data-unit="{{ m.unit }}"
+                        data-qty="{{ '%.4f'|format(st.qty) if st else '0' }}"
+                        data-avg="{{ '%.4f'|format(st.avg_price) if st else '0' }}"
                         {% if sug and sug == m.id %}selected{% endif %}>
-                  {{ m.name }} ({{ m.unit }})
+                  {{ m.name }} ({{ m.unit }}){% if st and st.qty %} · ост. {{ '%.3g'|format(st.qty) }} · {{ '{:,.0f}'.format(st.avg_price).replace(',', ' ') }} ₽{% endif %}
                 </option>
                 {% endfor %}
               </select>
+              <div class="stock-hint small text-muted mt-1"></div>
               {% if sug %}<div class="small text-success mt-1"><i class="fas fa-magic"></i> предложено AI</div>{% endif %}
             </td>
             <td class="num">
@@ -177,6 +182,28 @@
 
   <script>
   (function() {
+    function fmtQty(v) {
+      const n = Number(v);
+      if (!isFinite(n) || n === 0) return '0';
+      return (Math.round(n * 1000) / 1000).toLocaleString('ru-RU');
+    }
+    function fmtMoney(v) {
+      const n = Number(v);
+      if (!isFinite(n) || n === 0) return '—';
+      return Math.round(n).toLocaleString('ru-RU') + ' ₽';
+    }
+    function updateStockHint(sel) {
+      const cell = sel.closest('td');
+      const hint = cell ? cell.querySelector('.stock-hint') : null;
+      if (!hint) return;
+      const opt = sel.options[sel.selectedIndex];
+      if (!opt || !opt.value) { hint.textContent = ''; return; }
+      const qty = Number(opt.dataset.qty || 0);
+      const avg = Number(opt.dataset.avg || 0);
+      const unit = opt.dataset.unit || '';
+      hint.innerHTML = 'На складе: <b>' + fmtQty(qty) + '</b> ' + unit +
+        ' · ср. закупка: <b>' + fmtMoney(avg) + '</b>';
+    }
     function recalcRow(row) {
       const q = parseFloat((document.querySelector('.qty-input[data-row="'+row+'"]')||{}).value) || 0;
       const p = parseFloat((document.querySelector('.price-input[data-row="'+row+'"]')||{}).value) || 0;
@@ -185,6 +212,10 @@
     }
     document.querySelectorAll('.qty-input, .price-input').forEach(el => {
       el.addEventListener('input', () => recalcRow(el.dataset.row));
+    });
+    document.querySelectorAll('select.material-pick').forEach(sel => {
+      sel.addEventListener('change', () => updateStockHint(sel));
+      updateStockHint(sel);
     });
   })();
   </script>

@@ -24,6 +24,12 @@
   .vium-table input.form-control, .vium-table select.form-select { font-size: .9rem; }
 
   .price-col.hidden, .price-head.hidden { display: none; }
+  .stock-hint {
+    margin-top: 4px; font-size: .78rem; color: #64748b; line-height: 1.35;
+    min-height: 1.1em;
+  }
+  .stock-hint b { color: #0f172a; font-variant-numeric: tabular-nums; }
+  .stock-hint .zero { color: #b91c1c; }
 </style>
 
 <div class="vium-wrap">
@@ -34,7 +40,7 @@
       <span class="text-muted small">Старый документ будет отменён, остатки пересчитаны по новым строкам.</span>
       {% else %}
       <h4><i class="fas fa-plus-circle me-2 text-success"></i>Новая операция ВиУМ</h4>
-      <span class="text-muted small">Поступление, расход, списание или корректировка.</span>
+      <span class="text-muted small">При выборе материала — актуальный остаток и ср. цена закупки (как в отчёте остатков).</span>
       {% endif %}
     </div>
     <a class="btn btn-light" href="{% if edit_op %}{{ url_for('vium.vium_operation_view', op_id=edit_op.id) }}{% else %}{{ url_for('vium.vium_operations') }}{% endif %}">
@@ -83,9 +89,9 @@
       <table class="vium-table table mb-0">
         <thead>
           <tr>
-            <th style="width: 40%;">Материал</th>
-            <th style="width: 15%;" class="text-end">Кол-во</th>
-            <th style="width: 15%;" class="text-end price-head">Цена за ед.</th>
+            <th style="width: 38%;">Материал</th>
+            <th style="width: 14%;" class="text-end">Кол-во</th>
+            <th style="width: 14%;" class="text-end price-head">Цена за ед.</th>
             <th>Примечание</th>
             <th style="width: 60px;"></th>
           </tr>
@@ -109,9 +115,16 @@
       <select class="form-select form-select-sm material-pick" name="material_id[]" required>
         <option value="">— выберите —</option>
         {% for m in materials %}
-        <option value="{{ m.id }}" data-unit="{{ m.unit }}">{{ m.name }} ({{ m.unit }})</option>
+        {% set st = (stock_by_id or {}).get(m.id) %}
+        <option value="{{ m.id }}"
+                data-unit="{{ m.unit }}"
+                data-qty="{{ '%.4f'|format(st.qty) if st else '0' }}"
+                data-avg="{{ '%.4f'|format(st.avg_price) if st else '0' }}">
+          {{ m.name }} ({{ m.unit }}){% if st and st.qty %} · ост. {{ '%.3g'|format(st.qty) }} · {{ '{:,.0f}'.format(st.avg_price).replace(',', ' ') }} ₽{% endif %}
+        </option>
         {% endfor %}
       </select>
+      <div class="stock-hint"></div>
     </td>
     <td><input type="number" step="0.001" min="0" class="form-control form-control-sm text-end" name="qty[]" required></td>
     <td class="price-col"><input type="number" step="0.01" min="0" class="form-control form-control-sm text-end" name="unit_price[]"></td>
@@ -129,6 +142,67 @@
   const addBtn = document.getElementById('addLineBtn');
   const prefill = {{ (prefill_lines|default([]))|tojson }};
 
+  function fmtQty(v) {
+    const n = Number(v);
+    if (!isFinite(n) || n === 0) return '0';
+    return (Math.round(n * 1000) / 1000).toLocaleString('ru-RU');
+  }
+  function fmtMoney(v) {
+    const n = Number(v);
+    if (!isFinite(n) || n === 0) return '—';
+    return Math.round(n).toLocaleString('ru-RU') + ' ₽';
+  }
+
+  function currentKind() {
+    return (document.querySelector('input[name="kind"]:checked') || {}).value
+      || (document.querySelector('input[type="hidden"][name="kind"]') || {}).value
+      || 'intake';
+  }
+
+  function updateStockHint(tr) {
+    const sel = tr.querySelector('.material-pick');
+    const hint = tr.querySelector('.stock-hint');
+    if (!sel || !hint) return;
+    const opt = sel.options[sel.selectedIndex];
+    if (!opt || !opt.value) {
+      hint.textContent = '';
+      return;
+    }
+    const qty = Number(opt.dataset.qty || 0);
+    const avg = Number(opt.dataset.avg || 0);
+    const unit = opt.dataset.unit || '';
+    const qtyCls = qty > 0 ? '' : ' class="zero"';
+    hint.innerHTML =
+      'На складе: <b' + qtyCls + '>' + fmtQty(qty) + '</b> ' + unit +
+      ' · ср. закупка: <b>' + fmtMoney(avg) + '</b>' +
+      (qty > 0 ? '' : ' <span class="zero">(нет партий)</span>');
+  }
+
+  function maybeFillAvgPrice(tr) {
+    const kind = currentKind();
+    if (kind !== 'adjust' && kind !== 'intake') return;
+    const sel = tr.querySelector('.material-pick');
+    const price = tr.querySelector('input[name="unit_price[]"]');
+    if (!sel || !price) return;
+    // Не затираем уже введённую цену поступления/правки
+    if (price.value !== '' && Number(price.value) > 0) return;
+    if (kind === 'intake') return;
+    const opt = sel.options[sel.selectedIndex];
+    if (!opt || !opt.value) return;
+    const avg = Number(opt.dataset.avg || 0);
+    if (avg > 0) price.value = String(Math.round(avg * 100) / 100);
+  }
+
+  function wireLine(tr) {
+    const sel = tr.querySelector('.material-pick');
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+      updateStockHint(tr);
+      maybeFillAvgPrice(tr);
+    });
+    updateStockHint(tr);
+  }
+
   function addLine(data) {
     const node = tpl.content.cloneNode(true);
     const tr = node.querySelector('tr');
@@ -143,6 +217,8 @@
       if (note) note.value = data.note || '';
     }
     linesBox.appendChild(node);
+    const added = linesBox.lastElementChild;
+    wireLine(added);
     syncPriceVisibility();
   }
   addBtn.addEventListener('click', () => addLine(null));
@@ -152,8 +228,7 @@
   });
 
   function syncPriceVisibility() {
-    const k = (document.querySelector('input[name="kind"]:checked') || {}).value
-      || (document.querySelector('input[type="hidden"][name="kind"]') || {}).value;
+    const k = currentKind();
     const hide = (k === 'consume' || k === 'writeoff');
     document.querySelectorAll('.price-col, .price-head').forEach(el => el.classList.toggle('hidden', hide));
   }
