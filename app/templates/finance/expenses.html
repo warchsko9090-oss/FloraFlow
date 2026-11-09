@@ -277,6 +277,11 @@
                         <option value="single" {% if filters.split == 'single' %}selected{% endif %}>Без разбивки</option>
                     </select>
                 </div>
+                <div>
+                    <input type="search" name="q" value="{{ filters.q or '' }}"
+                           class="form-control form-control-sm" style="min-width: 160px; max-width: 220px;"
+                           placeholder="Описание…" title="Поиск по описанию">
+                </div>
                 <button class="btn btn-primary btn-sm">Поиск</button>
                 <a href="{{ url_for('finance.expenses') }}" class="btn btn-outline-secondary btn-sm">Сброс</a>
             </form>

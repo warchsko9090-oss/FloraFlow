@@ -98,6 +98,7 @@ def expenses():
     f_split = (request.args.get('filter_split') or '').strip().lower()
     if f_split not in ('split', 'single'):
         f_split = ''
+    f_q = (request.args.get('q') or '').strip()
     export = request.args.get('export')
 
     # Подготовка данных из счета для быстрого создания расхода
@@ -212,6 +213,9 @@ def expenses():
             )
         if f_type:
             query = query.filter(Expense.payment_type == f_type)
+        if f_q:
+            like = f"%{f_q.replace('%', r'\%').replace('_', r'\_')}%"
+            query = query.filter(Expense.description.ilike(like, escape='\\'))
         if f_split:
             from app.expense_splits import multi_split_expense_ids_subquery
             multi_ids = multi_split_expense_ids_subquery()
@@ -611,6 +615,7 @@ def expenses():
                            filters={
                                'start': start_date, 'end': end_date,
                                'item': f_item, 'type': f_type, 'split': f_split,
+                               'q': f_q,
                            })
 
 
@@ -748,6 +753,7 @@ def expenses_export():
     end_date = request.args.get('end_date')
     f_item = request.args.get('filter_item')
     f_type = request.args.get('filter_type')
+    f_q = (request.args.get('q') or '').strip()
 
     query = Expense.query
     if start_date: query = query.filter(func.date(Expense.date) >= start_date)
@@ -765,6 +771,9 @@ def expenses_export():
             )
         )
     if f_type: query = query.filter(Expense.payment_type == f_type)
+    if f_q:
+        like = f"%{f_q.replace('%', r'\%').replace('_', r'\_')}%"
+        query = query.filter(Expense.description.ilike(like, escape='\\'))
     
     from sqlalchemy.orm import selectinload, joinedload
     expenses = (
