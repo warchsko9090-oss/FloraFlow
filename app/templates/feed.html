@@ -352,7 +352,249 @@
                                             <img src="{{ ce.file_url }}" alt="Чек" class="img-fluid rounded border" style="max-height:280px;object-fit:contain;">
                                         </a>
                                         {% endif %}
-                                        {% if ce.amount %}
+                                        {% if ce.amount and ce.is_payroll %}
+                                        {# ЗП/аванс: раскладка по сотрудникам (логика выплат из табеля) #}
+                                        <div class="payroll-dash border rounded bg-light p-2 mb-2"
+                                             id="payroll-{{ ce.id }}"
+                                             data-msg-id="{{ ce.id }}"
+                                             data-total="{{ '%.2f'|format(ce.amount|float) }}"
+                                             data-month="{{ ce.payroll_month or '' }}"
+                                             data-year="{{ ce.payroll_year or '' }}"
+                                             data-pay-type="{{ ce.payment_type or 'cash' }}">
+                                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                                <div class="small text-success fw-bold text-uppercase">
+                                                    <i class="fas fa-wallet me-1"></i> Раскладка ЗП
+                                                </div>
+                                                <div class="small">
+                                                    Осталось:
+                                                    <strong class="payroll-remain text-danger">{{ '{:,.0f}'.format(ce.amount|float).replace(',', ' ') }}</strong> ₽
+                                                </div>
+                                            </div>
+                                            <form hx-post="/api/expenses/chat/{{ ce.id }}/payroll"
+                                                  hx-target="#card-{{ card.id }}"
+                                                  hx-swap="outerHTML swap:0.3s"
+                                                  class="m-0 payroll-form"
+                                                  onsubmit="return window.PayrollDash && PayrollDash.validate(this)">
+                                                <div class="row g-2 mb-2">
+                                                    <div class="col-4">
+                                                        <label class="form-label small text-muted mb-0">Месяц</label>
+                                                        <select name="target_month" class="form-select form-select-sm payroll-month"></select>
+                                                    </div>
+                                                    <div class="col-4">
+                                                        <label class="form-label small text-muted mb-0">Год</label>
+                                                        <select name="target_year" class="form-select form-select-sm payroll-year"></select>
+                                                    </div>
+                                                    <div class="col-4">
+                                                        <label class="form-label small text-muted mb-0">Дата</label>
+                                                        <input type="date" name="payment_date" class="form-control form-control-sm payroll-date" required>
+                                                    </div>
+                                                    <div class="col-6">
+                                                        <label class="form-label small text-muted mb-0">Тип оплаты</label>
+                                                        <select name="payment_type" class="form-select form-select-sm">
+                                                            <option value="cash" {% if ce.payment_type == 'cash' %}selected{% endif %}>Нал</option>
+                                                            <option value="cashless" {% if ce.payment_type != 'cash' %}selected{% endif %}>Безнал</option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-6">
+                                                        <label class="form-label small text-muted mb-0">Статья</label>
+                                                        <select name="budget_item_id" class="form-select form-select-sm payroll-budget" required>
+                                                            <option value="">— загрузка —</option>
+                                                            {% for i in all_budget_items or [] %}
+                                                            <option value="{{ i.id }}">{{ i.code }} {{ i.name }}</option>
+                                                            {% endfor %}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div class="payroll-table-wrap border rounded bg-white mb-2" style="max-height:280px;overflow:auto;">
+                                                    <div class="small text-muted p-2 payroll-loading">Загрузка сводки табеля…</div>
+                                                    <table class="table table-sm mb-0 payroll-table" style="display:none;font-size:12px;">
+                                                        <thead class="table-light sticky-top">
+                                                            <tr>
+                                                                <th>Сотрудник</th>
+                                                                <th class="text-end">Долг</th>
+                                                                <th class="text-end" style="width:110px;">Выдать</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody></tbody>
+                                                    </table>
+                                                </div>
+                                                <div class="small text-muted mb-2 payroll-hint">
+                                                    Выдать можно только в пределах долга. Сумма по строкам должна совпасть с суммой из чата.
+                                                </div>
+                                                <button type="submit" class="btn btn-sm btn-success fw-bold w-100 mb-0 payroll-submit" disabled>
+                                                    <i class="fas fa-check me-1"></i> Провести выплату
+                                                </button>
+                                            </form>
+                                        </div>
+                                        <script>
+                                        (function(){
+                                          if (!window.PayrollDash) {
+                                            window.PayrollDash = {
+                                              MONTHS: ['','Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'],
+                                              fmt: function(n){
+                                                return new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(n || 0);
+                                              },
+                                              parse: function(v){
+                                                var n = parseFloat(String(v || '').replace(',', '.').replace(/\s/g, ''));
+                                                return isFinite(n) ? n : 0;
+                                              },
+                                              initAll: function(){
+                                                document.querySelectorAll('.payroll-dash').forEach(function(el){
+                                                  if (el._pdReady) return;
+                                                  el._pdReady = true;
+                                                  window.PayrollDash.init(el);
+                                                });
+                                              },
+                                              init: function(root){
+                                                var total = this.parse(root.getAttribute('data-total'));
+                                                var now = new Date();
+                                                var defM = parseInt(root.getAttribute('data-month'), 10) || (now.getMonth()+1);
+                                                var defY = parseInt(root.getAttribute('data-year'), 10) || now.getFullYear();
+                                                var mSel = root.querySelector('.payroll-month');
+                                                var ySel = root.querySelector('.payroll-year');
+                                                var dInp = root.querySelector('.payroll-date');
+                                                for (var m=1;m<=12;m++){
+                                                  var o = document.createElement('option');
+                                                  o.value = m; o.textContent = this.MONTHS[m];
+                                                  if (m === defM) o.selected = true;
+                                                  mSel.appendChild(o);
+                                                }
+                                                for (var y=defY-1; y<=defY+1; y++){
+                                                  var oy = document.createElement('option');
+                                                  oy.value = y; oy.textContent = y;
+                                                  if (y === defY) oy.selected = true;
+                                                  ySel.appendChild(oy);
+                                                }
+                                                if (dInp && !dInp.value) {
+                                                  var iso = now.toISOString().slice(0,10);
+                                                  dInp.value = iso;
+                                                }
+                                                var self = this;
+                                                var reload = function(){ self.load(root); };
+                                                mSel.addEventListener('change', reload);
+                                                ySel.addEventListener('change', reload);
+                                                this.load(root);
+                                              },
+                                              load: function(root){
+                                                var m = root.querySelector('.payroll-month').value;
+                                                var y = root.querySelector('.payroll-year').value;
+                                                var loading = root.querySelector('.payroll-loading');
+                                                var table = root.querySelector('.payroll-table');
+                                                var tbody = table.querySelector('tbody');
+                                                loading.style.display = '';
+                                                loading.textContent = 'Загрузка сводки табеля…';
+                                                table.style.display = 'none';
+                                                tbody.innerHTML = '';
+                                                var self = this;
+                                                fetch('/api/hr/payroll_summary?year=' + y + '&month=' + m, {
+                                                  credentials: 'same-origin', cache: 'no-store'
+                                                }).then(function(r){ return r.json(); }).then(function(data){
+                                                  if (!data || !data.ok) throw new Error((data && data.error) || 'fail');
+                                                  var unoff = (data.settings && data.settings.unofficial_item_id) || null;
+                                                  var bud = root.querySelector('.payroll-budget');
+                                                  if (bud && unoff) {
+                                                    bud.value = String(unoff);
+                                                    if (!bud.value) {
+                                                      /* fallback: ищем option */
+                                                      Array.prototype.forEach.call(bud.options, function(opt){
+                                                        if (String(opt.value) === String(unoff)) bud.value = opt.value;
+                                                      });
+                                                    }
+                                                  }
+                                                  var total = self.parse(root.getAttribute('data-total'));
+                                                  var remainPool = total;
+                                                  var rows = (data.rows || []).slice().sort(function(a,b){
+                                                    return (b.debt||0) - (a.debt||0) || String(a.name).localeCompare(String(b.name), 'ru');
+                                                  });
+                                                  rows.forEach(function(row){
+                                                    var debt = Math.max(0, self.parse(row.debt));
+                                                    var pref = Math.min(debt, remainPool);
+                                                    if (pref > 0) remainPool = Math.round((remainPool - pref) * 100) / 100;
+                                                    var tr = document.createElement('tr');
+                                                    if (debt <= 0) tr.classList.add('text-muted');
+                                                    tr.innerHTML =
+                                                      '<td><div class="fw-semibold">' + self.esc(row.name) + '</div>' +
+                                                      '<div class="small text-muted">' + self.esc(row.role_label || row.role || '') +
+                                                      ' · заработано ' + self.fmt(row.earned) + '</div>' +
+                                                      '<input type="hidden" name="employee_id[]" value="' + row.employee_id + '"></td>' +
+                                                      '<td class="text-end align-middle"><span class="payroll-debt" data-debt="' + debt + '">' + self.fmt(debt) + '</span></td>' +
+                                                      '<td class="text-end align-middle">' +
+                                                      '<input type="number" name="amount[]" class="form-control form-control-sm text-end payroll-amt" ' +
+                                                      'min="0" step="0.01" max="' + debt + '" value="' + (debt <= 0 ? '0' : (pref ? pref : '')) + '" ' +
+                                                      (debt <= 0 ? 'readonly tabindex="-1" ' : '') + '></td>';
+                                                    tbody.appendChild(tr);
+                                                  });
+                                                  loading.style.display = 'none';
+                                                  table.style.display = '';
+                                                  tbody.querySelectorAll('.payroll-amt').forEach(function(inp){
+                                                    inp.addEventListener('input', function(){ self.refresh(root); });
+                                                  });
+                                                  root._payrollTotalDebt = self.parse(data.total_debt);
+                                                  self.refresh(root);
+                                                }).catch(function(err){
+                                                  loading.textContent = 'Не удалось загрузить сводку: ' + (err && err.message ? err.message : err);
+                                                });
+                                              },
+                                              esc: function(s){
+                                                return String(s || '').replace(/[&<>"']/g, function(c){
+                                                  return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);
+                                                });
+                                              },
+                                              refresh: function(root){
+                                                var total = this.parse(root.getAttribute('data-total'));
+                                                var sum = 0;
+                                                var bad = false;
+                                                root.querySelectorAll('.payroll-amt').forEach(function(inp){
+                                                  var debt = window.PayrollDash.parse(inp.getAttribute('max'));
+                                                  var v = window.PayrollDash.parse(inp.value);
+                                                  if (inp.readOnly) v = 0;
+                                                  if (v < 0) { bad = true; inp.classList.add('is-invalid'); }
+                                                  else if (v - debt > 0.009) { bad = true; inp.classList.add('is-invalid'); }
+                                                  else { inp.classList.remove('is-invalid'); }
+                                                  sum += v;
+                                                });
+                                                sum = Math.round(sum * 100) / 100;
+                                                var remain = Math.round((total - sum) * 100) / 100;
+                                                var el = root.querySelector('.payroll-remain');
+                                                if (el) {
+                                                  el.textContent = window.PayrollDash.fmt(remain);
+                                                  el.classList.toggle('text-danger', Math.abs(remain) > 0.05);
+                                                  el.classList.toggle('text-success', Math.abs(remain) <= 0.05);
+                                                }
+                                                var btn = root.querySelector('.payroll-submit');
+                                                var debtCap = root._payrollTotalDebt || 0;
+                                                var overPool = total - debtCap > 0.05;
+                                                var hint = root.querySelector('.payroll-hint');
+                                                if (hint) {
+                                                  if (overPool) {
+                                                    hint.innerHTML = '<span class="text-danger">Сумма из чата (' +
+                                                      window.PayrollDash.fmt(total) + ') больше суммарного долга (' +
+                                                      window.PayrollDash.fmt(debtCap) + '). Раздать целиком нельзя — проверьте табель или сумму.</span>';
+                                                  } else {
+                                                    hint.textContent = 'Выдать можно только в пределах долга. Сумма по строкам должна совпасть с суммой из чата.';
+                                                  }
+                                                }
+                                                if (btn) {
+                                                  btn.disabled = bad || overPool || Math.abs(remain) > 0.05 || sum <= 0;
+                                                }
+                                              },
+                                              validate: function(form){
+                                                var root = form.closest('.payroll-dash');
+                                                if (!root) return true;
+                                                this.refresh(root);
+                                                var btn = root.querySelector('.payroll-submit');
+                                                if (btn && btn.disabled) {
+                                                  alert('Раскладка неполная: остаток должен быть 0, суммы — не выше долга.');
+                                                  return false;
+                                                }
+                                                return confirm('Провести выплаты по сотрудникам и закрыть карточку?');
+                                              }
+                                            };
+                                          }
+                                          window.PayrollDash.initAll();
+                                        })();
+                                        </script>
+                                        {% elif ce.amount %}
                                         <form hx-post="/api/expenses/chat/{{ ce.id }}/import" hx-target="#card-{{ card.id }}" hx-swap="outerHTML swap:0.3s" class="m-0">
                                             <input type="hidden" name="amount" id="ce-amt-{{ ce.id }}" value="{{ '%.2f'|format(ce.amount|float) }}">
                                             {% set prefix = 'ceSplit' ~ ce.id %}

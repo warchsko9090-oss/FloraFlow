@@ -213,6 +213,196 @@ def _ensure_registration_period_from_profile(employee, profile):
     db.session.commit()
     return period
 
+
+def _hr_setting_int(key: str) -> int:
+    s = AppSetting.query.get(key)
+    return int(s.value) if s and s.value and str(s.value).isdigit() else 0
+
+
+def _hr_setting_int_list(key: str) -> list[int]:
+    s = AppSetting.query.get(key)
+    if not s or not s.value:
+        return []
+    out = []
+    for part in str(s.value).split(','):
+        part = part.strip()
+        if part.isdigit():
+            out.append(int(part))
+    return out
+
+
+def build_payroll_summary(year: int, month: int) -> dict:
+    """Сводка ЗП за месяц: все активные сотрудники + долг (как в табеле).
+
+    Используется дашбордом для раскладки ЗП/аванса из ТГ.
+    """
+    year = int(year)
+    month = int(month)
+    start_date = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    end_date = date(year, month, last_day)
+
+    official_item_id = _hr_setting_int('hr_official_item')
+    unofficial_item_id = _hr_setting_int('hr_unofficial_item')
+    other_salary_item_ids = [
+        bid for bid in _hr_setting_int_list('hr_other_salary_items')
+        if bid and bid != official_item_id and bid != unofficial_item_id
+    ]
+
+    employees = (
+        Employee.query
+        .filter(Employee.is_active.is_(True))
+        .order_by(Employee.name)
+        .all()
+    )
+
+    rates_map: dict = {}
+    for r in SalaryRate.query.filter_by(year=year).all():
+        rates_map.setdefault(r.role, {})[r.rate_type] = r.rate_value
+
+    hours_map: dict = {}
+    for l in TimeLog.query.filter(TimeLog.date >= start_date, TimeLog.date <= end_date).all():
+        eid = l.employee_id
+        if eid not in hours_map:
+            hours_map[eid] = {
+                'norm': 0.0, 'norm_over': 0.0, 'spec': 0.0, 'spec_over': 0.0,
+                'day_offs': [], 'worked_days': 0,
+            }
+        if getattr(l, 'is_day_off', False):
+            hours_map[eid]['day_offs'].append(l.date.day)
+        hn = float(l.hours_norm or 0)
+        hno = float(l.hours_norm_over or 0)
+        hs = float(l.hours_spec or 0)
+        hso = float(l.hours_spec_over or 0)
+        hours_map[eid]['norm'] += hn
+        hours_map[eid]['norm_over'] += hno
+        hours_map[eid]['spec'] += hs
+        hours_map[eid]['spec_over'] += hso
+        if not getattr(l, 'is_day_off', False) and (hn + hno + hs + hso) > 1:
+            hours_map[eid]['worked_days'] += 1
+    for eid in hours_map:
+        hours_map[eid]['day_offs'].sort()
+
+    exp_agg = db.session.query(
+        Expense.employee_id, Expense.budget_item_id, func.sum(Expense.amount)
+    ).filter(
+        Expense.employee_id.isnot(None),
+        or_(
+            and_(Expense.target_month == month, Expense.target_year == year),
+            and_(
+                Expense.target_month.is_(None),
+                extract('month', Expense.date) == month,
+                extract('year', Expense.date) == year,
+            ),
+        ),
+    ).group_by(Expense.employee_id, Expense.budget_item_id).all()
+    exp_map: dict = {}
+    for eid, bid, total in exp_agg:
+        exp_map.setdefault(eid, {})[bid] = total or 0
+
+    adj_agg = db.session.query(
+        EmployeePayment.employee_id, func.sum(EmployeePayment.amount)
+    ).filter(
+        EmployeePayment.date >= start_date,
+        EmployeePayment.date <= end_date,
+    ).group_by(EmployeePayment.employee_id).all()
+    adj_map = {r[0]: r[1] or 0 for r in adj_agg}
+
+    rows = []
+    total_debt = Decimal('0')
+    total_earned = Decimal('0')
+    for emp in employees:
+        h = hours_map.get(emp.id, {
+            'norm': 0.0, 'norm_over': 0.0, 'spec': 0.0, 'spec_over': 0.0,
+            'day_offs': [], 'worked_days': 0,
+        })
+        paid_day_offs = min(3, len(h['day_offs']))
+        emp_exp = exp_map.get(emp.id, {})
+        emp_off_id = emp.official_budget_item_id or official_item_id
+        emp_unoff_id = emp.unofficial_budget_item_id or unofficial_item_id
+        paid_official = Decimal(str(emp_exp.get(emp_off_id, 0) or 0))
+        paid_unofficial = (
+            Decimal(str(emp_exp.get(emp_unoff_id, 0) or 0))
+            if emp_unoff_id != emp_off_id else Decimal('0')
+        )
+        already = {emp_off_id, emp_unoff_id}
+        paid_other = Decimal('0')
+        for bid in other_salary_item_ids:
+            if bid in already:
+                continue
+            paid_other += Decimal(str(emp_exp.get(bid, 0) or 0))
+        manual_adjust = Decimal(str(adj_map.get(emp.id, 0) or 0))
+        other_adjust = paid_other + manual_adjust
+
+        emp_rates = rates_map.get(emp.role, {})
+        earned = Decimal('0')
+        if emp.is_salary:
+            earned = Decimal(str(emp.fixed_salary or 0))
+        elif emp.role == 'mechanic':
+            earned = Decimal(str(h['worked_days'])) * Decimal(str(emp_rates.get('norm', 0) or 0))
+        else:
+            earned += Decimal(str(h['norm'])) * Decimal(str(emp_rates.get('norm', 0) or 0))
+            earned += Decimal(str(h['norm_over'])) * Decimal(str(emp_rates.get('norm_over', 0) or 0))
+            earned += Decimal(str(h['spec'])) * Decimal(str(emp_rates.get('spec', 0) or 0))
+            earned += Decimal(str(h['spec_over'])) * Decimal(str(emp_rates.get('spec_over', 0) or 0))
+            earned += Decimal(str(paid_day_offs * 10)) * Decimal(str(emp_rates.get('norm', 0) or 0))
+
+        balance = earned - (paid_official + paid_unofficial + other_adjust)
+        debt = balance if balance > 0 else Decimal('0')
+        total_debt += debt
+        total_earned += earned
+        rows.append({
+            'employee_id': emp.id,
+            'name': emp.name,
+            'role': emp.role or '',
+            'role_label': EMPLOYEE_ROLES.get(emp.role, emp.role or ''),
+            'earned': float(earned),
+            'paid': float(paid_official + paid_unofficial + other_adjust),
+            'balance': float(balance),
+            'debt': float(debt),
+        })
+
+    unoff_item = BudgetItem.query.get(unofficial_item_id) if unofficial_item_id else None
+    off_item = BudgetItem.query.get(official_item_id) if official_item_id else None
+    return {
+        'year': year,
+        'month': month,
+        'month_label': MONTH_NAMES.get(month, str(month)),
+        'rows': rows,
+        'total_debt': float(total_debt),
+        'total_earned': float(total_earned),
+        'settings': {
+            'official_item_id': official_item_id or None,
+            'unofficial_item_id': unofficial_item_id or None,
+            'official_item_label': (
+                f'{off_item.code} {off_item.name}'.strip() if off_item else None
+            ),
+            'unofficial_item_label': (
+                f'{unoff_item.code} {unoff_item.name}'.strip() if unoff_item else None
+            ),
+        },
+    }
+
+
+@bp.route('/api/hr/payroll_summary')
+@login_required
+def api_payroll_summary():
+    """JSON сводки долгов за месяц — для раскладки ЗП на дашборде."""
+    if current_user.role not in ('admin', 'executive'):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    today = msk_today()
+    try:
+        year = int(request.args.get('year') or today.year)
+        month = int(request.args.get('month') or today.month)
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': 'bad_period'}), 400
+    if month < 1 or month > 12 or year < 2000 or year > 2100:
+        return jsonify({'ok': False, 'error': 'bad_period'}), 400
+    data = build_payroll_summary(year, month)
+    data['ok'] = True
+    return jsonify(data)
+
+
 @bp.route('/personnel', methods=['GET', 'POST'])
 @login_required
 def personnel():

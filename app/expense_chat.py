@@ -77,7 +77,7 @@ from flask import current_app
 from sqlalchemy import and_, extract, func, or_
 
 from app.models import (
-    db, Expense, BudgetItem, TgTask, User, PaymentInvoice,
+    db, Expense, BudgetItem, TgTask, User, PaymentInvoice, Employee,
     ChatExpenseMessage, ChatExpenseAlias,
 )
 from app.utils import msk_now, msk_today, MONTH_NAMES
@@ -1060,6 +1060,150 @@ def confirm_chat_expense(
 
     _safe_react(row.tg_chat_id, row.tg_message_id, None)
     return True, "ok"
+
+
+def confirm_chat_expense_payroll(
+    msg_id: int,
+    user: User,
+    *,
+    allocations: list[dict],
+    target_month: int,
+    target_year: int,
+    budget_item_id: int,
+    payment_date: date | None = None,
+    payment_type: str | None = None,
+) -> tuple[bool, str]:
+    """Раскладка ЗП/аванса из дашборда по сотрудникам (как выплата в табеле).
+
+    allocations: [{employee_id, amount}, ...] — только строки с amount > 0.
+    Сумма должна ровно совпасть с parsed_amount; каждая сумма ≤ долгу за месяц.
+    """
+    from app.expense_splits import apply_budget_lines, money2
+    from app.hr import build_payroll_summary
+
+    row = ChatExpenseMessage.query.get(msg_id)
+    if row is None:
+        return False, 'not_found'
+    if row.status in ('imported', 'rejected'):
+        return False, f'already_{row.status}'
+    if row.parsed_amount is None:
+        return False, 'unparseable'
+
+    total = money2(row.parsed_amount)
+    if total <= 0:
+        return False, 'bad_amount'
+
+    try:
+        target_month = int(target_month)
+        target_year = int(target_year)
+        budget_item_id = int(budget_item_id)
+    except (TypeError, ValueError):
+        return False, 'bad_params'
+    if target_month < 1 or target_month > 12:
+        return False, 'bad_period'
+    item = BudgetItem.query.get(budget_item_id)
+    if item is None:
+        return False, 'budget_item_not_found'
+
+    summary = build_payroll_summary(target_year, target_month)
+    debt_by_id = {
+        int(r['employee_id']): money2(r.get('debt') or 0)
+        for r in summary.get('rows') or []
+    }
+
+    cleaned: list[tuple[int, Decimal]] = []
+    alloc_sum = Decimal('0')
+    seen: set[int] = set()
+    for raw in allocations or []:
+        try:
+            eid = int(raw.get('employee_id'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if eid in seen:
+            return False, 'duplicate_employee'
+        seen.add(eid)
+        amt = money2(raw.get('amount'))
+        if amt <= 0:
+            continue
+        debt = debt_by_id.get(eid)
+        if debt is None:
+            return False, f'unknown_employee:{eid}'
+        if amt - debt > Decimal('0.009'):
+            return False, f'over_debt:{eid}'
+        cleaned.append((eid, amt))
+        alloc_sum += amt
+
+    if not cleaned:
+        return False, 'empty_allocations'
+    if abs(alloc_sum - total) > Decimal('0.05'):
+        return False, f'sum_mismatch:{alloc_sum}:{total}'
+
+    use_date = payment_date or (row.tg_date.date() if row.tg_date else msk_today())
+    pay_type = payment_type or row.parsed_payment_type or 'cash'
+    if pay_type not in ('cash', 'cashless'):
+        pay_type = 'cash'
+    month_label = MONTH_NAMES.get(target_month, str(target_month))
+
+    try:
+        first_expense_id = None
+        for eid, amt in cleaned:
+            emp = Employee.query.get(eid)
+            if emp is None:
+                raise ValueError(f'employee_missing:{eid}')
+            desc = f'ЗП {emp.name} (за {month_label} {target_year})'
+            chat_desc = (row.parsed_description or '').strip()
+            if chat_desc:
+                desc = f'{desc} · {chat_desc[:120]}'
+            ex = Expense(
+                date=use_date,
+                budget_item_id=budget_item_id,
+                description=desc[:500],
+                amount=amt,
+                payment_type=pay_type,
+                employee_id=eid,
+                target_month=target_month,
+                target_year=target_year,
+            )
+            db.session.add(ex)
+            db.session.flush()
+            apply_budget_lines(ex, [{'budget_item_id': budget_item_id, 'amount': amt}])
+            if first_expense_id is None:
+                first_expense_id = ex.id
+
+        row.expense_id = first_expense_id
+        row.status = 'imported'
+        row.suggested_budget_item_id = budget_item_id
+
+        alias_key = _normalize_alias_key(row.parsed_description or '')
+        if alias_key:
+            _bump_alias(alias_key, budget_item_id, user_id=getattr(user, 'id', None))
+
+        if row.task_id:
+            task = TgTask.query.get(row.task_id)
+            if task is not None and task.status != 'done':
+                task.status = 'done'
+                task.completed_at = msk_now()
+                task.completed_by_id = getattr(user, 'id', None)
+
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        try:
+            current_app.logger.exception('confirm_chat_expense_payroll failed')
+        except Exception:
+            pass
+        return False, str(exc)
+
+    try:
+        reconcile_payroll_for_month(target_month, target_year)
+    except Exception:
+        try:
+            current_app.logger.exception('reconcile after dashboard payroll')
+        except Exception:
+            pass
+
+    _safe_react(row.tg_chat_id, row.tg_message_id, None)
+    return True, 'ok'
 
 
 def reject_chat_expense(msg_id: int, user: User) -> tuple[bool, str]:

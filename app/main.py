@@ -1174,6 +1174,23 @@ def index():
                 if t.action_type == 'chat_expense' and payload_pl:
                     try:
                         pl = payload_pl
+                        from app.expense_chat import (
+                            is_payroll_chat_text,
+                            parse_payroll_month_year,
+                        )
+                        desc_ce = pl.get('description') or ''
+                        is_payroll = (
+                            (pl.get('classifier_source') or '') == 'payroll'
+                            or is_payroll_chat_text(desc_ce)
+                        )
+                        pay_m, pay_y = (None, None)
+                        if is_payroll:
+                            try:
+                                from app.utils import msk_today as _msk_today
+                                ref = _msk_today()
+                                pay_m, pay_y = parse_payroll_month_year(desc_ce, ref)
+                            except Exception:
+                                pay_m, pay_y = (None, None)
                         chat_expense = {
                             'id': pl.get('chat_expense_id'),
                             'amount': pl.get('amount'),
@@ -1188,6 +1205,9 @@ def index():
                             'file_url': pl.get('file_url') or (
                                 f"/api/bank-slips/{pl.get('slip_id')}/file" if pl.get('slip_id') else ''
                             ),
+                            'is_payroll': is_payroll,
+                            'payroll_month': pay_m,
+                            'payroll_year': pay_y,
                         }
                     except Exception:
                         chat_expense = None
@@ -2038,6 +2058,73 @@ def chat_expense_import(msg_id):
     except Exception:
         pass
     return _chat_expense_done_html('Проведено в расходы. Спасибо!')
+
+
+@bp.route('/api/expenses/chat/<int:msg_id>/payroll', methods=['POST'])
+@login_required
+def chat_expense_payroll(msg_id):
+    """Раскладка ЗП/аванса из ТГ по сотрудникам (дашборд)."""
+    if not _chat_expense_role_ok():
+        return _chat_expense_done_html('Доступ запрещён', 'fa-ban', 'danger'), 403
+
+    budget_item_id = request.form.get('budget_item_id', type=int)
+    target_month = request.form.get('target_month', type=int)
+    target_year = request.form.get('target_year', type=int)
+    payment_type = (request.form.get('payment_type') or '').strip() or None
+    payment_date_raw = (request.form.get('payment_date') or '').strip()
+    payment_date = None
+    if payment_date_raw:
+        try:
+            payment_date = datetime.strptime(payment_date_raw, '%Y-%m-%d').date()
+        except ValueError:
+            payment_date = None
+
+    eids = request.form.getlist('employee_id[]')
+    amts = request.form.getlist('amount[]')
+    allocations = []
+    for idx, eid_raw in enumerate(eids):
+        allocations.append({
+            'employee_id': eid_raw,
+            'amount': amts[idx] if idx < len(amts) else 0,
+        })
+
+    try:
+        from app.expense_chat import confirm_chat_expense_payroll
+        ok, msg = confirm_chat_expense_payroll(
+            msg_id,
+            current_user,
+            allocations=allocations,
+            target_month=target_month,
+            target_year=target_year,
+            budget_item_id=budget_item_id,
+            payment_date=payment_date,
+            payment_type=payment_type,
+        )
+    except Exception:
+        current_app.logger.exception('chat_expense_payroll failed')
+        return _chat_expense_done_html('Ошибка: см. логи', 'fa-triangle-exclamation', 'danger'), 500
+
+    if not ok:
+        human = {
+            'budget_item_not_found': 'Выберите статью бюджета (неофиц. ЗП).',
+            'empty_allocations': 'Укажите суммы хотя бы по одному сотруднику.',
+            'bad_period': 'Некорректный месяц выплаты.',
+            'bad_params': 'Не хватает параметров раскладки.',
+        }.get(msg)
+        if not human and msg.startswith('sum_mismatch:'):
+            human = 'Сумма по сотрудникам должна точно совпасть с суммой из чата.'
+        elif not human and msg.startswith('over_debt:'):
+            human = 'Нельзя выдать больше долга сотрудника.'
+        elif not human:
+            human = f'Не удалось: {msg}'
+        return _chat_expense_done_html(human, 'fa-triangle-exclamation', 'warning'), 400
+
+    n = sum(1 for a in allocations if float(a.get('amount') or 0) > 0)
+    try:
+        _log_action_safe(f'Раскидал ЗП из ТГ #{msg_id} на {n} сотр.')
+    except Exception:
+        pass
+    return _chat_expense_done_html(f'ЗП проведена по {n} сотрудникам.')
 
 
 @bp.route('/api/expenses/chat/<int:msg_id>/reject', methods=['POST'])
