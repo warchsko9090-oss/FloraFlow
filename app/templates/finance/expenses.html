@@ -386,6 +386,12 @@
                             <form method="POST" class="d-inline" onsubmit="return confirm('Удалить этот расход целиком (все части разбивки)?');">
                                 <input type="hidden" name="delete_expense" value="1">
                                 <input type="hidden" name="expense_id" value="{{ e.id }}">
+                                <input type="hidden" name="return_start_date" value="{{ filters.start or '' }}">
+                                <input type="hidden" name="return_end_date" value="{{ filters.end or '' }}">
+                                <input type="hidden" name="return_filter_item" value="{{ filters.item or '' }}">
+                                <input type="hidden" name="return_filter_type" value="{{ filters.type or '' }}">
+                                <input type="hidden" name="return_filter_split" value="{{ filters.split or '' }}">
+                                <input type="hidden" name="return_q" value="{{ filters.q or '' }}">
                                 <button class="btn btn-link text-danger p-0 btn-sm"><i class="fas fa-times"></i></button>
                             </form>
                             {% endif %}
@@ -481,6 +487,12 @@
                         <form method="POST" onsubmit="return confirm('Удалить этот расход целиком (все части разбивки)?');" class="m-0">
                             <input type="hidden" name="delete_expense" value="1">
                             <input type="hidden" name="expense_id" value="{{ e.id }}">
+                            <input type="hidden" name="return_start_date" value="{{ filters.start or '' }}">
+                            <input type="hidden" name="return_end_date" value="{{ filters.end or '' }}">
+                            <input type="hidden" name="return_filter_item" value="{{ filters.item or '' }}">
+                            <input type="hidden" name="return_filter_type" value="{{ filters.type or '' }}">
+                            <input type="hidden" name="return_filter_split" value="{{ filters.split or '' }}">
+                            <input type="hidden" name="return_q" value="{{ filters.q or '' }}">
                             <button class="btn btn-outline-danger btn-sm py-0 px-2"><i class="fas fa-trash"></i> Удалить</button>
                         </form>
                         {% endif %}
@@ -502,7 +514,14 @@
         <div class="modal-content">
             <form method="POST" id="editExpenseForm">
                 <input type="hidden" name="edit_expense" value="1">
+                <input type="hidden" name="ajax" value="1">
                 <input type="hidden" name="expense_id" id="editExpenseId" value="">
+                <input type="hidden" name="return_start_date" id="editReturnStart" value="{{ filters.start or '' }}">
+                <input type="hidden" name="return_end_date" id="editReturnEnd" value="{{ filters.end or '' }}">
+                <input type="hidden" name="return_filter_item" id="editReturnItem" value="{{ filters.item or '' }}">
+                <input type="hidden" name="return_filter_type" id="editReturnType" value="{{ filters.type or '' }}">
+                <input type="hidden" name="return_filter_split" id="editReturnSplit" value="{{ filters.split or '' }}">
+                <input type="hidden" name="return_q" id="editReturnQ" value="{{ filters.q or '' }}">
                 <div class="modal-header bg-primary text-white">
                     <h5 class="modal-title"><i class="fas fa-pen me-2"></i>Редактировать расход</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -1000,6 +1019,25 @@
 (function() {
     const modalEl = document.getElementById('editExpenseModal');
     if (!modalEl) return;
+    const form = document.getElementById('editExpenseForm');
+
+    function syncReturnFiltersFromForm() {
+        const ff = document.getElementById('filterForm');
+        if (!ff) return;
+        const fd = new FormData(ff);
+        const map = {
+            start_date: 'editReturnStart',
+            end_date: 'editReturnEnd',
+            filter_item: 'editReturnItem',
+            filter_type: 'editReturnType',
+            filter_split: 'editReturnSplit',
+            q: 'editReturnQ'
+        };
+        Object.keys(map).forEach(function(key) {
+            const el = document.getElementById(map[key]);
+            if (el) el.value = fd.get(key) || '';
+        });
+    }
 
     function fillProjectBudgetSelect(projectId, selectedBudgetId) {
         const wrap = document.getElementById('editExpenseProjectBudgetDiv');
@@ -1050,6 +1088,8 @@
         if (!btn) return;
         const ds = btn.dataset;
 
+        syncReturnFiltersFromForm();
+
         document.getElementById('editExpenseId').value = ds.id || '';
         document.getElementById('editExpenseDate').value = ds.date || '';
         document.getElementById('editExpenseAmount').value = ds.amount || '';
@@ -1085,6 +1125,39 @@
             jQuery('#editExpenseModal select.select-search').trigger('change');
         }
     });
+
+    if (form) {
+        form.addEventListener('submit', function(ev) {
+            ev.preventDefault();
+            syncReturnFiltersFromForm();
+            const submitBtn = form.querySelector('button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+            }
+            const body = new FormData(form);
+            fetch(form.getAttribute('action') || window.location.pathname, {
+                method: 'POST',
+                body: body,
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' }
+            }).then(function(resp) {
+                return resp.json().then(function(data) {
+                    return { okHttp: resp.ok, data: data };
+                }).catch(function() {
+                    throw new Error('Не удалось прочитать ответ сервера');
+                });
+            }).then(function(res) {
+                if (!res.data || !res.data.ok) {
+                    throw new Error((res.data && res.data.error) || 'Не удалось сохранить расход');
+                }
+                const target = res.data.redirect || window.location.href;
+                window.location.assign(target);
+            }).catch(function(err) {
+                alert(err.message || String(err));
+                if (submitBtn) submitBtn.disabled = false;
+            });
+        });
+    }
 })();
 </script>
 {% endif %}

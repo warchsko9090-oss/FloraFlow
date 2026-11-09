@@ -34,6 +34,47 @@ from app.services import (
 bp = Blueprint('finance', __name__)
 
 
+def _expenses_list_args_from_request() -> dict:
+    """Фильтры реестра расходов для redirect после POST (из return_* или URL)."""
+    args = {'tab': 'expenses'}
+
+    def _pick(*names):
+        for n in names:
+            v = request.form.get(n)
+            if v not in (None, ''):
+                return v
+            v = request.args.get(n)
+            if v not in (None, ''):
+                return v
+        return None
+
+    start = _pick('return_start_date', 'start_date')
+    end = _pick('return_end_date', 'end_date')
+    item = _pick('return_filter_item', 'filter_item')
+    typ = _pick('return_filter_type', 'filter_type')
+    split = _pick('return_filter_split', 'filter_split')
+    q = _pick('return_q', 'q')
+    if start:
+        args['start_date'] = start
+    if end:
+        args['end_date'] = end
+    if item:
+        args['filter_item'] = item
+    if typ:
+        args['filter_type'] = typ
+    if split:
+        args['filter_split'] = split
+    if q:
+        args['q'] = q
+    return args
+
+
+def _redirect_expenses_list(**extra):
+    args = _expenses_list_args_from_request()
+    args.update({k: v for k, v in extra.items() if v is not None})
+    return redirect(url_for('finance.expenses', **args))
+
+
 def _shared_project_economics_caches(projects):
     """Общие кэши для списка проектов: склад и себестоимость считаются один раз."""
     from collections import defaultdict
@@ -274,7 +315,7 @@ def expenses():
                     db.session.rollback()
                     current_app.logger.exception('expenses: delete failed')
                     flash(f'Не удалось удалить расход: {e}')
-            return redirect(url_for('finance.expenses', tab='expenses'))
+            return _redirect_expenses_list()
             
         # 2. НОВЫЙ БЛОК: Удаление или пометка счета как "Оплачен"
         elif request.form.get('action') in ['delete', 'mark_paid']:
@@ -382,9 +423,19 @@ def expenses():
             
         elif 'edit_expense' in request.form:
             # === РЕДАКТИРОВАНИЕ СУЩЕСТВУЮЩЕГО РАСХОДА (только admin) ===
+            wants_ajax = (
+                request.form.get('ajax') == '1'
+                or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            )
+
+            def _edit_fail(msg, code=400):
+                if wants_ajax:
+                    return jsonify({'ok': False, 'error': msg}), code
+                flash(msg)
+                return _redirect_expenses_list()
+
             if current_user.role != 'admin':
-                flash('Редактирование расходов доступно только администратору')
-                return redirect(url_for('finance.expenses', tab='expenses'))
+                return _edit_fail('Редактирование расходов доступно только администратору', 403)
 
             try:
                 exp_id = int(request.form.get('expense_id') or 0)
@@ -392,14 +443,12 @@ def expenses():
                 exp_id = 0
             exp = Expense.query.get(exp_id) if exp_id else None
             if exp is None:
-                flash('Расход не найден')
-                return redirect(url_for('finance.expenses', tab='expenses'))
+                return _edit_fail('Расход не найден', 404)
 
             try:
                 date_str = (request.form.get('date') or '').strip()
                 if not date_str:
-                    flash('Ошибка: Укажите дату расхода!')
-                    return redirect(url_for('finance.expenses', tab='expenses'))
+                    return _edit_fail('Ошибка: Укажите дату расхода!')
                 exp.date = datetime.strptime(date_str, '%Y-%m-%d')
 
                 exp.description = request.form.get('description') or exp.description
@@ -430,13 +479,11 @@ def expenses():
                 from app.expense_splits import apply_budget_lines, parse_split_lines_from_form
                 split_lines = parse_split_lines_from_form(request.form)
                 if not split_lines:
-                    flash('Укажите хотя бы одну статью бюджета с суммой')
-                    return redirect(url_for('finance.expenses', tab='expenses'))
+                    return _edit_fail('Укажите хотя бы одну статью бюджета с суммой')
                 try:
                     apply_budget_lines(exp, split_lines)
                 except ValueError as ve:
-                    flash(str(ve))
-                    return redirect(url_for('finance.expenses', tab='expenses'))
+                    return _edit_fail(str(ve))
 
                 inv_id_raw = request.form.get('invoice_id')
                 old_invoice_id = exp.invoice_id
@@ -484,13 +531,20 @@ def expenses():
                     except Exception:
                         current_app.logger.exception('refresh week plan pin after expense edit')
 
-                flash('Расход обновлен')
                 log_action(f"Отредактировал расход #{exp.id}")
+                if wants_ajax:
+                    # Список на клиенте перезагружаем с теми же фильтрами (без сброса).
+                    return jsonify({
+                        'ok': True,
+                        'message': 'Расход обновлен',
+                        'redirect': url_for('finance.expenses', **_expenses_list_args_from_request()),
+                    })
+                flash('Расход обновлен')
             except Exception as e:
                 db.session.rollback()
                 current_app.logger.exception('expenses: edit failed')
-                flash(f'Ошибка при сохранении расхода: {e}')
-            return redirect(url_for('finance.expenses', tab='expenses'))
+                return _edit_fail(f'Ошибка при сохранении расхода: {e}', 500)
+            return _redirect_expenses_list()
 
         else:
             # === ЭТО ЛОГИКА СОЗДАНИЯ ОБЫЧНОГО РАСХОДА ===
