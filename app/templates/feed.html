@@ -360,7 +360,8 @@
                                              data-total="{{ '%.2f'|format(ce.amount|float) }}"
                                              data-month="{{ ce.payroll_month or '' }}"
                                              data-year="{{ ce.payroll_year or '' }}"
-                                             data-pay-type="{{ ce.payment_type or 'cash' }}">
+                                             data-pay-type="{{ ce.payment_type or 'cash' }}"
+                                             data-preferred="{{ (ce.preferred_employee_ids or [])|join(',') }}">
                                             <div class="d-flex justify-content-between align-items-center mb-2">
                                                 <div class="small text-success fw-bold text-uppercase">
                                                     <i class="fas fa-wallet me-1"></i> Раскладка ЗП
@@ -503,13 +504,38 @@
                                                   }
                                                   var total = self.parse(root.getAttribute('data-total'));
                                                   var remainPool = total;
+                                                  var preferred = {};
+                                                  String(root.getAttribute('data-preferred') || '').split(',').forEach(function(x){
+                                                    x = String(x || '').trim();
+                                                    if (x) preferred[x] = true;
+                                                  });
                                                   var rows = (data.rows || []).slice().sort(function(a,b){
+                                                    var ap = preferred[String(a.employee_id)] ? 1 : 0;
+                                                    var bp = preferred[String(b.employee_id)] ? 1 : 0;
+                                                    if (ap !== bp) return bp - ap;
                                                     return (b.debt||0) - (a.debt||0) || String(a.name).localeCompare(String(b.name), 'ru');
                                                   });
+                                                  // Сначала именные из текста чата, потом остальные по долгу.
                                                   rows.forEach(function(row){
+                                                    var debt = Math.max(0, self.parse(row.debt));
+                                                    var isPref = !!preferred[String(row.employee_id)];
+                                                    var pref = 0;
+                                                    if (isPref && debt > 0 && remainPool > 0) {
+                                                      pref = Math.min(debt, remainPool);
+                                                      remainPool = Math.round((remainPool - pref) * 100) / 100;
+                                                    }
+                                                    row._prefAmt = pref;
+                                                  });
+                                                  rows.forEach(function(row){
+                                                    if (row._prefAmt) return;
                                                     var debt = Math.max(0, self.parse(row.debt));
                                                     var pref = Math.min(debt, remainPool);
                                                     if (pref > 0) remainPool = Math.round((remainPool - pref) * 100) / 100;
+                                                    row._prefAmt = pref;
+                                                  });
+                                                  rows.forEach(function(row){
+                                                    var debt = Math.max(0, self.parse(row.debt));
+                                                    var pref = self.parse(row._prefAmt);
                                                     var tr = document.createElement('tr');
                                                     if (debt <= 0) tr.classList.add('text-muted');
                                                     tr.innerHTML =

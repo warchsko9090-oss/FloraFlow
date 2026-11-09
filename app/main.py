@@ -966,6 +966,17 @@ def index():
     import json
     from sqlalchemy import or_
 
+    # Добить зависшие карточки ЗП/ТГ (уже проведены / rejected, а задача ещё new).
+    if current_user.role in ('admin', 'executive'):
+        try:
+            from app.expense_chat import sweep_stale_chat_expense_cards
+            sweep_stale_chat_expense_cards(days=60)
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
     # Переключатель для админа между тематическими вкладками дашборда.
     # Значения: 'all' (по умолчанию), 'mine', 'sales', 'finance', 'field'.
     # 'all'/'mine' — «кто» (видимость), 'sales'/'finance'/'field' — «что» (тема).
@@ -1178,12 +1189,14 @@ def index():
                             is_payroll_chat_text,
                             parse_payroll_month_year,
                         )
+                        from app.expense_chat import find_employees_mentioned
                         desc_ce = pl.get('description') or ''
                         is_payroll = (
                             (pl.get('classifier_source') or '') == 'payroll'
                             or is_payroll_chat_text(desc_ce)
                         )
                         pay_m, pay_y = (None, None)
+                        preferred_emp_ids = []
                         if is_payroll:
                             try:
                                 from app.utils import msk_today as _msk_today
@@ -1191,6 +1204,12 @@ def index():
                                 pay_m, pay_y = parse_payroll_month_year(desc_ce, ref)
                             except Exception:
                                 pay_m, pay_y = (None, None)
+                            try:
+                                preferred_emp_ids = [
+                                    e.id for e in find_employees_mentioned(desc_ce)
+                                ]
+                            except Exception:
+                                preferred_emp_ids = []
                         chat_expense = {
                             'id': pl.get('chat_expense_id'),
                             'amount': pl.get('amount'),
@@ -1208,6 +1227,7 @@ def index():
                             'is_payroll': is_payroll,
                             'payroll_month': pay_m,
                             'payroll_year': pay_y,
+                            'preferred_employee_ids': preferred_emp_ids,
                         }
                     except Exception:
                         chat_expense = None
@@ -1891,7 +1911,9 @@ def complete_tg_task():
                             msg = ChatExpenseMessage.query.get(int(cid))
                     except Exception:
                         msg = None
-                if msg is not None and (msg.status or '') in ('pending', 'invoice_match'):
+                if msg is not None and (msg.status or '') in (
+                    'pending', 'invoice_match', 'payroll',
+                ):
                     reject_chat_expense(msg.id, current_user)
             except Exception:
                 current_app.logger.exception('complete_tg_task: sync chat_expense reject')
@@ -2139,6 +2161,11 @@ def chat_expense_reject(msg_id):
         current_app.logger.exception('chat_expense_reject failed')
         return _chat_expense_done_html('Ошибка: см. логи', 'fa-triangle-exclamation', 'danger'), 500
     if not ok:
+        # already_rejected / already_imported — карточку всё равно убираем
+        if msg.startswith('already_'):
+            return _chat_expense_done_html(
+                'Уже закрыто.', 'fa-eye-slash', 'secondary',
+            )
         return _chat_expense_done_html(
             f'Не удалось: {msg}', 'fa-triangle-exclamation', 'warning',
         ), 400

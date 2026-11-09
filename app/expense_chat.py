@@ -501,6 +501,52 @@ def _amounts_close(a, b) -> bool:
     return abs(aa - bb) <= max(Decimal('100'), aa * Decimal('0.015'))
 
 
+def _norm_person_token(text: str) -> str:
+    # ё→е и э→е: в чате часто «Бэхруз», в справочнике «Бехруз».
+    return (text or '').lower().replace('ё', 'е').replace('э', 'е').strip()
+
+
+def find_employees_mentioned(text: str) -> list:
+    """Сотрудники, чьи имена встречаются в тексте чата (Бехруз, Влад…)."""
+    from app.models import Employee
+
+    blob = _norm_person_token(text)
+    if len(blob) < 3:
+        return []
+    emps = (
+        Employee.query
+        .filter(Employee.is_active.is_(True))
+        .order_by(Employee.name.asc())
+        .all()
+    )
+    # Длинные имена раньше, чтобы «Бехрузбек» не перебивался «Бехруз».
+    emps = sorted(emps, key=lambda e: len(e.name or ''), reverse=True)
+    hit = []
+    used_ids: set[int] = set()
+    words = re.findall(r'[а-яa-z0-9]{3,}', blob)
+
+    def _take(emp) -> None:
+        if emp.id not in used_ids:
+            used_ids.add(emp.id)
+            hit.append(emp)
+
+    for emp in emps:
+        name = _norm_person_token(emp.name or '')
+        if len(name) < 3:
+            continue
+        # Полное имя или первая часть («Бехрузбек» / «Бехруз»).
+        if name in blob or any(p and p in blob for p in name.split() if len(p) >= 3):
+            _take(emp)
+            continue
+        # Короткая форма из чата: «Влад» → «Владислав», «Бэхруз»→уже через э→е.
+        first = name.split()[0]
+        for w in words:
+            if len(w) >= 4 and first.startswith(w):
+                _take(emp)
+                break
+    return hit
+
+
 def _payroll_expenses(month: int, year: int, payment_type: str | None = None) -> list[Expense]:
     q = Expense.query.filter(Expense.employee_id.isnot(None))
     q = q.filter(or_(
@@ -529,8 +575,71 @@ def find_payroll_cover(
     rows = _payroll_expenses(month, year, payment_type)
     if not rows:
         rows = _payroll_expenses(month, year, None)
+
+    mentioned = find_employees_mentioned(description)
+    mentioned_ids = {e.id for e in mentioned}
+
+    # 1) Именная выплата: «аванс Бехруз 50000» ↔ расход этого сотрудника на 50к.
+    if mentioned_ids and rows:
+        named_rows = [e for e in rows if e.employee_id in mentioned_ids]
+        for exp in named_rows:
+            if _amounts_close(exp.amount, amount):
+                return {
+                    'kind': 'named_line',
+                    'expense': exp,
+                    'month': month,
+                    'year': year,
+                    'employee_ids': list(mentioned_ids),
+                }
+        named_total = sum((Decimal(str(x.amount or 0)) for x in named_rows), Decimal(0))
+        if named_rows and _amounts_close(named_total, amount):
+            return {
+                'kind': 'named_batch',
+                'expense': named_rows[0],
+                'month': month,
+                'year': year,
+                'total': named_total,
+                'count': len(named_rows),
+                'employee_ids': list(mentioned_ids),
+            }
+
     if not rows:
+        # Расход могли провести без employee_id — ищем по сумме+тексту в том же месяце.
+        loose = Expense.query.filter(
+            or_(
+                and_(Expense.target_month == month, Expense.target_year == year),
+                and_(
+                    Expense.target_month.is_(None),
+                    extract('month', Expense.date) == month,
+                    extract('year', Expense.date) == year,
+                ),
+            ),
+        ).all()
+        for exp in loose:
+            if not _amounts_close(exp.amount, amount):
+                continue
+            ed = _norm_person_token(exp.description or '')
+            cd = _norm_person_token(description or '')
+            if mentioned and any(
+                _norm_person_token(e.name).split()[0] in ed for e in mentioned if e.name
+            ):
+                return {
+                    'kind': 'desc_line',
+                    'expense': exp,
+                    'month': month,
+                    'year': year,
+                }
+            if 'аванс' in ed or 'зп' in ed or 'зарплат' in ed:
+                # совпала сумма и тип «зарплатный» расход без привязки
+                if any(tok in ed for tok in cd.split() if len(tok) >= 4):
+                    return {
+                        'kind': 'desc_line',
+                        'expense': exp,
+                        'month': month,
+                        'year': year,
+                    }
         return None
+
     for exp in rows:
         if _amounts_close(exp.amount, amount):
             return {'kind': 'line', 'expense': exp, 'month': month, 'year': year}
@@ -1206,6 +1315,76 @@ def confirm_chat_expense_payroll(
     return True, 'ok'
 
 
+def close_chat_expense_task(row: ChatExpenseMessage, user: User | None = None) -> None:
+    """Гасит TgTask сообщения (и по task_id, и по dedup_key — на случай дублей)."""
+    tasks = []
+    if row.task_id:
+        t = TgTask.query.get(row.task_id)
+        if t is not None:
+            tasks.append(t)
+    dedup = f"chat_expense:msg={row.tg_chat_id}:{row.tg_message_id}"
+    for t in TgTask.query.filter_by(dedup_key=dedup).all():
+        if t not in tasks:
+            tasks.append(t)
+    now = msk_now()
+    uid = getattr(user, 'id', None) if user is not None else None
+    for task in tasks:
+        if task.status != 'done':
+            task.status = 'done'
+            task.completed_at = now
+            if uid is not None:
+                task.completed_by_id = uid
+
+
+def sweep_stale_chat_expense_cards(days: int = 45) -> dict:
+    """Закрыть зависшие карточки ЗП/расходов, которые уже не должны висеть.
+
+    - message imported/matched/rejected, а задача ещё new → закрыть задачу
+    - pending/payroll, а задача уже done → rejected
+    - payroll_wait, но в ERP уже есть покрытие → matched + закрыть задачу
+    """
+    since = msk_now() - timedelta(days=days)
+    stats = {'tasks_closed': 0, 'msgs_rejected': 0, 'msgs_matched': 0}
+    rows = (
+        ChatExpenseMessage.query
+        .filter(ChatExpenseMessage.created_at >= since)
+        .order_by(ChatExpenseMessage.id.asc())
+        .all()
+    )
+    for row in rows:
+        st = (row.status or '')
+        if st in ('imported', 'matched', 'rejected'):
+            before = False
+            if row.task_id:
+                t = TgTask.query.get(row.task_id)
+                before = bool(t and t.status != 'done')
+            close_chat_expense_task(row)
+            if before:
+                stats['tasks_closed'] += 1
+            continue
+
+        hit = classify_chat_row_vs_db(row)
+        if hit.get('in_db'):
+            if st not in ('imported', 'matched'):
+                row.status = 'matched'
+                stats['msgs_matched'] += 1
+            if hit.get('expense') is not None and not row.expense_id:
+                row.expense_id = hit['expense'].id
+            close_chat_expense_task(row)
+            _safe_react(row.tg_chat_id, row.tg_message_id, None)
+            continue
+
+        if st in ('pending', 'payroll', 'invoice_match') and row.task_id:
+            task = TgTask.query.get(row.task_id)
+            if task is not None and task.status == 'done':
+                row.status = 'rejected'
+                stats['msgs_rejected'] += 1
+
+    if any(stats.values()):
+        db.session.commit()
+    return stats
+
+
 def reject_chat_expense(msg_id: int, user: User) -> tuple[bool, str]:
     """Админ пометил «не расход» / дубль, импортировать не нужно.
 
@@ -1216,16 +1395,17 @@ def reject_chat_expense(msg_id: int, user: User) -> tuple[bool, str]:
     if row is None:
         return False, "not_found"
     if row.status in ("imported", "rejected"):
+        # Задача могла остаться new — дожимаем.
+        try:
+            close_chat_expense_task(row, user)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         return False, f"already_{row.status}"
 
     try:
         row.status = "rejected"
-        if row.task_id:
-            task = TgTask.query.get(row.task_id)
-            if task is not None and task.status != "done":
-                task.status = "done"
-                task.completed_at = msk_now()
-                task.completed_by_id = getattr(user, "id", None)
+        close_chat_expense_task(row, user)
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
@@ -1412,12 +1592,25 @@ def heal_missed_chat_expenses(days: int = 21) -> dict:
     """Разово чинит пропуски: т/тр, смешанные «патент+зп», ЗП без покрытия,
     чеки с done-задачей без импорта. Не коммитит снаружи — коммитит сама.
     """
+    try:
+        sweep_stats = sweep_stale_chat_expense_cards(days=max(days, 45))
+    except Exception:
+        sweep_stats = {}
+        try:
+            db.session.rollback()
+            current_app.logger.exception('sweep_stale_chat_expense_cards failed')
+        except Exception:
+            pass
+
     since = msk_now() - timedelta(days=days)
     stats = {
         'thousands_reparsed': 0,
         'mixed_reopened': 0,
         'payroll_opened': 0,
         'ghost_receipts_rejected': 0,
+        'swept_tasks_closed': int(sweep_stats.get('tasks_closed') or 0),
+        'swept_msgs_matched': int(sweep_stats.get('msgs_matched') or 0),
+        'swept_msgs_rejected': int(sweep_stats.get('msgs_rejected') or 0),
     }
     rows = (
         ChatExpenseMessage.query
