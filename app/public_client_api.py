@@ -1,6 +1,9 @@
 import json
 import os
 import re
+import tempfile
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -37,7 +40,16 @@ from app.shop_catalog import (
     sort_plant_groups,
 )
 from app.stock_helpers import get_reserved_map
-from app.utils import msk_now, create_pdf_response, natural_key, size_natural_key
+from app.utils import (
+    msk_now,
+    create_pdf_response,
+    natural_key,
+    size_natural_key,
+    resolve_upload_path_from_uri,
+    build_pdf_bytes,
+    stamp_pdf_page_numbers,
+    merge_pdf_bytes,
+)
 from app.rate_limit import rate_limit, check_rate_limit
 from app.shop_security import shop_kp_access_token, verify_shop_kp_access
 from app.shop_landing_page import get_landing_context
@@ -46,6 +58,10 @@ bp = Blueprint("public_client_api", __name__)
 
 
 _UPLOAD_SUFFIX_RE = re.compile(r"_(\d{10,})(_\d+)?$")
+_STOCK_PDF_TTL_SEC = 180
+_STOCK_PDF_CACHE_SECONDS = 120
+_stock_pdf_lock = threading.Lock()
+_stock_pdf_cache = {"key": None, "data": None, "filename": None, "at": 0.0}
 
 
 def _display_name_from_filename(filename: str) -> str:
@@ -797,10 +813,69 @@ def _build_site_stock_pdf_groups(catalog_items: list) -> list:
 def get_public_product_stock_report():
     """PDF товарных остатков на сайте — только позиции с витрины (как в каталоге)."""
     end_date = msk_now()
-    regular = build_visible_catalog_items(apply_shop_prices=False)
-    seedlings = build_visible_seedling_items(apply_shop_prices=False)
+    # Фото карточек прайсу не нужны — не сканируем uploads на каждый клик.
+    regular = build_visible_catalog_items(apply_shop_prices=False, include_photos=False)
+    seedlings = build_visible_seedling_items(apply_shop_prices=False, include_photos=False)
     catalog_items = regular + seedlings
     return end_date, _build_site_stock_pdf_groups(catalog_items)
+
+
+def _prepare_pdf_promo_photos(urls):
+    """Локальные ужатые JPEG для PDF. Без HTTP self-fetch огромных /uploads/.
+
+    Возвращает (список путей для <img src>, временные файлы на удаление).
+    """
+    from PIL import Image
+
+    prepared = []
+    cleanup = []
+    for url in urls or []:
+        src = resolve_upload_path_from_uri(url)
+        if src is None:
+            continue
+        try:
+            with Image.open(src) as im:
+                rgb = im.convert('RGB')
+                rgb.thumbnail((900, 900))
+                tmp = tempfile.NamedTemporaryFile(
+                    prefix='shop_pdf_promo_', suffix='.jpg', delete=False,
+                )
+                tmp_path = tmp.name
+                tmp.close()
+                rgb.save(tmp_path, format='JPEG', quality=72, optimize=True)
+            prepared.append(tmp_path)
+            cleanup.append(tmp_path)
+        except Exception:
+            current_app.logger.exception('pdf promo resize failed for %s', url)
+            prepared.append(str(src))
+    return prepared, cleanup
+
+
+def _build_stock_pdf_bytes(template_ctx, ground_groups, container_groups):
+    """Собирает байты прайса (две части при грунте+саженцах)."""
+    pdf_kwargs = dict(page_margin='0')
+    if ground_groups and container_groups:
+        html_ground = render_template(
+            'shop_stock_pdf.html', pdf_part='ground', **template_ctx,
+        )
+        html_containers = render_template(
+            'shop_stock_pdf.html', pdf_part='containers', **template_ctx,
+        )
+        blobs = []
+        for idx, part in enumerate((html_ground, html_containers)):
+            blob = build_pdf_bytes(part, page_margin=pdf_kwargs['page_margin'])
+            if not blob:
+                return None
+            if idx == 1:
+                blob = stamp_pdf_page_numbers(blob)
+            blobs.append(blob)
+        return merge_pdf_bytes(blobs)
+
+    html = render_template('shop_stock_pdf.html', pdf_part='full', **template_ctx)
+    blob = build_pdf_bytes(html, page_margin=pdf_kwargs['page_margin'])
+    if blob and container_groups:
+        blob = stamp_pdf_page_numbers(blob)
+    return blob
 
 
 @bp.get("/shop/pdf-diag")
@@ -825,7 +900,25 @@ def public_shop_pdf_diag():
 def public_shop_stock_pdf():
     from flask import current_app
 
+    cleanup_paths = []
     try:
+        end_date = msk_now()
+        cache_key = end_date.strftime('%Y-%m-%d')
+        now = time.time()
+        with _stock_pdf_lock:
+            cached = _stock_pdf_cache
+            if (
+                cached['key'] == cache_key
+                and cached['data']
+                and now - float(cached['at'] or 0) < _STOCK_PDF_TTL_SEC
+            ):
+                return create_pdf_response(
+                    '',
+                    cached['filename'],
+                    pdf_bytes=cached['data'],
+                    cache_seconds=_STOCK_PDF_CACHE_SECONDS,
+                )
+
         end_date, groups = get_public_product_stock_report()
         groups = transform_stock_report_price_mode(groups, 'retail')
         ground_groups = []
@@ -847,11 +940,12 @@ def public_shop_stock_pdf():
                 print_settings = json.loads(setting.value)
             except Exception:
                 print_settings = {}
-        promo_photos = [
+        raw_promo = [
             print_settings.get(k) for k in (
                 'promo_photo_1_url', 'promo_photo_2_url', 'promo_photo_3_url',
             ) if print_settings.get(k)
         ]
+        promo_photos, cleanup_paths = _prepare_pdf_promo_photos(raw_promo)
 
         template_ctx = dict(
             groups=groups,
@@ -866,32 +960,21 @@ def public_shop_stock_pdf():
             contact_display_label=contact_display_label,
         )
         filename = f"Прайс Княжество от {end_date.strftime('%d.%m.%Y')}.pdf"
-        # Без page_bg: белый фон уже в CSS шаблона. Кастомный beforeDrawPage
-        # на Amvera конфликтует с KeepTogether (нет attribute 'draw').
-        pdf_kwargs = dict(page_margin="0")
-
-        if ground_groups and container_groups:
-            html_ground = render_template(
-                "shop_stock_pdf.html",
-                pdf_part="ground",
-                **template_ctx,
-            )
-            html_containers = render_template(
-                "shop_stock_pdf.html",
-                pdf_part="containers",
-                **template_ctx,
-            )
-            return create_pdf_response(
-                "",
-                filename,
-                pdf_parts=[html_ground, html_containers],
-                page_number_part_indexes=(1,),
-                **pdf_kwargs,
-            )
-
-        html = render_template("shop_stock_pdf.html", pdf_part="full", **template_ctx)
+        data = _build_stock_pdf_bytes(template_ctx, ground_groups, container_groups)
+        if not data:
+            return 'Error generating PDF'
+        with _stock_pdf_lock:
+            _stock_pdf_cache.update({
+                'key': cache_key,
+                'data': data,
+                'filename': filename,
+                'at': time.time(),
+            })
         return create_pdf_response(
-            html, filename, number_pages=bool(container_groups), **pdf_kwargs,
+            '',
+            filename,
+            pdf_bytes=data,
+            cache_seconds=_STOCK_PDF_CACHE_SECONDS,
         )
     except Exception as exc:
         current_app.logger.exception('public_shop_stock_pdf failed')
@@ -909,6 +992,12 @@ def public_shop_stock_pdf():
                 'dejavu': (Path(pdf_static) / 'DejaVuSans.ttf').is_file(),
             }), 500
         raise
+    finally:
+        for path in cleanup_paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 @bp.route("/shop/contacts")

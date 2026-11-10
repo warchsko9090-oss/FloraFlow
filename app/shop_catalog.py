@@ -670,7 +670,7 @@ def _catalog_photo_rel(root: str, plant_id: int, plant_name: str, bucket: str, c
     return cache[key]
 
 
-def build_visible_catalog_items(apply_shop_prices=True):
+def build_visible_catalog_items(apply_shop_prices=True, include_photos=True):
     """Собирает позиции для публичной витрины с учётом настроек."""
     from app.shop_images import SHOP_IMG_CARD, shop_image_url
     from app.seedlings import size_name_export_label
@@ -689,7 +689,7 @@ def build_visible_catalog_items(apply_shop_prices=True):
         for bucket in _buckets_for_plant_size(plant_id, size_id):
             keys.add((plant_id, size_id, bucket))
 
-    root = current_app.config['UPLOAD_FOLDER']
+    root = current_app.config['UPLOAD_FOLDER'] if include_photos else ''
     photo_cache = {}
     items = []
 
@@ -724,7 +724,9 @@ def build_visible_catalog_items(apply_shop_prices=True):
         forced_container = plant_forced_to_container_section(plant.name, plant.latin_name)
         display_bucket = 'ground' if forced_container else bucket
         card_attrs = _catalog_card_attrs(pd, display_bucket)
-        photo_rel = _catalog_photo_rel(root, plant_id, plant.name, display_bucket, photo_cache)
+        photo_rel = None
+        if include_photos:
+            photo_rel = _catalog_photo_rel(root, plant_id, plant.name, display_bucket, photo_cache)
         row = {
             'plant_id': plant_id,
             'size_id': size_id,
@@ -741,7 +743,7 @@ def build_visible_catalog_items(apply_shop_prices=True):
             'price': _wholesale_price_for_pair(plant_id, size_id, stock),
             'has_photos': bool(photo_rel),
             'photo_rel': photo_rel,
-            'photo_url': shop_image_url(photo_rel, SHOP_IMG_CARD),
+            'photo_url': shop_image_url(photo_rel, SHOP_IMG_CARD) if photo_rel else '',
             'catalog_bucket': 'container' if forced_container else bucket,
         }
         items.append(row)
@@ -753,7 +755,7 @@ def build_visible_catalog_items(apply_shop_prices=True):
     return items
 
 
-def build_visible_seedling_items(apply_shop_prices=True):
+def build_visible_seedling_items(apply_shop_prices=True, include_photos=True):
     """Позиции-саженцы для витрины (без размеров в UI, один plant_id)."""
     from app.shop_images import SHOP_IMG_CARD, shop_image_url
     from app.seedlings import size_name_export_label
@@ -769,7 +771,7 @@ def build_visible_seedling_items(apply_shop_prices=True):
     cards = {c.plant_id: c for c in _load_shop_plant_cards()}
     hidden_ids = get_seedling_hidden_ids()
 
-    root = current_app.config['UPLOAD_FOLDER']
+    root = current_app.config['UPLOAD_FOLDER'] if include_photos else ''
     photo_cache = {}
     items = []
 
@@ -793,7 +795,9 @@ def build_visible_seedling_items(apply_shop_prices=True):
         size_id = int(stock['size_id'])
         pd = plant_display.get(plant_id, {})
 
-        photo_rel = _catalog_photo_rel(root, plant_id, plant.name, 'container', photo_cache)
+        photo_rel = None
+        if include_photos:
+            photo_rel = _catalog_photo_rel(root, plant_id, plant.name, 'container', photo_cache)
         row = {
             'plant_id': plant_id,
             'size_id': size_id,
@@ -811,7 +815,7 @@ def build_visible_seedling_items(apply_shop_prices=True):
             'price': _wholesale_price_for_pair(plant_id, size_id, stock),
             'has_photos': bool(photo_rel),
             'photo_rel': photo_rel,
-            'photo_url': shop_image_url(photo_rel, SHOP_IMG_CARD),
+            'photo_url': shop_image_url(photo_rel, SHOP_IMG_CARD) if photo_rel else '',
         }
         row['catalog_bucket'] = 'container'
         items.append(row)

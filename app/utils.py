@@ -359,10 +359,43 @@ def ensure_dejavu_fonts():
         addMapping('DejaVuSans', 1, 1, 'DejaVuSans-Bold')
 
 
+def resolve_upload_path_from_uri(uri: str):
+    """Локальный файл из /uploads/... или https://host/uploads/... — без HTTP self-fetch."""
+    if not uri or not has_app_context():
+        return None
+    raw = (uri or '').strip()
+    path_part = raw
+    if '://' in raw:
+        path_part = unquote(urlparse(raw).path or '')
+    path_part = path_part.replace('\\', '/')
+    if path_part.startswith('/uploads/'):
+        rel = path_part[len('/uploads/'):]
+    elif path_part.startswith('uploads/'):
+        rel = path_part[len('uploads/'):]
+    else:
+        return None
+    rel = unquote(rel).lstrip('/')
+    if not rel or '..' in rel.split('/'):
+        return None
+    upload_root = Path(current_app.config['UPLOAD_FOLDER'])
+    candidate = (upload_root / rel).resolve()
+    try:
+        candidate.relative_to(upload_root.resolve())
+    except ValueError:
+        return None
+    if candidate.is_file():
+        return candidate
+    return None
+
+
 def pdf_resource_callback(uri, rel):
-    """Разрешает url() в CSS (@font-face) в локальные файлы шрифтов."""
+    """Разрешает url() в CSS (@font-face) и /uploads/ в локальные файлы."""
     if not has_app_context():
         return uri
+
+    upload_path = resolve_upload_path_from_uri(uri)
+    if upload_path is not None:
+        return str(upload_path)
 
     static = _pdf_static_dir()
     bare = uri.split('?')[0].split('/')[-1]
@@ -390,6 +423,11 @@ def pdf_resource_callback(uri, rel):
             path = path[1:]
         if os.path.isfile(path):
             return path
+
+    # Не отдаём http(s) обратно в xhtml2pdf — на 1–2 воркерах self-fetch
+    # промо-фото (по 3 МБ) подвешивает генерацию прайса почти бесконечно.
+    if uri.startswith('http://') or uri.startswith('https://'):
+        return None
 
     return uri
 
@@ -543,25 +581,31 @@ def stamp_pdf_page_numbers(data: bytes) -> bytes:
 
 def create_pdf_response(
     html_content, filename, *, page_bg=None, page_margin='1cm', pdf_parts=None,
-    page_number_part_indexes=None, number_pages=False,
+    page_number_part_indexes=None, number_pages=False, cache_seconds=None,
+    pdf_bytes=None,
 ):
     """PDF через xhtml2pdf. pdf_parts — список HTML-фрагментов для склейки в один файл.
 
     number_pages — нумерация всего файла. page_number_part_indexes — только
     указанные части (0-based), каждая со своей нумерацией 1/N.
+    pdf_bytes — готовые байты (кэш), без повторной сборки.
+    cache_seconds — Cache-Control max-age для публичных выгрузок.
     """
-    parts = pdf_parts if pdf_parts else [html_content]
-    stamp_idx = set(page_number_part_indexes or ())
-    blobs = []
-    for idx, part in enumerate(parts):
-        blob = build_pdf_bytes(part, page_bg=page_bg, page_margin=page_margin)
-        if not blob:
-            return 'Error generating PDF'
-        if number_pages or idx in stamp_idx:
-            blob = stamp_pdf_page_numbers(blob)
-        blobs.append(blob)
+    if pdf_bytes is not None:
+        data = pdf_bytes
+    else:
+        parts = pdf_parts if pdf_parts else [html_content]
+        stamp_idx = set(page_number_part_indexes or ())
+        blobs = []
+        for idx, part in enumerate(parts):
+            blob = build_pdf_bytes(part, page_bg=page_bg, page_margin=page_margin)
+            if not blob:
+                return 'Error generating PDF'
+            if number_pages or idx in stamp_idx:
+                blob = stamp_pdf_page_numbers(blob)
+            blobs.append(blob)
 
-    data = merge_pdf_bytes(blobs) if len(blobs) > 1 else blobs[0]
+        data = merge_pdf_bytes(blobs) if len(blobs) > 1 else blobs[0]
     response = make_response(data)
     response.headers['Content-Type'] = 'application/pdf'
     # ASCII fallback нужен браузерам/Яндексу: кириллица в filename= превращается в «_ _ _».
@@ -580,7 +624,10 @@ def create_pdf_response(
         f'attachment; filename="{ascii_fallback}"; '
         f"filename*=UTF-8''{quoted_name}"
     )
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    if cache_seconds and int(cache_seconds) > 0:
+        response.headers['Cache-Control'] = f'public, max-age={int(cache_seconds)}'
+    else:
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     return response
 
 def apply_excel_styles(ws):
