@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v70'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
+const CACHE_VERSION = 'v72'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
 
@@ -15,20 +15,20 @@ const NO_CACHE_PATHS = [
 
 // Список файлов, которые нужны всегда (ОБОЛОЧКА)
 const ASSETS_TO_CACHE = [
-    '/offline', // Наша страница ошибки
+    '/offline',
     '/static/icon-192.png',
-    'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap',
-    'https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css',
-    'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css',
-    'https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css',
-    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
-    'https://unpkg.com/nprogress@0.2.0/nprogress.css',
-    'https://code.jquery.com/jquery-3.7.0.min.js',
-    'https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js',
-    'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js',
-    'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/i18n/ru.js',
-    'https://unpkg.com/htmx.org@1.9.10',
-    'https://unpkg.com/nprogress@0.2.0/nprogress.js'
+    '/static/vendor/fonts/inter-google.css',
+    '/static/vendor/bootstrap.min.css',
+    '/static/vendor/select2.min.css',
+    '/static/vendor/select2-bootstrap-5-theme.min.css',
+    '/static/vendor/fontawesome/css/all.min.css',
+    '/static/vendor/nprogress.css',
+    '/static/vendor/jquery.min.js',
+    '/static/vendor/bootstrap.bundle.min.js',
+    '/static/vendor/select2.min.js',
+    '/static/vendor/select2.ru.js',
+    '/static/vendor/htmx.min.js',
+    '/static/vendor/nprogress.js',
 ];
 
 // 1. УСТАНОВКА: Скачиваем критически важные файлы
@@ -83,12 +83,8 @@ self.addEventListener('fetch', (event) => {
     }
 
     // СТРАТЕГИЯ 1: Кэш (Cache First) -> Сеть
-    // Для статики (картинки, скрипты, шрифты)
-    if (url.pathname.startsWith('/static/') || 
-        url.hostname.includes('cdn') || 
-        url.hostname.includes('unpkg') || 
-        url.hostname.includes('fonts') ||
-        url.hostname.includes('cdnjs')) {
+    // Оболочка: свои копии CSS/JS/шрифтов/картинок. CDN больше не трогаем.
+    if (url.pathname.startsWith('/static/')) {
         
         event.respondWith(
             caches.match(event.request).then((cachedResponse) => {
