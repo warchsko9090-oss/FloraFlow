@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v72'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
+const CACHE_VERSION = 'v73'; // Меняй эту цифру, если обновил дизайн, чтобы сбросить кэш у всех
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
 
@@ -13,15 +13,26 @@ const NO_CACHE_PATHS = [
     '/api/cache-manifest',
 ];
 
-// Список файлов, которые нужны всегда (ОБОЛОЧКА)
+// Полный пак оболочки ERP (~1.3 МБ): CSS/JS, Inter, иконки, Chart.js.
+// Качается один раз при установке SW (первый вход), не фото и не HTML-страницы.
 const ASSETS_TO_CACHE = [
     '/offline',
     '/static/icon-192.png',
     '/static/vendor/fonts/inter-google.css',
+    '/static/vendor/fonts/inter-1.woff2',
+    '/static/vendor/fonts/inter-2.woff2',
+    '/static/vendor/fonts/inter-3.woff2',
+    '/static/vendor/fonts/inter-4.woff2',
+    '/static/vendor/fonts/inter-5.woff2',
+    '/static/vendor/fonts/inter-6.woff2',
+    '/static/vendor/fonts/inter-7.woff2',
     '/static/vendor/bootstrap.min.css',
     '/static/vendor/select2.min.css',
     '/static/vendor/select2-bootstrap-5-theme.min.css',
     '/static/vendor/fontawesome/css/all.min.css',
+    '/static/vendor/fontawesome/webfonts/fa-solid-900.woff2',
+    '/static/vendor/fontawesome/webfonts/fa-regular-400.woff2',
+    '/static/vendor/fontawesome/webfonts/fa-brands-400.woff2',
     '/static/vendor/nprogress.css',
     '/static/vendor/jquery.min.js',
     '/static/vendor/bootstrap.bundle.min.js',
@@ -29,15 +40,21 @@ const ASSETS_TO_CACHE = [
     '/static/vendor/select2.ru.js',
     '/static/vendor/htmx.min.js',
     '/static/vendor/nprogress.js',
+    '/static/vendor/chart.umd.min.js',
 ];
 
-// 1. УСТАНОВКА: Скачиваем критически важные файлы
+// 1. УСТАНОВКА: сразу качаем весь пак оболочки.
+// add() по одному — один 404 не срывает всю установку (addAll так делает).
 self.addEventListener('install', (event) => {
     self.skipWaiting();
     event.waitUntil(
         caches.open(STATIC_CACHE).then((cache) => {
-            console.log('[SW] Caching shell assets');
-            return cache.addAll(ASSETS_TO_CACHE);
+            console.log('[SW] Caching full vendor pack');
+            return Promise.all(
+                ASSETS_TO_CACHE.map((url) =>
+                    cache.add(url).catch((err) => console.warn('[SW] skip', url, err))
+                )
+            );
         })
     );
 });

@@ -283,7 +283,8 @@
                            placeholder="Описание…" title="Поиск по описанию">
                 </div>
                 <button class="btn btn-primary btn-sm">Поиск</button>
-                <a href="{{ url_for('finance.expenses') }}" class="btn btn-outline-secondary btn-sm">Сброс</a>
+                <a href="{{ url_for('finance.expenses', tab='expenses') }}" class="btn btn-outline-secondary btn-sm">Сброс</a>
+                <a href="{{ url_for('finance.expenses', tab='expenses', all_dates=1) }}" class="btn btn-outline-secondary btn-sm" title="Без ограничения по датам">Все даты</a>
             </form>
             <div class="page-actions mt-2 mt-md-0">
                 <button onclick="exportExpenses()" class="btn btn-success btn-sm">Excel</button>
@@ -291,6 +292,30 @@
             </div>
             </details>
         </div>
+
+        {% if default_period_applied %}
+        <div class="alert alert-light border py-2 px-3 small mb-2">
+            Показаны последние 90 дней ({{ filters.start }} — {{ filters.end }}).
+            <a href="{{ url_for('finance.expenses', tab='expenses', all_dates=1) }}">Показать все даты</a>
+        </div>
+        {% endif %}
+        {% if expenses_total is defined and expenses_total > 0 %}
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2 small text-muted">
+            <span>{{ expenses_total }} записей · стр. {{ page }} / {{ expenses_pages }}</span>
+            {% if expenses_pages > 1 %}
+            <div class="btn-group btn-group-sm">
+                {% if page > 1 %}
+                <a class="btn btn-outline-secondary"
+                   href="{{ url_for('finance.expenses', tab='expenses', start_date=filters.start, end_date=filters.end, filter_item=filters.item, filter_type=filters.type, filter_split=filters.split, q=filters.q, page=page-1) }}">←</a>
+                {% endif %}
+                {% if page < expenses_pages %}
+                <a class="btn btn-outline-secondary"
+                   href="{{ url_for('finance.expenses', tab='expenses', start_date=filters.start, end_date=filters.end, filter_item=filters.item, filter_type=filters.type, filter_split=filters.split, q=filters.q, page=page+1) }}">→</a>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
 
         <!-- ПК ВЕРСИЯ ТАБЛИЦЫ -->
         <div class="table-responsive d-none d-md-block" style="max-height: 70vh; overflow: auto;">

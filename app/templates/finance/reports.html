@@ -10,6 +10,14 @@
             Сверка, обороты, результат, маржа, партнеры и проекты в едином разделе.
         </div>
     </div>
+    <div class="page-actions">
+        <a class="btn btn-outline-secondary btn-sm"
+           href="{{ url_for('finance.refresh_report_cache', next=request.full_path) }}"
+           hx-boost="false"
+           title="Пересчитать кэш отчётов">
+            <i class="fas fa-sync-alt"></i> Обновить
+        </a>
+    </div>
 </div>
 
 <!-- Вкладки навигации -->

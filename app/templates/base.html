@@ -2447,22 +2447,22 @@
     });
 
     // --- SERVICE WORKER & SMART CACHE WARMING ---
-    let _warmCacheRunning = false;
+    // var/window: HTMX boost может повторно выполнить inline-скрипт → Redeclaration of let
+    var _warmCacheRunning = window._warmCacheRunning || false;
+    window._warmCacheRunning = _warmCacheRunning;
     if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js').then(reg => {
-                console.log('SW Registered');
-                const initialDelay = 5000 + Math.random() * 15000;
-                setTimeout(warmCache, initialDelay);
-                scheduleNextWarm();
-                {% if current_user.is_authenticated %}
-                // Web Push подписка — только для авторизованных пользователей.
-                // Запрашиваем разрешение мягко: если уже granted — подписываемся,
-                // если default — даём пользователю «спокойно поработать», прежде
-                // чем показывать всплывайку (через 8 сек).
-                setTimeout(() => { setupWebPush(reg).catch(()=>{}); }, 8000);
-                {% endif %}
-            });
+        navigator.serviceWorker.register('/sw.js').then(reg => {
+            console.log('SW Registered');
+            const initialDelay = 5000 + Math.random() * 15000;
+            setTimeout(warmCache, initialDelay);
+            scheduleNextWarm();
+            {% if current_user.is_authenticated %}
+            // Web Push подписка — только для авторизованных пользователей.
+            // Запрашиваем разрешение мягко: если уже granted — подписываемся,
+            // если default — даём пользователю «спокойно поработать», прежде
+            // чем показывать всплывайку (через 8 сек).
+            setTimeout(() => { setupWebPush(reg).catch(()=>{}); }, 8000);
+            {% endif %}
         });
     }
 
@@ -2532,9 +2532,10 @@
         }, next);
     }
     async function warmCache() {
-        if (_warmCacheRunning) return;
+        if (window._warmCacheRunning) return;
         if (!navigator.onLine) return;
         if (document.visibilityState === 'hidden') return;
+        window._warmCacheRunning = true;
         _warmCacheRunning = true;
         const statusEl = document.getElementById('networkStatus');
         const textEl = document.getElementById('statusText');
@@ -2570,6 +2571,7 @@
         } catch (e) {
             console.error('Warming failed', e);
         } finally {
+            window._warmCacheRunning = false;
             _warmCacheRunning = false;
         }
     }

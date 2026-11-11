@@ -1221,16 +1221,36 @@ def stock_report():
     all_fields = sorted(Field.query.all(), key=natural_key)
     all_years = sorted([r[0] for r in db.session.query(StockBalance.year).distinct().all() if r[0] is not None])
 
-    sorted_groups, grand_total = build_stock_report_data(
-        report_mode,
-        end_date,
-        selected_fields=selected_fields,
-        selected_plants=selected_plants,
-        selected_sizes=query_sizes,
-        selected_years=selected_years,
-        all_plants=all_plants,
-        all_sizes=all_sizes,
-        all_fields=all_fields,
+    from app.report_cache import cached_report
+    # Ключ без ORM: id фильтров + дата + режим
+    _sf = tuple(sorted(int(x) for x in (selected_fields or [])))
+    _sp = tuple(sorted(int(x) for x in (selected_plants or [])))
+    _ss = (
+        tuple(sorted(int(x) for x in query_sizes))
+        if query_sizes is not None else 'auto'
+    )
+    _sy = tuple(sorted(int(x) for x in (selected_years or [])))
+    _stock_cache_name = (
+        f'stock_report|{report_mode}|{end_date.isoformat()}'
+        f'|f{_sf}|p{_sp}|s{_ss}|y{_sy}'
+    )
+
+    def _build_stock_cached():
+        return build_stock_report_data(
+            report_mode,
+            end_date,
+            selected_fields=selected_fields,
+            selected_plants=selected_plants,
+            selected_sizes=query_sizes,
+            selected_years=selected_years,
+            all_plants=all_plants,
+            all_sizes=all_sizes,
+            all_fields=all_fields,
+        )
+
+    sorted_groups, grand_total = cached_report(
+        _stock_cache_name,
+        _build_stock_cached,
     )
     # Автофильтр товарных: нетоварные саженцы на экране есть, но в «Итого» не входят
     # (как в Excel / КП). При ручном выборе размеров — считаем всё выбранное.

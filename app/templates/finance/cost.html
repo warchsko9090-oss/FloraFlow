@@ -30,7 +30,13 @@
             Свод себестоимости по годам, амортизация, влияние на цену и контейнерная посадка.
         </div>
     </div>
-    <div class="d-flex gap-2">
+    <div class="d-flex gap-2 align-items-center">
+        <a class="btn btn-outline-secondary btn-sm"
+           href="{{ url_for('finance.refresh_report_cache', next=request.full_path) }}"
+           hx-boost="false"
+           title="Пересчитать кэш отчётов (себестоимость, остатки, партнёр)">
+            <i class="fas fa-sync-alt"></i> Обновить
+        </a>
         {% if active_tab == 'summary' %}
         <div class="dropdown">
             <button class="btn btn-outline-secondary btn-sm dropdown-toggle bg-white" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside"><i class="fas fa-filter text-muted"></i> Фильтр</button>

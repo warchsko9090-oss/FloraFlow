@@ -450,7 +450,7 @@ def build_container_cost_table_rows(container_cd, plant_ids=None):
         table_total += total_cost
     return rows, total_qty, table_total
 
-def get_detailed_stock_at_year_end(year):
+def _get_detailed_stock_at_year_end_uncached(year):
     """Возвращает детальные остатки (какие растения, какие поля) на конец года."""
     target_date = datetime(year, 12, 31, 23, 59, 59)
     movements = db.session.query(DocumentRow.plant_id, DocumentRow.size_id, DocumentRow.field_to_id, DocumentRow.field_from_id, DocumentRow.quantity, Document.doc_type, DocumentRow.year, DocumentRow.size_to_id).join(Document).filter(Document.date <= target_date).all()
@@ -486,6 +486,16 @@ def get_detailed_stock_at_year_end(year):
                 'selling_price': get_actual_price(pid, sid, fid, year)
             })
     return result
+
+
+def get_detailed_stock_at_year_end(year, *, force_refresh=False):
+    from app.report_cache import cached_report
+    return cached_report(
+        'stock_ye',
+        _get_detailed_stock_at_year_end_uncached,
+        int(year),
+        force=force_refresh,
+    )
 
 def _parse_cost_period(period, selected_year):
     """Интервал для фильтра расходов (квартал/сезон) — как в calculate_cost_data."""
@@ -600,7 +610,22 @@ def get_unit_cost_for_year(year, period=None):
     )
 
 
-def calculate_cost_data(selected_year=None, period=None):
+def calculate_cost_data(selected_year=None, period=None, *, force_refresh=False):
+    """
+    Сложный расчет себестоимости (с файловым кэшем).
+    force_refresh=True — пересчитать и перезаписать кэш.
+    """
+    from app.report_cache import cached_report
+    return cached_report(
+        'cost_data',
+        _calculate_cost_data_uncached,
+        selected_year,
+        period,
+        force=force_refresh,
+    )
+
+
+def _calculate_cost_data_uncached(selected_year=None, period=None):
     """
     Сложный расчет себестоимости:
     1. Берет все общие расходы (не привязанные к заказам).

@@ -141,6 +141,24 @@ def expenses():
         f_split = ''
     f_q = (request.args.get('q') or '').strip()
     export = request.args.get('export')
+    page = max(1, request.args.get('page', 1, type=int) or 1)
+    per_page = 150
+    # Без дат в URL — последние 90 дней (полный архив через all_dates=1)
+    default_period_applied = False
+    dates_in_query = (
+        'start_date' in request.args
+        or 'end_date' in request.args
+        or 'all_dates' in request.args
+    )
+    if (
+        tab == 'expenses'
+        and request.method == 'GET'
+        and not export
+        and not dates_in_query
+    ):
+        end_date = msk_today().isoformat()
+        start_date = (msk_today() - timedelta(days=90)).isoformat()
+        default_period_applied = True
 
     # Подготовка данных из счета для быстрого создания расхода
     invoice_id = request.args.get('invoice_id')
@@ -266,7 +284,7 @@ def expenses():
                 query = query.filter(~Expense.id.in_(multi_ids))
 
         from sqlalchemy.orm import joinedload, selectinload
-        expenses_list = (
+        q_opts = (
             query.options(
                 joinedload(Expense.item),
                 joinedload(Expense.employee),
@@ -274,8 +292,20 @@ def expenses():
                 selectinload(Expense.budget_lines).joinedload(ExpenseBudgetLine.item),
             )
             .order_by(Expense.date.desc())
-            .all()
         )
+        if export:
+            expenses_list = q_opts.all()
+            expenses_total = len(expenses_list)
+            expenses_pages = 1
+        else:
+            expenses_total = query.count()
+            expenses_pages = max(1, (expenses_total + per_page - 1) // per_page)
+            if page > expenses_pages:
+                page = expenses_pages
+            expenses_list = q_opts.offset((page - 1) * per_page).limit(per_page).all()
+    else:
+        expenses_total = 0
+        expenses_pages = 1
     
     if export == 'pdf' and tab == 'expenses':
         font_path = os.path.join(current_app.root_path, 'static', 'DejaVuSans.ttf').replace('\\', '/')
@@ -666,6 +696,11 @@ def expenses():
                            active_projects=active_projects, 
                            today=msk_today(), 
                            prefill_invoice=prefill_invoice,
+                           default_period_applied=default_period_applied,
+                           page=page,
+                           per_page=per_page,
+                           expenses_total=expenses_total,
+                           expenses_pages=expenses_pages,
                            filters={
                                'start': start_date, 'end': end_date,
                                'item': f_item, 'type': f_type, 'split': f_split,
@@ -2527,6 +2562,29 @@ def _build_cost_report_xlsx(
     return buf
 
 
+@bp.route('/reports/refresh-cache')
+@login_required
+def refresh_report_cache():
+    """Принудительный сброс + прогрев кэша отчётов. Доступно всем ролям."""
+    from app.report_cache import clear_report_cache, warm_heavy_reports
+    clear_report_cache()
+    try:
+        stats = warm_heavy_reports()
+        flash(
+            f'Кэш отчётов обновлён (себестоимость: {stats.get("cost")}, '
+            f'остатки YE: {stats.get("stock_ye")})',
+            'success',
+        )
+        log_action('Принудительно обновил кэш финансовых отчётов')
+    except Exception as e:
+        flash(f'Кэш сброшен, прогрев с ошибкой: {e}', 'warning')
+    nxt = request.args.get('next') or request.referrer or url_for('main.index')
+    # Только относительный путь — защита от open redirect
+    if not isinstance(nxt, str) or not nxt.startswith('/') or nxt.startswith('//'):
+        nxt = url_for('main.index')
+    return redirect(nxt)
+
+
 @bp.route('/cost', methods=['GET', 'POST'])
 @login_required
 def cost_report():
@@ -2629,6 +2687,13 @@ def cost_report():
                     err_n += 1
             if ok_n:
                 db.session.commit()
+                try:
+                    from app.report_cache import clear_report_cache
+                    clear_report_cache('stock_ye')
+                    clear_report_cache('cost_data')
+                    clear_report_cache('stock_report')
+                except Exception:
+                    pass
             else:
                 db.session.rollback()
             return jsonify({
@@ -2655,6 +2720,13 @@ def cost_report():
             })
             if updated:
                 db.session.commit()
+                try:
+                    from app.report_cache import clear_report_cache
+                    clear_report_cache('stock_ye')
+                    clear_report_cache('cost_data')
+                    clear_report_cache('stock_report')
+                except Exception:
+                    pass
                 flash(f'Цена закупки обновлена', 'success')
             else:
                 flash('Не нашли позиции этой партии в остатках — цена не записана.', 'warning')
@@ -2950,6 +3022,11 @@ def save_cost_override():
             db.session.delete(override)
         
         db.session.commit()
+        try:
+            from app.report_cache import clear_report_cache
+            clear_report_cache('cost_data')
+        except Exception:
+            pass
         log_action(f"Обновил ручную себестоимость для {year} года")
         flash(f'Данные за {year} год обновлены')
     except Exception as e:

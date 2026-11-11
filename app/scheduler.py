@@ -133,6 +133,25 @@ def _run_friday_itr_cash(app):
         _release_file_lock(lock_path)
 
 
+def _run_nightly_report_cache(app):
+    """03:15 МСК: сброс + прогрев тяжёлых отчётов (себестоимость, остатки)."""
+    lock_path = os.path.join(_lock_dir(app), '.report_cache_warm.lock')
+    if not _acquire_file_lock(lock_path, ttl_seconds=7200):
+        _logger.info('report cache warm: lock held by another worker, skip')
+        return
+    try:
+        with app.app_context():
+            try:
+                from app.report_cache import clear_report_cache, warm_heavy_reports
+                clear_report_cache()
+                stats = warm_heavy_reports()
+                _logger.info('report cache warm done: %s', stats)
+            except Exception:
+                _logger.exception('report cache warm failed')
+    finally:
+        _release_file_lock(lock_path)
+
+
 def _run_sales_chat_digest(app):
     """20:00 МСК: вечерняя сводка в личку.
 
@@ -194,11 +213,13 @@ def init_scheduler(app):
         trigger = CronTrigger(hour=9, minute=0, timezone='Europe/Moscow')
         friday = CronTrigger(day_of_week='fri', hour=9, minute=0, timezone='Europe/Moscow')
         evening = CronTrigger(hour=20, minute=0, timezone='Europe/Moscow')
+        nightly_cache = CronTrigger(hour=3, minute=15, timezone='Europe/Moscow')
     except Exception:
         # Фоллбэк — если tzdata/pytz отсутствует, используем UTC 06:00 (= 9:00 МСК)
         trigger = CronTrigger(hour=6, minute=0)
         friday = CronTrigger(day_of_week='fri', hour=6, minute=0)
         evening = CronTrigger(hour=17, minute=0)
+        nightly_cache = CronTrigger(hour=0, minute=15)
 
     sched = BackgroundScheduler(
         daemon=True,
@@ -236,6 +257,13 @@ def init_scheduler(app):
         id='sales_chat_digest',
         replace_existing=True,
     )
+    sched.add_job(
+        func=_run_nightly_report_cache,
+        args=[app],
+        trigger=nightly_cache,
+        id='nightly_report_cache',
+        replace_existing=True,
+    )
     try:
         sched.start()
         _scheduler = sched
@@ -244,15 +272,17 @@ def init_scheduler(app):
             patent_job = sched.get_job('daily_patent_reminders')
             itr_job = sched.get_job('friday_itr_cash')
             digest_job = sched.get_job('sales_chat_digest')
+            cache_job = sched.get_job('nightly_report_cache')
             app.logger.info(
                 'scheduler started (pid=%s), next daily_anomaly_scan at %s, '
                 'next daily_patent_reminders at %s, next friday_itr_cash at %s, '
-                'next sales_chat_digest at %s',
+                'next sales_chat_digest at %s, next nightly_report_cache at %s',
                 os.getpid(),
                 getattr(anomaly_job, 'next_run_time', None),
                 getattr(patent_job, 'next_run_time', None),
                 getattr(itr_job, 'next_run_time', None),
                 getattr(digest_job, 'next_run_time', None),
+                getattr(cache_job, 'next_run_time', None),
             )
         except Exception:
             app.logger.info('scheduler started (pid=%s)', os.getpid())

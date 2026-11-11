@@ -786,6 +786,12 @@
         </div>
     </div>
     <div class="page-actions">
+        <a class="btn btn-outline-secondary btn-sm"
+           href="{{ url_for('finance.refresh_report_cache', next=request.full_path) }}"
+           hx-boost="false"
+           title="Пересчитать кэш остатков и отчётов">
+            <i class="fas fa-sync-alt"></i> Обновить
+        </a>
         <div class="btn-group btn-group-sm stock-mode-tabs d-none d-lg-inline-flex">
             <a href="{{ url_for('stock.stock_report', mode='product', end_date=end_date) }}" class="btn {% if report_mode=='product' %}btn-success{% else %}btn-outline-secondary{% endif %}">Товарные</a>
             <a href="{{ url_for('stock.stock_report', mode='inventory', end_date=end_date) }}" class="btn {% if report_mode=='inventory' %}btn-success{% else %}btn-outline-secondary{% endif %}">По полям</a>

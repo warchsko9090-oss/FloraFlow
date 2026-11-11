@@ -190,7 +190,13 @@ def crm_abc():
     end_year = request.args.get('year_end', msk_now().year, type=int)
     
     # 1. Получаем данные в разбивке: Растение + Размер
-    # Исключаем удаленные и отмененные
+    # Исключаем удаленные и отмененные.
+    # Месяцы: extract(year)*100+extract(month) — и SQLite, и Postgres
+    # (func.strftime на PG даёт HTTP 500).
+    month_key = (
+        func.extract('year', Order.date) * 100
+        + func.extract('month', Order.date)
+    )
     results = db.session.query(
         OrderItem.plant_id,
         OrderItem.size_id,
@@ -198,7 +204,7 @@ def crm_abc():
             OrderItem.shipped_quantity * (OrderItem.price - _crm_agency_unit())
         ).label('rev'),
         func.sum(OrderItem.shipped_quantity).label('qty'),
-        func.count(func.distinct(func.strftime('%Y-%m', Order.date))).label('months')
+        func.count(func.distinct(month_key)).label('months')
     ).join(Order).filter(
         Order.is_deleted == False,
         Order.status != 'canceled',
@@ -217,7 +223,7 @@ def crm_abc():
     total_revenue = 0
     
     for r in results:
-        rev = float(r.rev)
+        rev = float(r.rev or 0)
         total_revenue += rev
         all_items.append({
             'plant_id': r.plant_id,
@@ -225,8 +231,8 @@ def crm_abc():
             'plant_name': plants_map.get(r.plant_id, 'Unknown'),
             'size_name': sizes_map.get(r.size_id, 'Unknown'),
             'revenue': rev,
-            'qty': r.qty,
-            'months': r.months
+            'qty': int(r.qty or 0),
+            'months': int(r.months or 0)
         })
 
     # 4. Сортируем по выручке для расчета ABC
