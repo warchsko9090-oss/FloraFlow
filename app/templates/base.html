@@ -2091,6 +2091,7 @@
         let reqCount = 0;
         let navOverlayCount = 0;
         let overlayTimer = null;
+        let overlaySafetyTimer = null;
 
         function ensureOverlay() {
             let el = document.getElementById('page-loading-overlay');
@@ -2102,6 +2103,13 @@
                 el.setAttribute('aria-live', 'polite');
                 el.setAttribute('aria-busy', 'false');
                 el.innerHTML = '<div class="plo-card"><div class="plo-spinner" aria-hidden="true"></div><p class="plo-text">Загрузка страницы…</p></div>';
+                // Клик по оверлею при залипании — снять блокировку
+                el.addEventListener('click', function () {
+                    if (el.classList.contains('active')) {
+                        forceStopAll();
+                        if (typeof cleanupModalBackdrops === 'function') cleanupModalBackdrops();
+                    }
+                });
                 document.documentElement.appendChild(el);
             }
             return el;
@@ -2120,9 +2128,15 @@
         function showNavOverlay(immediate) {
             const el = ensureOverlay();
             clearTimeout(overlayTimer);
+            clearTimeout(overlaySafetyTimer);
             const activate = () => {
                 el.classList.add('active');
                 el.setAttribute('aria-busy', 'true');
+                // Страховка: не держать блокировку дольше 20 с
+                overlaySafetyTimer = setTimeout(function () {
+                    forceStopAll();
+                    if (typeof cleanupModalBackdrops === 'function') cleanupModalBackdrops();
+                }, 20000);
             };
             if (immediate) activate();
             else overlayTimer = setTimeout(activate, 220);
@@ -2130,6 +2144,7 @@
 
         function hideNavOverlay() {
             clearTimeout(overlayTimer);
+            clearTimeout(overlaySafetyTimer);
             const el = document.getElementById('page-loading-overlay');
             if (el) {
                 el.classList.remove('active');
@@ -2170,19 +2185,43 @@
             }
         }
 
+        function htmxVerb(evt) {
+            const d = evt && evt.detail;
+            if (!d) return 'get';
+            const raw = (d.verb || (d.requestConfig && d.requestConfig.verb) || 'get');
+            return String(raw).toLowerCase();
+        }
+
+        function endHtmxUi(evt) {
+            stopBar();
+            // Оверлей мог стартовать только на GET-навигации — всегда гасим счётчик
+            if (evt && evt.detail && evt.detail.boosting) stopNavOverlay();
+            else if (navOverlayCount > 0) stopNavOverlay();
+        }
+
         document.addEventListener('htmx:beforeRequest', function(evt) {
             startBar();
-            if (evt.detail && evt.detail.boosting) startNavOverlay(true);
+            // Оверлей только для boosted GET (переход по ссылке).
+            // POST из модалок/форм (выплата в табеле и т.п.) — только полоска NProgress,
+            // иначе серый слой pointer-events:auto «замораживает» страницу.
+            if (evt.detail && evt.detail.boosting && htmxVerb(evt) === 'get') {
+                startNavOverlay(true);
+            }
         });
 
-        document.addEventListener('htmx:afterSettle', function(evt) {
-            stopBar();
-            if (evt.detail && evt.detail.boosting) stopNavOverlay();
+        document.addEventListener('htmx:afterSettle', endHtmxUi);
+        document.addEventListener('htmx:afterRequest', function(evt) {
+            // afterSettle бывает не всегда (ошибка/abort) — дублируем сброс UI
+            if (evt.detail && evt.detail.successful === false) {
+                endHtmxUi(evt);
+                if (typeof cleanupModalBackdrops === 'function') cleanupModalBackdrops();
+            }
         });
-
-        document.addEventListener('htmx:responseError', function(evt) {
-            stopBar();
-            if (evt.detail && evt.detail.boosting) stopNavOverlay();
+        ['htmx:responseError', 'htmx:sendError', 'htmx:timeout', 'htmx:abort', 'htmx:swapError'].forEach(function (name) {
+            document.addEventListener(name, function(evt) {
+                forceStopAll();
+                if (typeof cleanupModalBackdrops === 'function') cleanupModalBackdrops();
+            });
         });
 
         // Полные переходы (data-hx-boost="false", stock, documents и т.д.)
@@ -2206,16 +2245,27 @@
 
         window.addEventListener('pageshow', forceStopAll);
         window.addEventListener('load', forceStopAll);
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible') forceStopAll();
+        });
 
         window.__pageLoadingStartNav = function() {
             startBar();
             startNavOverlay(true);
         };
+        window.__pageLoadingForceStop = forceStopAll;
     })();
 
     function cleanupModalBackdrops() {
         document.body.classList.remove('modal-open');
         document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+        // Bootstrap оставляет overflow/padding-right — без сброса страница «не кликается»
+        try {
+            document.body.style.removeProperty('overflow');
+            document.body.style.removeProperty('padding-right');
+            document.documentElement.style.removeProperty('overflow');
+            document.documentElement.style.removeProperty('padding-right');
+        } catch (e) {}
     }
 
     // Модалки Bootstrap должны быть прямыми детьми body, иначе любой
@@ -2335,6 +2385,15 @@
         });
         bindImageCompressOnFileInputs(root);
     }
+    // Модалки: POST через hx-boost + оверлей/backdrop часто «замораживают» UI
+    // (выплата в табеле, правки в карточках). Полный PRG надёжнее.
+    function disableBoostForModalForms(scope = document) {
+        const root = (scope && scope.querySelectorAll) ? scope : document;
+        root.querySelectorAll('.modal form').forEach(form => {
+            form.setAttribute('hx-boost', 'false');
+            form.setAttribute('data-hx-boost', 'false');
+        });
+    }
     async function compressFileInput(input) {
         const files = Array.from(input.files || []);
         if (!files.length) return;
@@ -2439,11 +2498,25 @@
     document.addEventListener('DOMContentLoaded', function() {
         disableBoostForDownloads();
         disableBoostForFileForms();
+        disableBoostForModalForms();
     });
     document.addEventListener('htmx:afterSwap', function(evt) {
         const scope = (evt.detail && evt.detail.elt) || document;
         disableBoostForDownloads(scope);
         disableBoostForFileForms(scope);
+        disableBoostForModalForms(document);
+        cleanupModalBackdrops();
+        if (window.__pageLoadingForceStop) window.__pageLoadingForceStop();
+    });
+    // Перед подменой body закрываем открытые модалки — иначе backdrop остаётся
+    document.addEventListener('htmx:beforeSwap', function () {
+        try {
+            document.querySelectorAll('.modal.show').forEach(function (modalEl) {
+                const inst = bootstrap.Modal.getInstance(modalEl);
+                if (inst) inst.hide();
+            });
+        } catch (e) {}
+        cleanupModalBackdrops();
     });
 
     // --- SERVICE WORKER & SMART CACHE WARMING ---
@@ -2600,7 +2673,14 @@
             try { inp.value = ''; } catch(e) {}
         });
     });
-    document.addEventListener('shown.bs.modal', function (event) { initSelect2(event.target); });
+    document.addEventListener('shown.bs.modal', function (event) {
+        initSelect2(event.target);
+        disableBoostForModalForms(event.target);
+    });
+    document.addEventListener('hidden.bs.modal', function () {
+        // Если закрыли последнюю модалку — подчистить сиротский backdrop
+        if (!document.querySelector('.modal.show')) cleanupModalBackdrops();
+    });
 
     // --- CHAT ---
     function toggleChat() {
