@@ -2276,8 +2276,9 @@ class CashHolder(db.Model):
 class CashMove(db.Model):
     """Движение кассы по человеку.
 
-    receipt — расход сотрудника: плюс, только внутри кассы.
-    payout — поступление ДС (пополнение его кассы): минус, пишется в чат и в базу.
+    receipt — расход сотрудника: плюс.
+    payout — поступление ДС (пополнение его кассы): минус.
+    Оба вида — только внутри кассы (без чата расходов и без Expense).
     """
     __tablename__ = 'cash_move'
 
@@ -2286,7 +2287,8 @@ class CashMove(db.Model):
     kind = db.Column(db.String(20), nullable=False)  # receipt | payout
     amount = db.Column(db.Numeric(12, 2), nullable=False)
     move_date = db.Column(db.Date, nullable=False)
-    source_kind = db.Column(db.String(20), nullable=True)  # plan | quick
+    # spend | topup; legacy invoice — старые пополнения с проводкой в ERP
+    source_kind = db.Column(db.String(20), nullable=True)
     source_id = db.Column(db.Integer, nullable=True)
     note = db.Column(db.String(300), nullable=True)
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)

@@ -1,7 +1,7 @@
-"""Касса в Mini App оплат: наличные по людям, отдельно от табеля.
+"""Касса в Mini App оплат: наличные по людям, отдельно от табеля и ERP.
 
-Плюс — расход сотрудника, живёт только в кассе.
-Минус — поступление ДС: мы пополняем его кассу, это уходит в чат и в базу.
+Плюс — расход сотрудника. Минус — пополнение его кассы (выдача ДС).
+Оба вида движений живут только в кассе: без чата расходов и без Expense.
 Стартовое сальдо задаётся в админке приложений основной программы.
 """
 from __future__ import annotations
@@ -9,14 +9,12 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, jsonify, request
 from sqlalchemy import case, func, or_
 
 from app.models import (
-    BudgetItem,
     CashHolder,
     CashMove,
-    ChatExpenseMessage,
     Employee,
     Expense,
     PaymentInvoice,
@@ -84,98 +82,6 @@ def _balances() -> dict[int, Decimal]:
         opening = Decimal(str(holder.opening_balance or 0))
         totals[holder.id] = opening + totals.get(holder.id, Decimal('0'))
     return totals
-
-
-def _allocated(source_kind: str) -> dict[int, Decimal]:
-    rows = (
-        db.session.query(CashMove.source_id, func.coalesce(func.sum(CashMove.amount), 0))
-        .filter(
-            CashMove.kind == 'payout',
-            CashMove.source_kind == source_kind,
-            CashMove.source_id.isnot(None),
-        )
-        .group_by(CashMove.source_id)
-        .all()
-    )
-    return {source_id: Decimal(str(total or 0)) for source_id, total in rows}
-
-
-def _title(text, fallback: str) -> str:
-    clean = ' '.join((text or '').split())
-    return (clean or fallback)[:180]
-
-
-def _source_rows():
-    plan_used = _allocated('plan')
-    quick_used = _allocated('quick')
-    plans = (
-        PaymentInvoice.query
-        .filter(
-            PaymentInvoice.kind == 'plan',
-            PaymentInvoice.payment_type == 'cash',
-            PaymentInvoice.status != 'draft',
-        )
-        .order_by(PaymentInvoice.id.desc())
-        .limit(80)
-        .all()
-    )
-    items = []
-    for inv in plans:
-        basis = Decimal(str(inv.planned_amount or inv.amount or 0)).quantize(Decimal('0.01'))
-        left = (basis - plan_used.get(inv.id, Decimal('0'))).quantize(Decimal('0.01'))
-        if basis <= 0 or left <= Decimal('0.009'):
-            continue
-        when = inv.week_start or inv.due_date or (inv.created_at.date() if inv.created_at else None)
-        items.append({
-            'kind': 'plan',
-            'id': inv.id,
-            'title': _title(inv.summary, 'План без названия'),
-            'label': 'План',
-            'amount': basis,
-            'left': left,
-            'date': when.isoformat() if when else '',
-        })
-
-    quicks = (
-        ChatExpenseMessage.query
-        .filter(
-            ChatExpenseMessage.parsed_payment_type == 'cash',
-            ChatExpenseMessage.status.notin_(('rejected', 'unparseable')),
-            ChatExpenseMessage.parsed_amount > 0,
-        )
-        .order_by(ChatExpenseMessage.id.desc())
-        .limit(80)
-        .all()
-    )
-    linked = [row.matched_invoice_id for row in quicks if row.matched_invoice_id]
-    plan_ids = set()
-    if linked:
-        plan_ids = {
-            row.id for row in PaymentInvoice.query.filter(
-                PaymentInvoice.id.in_(linked),
-                PaymentInvoice.kind == 'plan',
-                PaymentInvoice.payment_type == 'cash',
-            ).all()
-        }
-    for row in quicks:
-        if row.matched_invoice_id in plan_ids:
-            continue
-        basis = Decimal(str(row.parsed_amount or 0)).quantize(Decimal('0.01'))
-        left = (basis - quick_used.get(row.id, Decimal('0'))).quantize(Decimal('0.01'))
-        if left <= Decimal('0.009'):
-            continue
-        when = row.tg_date or row.created_at
-        items.append({
-            'kind': 'quick',
-            'id': row.id,
-            'title': _title(row.parsed_description or row.raw_text, 'Быстрый расход'),
-            'label': 'Быстрый',
-            'amount': basis,
-            'left': left,
-            'date': when.date().isoformat() if when else '',
-        })
-    items.sort(key=lambda item: item['date'], reverse=True)
-    return items[:40]
 
 
 def _holder_json(holder: CashHolder, balance: Decimal) -> dict:
@@ -280,6 +186,7 @@ def holder_detail(user, holder_id: int):
             title = move.note or 'Расход'
         else:
             title = move.note or 'Поступление ДС'
+        # posted=True только у старых записей, когда пополнение ещё писало Expense.
         payload.append({
             'id': move.id,
             'kind': move.kind,
@@ -338,101 +245,10 @@ def delete_holder(user, holder_id: int):
     return jsonify({'ok': True})
 
 
-def _plan_left(plan: PaymentInvoice) -> Decimal:
-    from app.tg_pay import _fact_amount
-    planned = Decimal(str(plan.planned_amount or 0)).quantize(Decimal('0.01'))
-    fact = Decimal(str(_fact_amount(plan) or 0)).quantize(Decimal('0.01'))
-    left = (planned - fact).quantize(Decimal('0.01'))
-    return left if left > 0 else Decimal('0')
-
-
-def _real_budget(item: BudgetItem | None) -> BudgetItem | None:
-    if item is None or (item.code or '') == 'UNASSIGNED':
-        return None
-    return item
-
-
-def _book_cash_topup(holder: CashHolder, user, amount: Decimal, day, inv: PaymentInvoice, note: str):
-    from app.invoice_files import ensure_expense_for_paid_invoice, notify_invoice_paid_chat
-
-    expense = ensure_expense_for_paid_invoice(inv)
-    expense.date = day
-    expense.payment_type = 'cash'
-    expense.description = f'{(inv.summary or note)} · {holder.name}'[:500]
-    try:
-        from app.vium_inbox import maybe_enqueue
-        maybe_enqueue(inv, expense=expense)
-    except Exception:
-        current_app.logger.exception('vium after cash receipt')
-
-    move = CashMove(
-        holder_id=holder.id,
-        kind='payout',
-        amount=amount,
-        move_date=day,
-        source_kind='invoice',
-        source_id=inv.id,
-        note=note[:300],
-        created_by_user_id=user.id,
-        created_at=msk_now(),
-    )
-    db.session.add(move)
-    db.session.commit()
-
-    try:
-        notify_invoice_paid_chat(inv)
-    except Exception:
-        current_app.logger.exception('cash receipt chat notify')
-    if inv.plan_id and inv.week_start:
-        try:
-            from app.tg_pay import refresh_week_plan_pin
-            refresh_week_plan_pin(inv.week_start)
-        except Exception:
-            current_app.logger.exception('week pin after cash receipt')
-    return move, expense
-
-
-@bp.route('/api/cash/week-plans')
-@require_user
-def week_plans(user):
-    denied = _deny(user)
-    if denied:
-        return denied
-    from app.tg_pay import _default_plan_week, _purpose
-    week = _default_plan_week()
-    rows = (
-        PaymentInvoice.query
-        .filter(
-            PaymentInvoice.kind == 'plan',
-            PaymentInvoice.week_start == week,
-            PaymentInvoice.status != 'draft',
-        )
-        .order_by(PaymentInvoice.id.desc())
-        .all()
-    )
-    plans = []
-    for inv in rows:
-        left = _plan_left(inv)
-        planned = Decimal(str(inv.planned_amount or 0))
-        if planned <= 0 or left <= Decimal('0.009'):
-            continue
-        item = _real_budget(inv.item)
-        plans.append({
-            'id': inv.id,
-            'title': _purpose(inv),
-            'left': _num(left),
-            'amount': _num(planned),
-            'payment_type': 'cash' if inv.payment_type == 'cash' else 'cashless',
-            'budget_item_id': item.id if item else None,
-            'budget_name': item.name if item else '',
-        })
-    return jsonify({'week_start': week.isoformat(), 'plans': plans})
-
-
 @bp.route('/api/cash/holders/<int:holder_id>/receipt', methods=['POST'])
 @require_user
 def add_receipt(user, holder_id: int):
-    """Расход сотрудника: только запись в кассе, без чата и без базы расходов."""
+    """Расход сотрудника: только запись в кассе."""
     denied = _deny(user)
     if denied:
         return denied
@@ -463,24 +279,10 @@ def add_receipt(user, holder_id: int):
     return jsonify({'ok': True, 'id': move.id})
 
 
-@bp.route('/api/cash/sources')
-@require_user
-def sources(user):
-    denied = _deny(user)
-    if denied:
-        return denied
-    rows = _source_rows()
-    return jsonify({'sources': [{
-        **item,
-        'amount': _num(item['amount']),
-        'left': _num(item['left']),
-    } for item in rows]})
-
-
 @bp.route('/api/cash/holders/<int:holder_id>/payout', methods=['POST'])
 @require_user
 def add_payout(user, holder_id: int):
-    """Поступление ДС: пополнение кассы сотрудника, уходит в чат и в базу расходов."""
+    """Пополнение кассы сотрудника: только внутри кассы, без чата и без Expense."""
     denied = _deny(user)
     if denied:
         return denied
@@ -488,88 +290,26 @@ def add_payout(user, holder_id: int):
     if not holder:
         return jsonify({'error': 'Сотрудник не найден'}), 404
     body = request.get_json(silent=True) or {}
-    mode = body.get('mode') or 'article'
+    purpose = str(body.get('purpose') or body.get('note') or '').strip()
     try:
         amount = _amount(body.get('amount'))
         day = _date(body.get('date'))
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    stamp = f"cash_{holder.id}_{int(msk_now().timestamp())}"
-    if mode == 'plan':
-        try:
-            plan_id = int(body.get('plan_id'))
-        except (TypeError, ValueError):
-            return jsonify({'error': 'Выберите строку плана'}), 400
-        from app.tg_pay import _default_plan_week, _purpose
-        plan = PaymentInvoice.query.get(plan_id)
-        if plan is None or (plan.kind or '') != 'plan' or (plan.status or '') == 'draft':
-            return jsonify({'error': 'Строка плана не найдена'}), 400
-        if plan.week_start != _default_plan_week():
-            return jsonify({'error': 'Это не план текущей недели'}), 400
-        left = _plan_left(plan)
-        if amount > left + Decimal('0.009'):
-            return jsonify({'error': 'Сумма больше остатка по плану'}), 400
-        item = _real_budget(plan.item)
-        if item is None:
-            return jsonify({'error': 'У этой строки плана нет статьи бюджета'}), 400
-        purpose = _purpose(plan)[:500]
-        inv = PaymentInvoice(
-            filename=stamp,
-            original_name=purpose[:255],
-            summary=purpose,
-            comment=holder.name[:500],
-            source='cash',
-            budget_item_id=item.id,
-            amount=amount,
-            status='paid',
-            priority=plan.priority or 'normal',
-            payment_type='cash',
-            kind='invoice',
-            plan_id=plan.id,
-            week_start=plan.week_start,
-            created_by_user_id=user.id,
-        )
-        db.session.add(inv)
-        db.session.flush()
-        already = Decimal(str(plan.planned_amount or 0)) - left
-        if Decimal(str(plan.planned_amount or 0)) > 0 and already + amount + Decimal('0.009') >= Decimal(str(plan.planned_amount or 0)):
-            plan.status = 'paid'
-        move, expense = _book_cash_topup(holder, user, amount, day, inv, purpose)
-    else:
-        try:
-            budget_id = int(body.get('budget_item_id'))
-        except (TypeError, ValueError):
-            return jsonify({'error': 'Выберите статью'}), 400
-        item = _real_budget(BudgetItem.query.get(budget_id))
-        if item is None:
-            return jsonify({'error': 'Выберите статью'}), 400
-        article = (item.name or 'Поступление').strip()[:180]
-        inv = PaymentInvoice(
-            filename=stamp,
-            original_name=article[:255],
-            summary=article[:500],
-            comment=holder.name[:500],
-            source='cash',
-            budget_item_id=item.id,
-            amount=amount,
-            status='paid',
-            priority='normal',
-            payment_type='cash',
-            kind='invoice',
-            due_date=day,
-            created_by_user_id=user.id,
-        )
-        db.session.add(inv)
-        db.session.flush()
-        move, expense = _book_cash_topup(holder, user, amount, day, inv, article)
-
-    return jsonify({
-        'ok': True,
-        'id': move.id,
-        'invoice_id': inv.id,
-        'expense_id': expense.id,
-    })
+    move = CashMove(
+        holder_id=holder.id,
+        kind='payout',
+        amount=amount,
+        move_date=day,
+        source_kind='topup',
+        note=(purpose or 'Поступление ДС')[:300],
+        created_by_user_id=user.id,
+        created_at=msk_now(),
+    )
+    db.session.add(move)
+    db.session.commit()
+    return jsonify({'ok': True, 'id': move.id})
 
 
 @bp.route('/api/cash/moves/<int:move_id>', methods=['DELETE'])
@@ -581,8 +321,11 @@ def delete_move(user, move_id: int):
     move = CashMove.query.get(move_id)
     if not move:
         return jsonify({'error': 'Запись не найдена'}), 404
+
+    # Старые пополнения могли создать счёт/расход — подчищаем хвост при удалении.
     week = None
     if move.source_kind == 'invoice' and move.source_id:
+        from flask import current_app
         inv = PaymentInvoice.query.get(move.source_id)
         if inv is not None and (inv.source or '') == 'cash':
             plan = PaymentInvoice.query.get(inv.plan_id) if inv.plan_id else None
@@ -600,12 +343,14 @@ def delete_move(user, move_id: int):
             ViumInvoiceQueue.query.filter_by(invoice_id=inv.id).delete(synchronize_session=False)
             Expense.query.filter_by(invoice_id=inv.id).delete(synchronize_session=False)
             db.session.delete(inv)
+
     db.session.delete(move)
     db.session.commit()
     if week:
+        from flask import current_app
         try:
             from app.tg_pay import refresh_week_plan_pin
             refresh_week_plan_pin(week)
         except Exception:
-            current_app.logger.exception('week pin after cash receipt delete')
+            current_app.logger.exception('week pin after legacy cash receipt delete')
     return jsonify({'ok': True})

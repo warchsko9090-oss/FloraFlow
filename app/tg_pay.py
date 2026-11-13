@@ -129,7 +129,7 @@ def _start_greeting(sender, tg_id) -> str:
             if _role(user) in ('admin', 'executive'):
                 lines.append('Отгрузки — бухгалтерский экран.')
             if _is_admin(user):
-                lines.append('Касса — наличные по сотрудникам.')
+                lines.append('Касса — наличные по сотрудникам (только внутри приложения).')
         elif _can_sale_role(user):
             lines.append('Выставить счёт клиенту.')
         elif _is_accountant(user):

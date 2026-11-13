@@ -1454,7 +1454,7 @@
     const rows = data.holders || [];
     let html = `
       <button class="back" type="button" id="goBack">${hidden ? '← к кассе' : '← к счетам'}</button>
-      <p class="hint" style="margin-top:0">Наличные по сотрудникам. В табель не записываются. Плюс — мы должны, минус — он должен кассе.</p>
+      <p class="hint" style="margin-top:0">Наличные по сотрудникам — только внутри кассы. В чат расходов и в программу не пишется. Плюс — мы должны, минус — он должен кассе.</p>
     `;
     if (!hidden) {
       html += `<button class="btn btn-ink" type="button" id="addHolder">Новый сотрудник</button>`;
@@ -1603,8 +1603,8 @@
       btn.onclick = async () => {
         const posted = btn.dataset.posted === '1';
         const ask = posted
-          ? 'Удалить поступление? Оно уйдёт из кассы и из расходов.'
-          : 'Удалить этот расход? Он есть только в кассе.';
+          ? 'Удалить старое поступление? Оно уйдёт из кассы; связанный расход из программы тоже снимем, если был.'
+          : 'Удалить запись? Она есть только в кассе.';
         if (!confirm(ask)) return;
         try {
           await api('/tg/pay/api/cash/moves/' + btn.dataset.id, { method: 'DELETE' });
@@ -1655,117 +1655,39 @@
 
   async function renderCashPayout(id) {
     setTitle('Поступление ДС');
-    await ensureBudgetItems();
-    const week = await api('/tg/pay/api/cash/week-plans');
-    const plans = week.plans || [];
-    let mode = 'article';
-    let planId = '';
-
-    function draw() {
-      const prevAmount = (document.getElementById('cAmount') || {}).value || '';
-      const prevDate = (document.getElementById('cDate') || {}).value || todayISO();
-      const prevBudget = (document.getElementById('cBudget') || {}).value || '';
-      let plansHtml = '';
-      if (mode === 'plan') {
-        if (!plans.length) {
-          plansHtml = '<p class="hint">В плане этой недели нет открытых строк.</p>';
-        } else {
-          plansHtml = '<div class="sec">План недели</div><div class="list">';
-          for (const row of plans) {
-            const picked = String(row.id) === String(planId) ? ' cash-picked' : '';
-            const kind = row.payment_type === 'cash' ? 'нал' : 'безнал';
-            const article = row.budget_name || 'нет статьи';
-            plansHtml += `<button type="button" class="row cash-plan${picked}" data-plan="${row.id}">
-              <div>
-                <div class="name">${esc(row.title)}</div>
-                <div class="sub">${esc(article)} · ${kind} · осталось ${money(row.left)}</div>
-              </div>
-            </button>`;
-          }
-          plansHtml += '</div>';
-        }
+    view.innerHTML = `
+      <button class="back" type="button" id="goBack">← назад</button>
+      <div class="card">
+        <p class="hint" style="margin-top:0">Пополняем кассу сотрудника. Только внутри кассы — в чат расходов и в программу не уходит. Остаток уменьшается: он должен кассе.</p>
+        <div class="field"><label>Сумма, ₽</label>
+          <input id="cAmount" inputmode="decimal" placeholder="0"></div>
+        <div class="field"><label>Дата</label>
+          <input id="cDate" type="date" value="${todayISO()}"></div>
+        <div class="field"><label>Комментарий</label>
+          <input id="cPurpose" placeholder="например, выдача на неделю"></div>
+        <button class="btn btn-ink" type="button" id="cSave">Записать</button>
+        <p class="hint" id="cStatus"></p>
+      </div>
+    `;
+    document.getElementById('goBack').onclick = () => { location.hash = '#/cash/' + id; };
+    document.getElementById('cSave').onclick = async () => {
+      const status = document.getElementById('cStatus');
+      status.textContent = '';
+      try {
+        await api('/tg/pay/api/cash/holders/' + id + '/payout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: document.getElementById('cAmount').value,
+            date: document.getElementById('cDate').value,
+            purpose: document.getElementById('cPurpose').value,
+          }),
+        });
+        location.hash = '#/cash/' + id;
+      } catch (e) {
+        status.textContent = e.message || 'Не сохранилось';
       }
-      view.innerHTML = `
-        <button class="back" type="button" id="goBack">← назад</button>
-        <div class="card">
-          <p class="hint" style="margin-top:0">Пополняем кассу сотрудника. Нал уходит в чат расходов и в базу. Остаток уменьшается: он должен кассе.</p>
-          <div class="pay-toggle" id="cMode">
-            <button type="button" class="pay-opt" data-v="article" aria-pressed="${mode === 'article' ? 'true' : 'false'}">Новая статья</button>
-            <button type="button" class="pay-opt" data-v="plan" aria-pressed="${mode === 'plan' ? 'true' : 'false'}">Из плана</button>
-          </div>
-          <div class="field"><label>Сумма, ₽</label>
-            <input id="cAmount" inputmode="decimal" placeholder="0" value="${esc(prevAmount)}"></div>
-          <div class="field"><label>Дата</label>
-            <input id="cDate" type="date" value="${esc(prevDate)}"></div>
-          ${mode === 'article'
-            ? `<div class="field"><label>Статья</label>${budgetPickerHtml('cBudget', prevBudget)}</div>`
-            : ''}
-          <button class="btn btn-ink" type="button" id="cSave">Провести</button>
-          <p class="hint" id="cStatus"></p>
-        </div>
-        ${mode === 'plan' ? plansHtml : ''}
-      `;
-      document.getElementById('goBack').onclick = () => { location.hash = '#/cash/' + id; };
-      view.querySelectorAll('#cMode .pay-opt').forEach((btn) => {
-        btn.onclick = () => {
-          mode = btn.dataset.v;
-          if (mode !== 'plan') planId = '';
-          draw();
-        };
-      });
-      if (mode === 'article') bindBudgetPickers(view);
-      view.querySelectorAll('[data-plan]').forEach((btn) => {
-        btn.onclick = () => {
-          planId = btn.dataset.plan;
-          const picked = plans.find((p) => String(p.id) === String(planId));
-          draw();
-          if (picked) {
-            const input = document.getElementById('cAmount');
-            if (input) input.value = String(picked.left).replace('.', ',');
-          }
-        };
-      });
-      document.getElementById('cSave').onclick = async () => {
-        const status = document.getElementById('cStatus');
-        status.textContent = '';
-        const payload = {
-          amount: document.getElementById('cAmount').value,
-          date: document.getElementById('cDate').value,
-          mode: mode,
-        };
-        if (mode === 'plan') {
-          if (!planId) {
-            status.textContent = 'Выберите строку плана';
-            return;
-          }
-          const picked = plans.find((p) => String(p.id) === String(planId));
-          if (picked && !picked.budget_item_id) {
-            status.textContent = 'У этой строки нет статьи бюджета';
-            return;
-          }
-          payload.plan_id = planId;
-        } else {
-          const budgetId = (document.getElementById('cBudget') || {}).value;
-          if (!budgetId) {
-            status.textContent = 'Выберите статью';
-            return;
-          }
-          payload.budget_item_id = budgetId;
-        }
-        try {
-          await api('/tg/pay/api/cash/holders/' + id + '/payout', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-          location.hash = '#/cash/' + id;
-        } catch (e) {
-          status.textContent = e.message || 'Не сохранилось';
-        }
-      };
-    }
-
-    draw();
+    };
   }
 
   function esc(s) {
