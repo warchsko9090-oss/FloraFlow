@@ -2110,6 +2110,17 @@ def chat_expense_payroll(msg_id):
             'amount': amts[idx] if idx < len(amts) else 0,
         })
 
+    extra_ids = request.form.getlist('extra_split_item_id')
+    extra_amts = request.form.getlist('extra_split_amount')
+    extra_lines = []
+    for idx, raw_id in enumerate(extra_ids):
+        if raw_id in (None, ''):
+            continue
+        extra_lines.append({
+            'budget_item_id': raw_id,
+            'amount': extra_amts[idx] if idx < len(extra_amts) else 0,
+        })
+
     try:
         from app.expense_chat import confirm_chat_expense_payroll
         ok, msg = confirm_chat_expense_payroll(
@@ -2121,6 +2132,7 @@ def chat_expense_payroll(msg_id):
             budget_item_id=budget_item_id,
             payment_date=payment_date,
             payment_type=payment_type,
+            extra_lines=extra_lines or None,
         )
     except Exception:
         current_app.logger.exception('chat_expense_payroll failed')
@@ -2132,11 +2144,16 @@ def chat_expense_payroll(msg_id):
             'empty_allocations': 'Укажите суммы хотя бы по одному сотруднику.',
             'bad_period': 'Некорректный месяц выплаты.',
             'bad_params': 'Не хватает параметров раскладки.',
+            'extra_budget_item_not_found': 'В доп. статьях выберите существующую статью бюджета.',
+            'extra_same_as_payroll': 'Доп. статья не должна совпадать со статьёй ЗП — вынесите ГСМ отдельно.',
+            'extra_over_total': 'Сумма доп. статей больше суммы из чата.',
         }.get(msg)
         if not human and msg.startswith('sum_mismatch:'):
-            human = 'Сумма по сотрудникам должна точно совпасть с суммой из чата.'
+            human = 'Сумма по сотрудникам + доп. статьи должна совпасть с суммой из чата.'
         elif not human and msg.startswith('over_debt:'):
             human = 'Нельзя выдать больше долга сотрудника.'
+        elif not human and msg.startswith('extra_invalid:'):
+            human = 'Проверьте доп. статьи: ' + msg.split(':', 1)[-1]
         elif not human:
             human = f'Не удалось: {msg}'
         return _chat_expense_done_html(human, 'fa-triangle-exclamation', 'warning'), 400

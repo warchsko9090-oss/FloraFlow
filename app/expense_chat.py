@@ -110,7 +110,8 @@ _AMOUNT_RE = re.compile(
 # Смешанный расход: в тексте есть зп/аванс, но ещё и обычная статья.
 _MIXED_EXPENSE_HINT_RE = re.compile(
     r"(?i)\b("
-    r"патент\w*|доставк\w*|гсм|топлив\w*|интернет\w*|аренд\w*|билет\w*|"
+    r"патент\w*|доставк\w*|гсм|топлив\w*|бензин\w*|компенсац\w*|транспорт\w*|"
+    r"интернет\w*|аренд\w*|билет\w*|"
     r"офис\w*|закуп\w*|материал\w*|услуг\w*|ремонт\w*|груш\w*|сетк\w*|"
     r"удобрен\w*|чоп\w*|хоз\w*|инструмент\w*|представит\w*|видеограф\w*"
     r")\b",
@@ -1181,13 +1182,16 @@ def confirm_chat_expense_payroll(
     budget_item_id: int,
     payment_date: date | None = None,
     payment_type: str | None = None,
+    extra_lines: list[dict] | None = None,
 ) -> tuple[bool, str]:
     """Раскладка ЗП/аванса из дашборда по сотрудникам (как выплата в табеле).
 
     allocations: [{employee_id, amount}, ...] — только строки с amount > 0.
-    Сумма должна ровно совпасть с parsed_amount; каждая сумма ≤ долгу за месяц.
+    extra_lines: опционально [{budget_item_id, amount}, ...] — ГСМ/компенсация
+    и прочие статьи; уходит отдельным расходом, в долг ЗП не входит.
+    Сумма allocations + extra_lines должна совпасть с parsed_amount.
     """
-    from app.expense_splits import apply_budget_lines, money2
+    from app.expense_splits import apply_budget_lines, money2, validate_split_lines
     from app.hr import build_payroll_summary
 
     row = ChatExpenseMessage.query.get(msg_id)
@@ -1213,6 +1217,35 @@ def confirm_chat_expense_payroll(
     item = BudgetItem.query.get(budget_item_id)
     if item is None:
         return False, 'budget_item_not_found'
+
+    extras: list[dict] = []
+    extra_sum = Decimal('0')
+    for raw in extra_lines or []:
+        try:
+            bid = int(raw.get('budget_item_id'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        amt = money2(raw.get('amount'))
+        if amt <= 0:
+            continue
+        if BudgetItem.query.get(bid) is None:
+            return False, 'extra_budget_item_not_found'
+        if bid == budget_item_id:
+            return False, 'extra_same_as_payroll'
+        extras.append({'budget_item_id': bid, 'amount': amt})
+        extra_sum += amt
+    if extras:
+        ok_extra, msg_extra = validate_split_lines(extras, extra_sum)
+        if not ok_extra:
+            return False, f'extra_invalid:{msg_extra}'
+
+    payroll_total = money2(total - extra_sum)
+    if payroll_total < 0:
+        return False, 'extra_over_total'
+    if payroll_total <= 0 and not extras:
+        return False, 'bad_amount'
+    if payroll_total <= 0:
+        return False, 'empty_allocations'
 
     summary = build_payroll_summary(target_year, target_month)
     debt_by_id = {
@@ -1244,14 +1277,15 @@ def confirm_chat_expense_payroll(
 
     if not cleaned:
         return False, 'empty_allocations'
-    if abs(alloc_sum - total) > Decimal('0.05'):
-        return False, f'sum_mismatch:{alloc_sum}:{total}'
+    if abs(alloc_sum - payroll_total) > Decimal('0.05'):
+        return False, f'sum_mismatch:{alloc_sum}:{payroll_total}'
 
     use_date = payment_date or (row.tg_date.date() if row.tg_date else msk_today())
     pay_type = payment_type or row.parsed_payment_type or 'cash'
     if pay_type not in ('cash', 'cashless'):
         pay_type = 'cash'
     month_label = MONTH_NAMES.get(target_month, str(target_month))
+    chat_desc = (row.parsed_description or '').strip()
 
     try:
         first_expense_id = None
@@ -1260,7 +1294,6 @@ def confirm_chat_expense_payroll(
             if emp is None:
                 raise ValueError(f'employee_missing:{eid}')
             desc = f'ЗП {emp.name} (за {month_label} {target_year})'
-            chat_desc = (row.parsed_description or '').strip()
             if chat_desc:
                 desc = f'{desc} · {chat_desc[:120]}'
             ex = Expense(
@@ -1278,6 +1311,23 @@ def confirm_chat_expense_payroll(
             apply_budget_lines(ex, [{'budget_item_id': budget_item_id, 'amount': amt}])
             if first_expense_id is None:
                 first_expense_id = ex.id
+
+        if extras:
+            extra_desc = 'Компенсация / доп. статьи'
+            if chat_desc:
+                extra_desc = f'{extra_desc} · {chat_desc[:160]}'
+            extra_ex = Expense(
+                date=use_date,
+                budget_item_id=int(extras[0]['budget_item_id']),
+                description=extra_desc[:500],
+                amount=extra_sum,
+                payment_type=pay_type,
+            )
+            db.session.add(extra_ex)
+            db.session.flush()
+            apply_budget_lines(extra_ex, extras)
+            if first_expense_id is None:
+                first_expense_id = extra_ex.id
 
         row.expense_id = first_expense_id
         row.status = 'imported'

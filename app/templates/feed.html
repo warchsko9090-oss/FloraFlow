@@ -419,8 +419,22 @@
                                                         <tbody></tbody>
                                                     </table>
                                                 </div>
+                                                <div class="payroll-extras border rounded bg-white p-2 mb-2">
+                                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                                        <div class="small text-muted fw-bold mb-0">Доп. статьи (ГСМ, компенсация…)</div>
+                                                        <button type="button" class="btn btn-link btn-sm p-0 payroll-extra-add">+ статья</button>
+                                                    </div>
+                                                    <div class="payroll-extra-rows"></div>
+                                                    <div class="small text-muted">Не входят в долг ЗП. Остаток на ЗП: <strong class="payroll-zp-remain">—</strong></div>
+                                                    <template class="payroll-extra-options">
+                                                        <option value="">— статья —</option>
+                                                        {% for i in all_budget_items or [] %}
+                                                        <option value="{{ i.id }}">{{ i.code }} {{ i.name }}</option>
+                                                        {% endfor %}
+                                                    </template>
+                                                </div>
                                                 <div class="small text-muted mb-2 payroll-hint">
-                                                    Выдать можно только в пределах долга. Сумма по строкам должна совпасть с суммой из чата.
+                                                    Выдать можно только в пределах долга. Сумма по сотрудникам + доп. статьи = сумма из чата.
                                                 </div>
                                                 <button type="submit" class="btn btn-sm btn-success fw-bold w-100 mb-0 payroll-submit" disabled>
                                                     <i class="fas fa-check me-1"></i> Провести выплату
@@ -429,8 +443,9 @@
                                         </div>
                                         <script>
                                         (function(){
-                                          if (!window.PayrollDash) {
-                                            window.PayrollDash = {
+                                          // Перезаписываем объект целиком — иначе после деплоя
+                                          // старый PayrollDash без доп. статей остаётся в памяти вкладки.
+                                          window.PayrollDash = {
                                               MONTHS: ['','Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'],
                                               fmt: function(n){
                                                 return new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(n || 0);
@@ -474,7 +489,51 @@
                                                 var reload = function(){ self.load(root); };
                                                 mSel.addEventListener('change', reload);
                                                 ySel.addEventListener('change', reload);
+                                                var addExtra = root.querySelector('.payroll-extra-add');
+                                                if (addExtra && !addExtra._pdBound) {
+                                                  addExtra._pdBound = true;
+                                                  addExtra.addEventListener('click', function(){ self.addExtraRow(root); });
+                                                }
                                                 this.load(root);
+                                              },
+                                              extraSum: function(root){
+                                                var sum = 0;
+                                                root.querySelectorAll('.payroll-extra-amt').forEach(function(inp){
+                                                  sum += window.PayrollDash.parse(inp.value);
+                                                });
+                                                return Math.round(sum * 100) / 100;
+                                              },
+                                              addExtraRow: function(root, preset){
+                                                preset = preset || {};
+                                                var wrap = root.querySelector('.payroll-extra-rows');
+                                                var optTpl = root.querySelector('.payroll-extra-options');
+                                                if (!wrap || !optTpl) return;
+                                                var div = document.createElement('div');
+                                                div.className = 'row g-1 align-items-center mb-1 payroll-extra-row';
+                                                div.innerHTML =
+                                                  '<div class="col-7">' +
+                                                    '<select name="extra_split_item_id" class="form-select form-select-sm payroll-extra-item"></select>' +
+                                                  '</div>' +
+                                                  '<div class="col-4">' +
+                                                    '<input type="number" step="0.01" min="0" name="extra_split_amount" class="form-control form-control-sm text-end payroll-extra-amt" placeholder="0" inputmode="decimal">' +
+                                                  '</div>' +
+                                                  '<div class="col-1 text-end">' +
+                                                    '<button type="button" class="btn btn-link text-danger btn-sm p-0 payroll-extra-del" title="Убрать">&times;</button>' +
+                                                  '</div>';
+                                                var sel = div.querySelector('select');
+                                                sel.innerHTML = optTpl.innerHTML;
+                                                if (preset.budget_item_id) sel.value = String(preset.budget_item_id);
+                                                var amt = div.querySelector('.payroll-extra-amt');
+                                                if (preset.amount != null && preset.amount !== '') amt.value = preset.amount;
+                                                var self = this;
+                                                div.querySelector('.payroll-extra-del').addEventListener('click', function(){
+                                                  div.remove();
+                                                  self.refresh(root);
+                                                });
+                                                amt.addEventListener('input', function(){ self.refresh(root); });
+                                                sel.addEventListener('change', function(){ self.refresh(root); });
+                                                wrap.appendChild(div);
+                                                this.refresh(root);
                                               },
                                               load: function(root){
                                                 var m = root.querySelector('.payroll-month').value;
@@ -568,8 +627,28 @@
                                               },
                                               refresh: function(root){
                                                 var total = this.parse(root.getAttribute('data-total'));
+                                                var extras = this.extraSum(root);
+                                                var zpNeed = Math.round((total - extras) * 100) / 100;
                                                 var sum = 0;
                                                 var bad = false;
+                                                var extraBad = false;
+                                                root.querySelectorAll('.payroll-extra-row').forEach(function(row){
+                                                  var sel = row.querySelector('.payroll-extra-item');
+                                                  var amt = row.querySelector('.payroll-extra-amt');
+                                                  var v = window.PayrollDash.parse(amt && amt.value);
+                                                  if (v > 0 && (!sel || !sel.value)) {
+                                                    extraBad = true;
+                                                    if (sel) sel.classList.add('is-invalid');
+                                                  } else if (sel) {
+                                                    sel.classList.remove('is-invalid');
+                                                  }
+                                                  if (v < 0) {
+                                                    extraBad = true;
+                                                    if (amt) amt.classList.add('is-invalid');
+                                                  } else if (amt) {
+                                                    amt.classList.remove('is-invalid');
+                                                  }
+                                                });
                                                 root.querySelectorAll('.payroll-amt').forEach(function(inp){
                                                   var debt = window.PayrollDash.parse(inp.getAttribute('max'));
                                                   var v = window.PayrollDash.parse(inp.value);
@@ -580,28 +659,34 @@
                                                   sum += v;
                                                 });
                                                 sum = Math.round(sum * 100) / 100;
-                                                var remain = Math.round((total - sum) * 100) / 100;
+                                                var remain = Math.round((total - sum - extras) * 100) / 100;
                                                 var el = root.querySelector('.payroll-remain');
                                                 if (el) {
                                                   el.textContent = window.PayrollDash.fmt(remain);
                                                   el.classList.toggle('text-danger', Math.abs(remain) > 0.05);
                                                   el.classList.toggle('text-success', Math.abs(remain) <= 0.05);
                                                 }
+                                                var zpEl = root.querySelector('.payroll-zp-remain');
+                                                if (zpEl) {
+                                                  zpEl.textContent = window.PayrollDash.fmt(Math.max(0, zpNeed)) + ' ₽';
+                                                }
                                                 var btn = root.querySelector('.payroll-submit');
                                                 var debtCap = root._payrollTotalDebt || 0;
-                                                var overPool = total - debtCap > 0.05;
+                                                var overPool = zpNeed - debtCap > 0.05;
                                                 var hint = root.querySelector('.payroll-hint');
                                                 if (hint) {
-                                                  if (overPool) {
-                                                    hint.innerHTML = '<span class="text-danger">Сумма из чата (' +
-                                                      window.PayrollDash.fmt(total) + ') больше суммарного долга (' +
-                                                      window.PayrollDash.fmt(debtCap) + '). Раздать целиком нельзя — проверьте табель или сумму.</span>';
+                                                  if (extras > total + 0.05) {
+                                                    hint.innerHTML = '<span class="text-danger">Доп. статьи больше суммы из чата.</span>';
+                                                  } else if (overPool) {
+                                                    hint.innerHTML = '<span class="text-danger">На ЗП осталось ' +
+                                                      window.PayrollDash.fmt(zpNeed) + ', а суммарный долг ' +
+                                                      window.PayrollDash.fmt(debtCap) + '. Увеличьте доп. статьи или проверьте табель.</span>';
                                                   } else {
-                                                    hint.textContent = 'Выдать можно только в пределах долга. Сумма по строкам должна совпасть с суммой из чата.';
+                                                    hint.textContent = 'Выдать можно только в пределах долга. Сумма по сотрудникам + доп. статьи = сумма из чата.';
                                                   }
                                                 }
                                                 if (btn) {
-                                                  btn.disabled = bad || overPool || Math.abs(remain) > 0.05 || sum <= 0;
+                                                  btn.disabled = bad || extraBad || overPool || Math.abs(remain) > 0.05 || sum <= 0 || zpNeed < -0.05;
                                                 }
                                               },
                                               validate: function(form){
@@ -610,13 +695,16 @@
                                                 this.refresh(root);
                                                 var btn = root.querySelector('.payroll-submit');
                                                 if (btn && btn.disabled) {
-                                                  alert('Раскладка неполная: остаток должен быть 0, суммы — не выше долга.');
+                                                  alert('Раскладка неполная: остаток должен быть 0, ЗП — не выше долга, доп. статьи заполнены.');
                                                   return false;
                                                 }
-                                                return confirm('Провести выплаты по сотрудникам и закрыть карточку?');
+                                                var extras = this.extraSum(root);
+                                                var msg = extras > 0.05
+                                                  ? 'Провести ЗП по сотрудникам и доп. статьи отдельно, закрыть карточку?'
+                                                  : 'Провести выплаты по сотрудникам и закрыть карточку?';
+                                                return confirm(msg);
                                               }
                                             };
-                                          }
                                           window.PayrollDash.initAll();
                                         })();
                                         </script>
