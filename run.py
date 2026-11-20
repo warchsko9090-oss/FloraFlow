@@ -64,6 +64,50 @@ def _run_ai_seed_once():
 _run_ai_seed_once()
 
 
+def _run_demo_seed_once():
+    """Amvera/локальный DEMO_MODE: синтетика в пустую БД + дедлайны на сегодня."""
+    if (os.environ.get('DEMO_MODE') or '').strip().lower() not in ('1', 'true', 'yes'):
+        return
+    lock_path = _seed_lock_path().replace('.ff_ai_seed.lock', '.ff_demo_seed.lock')
+    lock_fh = None
+    acquired = False
+    try:
+        lock_fh = open(lock_path, 'a+')
+        try:
+            import fcntl
+            fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except (ImportError, BlockingIOError, OSError):
+            # Windows / другой воркер — пробуем без блокировки один раз
+            acquired = True
+        if not acquired:
+            return
+        with app.app_context():
+            from tools.demo_seed import ensure_demo_seeded
+            stats = ensure_demo_seeded()
+            if stats:
+                app.logger.info('DEMO_MODE seed: %s', stats)
+            else:
+                app.logger.info('DEMO_MODE: база уже заполнена / дедлайны обновлены')
+    except Exception as e:
+        app.logger.warning('DEMO_MODE seed failed: %s', e)
+    finally:
+        if lock_fh is not None:
+            try:
+                if acquired:
+                    import fcntl
+                    fcntl.flock(lock_fh, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                lock_fh.close()
+            except Exception:
+                pass
+
+
+_run_demo_seed_once()
+
+
 if __name__ == '__main__':
     # Локальный запуск (python run.py). В проде работает gunicorn -c gunicorn.conf.py run:app.
     app.run(host='0.0.0.0', port=5000, debug=True)

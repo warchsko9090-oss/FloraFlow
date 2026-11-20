@@ -946,8 +946,22 @@ def index():
         'future': {'id': 'future', 'label': '⏳ Предстоящие задачи', 'color': 'secondary', 'icon': 'fa-calendar-alt', 'cards': [], 'is_open': False, 'order': 3},
         'overdue': {'id': 'overdue', 'label': '🔥 Срочно / Просрочено', 'color': 'danger', 'icon': 'fa-exclamation-circle', 'cards': [], 'is_open': False, 'order': 4},
     }
+    demo_mode = (os.environ.get('DEMO_MODE') or '').strip().lower() in ('1', 'true', 'yes')
+    if demo_mode:
+        # Для показа клиенту «Просрочено» раскрыто — ничего не теряется в аккордеоне.
+        groups['overdue']['is_open'] = True
 
     def add_to_group(card, target_date, is_forced_urgent=False):
+        # Демо-стенд: ТГ-расходы / AI Ops / дайджесты всегда в «Сегодня».
+        if demo_mode:
+            ctype = (card.get('type') or '')
+            src = (card.get('source') or '')
+            at = (card.get('action_type') or '')
+            if ctype in ('chat_expense', 'ai_ops', 'invoice', 'expense_unassigned') or src in (
+                'tg', 'ai_ops', 'digest',
+            ) or at in ('chat_expense', 'digest'):
+                groups['today']['cards'].append(card)
+                return
         if is_forced_urgent:
             groups['overdue']['cards'].append(card)
             return

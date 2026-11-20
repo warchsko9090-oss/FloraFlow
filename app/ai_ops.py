@@ -66,6 +66,11 @@ def is_ai_ops_pilot(user) -> bool:
         return False
     if not user or not getattr(user, 'is_authenticated', False):
         return False
+    # Локальный демо-стенд (scripts/run-demo.ps1): карточки оплаты/отгрузки
+    # из ТГ доступны admin/executive без привязки к прод-пилоту Vlad.
+    if (os.environ.get('DEMO_MODE') or '').strip().lower() in ('1', 'true', 'yes'):
+        if (getattr(user, 'role', None) or '') in ('admin', 'executive'):
+            return True
     if (getattr(user, 'username', None) or '').strip().lower() == 'vlad':
         return True
     return str(getattr(user, 'telegram_id', '') or '') == _VLAD_TG_ID
