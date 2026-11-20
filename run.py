@@ -1,6 +1,29 @@
 import os
 import tempfile
 
+
+def _bootstrap_floraflow1_demo_env():
+    """FloraFlow1 (Amvera, SQLite /data, без DATABASE_URL) — демо рядом с продом ff-m1.
+
+    Прод всегда с DATABASE_URL/Postgres и TG_BOT_TOKEN — сюда не попадает.
+    """
+    if not (os.environ.get('AMVERA') or os.path.isdir('/data')):
+        return
+    if os.environ.get('DATABASE_URL') or os.environ.get('TG_BOT_TOKEN'):
+        return
+    defaults = {
+        'DEMO_MODE': '1',
+        'DISABLE_SCHEDULER': '1',
+        'DISABLE_AI_SEED': '1',
+        'TG_USE_POLLING': '0',
+        'SECRET_KEY': 'demo-floraflow-client-preview',
+    }
+    for key, value in defaults.items():
+        os.environ.setdefault(key, value)
+
+
+_bootstrap_floraflow1_demo_env()
+
 from app import create_app
 
 app = create_app()
