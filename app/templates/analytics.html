@@ -115,6 +115,58 @@
     .pf-delta.down { color: #dc2626; }
     .cmp-table td.num { white-space: nowrap; }
 
+    .plants-settings-card details > summary {
+        list-style: none; cursor: pointer; font-weight: 700; color: #0f172a;
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    }
+    .plants-settings-card details > summary::-webkit-details-marker { display: none; }
+    .plants-settings-card details > summary .ps-meta {
+        font-size: .78rem; font-weight: 600; color: #64748b;
+    }
+    .plants-settings-card details[open] > summary { margin-bottom: 14px; }
+    .plants-settings-card .ps-grid {
+        display: grid; grid-template-columns: 220px 1fr; gap: 16px;
+    }
+    @media (max-width: 767px) { .plants-settings-card .ps-grid { grid-template-columns: 1fr; } }
+    .plants-settings-card .ps-limit label {
+        display: block; font-size: .72rem; text-transform: uppercase;
+        letter-spacing: .05em; color: #64748b; font-weight: 700; margin-bottom: 6px;
+    }
+    .plants-settings-card .ps-limit select {
+        width: 100%; border: 1px solid #e2e8f0; background: #f8fafc;
+        border-radius: 10px; padding: 8px 10px; font-weight: 650; color: #0f172a;
+    }
+    .plants-settings-card .ps-search {
+        width: 100%; border: 1px solid #e2e8f0; background: #fff;
+        border-radius: 10px; padding: 8px 10px; font-size: .86rem; margin-bottom: 8px;
+    }
+    .plants-settings-card .ps-list {
+        max-height: 260px; overflow: auto; border: 1px solid #e2e8f0;
+        border-radius: 10px; background: #f8fafc; padding: 6px 8px;
+    }
+    .plants-settings-card .ps-row {
+        display: flex; align-items: center; gap: 8px; padding: 6px 4px;
+        border-bottom: 1px solid #eef2f7; font-size: .86rem;
+    }
+    .plants-settings-card .ps-row:last-child { border-bottom: 0; }
+    .plants-settings-card .ps-row.hidden-row { opacity: .72; }
+    .plants-settings-card .ps-row .qty {
+        margin-left: auto; font-variant-numeric: tabular-nums;
+        color: #64748b; font-weight: 650; white-space: nowrap;
+    }
+    .plants-settings-card .ps-actions {
+        margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    }
+    .plants-settings-card .btn-save-plants {
+        border: 0; background: #0f172a; color: #fff; border-radius: 999px;
+        padding: 8px 16px; font-size: .84rem; font-weight: 700; cursor: pointer;
+    }
+    .plants-settings-card .btn-linkish {
+        border: 1px solid #e2e8f0; background: #fff; border-radius: 999px;
+        padding: 7px 12px; font-size: .8rem; font-weight: 650; color: #334155; cursor: pointer;
+    }
+    .plants-settings-card .ps-hint { font-size: .78rem; color: #64748b; }
+
 </style>
 
 <div class="ana-wrapper">
@@ -310,6 +362,78 @@
     {% endif %}
     {% endif %}
 
+    {% set ps = analytics.plants_settings or {'limit': 10, 'hidden_ids': []} %}
+    {% set catalog = analytics.plants_catalog or [] %}
+    {% set hidden_set = ps.hidden_ids or [] %}
+    {% set catalog_ids = catalog|map(attribute='id')|list %}
+    <div class="chart-card plants-settings-card" style="margin-bottom: 16px;">
+        <details>
+            <summary>
+                <span><i class="fas fa-sliders-h me-2 text-success"></i>Настройка топа растений</span>
+                <span class="ps-meta">
+                    показывать {% if ps.limit == 0 %}все{% else %}{{ ps.limit }}{% endif %}
+                    · скрыто {{ hidden_set|length }}
+                </span>
+            </summary>
+            <form method="post" action="{{ url_for('main.analytics_plants_settings') }}" id="plantsSettingsForm">
+                {% if p %}
+                <input type="hidden" name="period" value="{{ p.mode }}">
+                <input type="hidden" name="year" value="{{ p.year }}">
+                {% if p.mode == 'month' %}<input type="hidden" name="month" value="{{ p.month }}">{% endif %}
+                {% if p.mode == 'quarter' %}<input type="hidden" name="quarter" value="{{ p.quarter }}">{% endif %}
+                {% if p.mode == 'half' %}<input type="hidden" name="half" value="{{ p.half }}">{% endif %}
+                {% if p.mode == 'season' %}<input type="hidden" name="season" value="{{ p.season }}">{% endif %}
+                {% if p.mode == 'months' %}
+                    {% for m in p.months %}<input type="hidden" name="months" value="{{ m }}">{% endfor %}
+                {% endif %}
+                {% endif %}
+                {# Скрытые из других периодов сохраняем, чтобы не сбрасывались #}
+                {% for hid in hidden_set %}
+                    {% if hid not in catalog_ids %}
+                    <input type="hidden" name="hide_plant" value="{{ hid }}" data-persist-hidden="1">
+                    {% endif %}
+                {% endfor %}
+
+                <div class="ps-grid">
+                    <div class="ps-limit">
+                        <label for="plantsLimit">Сколько позиций на графике</label>
+                        <select name="plants_limit" id="plantsLimit">
+                            {% for n in plants_limit_choices %}
+                            <option value="{{ n }}" {% if n == ps.limit %}selected{% endif %}>
+                                {% if n == 0 %}Все проданные{% else %}Топ-{{ n }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="ps-hint mt-2">Действует на общий топ, поля и контейнерные площадки. Скрытые растения не попадают в графики даже при «Все».</div>
+                    </div>
+                    <div>
+                        <div class="ps-hint mb-1">Отметьте растения, которые нужно скрыть на графиках</div>
+                        <input type="search" class="ps-search" id="plantsFilter" placeholder="Поиск по названию…" autocomplete="off">
+                        <div class="ps-list" id="plantsHideList">
+                            {% if catalog %}
+                                {% for row in catalog %}
+                                <label class="ps-row {% if row.id in hidden_set %}hidden-row{% endif %}" data-name="{{ row.name|lower }}">
+                                    <input type="checkbox" name="hide_plant" value="{{ row.id }}" {% if row.id in hidden_set %}checked{% endif %}>
+                                    <span>{{ row.name }}</span>
+                                    <span class="qty">{{ row.qty }} шт.</span>
+                                </label>
+                                {% endfor %}
+                            {% else %}
+                                <div class="empty-state" style="padding: 16px;">За период нет продаж растений</div>
+                            {% endif %}
+                        </div>
+                        <div class="ps-actions">
+                            <button type="submit" class="btn-save-plants">Сохранить</button>
+                            <button type="button" class="btn-linkish" id="plantsHideNone">Показать все</button>
+                            <button type="button" class="btn-linkish" id="plantsHideBelowTop">Скрыть всё ниже выбранного топа</button>
+                            <span class="ps-hint">Настройки общие для всех пользователей</span>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </details>
+    </div>
+
     <!-- ТОП КЛИЕНТЫ + ТОП РАСТЕНИЯ -->
     <div class="chart-grid">
         <div class="chart-card">
@@ -346,7 +470,11 @@
 
         <div class="chart-card">
             <h6>Топ растений · {{ analytics.period.label if analytics.period else today.year }}</h6>
-            <div class="chart-sub">По количеству штук в проданных заказах</div>
+            <div class="chart-sub">
+                По количеству штук в проданных заказах
+                · {% if ps.limit == 0 %}все{% else %}топ-{{ ps.limit }}{% endif %}
+                {% if hidden_set %} · без {{ hidden_set|length }} скрытых{% endif %}
+            </div>
             {% if analytics.top_plants %}
             <div class="chart-box">
                 <canvas id="chartPlants"></canvas>
@@ -587,6 +715,10 @@
     function renderPlantChart(canvasId, rows, color, colorSoft) {
         const canvas = document.getElementById(canvasId);
         if (!canvas || !rows || !rows.length) return;
+        const box = canvas.parentElement;
+        if (box) {
+            box.style.height = Math.min(720, Math.max(240, rows.length * 28 + 24)) + 'px';
+        }
         new Chart(canvas, {
             type: 'bar',
             data: {
@@ -617,6 +749,51 @@
     renderPlantChart('chartPlants', {{ analytics.top_plants|tojson }}, palette.blue, palette.blueSoft);
     renderPlantChart('chartPlantsFields', {{ analytics.top_plants_fields|tojson }}, palette.green, palette.greenSoft);
     renderPlantChart('chartPlantsContainers', {{ analytics.top_plants_containers|tojson }}, palette.amber, palette.amberSoft);
+
+    // --- Настройка топа растений ---
+    const plantsFilter = document.getElementById('plantsFilter');
+    const plantsList = document.getElementById('plantsHideList');
+    const plantsLimit = document.getElementById('plantsLimit');
+    if (plantsFilter && plantsList) {
+        plantsFilter.addEventListener('input', () => {
+            const q = (plantsFilter.value || '').trim().toLowerCase();
+            plantsList.querySelectorAll('.ps-row').forEach((row) => {
+                const name = row.getAttribute('data-name') || '';
+                row.style.display = (!q || name.includes(q)) ? '' : 'none';
+            });
+        });
+    }
+    const hideNoneBtn = document.getElementById('plantsHideNone');
+    if (hideNoneBtn && plantsList) {
+        hideNoneBtn.addEventListener('click', () => {
+            plantsList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+                cb.checked = false;
+                cb.closest('.ps-row')?.classList.remove('hidden-row');
+            });
+            document.querySelectorAll('input[data-persist-hidden]').forEach((el) => el.remove());
+        });
+    }
+    const hideBelowBtn = document.getElementById('plantsHideBelowTop');
+    if (hideBelowBtn && plantsList && plantsLimit) {
+        hideBelowBtn.addEventListener('click', () => {
+            const lim = Number(plantsLimit.value || 10);
+            const rows = [...plantsList.querySelectorAll('.ps-row')];
+            rows.forEach((row, idx) => {
+                const cb = row.querySelector('input[type="checkbox"]');
+                if (!cb) return;
+                const hide = lim > 0 ? idx >= lim : false;
+                cb.checked = hide;
+                row.classList.toggle('hidden-row', hide);
+            });
+        });
+    }
+    if (plantsList) {
+        plantsList.addEventListener('change', (e) => {
+            const cb = e.target;
+            if (!(cb instanceof HTMLInputElement) || cb.type !== 'checkbox') return;
+            cb.closest('.ps-row')?.classList.toggle('hidden-row', cb.checked);
+        });
+    }
 })();
 </script>
 

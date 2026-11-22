@@ -4,7 +4,10 @@ import json
 import io
 from decimal import Decimal
 from calendar import monthrange
-from flask import Blueprint, redirect, url_for, send_file, send_from_directory, current_app, render_template, jsonify, request, make_response, abort
+from flask import (
+    Blueprint, redirect, url_for, send_file, send_from_directory, current_app,
+    render_template, jsonify, request, make_response, abort, flash,
+)
 from flask_login import current_user, login_required
 from datetime import timedelta, date, datetime
 from sqlalchemy import func, and_, or_, text
@@ -13,7 +16,7 @@ from app.models import (
     db, Order, OrderItem, Payment, PaymentInvoice, Document,
     DiggingTask, DiggingLog, ActionLog, TgTask, Client, Plant, Size, Field,
     Expense, TimeLog, Employee, User, MapSettings, DocumentRow, BankSlip,
-    BudgetPlan, CashflowPlan, BudgetItem,
+    BudgetPlan, CashflowPlan, BudgetItem, AppSetting,
 )
 from app.utils import msk_today, msk_now, natural_key, MONTH_NAMES
 
@@ -775,12 +778,72 @@ def _plan_fact_for_period(period):
     }
 
 
+_ANALYTICS_PLANTS_SETTING_KEY = 'analytics_plants'
+_ANALYTICS_PLANTS_LIMIT_CHOICES = (5, 10, 15, 20, 30, 50, 0)  # 0 = все
+
+
+def _default_analytics_plants_settings():
+    return {'limit': 10, 'hidden_ids': []}
+
+
+def _analytics_plants_settings():
+    """Настройки топа растений: сколько позиций и какие id скрыть."""
+    cfg = _default_analytics_plants_settings()
+    try:
+        row = AppSetting.query.get(_ANALYTICS_PLANTS_SETTING_KEY)
+        if not row or not (row.value or '').strip():
+            return cfg
+        raw = json.loads(row.value)
+        if not isinstance(raw, dict):
+            return cfg
+        limit = int(raw.get('limit', 10))
+        if limit not in _ANALYTICS_PLANTS_LIMIT_CHOICES:
+            limit = 10
+        hidden = []
+        for x in (raw.get('hidden_ids') or []):
+            try:
+                hidden.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        cfg['limit'] = limit
+        cfg['hidden_ids'] = sorted(set(hidden))
+    except Exception:
+        current_app.logger.exception('analytics: plants settings parse failed')
+    return cfg
+
+
+def _save_analytics_plants_settings(limit, hidden_ids):
+    limit = int(limit)
+    if limit not in _ANALYTICS_PLANTS_LIMIT_CHOICES:
+        limit = 10
+    cleaned = []
+    for x in hidden_ids or []:
+        try:
+            cleaned.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    payload = json.dumps(
+        {'limit': limit, 'hidden_ids': sorted(set(cleaned))},
+        ensure_ascii=False,
+    )
+    row = AppSetting.query.get(_ANALYTICS_PLANTS_SETTING_KEY)
+    if row is None:
+        row = AppSetting(key=_ANALYTICS_PLANTS_SETTING_KEY, value=payload)
+        db.session.add(row)
+    else:
+        row.value = payload
+    db.session.commit()
+    return {'limit': limit, 'hidden_ids': sorted(set(cleaned))}
+
+
 def _top_sold_plants(period, *, only_field_ids=None, exclude_field_ids=None,
-                     require_field=False, limit=10):
+                     require_field=False, limit=10, exclude_plant_ids=None):
     """Топ растений по штукам в заказах периода.
 
     only_field_ids — оставить только эти поля (контейнерные площадки).
     exclude_field_ids + require_field — все остальные поля, у которых место указано.
+    exclude_plant_ids — скрытые растения из настроек.
+    limit=0 — без ограничения по числу позиций.
     Пустой only_field_ids означает «таких полей нет» и возвращает пустой список.
     """
     if only_field_ids is not None and not only_field_ids:
@@ -804,11 +867,19 @@ def _top_sold_plants(period, *, only_field_ids=None, exclude_field_ids=None,
         q = q.filter(OrderItem.field_id.isnot(None))
         if exclude_field_ids:
             q = q.filter(OrderItem.field_id.notin_(list(exclude_field_ids)))
-    rows = q.group_by(Plant.id, Plant.name).order_by(
-        func.sum(OrderItem.quantity).desc()
-    ).limit(limit).all()
+    if exclude_plant_ids:
+        q = q.filter(Plant.id.notin_(list(exclude_plant_ids)))
+    q = q.group_by(Plant.id, Plant.name).order_by(func.sum(OrderItem.quantity).desc())
+    if limit and int(limit) > 0:
+        q = q.limit(int(limit))
+    rows = q.all()
     return [
-        {'name': r.name, 'qty': int(r.qty or 0), 'revenue': _safe_float(r.rev)}
+        {
+            'id': int(r.id),
+            'name': r.name,
+            'qty': int(r.qty or 0),
+            'revenue': _safe_float(r.rev),
+        }
         for r in rows
     ]
 
@@ -828,6 +899,8 @@ def _analytics_data(user, today, period):
         'top_plants': [],
         'top_plants_fields': [],
         'top_plants_containers': [],
+        'plants_settings': _default_analytics_plants_settings(),
+        'plants_catalog': [],
         'tg_summary': {},
         'debtors': [],
         'reserves': [],
@@ -893,15 +966,31 @@ def _analytics_data(user, today, period):
     # Общий топ и две разбивки по месту: поле или контейнерная площадка.
     # Площадки определяются по имени поля (см. get_container_field_ids).
     # Позиция без поля остаётся только в общем топе.
+    # limit / hidden_ids — из настроек (AppSetting analytics_plants).
     try:
         from app.services import get_container_field_ids
+        plants_cfg = _analytics_plants_settings()
+        data['plants_settings'] = plants_cfg
         container_ids = get_container_field_ids()
-        data['top_plants'] = _top_sold_plants(period)
+        hidden = plants_cfg.get('hidden_ids') or []
+        limit = plants_cfg.get('limit', 10)
+        # Полный список периода — для панели «скрыть / показать» (без скрытия).
+        data['plants_catalog'] = _top_sold_plants(period, limit=0)
+        data['top_plants'] = _top_sold_plants(
+            period, limit=limit, exclude_plant_ids=hidden,
+        )
         data['top_plants_fields'] = _top_sold_plants(
-            period, exclude_field_ids=container_ids, require_field=True,
+            period,
+            exclude_field_ids=container_ids,
+            require_field=True,
+            limit=limit,
+            exclude_plant_ids=hidden,
         )
         data['top_plants_containers'] = _top_sold_plants(
-            period, only_field_ids=container_ids,
+            period,
+            only_field_ids=container_ids,
+            limit=limit,
+            exclude_plant_ids=hidden,
         )
     except Exception:
         current_app.logger.exception('analytics: top_plants failed')
@@ -1714,6 +1803,19 @@ def _tasks_analytics(today, user=None):
     }
 
 
+def _analytics_redirect_args(form_or_args):
+    """Сохраняет выбранный период при редиректе после сохранения настроек."""
+    args = {}
+    for key in ('period', 'year', 'month', 'quarter', 'half', 'season'):
+        val = form_or_args.get(key)
+        if val not in (None, ''):
+            args[key] = val
+    months = form_or_args.getlist('months') if hasattr(form_or_args, 'getlist') else []
+    if months:
+        args['months'] = months
+    return args
+
+
 @bp.route('/analytics')
 @login_required
 def analytics():
@@ -1738,7 +1840,41 @@ def analytics():
         analytics=data,
         kpi_tiles=kpi_tiles,
         today=today,
+        plants_limit_choices=_ANALYTICS_PLANTS_LIMIT_CHOICES,
     )
+
+
+@bp.route('/analytics/plants-settings', methods=['POST'])
+@login_required
+def analytics_plants_settings():
+    """Сохранить лимит и скрытые растения для топ-чартов."""
+    if (current_user.role or '') in ('user2', 'brigadier'):
+        return redirect(url_for('main.index'))
+    try:
+        limit = int(request.form.get('plants_limit') or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    # В форме отмечают «скрыть»; пустой список = ничего не скрыто.
+    hidden_ids = request.form.getlist('hide_plant')
+    try:
+        cfg = _save_analytics_plants_settings(limit, hidden_ids)
+        hidden_n = len(cfg.get('hidden_ids') or [])
+        if cfg['limit'] == 0:
+            limit_lbl = 'все'
+        else:
+            limit_lbl = str(cfg['limit'])
+        flash(
+            f'Настройки топа растений сохранены: показывать {limit_lbl}, скрыто {hidden_n}.',
+            'success',
+        )
+    except Exception:
+        current_app.logger.exception('analytics: save plants settings failed')
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        flash('Не удалось сохранить настройки топа растений.', 'danger')
+    return redirect(url_for('main.analytics', **_analytics_redirect_args(request.form)))
 
 
 @bp.route('/dashboard/anomalies', methods=['GET', 'POST'])
