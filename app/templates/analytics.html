@@ -60,7 +60,10 @@
     .chart-grid {
         display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px;
     }
-    @media (max-width: 991px) { .chart-grid { grid-template-columns: 1fr; } }
+    .chart-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+    @media (max-width: 991px) {
+        .chart-grid, .chart-grid.cols-2 { grid-template-columns: 1fr; }
+    }
 
     .chart-card {
         background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
@@ -354,6 +357,33 @@
         </div>
     </div>
 
+    <!-- ТОП РАСТЕНИЙ: ПОЛЯ И КОНТЕЙНЕРНЫЕ ПЛОЩАДКИ -->
+    <div class="chart-grid cols-2">
+        <div class="chart-card">
+            <h6>Топ растений с полей · {{ analytics.period.label if analytics.period else today.year }}</h6>
+            <div class="chart-sub">По количеству штук в проданных заказах · поля</div>
+            {% if analytics.top_plants_fields %}
+            <div class="chart-box">
+                <canvas id="chartPlantsFields"></canvas>
+            </div>
+            {% else %}
+            <div class="empty-state">Нет продаж с полей за этот период</div>
+            {% endif %}
+        </div>
+
+        <div class="chart-card">
+            <h6>Топ растений с контейнерных площадок · {{ analytics.period.label if analytics.period else today.year }}</h6>
+            <div class="chart-sub">По количеству штук в проданных заказах · контейнерные площадки</div>
+            {% if analytics.top_plants_containers %}
+            <div class="chart-box">
+                <canvas id="chartPlantsContainers"></canvas>
+            </div>
+            {% else %}
+            <div class="empty-state">Нет продаж с контейнерных площадок за этот период</div>
+            {% endif %}
+        </div>
+    </div>
+
     <!-- ДОЛГ ЗА ОТГРУЗКУ + РЕЗЕРВЫ -->
     <div class="chart-grid">
         <div class="chart-card">
@@ -554,17 +584,18 @@
     }
 
     // --- Топ растений (горизонтальный бар) ---
-    const plantsData = {{ analytics.top_plants|tojson }};
-    if (plantsData && plantsData.length && document.getElementById('chartPlants')) {
-        new Chart(document.getElementById('chartPlants'), {
+    function renderPlantChart(canvasId, rows, color, colorSoft) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || !rows || !rows.length) return;
+        new Chart(canvas, {
             type: 'bar',
             data: {
-                labels: plantsData.map(r => r.name),
+                labels: rows.map(r => r.name),
                 datasets: [{
                     label: 'шт.',
-                    data: plantsData.map(r => r.qty),
-                    backgroundColor: palette.blueSoft,
-                    borderColor: palette.blue, borderWidth: 1.5,
+                    data: rows.map(r => r.qty),
+                    backgroundColor: colorSoft,
+                    borderColor: color, borderWidth: 1.5,
                     borderRadius: 6,
                 }]
             },
@@ -576,12 +607,16 @@
                     tooltip: { callbacks: { label: (c) => c.parsed.x + ' шт.' } },
                 },
                 scales: {
-                    x: { grid: { color: '#f1f5f9' } },
-                    y: { grid: { display: false } },
+                    x: { grid: { color: '#f1f5f9' }, beginAtZero: true },
+                    y: { grid: { display: false }, ticks: { font: { size: 11 } } },
                 }
             }
         });
     }
+
+    renderPlantChart('chartPlants', {{ analytics.top_plants|tojson }}, palette.blue, palette.blueSoft);
+    renderPlantChart('chartPlantsFields', {{ analytics.top_plants_fields|tojson }}, palette.green, palette.greenSoft);
+    renderPlantChart('chartPlantsContainers', {{ analytics.top_plants_containers|tojson }}, palette.amber, palette.amberSoft);
 })();
 </script>
 

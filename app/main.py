@@ -775,6 +775,44 @@ def _plan_fact_for_period(period):
     }
 
 
+def _top_sold_plants(period, *, only_field_ids=None, exclude_field_ids=None,
+                     require_field=False, limit=10):
+    """Топ растений по штукам в заказах периода.
+
+    only_field_ids — оставить только эти поля (контейнерные площадки).
+    exclude_field_ids + require_field — все остальные поля, у которых место указано.
+    Пустой only_field_ids означает «таких полей нет» и возвращает пустой список.
+    """
+    if only_field_ids is not None and not only_field_ids:
+        return []
+
+    q = db.session.query(
+        Plant.id, Plant.name,
+        func.coalesce(func.sum(OrderItem.quantity), 0).label('qty'),
+        func.coalesce(func.sum(OrderItem.price * OrderItem.quantity), 0).label('rev'),
+    ).join(OrderItem, OrderItem.plant_id == Plant.id
+    ).join(Order, OrderItem.order_id == Order.id
+    ).filter(
+        Order.is_deleted.is_(False),
+        Order.status != 'canceled',
+        func.extract('year', Order.date) == period['year'],
+        func.extract('month', Order.date).in_(period['months']),
+    )
+    if only_field_ids is not None:
+        q = q.filter(OrderItem.field_id.in_(list(only_field_ids)))
+    elif require_field:
+        q = q.filter(OrderItem.field_id.isnot(None))
+        if exclude_field_ids:
+            q = q.filter(OrderItem.field_id.notin_(list(exclude_field_ids)))
+    rows = q.group_by(Plant.id, Plant.name).order_by(
+        func.sum(OrderItem.quantity).desc()
+    ).limit(limit).all()
+    return [
+        {'name': r.name, 'qty': int(r.qty or 0), 'revenue': _safe_float(r.rev)}
+        for r in rows
+    ]
+
+
 def _analytics_data(user, today, period):
     """Данные для страницы /analytics — графики и таблицы."""
     role = user.role or ''
@@ -788,6 +826,8 @@ def _analytics_data(user, today, period):
         'order_funnel': [],
         'top_clients': [],
         'top_plants': [],
+        'top_plants_fields': [],
+        'top_plants_containers': [],
         'tg_summary': {},
         'debtors': [],
         'reserves': [],
@@ -850,24 +890,19 @@ def _analytics_data(user, today, period):
         current_app.logger.exception('analytics: top_clients failed')
 
     # --- Топ растений за выбранный период ---
+    # Общий топ и две разбивки по месту: поле или контейнерная площадка.
+    # Площадки определяются по имени поля (см. get_container_field_ids).
+    # Позиция без поля остаётся только в общем топе.
     try:
-        rows = db.session.query(
-            Plant.id, Plant.name,
-            func.coalesce(func.sum(OrderItem.quantity), 0).label('qty'),
-            func.coalesce(func.sum(OrderItem.price * OrderItem.quantity), 0).label('rev')
-        ).join(OrderItem, OrderItem.plant_id == Plant.id
-        ).join(Order, OrderItem.order_id == Order.id
-        ).filter(
-            Order.is_deleted.is_(False),
-            Order.status != 'canceled',
-            func.extract('year', Order.date) == period['year'],
-            func.extract('month', Order.date).in_(period['months']),
-        ).group_by(Plant.id, Plant.name
-        ).order_by(func.sum(OrderItem.quantity).desc()).limit(10).all()
-        data['top_plants'] = [
-            {'name': r.name, 'qty': int(r.qty or 0), 'revenue': _safe_float(r.rev)}
-            for r in rows
-        ]
+        from app.services import get_container_field_ids
+        container_ids = get_container_field_ids()
+        data['top_plants'] = _top_sold_plants(period)
+        data['top_plants_fields'] = _top_sold_plants(
+            period, exclude_field_ids=container_ids, require_field=True,
+        )
+        data['top_plants_containers'] = _top_sold_plants(
+            period, only_field_ids=container_ids,
+        )
     except Exception:
         current_app.logger.exception('analytics: top_plants failed')
 
