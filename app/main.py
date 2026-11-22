@@ -782,12 +782,23 @@ _ANALYTICS_PLANTS_SETTING_KEY = 'analytics_plants'
 _ANALYTICS_PLANTS_LIMIT_CHOICES = (5, 10, 15, 20, 30, 50, 0)  # 0 = все
 
 
+def _parse_plant_id_list(raw_ids):
+    cleaned = []
+    for x in raw_ids or []:
+        try:
+            cleaned.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(cleaned))
+
+
 def _default_analytics_plants_settings():
-    return {'limit': 10, 'hidden_ids': []}
+    # mode: hide — обычный топ минус скрытые; only — только отмеченные растения.
+    return {'limit': 10, 'mode': 'hide', 'hidden_ids': [], 'only_ids': []}
 
 
 def _analytics_plants_settings():
-    """Настройки топа растений: сколько позиций и какие id скрыть."""
+    """Настройки топа растений: лимит, режим и списки id."""
     cfg = _default_analytics_plants_settings()
     try:
         row = AppSetting.query.get(_ANALYTICS_PLANTS_SETTING_KEY)
@@ -799,54 +810,57 @@ def _analytics_plants_settings():
         limit = int(raw.get('limit', 10))
         if limit not in _ANALYTICS_PLANTS_LIMIT_CHOICES:
             limit = 10
-        hidden = []
-        for x in (raw.get('hidden_ids') or []):
-            try:
-                hidden.append(int(x))
-            except (TypeError, ValueError):
-                continue
+        mode = (raw.get('mode') or 'hide').strip().lower()
+        if mode not in ('hide', 'only'):
+            mode = 'hide'
         cfg['limit'] = limit
-        cfg['hidden_ids'] = sorted(set(hidden))
+        cfg['mode'] = mode
+        cfg['hidden_ids'] = _parse_plant_id_list(raw.get('hidden_ids'))
+        cfg['only_ids'] = _parse_plant_id_list(raw.get('only_ids'))
     except Exception:
         current_app.logger.exception('analytics: plants settings parse failed')
     return cfg
 
 
-def _save_analytics_plants_settings(limit, hidden_ids):
+def _save_analytics_plants_settings(limit, mode, selected_ids):
     limit = int(limit)
     if limit not in _ANALYTICS_PLANTS_LIMIT_CHOICES:
         limit = 10
-    cleaned = []
-    for x in hidden_ids or []:
-        try:
-            cleaned.append(int(x))
-        except (TypeError, ValueError):
-            continue
-    payload = json.dumps(
-        {'limit': limit, 'hidden_ids': sorted(set(cleaned))},
-        ensure_ascii=False,
-    )
+    mode = (mode or 'hide').strip().lower()
+    if mode not in ('hide', 'only'):
+        mode = 'hide'
+    selected = _parse_plant_id_list(selected_ids)
+    payload = {
+        'limit': limit,
+        'mode': mode,
+        'hidden_ids': selected if mode == 'hide' else [],
+        'only_ids': selected if mode == 'only' else [],
+    }
     row = AppSetting.query.get(_ANALYTICS_PLANTS_SETTING_KEY)
     if row is None:
-        row = AppSetting(key=_ANALYTICS_PLANTS_SETTING_KEY, value=payload)
+        row = AppSetting(key=_ANALYTICS_PLANTS_SETTING_KEY, value=json.dumps(payload, ensure_ascii=False))
         db.session.add(row)
     else:
-        row.value = payload
+        row.value = json.dumps(payload, ensure_ascii=False)
     db.session.commit()
-    return {'limit': limit, 'hidden_ids': sorted(set(cleaned))}
+    return payload
 
 
 def _top_sold_plants(period, *, only_field_ids=None, exclude_field_ids=None,
-                     require_field=False, limit=10, exclude_plant_ids=None):
+                     require_field=False, limit=10, exclude_plant_ids=None,
+                     include_plant_ids=None):
     """Топ растений по штукам в заказах периода.
 
     only_field_ids — оставить только эти поля (контейнерные площадки).
     exclude_field_ids + require_field — все остальные поля, у которых место указано.
     exclude_plant_ids — скрытые растения из настроек.
+    include_plant_ids — если задан непустой список, в топ попадают только они.
     limit=0 — без ограничения по числу позиций.
     Пустой only_field_ids означает «таких полей нет» и возвращает пустой список.
     """
     if only_field_ids is not None and not only_field_ids:
+        return []
+    if include_plant_ids is not None and not include_plant_ids:
         return []
 
     q = db.session.query(
@@ -867,6 +881,8 @@ def _top_sold_plants(period, *, only_field_ids=None, exclude_field_ids=None,
         q = q.filter(OrderItem.field_id.isnot(None))
         if exclude_field_ids:
             q = q.filter(OrderItem.field_id.notin_(list(exclude_field_ids)))
+    if include_plant_ids:
+        q = q.filter(Plant.id.in_(list(include_plant_ids)))
     if exclude_plant_ids:
         q = q.filter(Plant.id.notin_(list(exclude_plant_ids)))
     q = q.group_by(Plant.id, Plant.name).order_by(func.sum(OrderItem.quantity).desc())
@@ -972,25 +988,34 @@ def _analytics_data(user, today, period):
         plants_cfg = _analytics_plants_settings()
         data['plants_settings'] = plants_cfg
         container_ids = get_container_field_ids()
-        hidden = plants_cfg.get('hidden_ids') or []
         limit = plants_cfg.get('limit', 10)
-        # Полный список периода — для панели «скрыть / показать» (без скрытия).
+        mode = plants_cfg.get('mode') or 'hide'
+        hidden = plants_cfg.get('hidden_ids') or []
+        only_ids = plants_cfg.get('only_ids') or []
+        include_ids = only_ids if mode == 'only' else None
+        exclude_ids = hidden if mode != 'only' else None
+        # Полный список периода — для панели выбора (без фильтров по растениям).
         data['plants_catalog'] = _top_sold_plants(period, limit=0)
         data['top_plants'] = _top_sold_plants(
-            period, limit=limit, exclude_plant_ids=hidden,
+            period,
+            limit=limit,
+            exclude_plant_ids=exclude_ids,
+            include_plant_ids=include_ids,
         )
         data['top_plants_fields'] = _top_sold_plants(
             period,
             exclude_field_ids=container_ids,
             require_field=True,
             limit=limit,
-            exclude_plant_ids=hidden,
+            exclude_plant_ids=exclude_ids,
+            include_plant_ids=include_ids,
         )
         data['top_plants_containers'] = _top_sold_plants(
             period,
             only_field_ids=container_ids,
             limit=limit,
-            exclude_plant_ids=hidden,
+            exclude_plant_ids=exclude_ids,
+            include_plant_ids=include_ids,
         )
     except Exception:
         current_app.logger.exception('analytics: top_plants failed')
@@ -1854,17 +1879,21 @@ def analytics_plants_settings():
         limit = int(request.form.get('plants_limit') or 10)
     except (TypeError, ValueError):
         limit = 10
-    # В форме отмечают «скрыть»; пустой список = ничего не скрыто.
-    hidden_ids = request.form.getlist('hide_plant')
+    mode = (request.form.get('plants_mode') or 'hide').strip().lower()
+    # Отмеченные в списке: скрыть ИЛИ оставить только их — зависит от режима.
+    selected_ids = request.form.getlist('plant_pick')
     try:
-        cfg = _save_analytics_plants_settings(limit, hidden_ids)
-        hidden_n = len(cfg.get('hidden_ids') or [])
+        cfg = _save_analytics_plants_settings(limit, mode, selected_ids)
         if cfg['limit'] == 0:
             limit_lbl = 'все'
         else:
             limit_lbl = str(cfg['limit'])
+        if cfg.get('mode') == 'only':
+            mode_lbl = f"только выбранные ({len(cfg.get('only_ids') or [])})"
+        else:
+            mode_lbl = f"скрыто {len(cfg.get('hidden_ids') or [])}"
         flash(
-            f'Настройки топа растений сохранены: показывать {limit_lbl}, скрыто {hidden_n}.',
+            f'Настройки топа растений сохранены: показывать {limit_lbl}, {mode_lbl}.',
             'success',
         )
     except Exception:

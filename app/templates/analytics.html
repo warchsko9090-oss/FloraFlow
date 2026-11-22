@@ -362,20 +362,25 @@
     {% endif %}
     {% endif %}
 
-    {% set ps = analytics.plants_settings or {'limit': 10, 'hidden_ids': []} %}
+    {% set ps = analytics.plants_settings or {'limit': 10, 'mode': 'hide', 'hidden_ids': [], 'only_ids': []} %}
     {% set catalog = analytics.plants_catalog or [] %}
-    {% set hidden_set = ps.hidden_ids or [] %}
+    {% set plants_mode = ps.mode or 'hide' %}
+    {% set selected_ids = (ps.only_ids if plants_mode == 'only' else ps.hidden_ids) or [] %}
     {% set catalog_ids = catalog|map(attribute='id')|list %}
     <div class="chart-card plants-settings-card" style="margin-bottom: 16px;">
-        <details>
+        <details {% if selected_ids %}open{% endif %}>
             <summary>
                 <span><i class="fas fa-sliders-h me-2 text-success"></i>Настройка топа растений</span>
                 <span class="ps-meta">
-                    показывать {% if ps.limit == 0 %}все{% else %}{{ ps.limit }}{% endif %}
-                    · скрыто {{ hidden_set|length }}
+                    {% if plants_mode == 'only' %}
+                        только выбранные · {{ selected_ids|length }}
+                    {% else %}
+                        топ {% if ps.limit == 0 %}все{% else %}{{ ps.limit }}{% endif %}
+                        · скрыто {{ selected_ids|length }}
+                    {% endif %}
                 </span>
             </summary>
-            <form method="post" action="{{ url_for('main.analytics_plants_settings') }}" id="plantsSettingsForm">
+            <form method="post" action="{{ url_for('main.analytics_plants_settings') }}" id="plantsSettingsForm" data-hx-boost="false" hx-boost="false">
                 {% if p %}
                 <input type="hidden" name="period" value="{{ p.mode }}">
                 <input type="hidden" name="year" value="{{ p.year }}">
@@ -387,33 +392,50 @@
                     {% for m in p.months %}<input type="hidden" name="months" value="{{ m }}">{% endfor %}
                 {% endif %}
                 {% endif %}
-                {# Скрытые из других периодов сохраняем, чтобы не сбрасывались #}
-                {% for hid in hidden_set %}
-                    {% if hid not in catalog_ids %}
-                    <input type="hidden" name="hide_plant" value="{{ hid }}" data-persist-hidden="1">
+                {# Отмеченные вне текущего каталога периода сохраняем #}
+                {% for pid in selected_ids %}
+                    {% if pid not in catalog_ids %}
+                    <input type="hidden" name="plant_pick" value="{{ pid }}" data-persist-pick="1">
                     {% endif %}
                 {% endfor %}
 
                 <div class="ps-grid">
                     <div class="ps-limit">
-                        <label for="plantsLimit">Сколько позиций на графике</label>
+                        <label for="plantsMode">Режим фильтра</label>
+                        <select name="plants_mode" id="plantsMode">
+                            <option value="hide" {% if plants_mode != 'only' %}selected{% endif %}>Обычный топ · скрыть отмеченные</option>
+                            <option value="only" {% if plants_mode == 'only' %}selected{% endif %}>Только отмеченные растения</option>
+                        </select>
+                        <label for="plantsLimit" class="mt-3">Сколько позиций на графике</label>
                         <select name="plants_limit" id="plantsLimit">
                             {% for n in plants_limit_choices %}
                             <option value="{{ n }}" {% if n == ps.limit %}selected{% endif %}>
-                                {% if n == 0 %}Все проданные{% else %}Топ-{{ n }}{% endif %}
+                                {% if n == 0 %}Все подходящие{% else %}Топ-{{ n }}{% endif %}
                             </option>
                             {% endfor %}
                         </select>
-                        <div class="ps-hint mt-2">Действует на общий топ, поля и контейнерные площадки. Скрытые растения не попадают в графики даже при «Все».</div>
+                        <div class="ps-hint mt-2" id="plantsModeHint">
+                            {% if plants_mode == 'only' %}
+                                На графиках останутся только отмеченные растения (даже если они не в общем топ-10).
+                            {% else %}
+                                Отмеченные растения будут убраны из всех трёх графиков.
+                            {% endif %}
+                        </div>
                     </div>
                     <div>
-                        <div class="ps-hint mb-1">Отметьте растения, которые нужно скрыть на графиках</div>
+                        <div class="ps-hint mb-1" id="plantsListHint">
+                            {% if plants_mode == 'only' %}
+                                Отметьте растения, которые нужно показать (например все гортензии)
+                            {% else %}
+                                Отметьте растения, которые нужно скрыть на графиках
+                            {% endif %}
+                        </div>
                         <input type="search" class="ps-search" id="plantsFilter" placeholder="Поиск по названию…" autocomplete="off">
                         <div class="ps-list" id="plantsHideList">
                             {% if catalog %}
                                 {% for row in catalog %}
-                                <label class="ps-row {% if row.id in hidden_set %}hidden-row{% endif %}" data-name="{{ row.name|lower }}">
-                                    <input type="checkbox" name="hide_plant" value="{{ row.id }}" {% if row.id in hidden_set %}checked{% endif %}>
+                                <label class="ps-row {% if row.id in selected_ids %}hidden-row{% endif %}" data-name="{{ row.name|lower }}">
+                                    <input type="checkbox" name="plant_pick" value="{{ row.id }}" {% if row.id in selected_ids %}checked{% endif %}>
                                     <span>{{ row.name }}</span>
                                     <span class="qty">{{ row.qty }} шт.</span>
                                 </label>
@@ -424,8 +446,8 @@
                         </div>
                         <div class="ps-actions">
                             <button type="submit" class="btn-save-plants">Сохранить</button>
-                            <button type="button" class="btn-linkish" id="plantsHideNone">Показать все</button>
-                            <button type="button" class="btn-linkish" id="plantsHideBelowTop">Скрыть всё ниже выбранного топа</button>
+                            <button type="button" class="btn-linkish" id="plantsHideNone">Снять все отметки</button>
+                            <button type="button" class="btn-linkish" id="plantsMarkVisible">Отметить видимые в поиске</button>
                             <span class="ps-hint">Настройки общие для всех пользователей</span>
                         </div>
                     </div>
