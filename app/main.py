@@ -4,7 +4,10 @@ import json
 import io
 from decimal import Decimal
 from calendar import monthrange
-from flask import Blueprint, redirect, url_for, send_file, send_from_directory, current_app, render_template, jsonify, request, make_response, abort
+from flask import (
+    Blueprint, redirect, url_for, send_file, send_from_directory, current_app,
+    render_template, jsonify, request, make_response, abort, flash,
+)
 from flask_login import current_user, login_required
 from datetime import timedelta, date, datetime
 from sqlalchemy import func, and_, or_, text
@@ -13,7 +16,7 @@ from app.models import (
     db, Order, OrderItem, Payment, PaymentInvoice, Document,
     DiggingTask, DiggingLog, ActionLog, TgTask, Client, Plant, Size, Field,
     Expense, TimeLog, Employee, User, MapSettings, DocumentRow, BankSlip,
-    BudgetPlan, CashflowPlan, BudgetItem,
+    BudgetPlan, CashflowPlan, BudgetItem, AppSetting,
 )
 from app.utils import msk_today, msk_now, natural_key, MONTH_NAMES
 
@@ -775,6 +778,128 @@ def _plan_fact_for_period(period):
     }
 
 
+_ANALYTICS_PLANTS_SETTING_KEY = 'analytics_plants'
+_ANALYTICS_PLANTS_LIMIT_CHOICES = (5, 10, 15, 20, 30, 50, 0)  # 0 = все
+
+
+def _parse_plant_id_list(raw_ids):
+    cleaned = []
+    for x in raw_ids or []:
+        try:
+            cleaned.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(cleaned))
+
+
+def _default_analytics_plants_settings():
+    # mode: hide — обычный топ минус скрытые; only — только отмеченные растения.
+    return {'limit': 10, 'mode': 'hide', 'hidden_ids': [], 'only_ids': []}
+
+
+def _analytics_plants_settings():
+    """Настройки топа растений: лимит, режим и списки id."""
+    cfg = _default_analytics_plants_settings()
+    try:
+        row = AppSetting.query.get(_ANALYTICS_PLANTS_SETTING_KEY)
+        if not row or not (row.value or '').strip():
+            return cfg
+        raw = json.loads(row.value)
+        if not isinstance(raw, dict):
+            return cfg
+        limit = int(raw.get('limit', 10))
+        if limit not in _ANALYTICS_PLANTS_LIMIT_CHOICES:
+            limit = 10
+        mode = (raw.get('mode') or 'hide').strip().lower()
+        if mode not in ('hide', 'only'):
+            mode = 'hide'
+        cfg['limit'] = limit
+        cfg['mode'] = mode
+        cfg['hidden_ids'] = _parse_plant_id_list(raw.get('hidden_ids'))
+        cfg['only_ids'] = _parse_plant_id_list(raw.get('only_ids'))
+    except Exception:
+        current_app.logger.exception('analytics: plants settings parse failed')
+    return cfg
+
+
+def _save_analytics_plants_settings(limit, mode, selected_ids):
+    limit = int(limit)
+    if limit not in _ANALYTICS_PLANTS_LIMIT_CHOICES:
+        limit = 10
+    mode = (mode or 'hide').strip().lower()
+    if mode not in ('hide', 'only'):
+        mode = 'hide'
+    selected = _parse_plant_id_list(selected_ids)
+    payload = {
+        'limit': limit,
+        'mode': mode,
+        'hidden_ids': selected if mode == 'hide' else [],
+        'only_ids': selected if mode == 'only' else [],
+    }
+    row = AppSetting.query.get(_ANALYTICS_PLANTS_SETTING_KEY)
+    if row is None:
+        row = AppSetting(key=_ANALYTICS_PLANTS_SETTING_KEY, value=json.dumps(payload, ensure_ascii=False))
+        db.session.add(row)
+    else:
+        row.value = json.dumps(payload, ensure_ascii=False)
+    db.session.commit()
+    return payload
+
+
+def _top_sold_plants(period, *, only_field_ids=None, exclude_field_ids=None,
+                     require_field=False, limit=10, exclude_plant_ids=None,
+                     include_plant_ids=None):
+    """Топ растений по штукам в заказах периода.
+
+    only_field_ids — оставить только эти поля (контейнерные площадки).
+    exclude_field_ids + require_field — все остальные поля, у которых место указано.
+    exclude_plant_ids — скрытые растения из настроек.
+    include_plant_ids — если задан непустой список, в топ попадают только они.
+    limit=0 — без ограничения по числу позиций.
+    Пустой only_field_ids означает «таких полей нет» и возвращает пустой список.
+    """
+    if only_field_ids is not None and not only_field_ids:
+        return []
+    if include_plant_ids is not None and not include_plant_ids:
+        return []
+
+    q = db.session.query(
+        Plant.id, Plant.name,
+        func.coalesce(func.sum(OrderItem.quantity), 0).label('qty'),
+        func.coalesce(func.sum(OrderItem.price * OrderItem.quantity), 0).label('rev'),
+    ).join(OrderItem, OrderItem.plant_id == Plant.id
+    ).join(Order, OrderItem.order_id == Order.id
+    ).filter(
+        Order.is_deleted.is_(False),
+        Order.status != 'canceled',
+        func.extract('year', Order.date) == period['year'],
+        func.extract('month', Order.date).in_(period['months']),
+    )
+    if only_field_ids is not None:
+        q = q.filter(OrderItem.field_id.in_(list(only_field_ids)))
+    elif require_field:
+        q = q.filter(OrderItem.field_id.isnot(None))
+        if exclude_field_ids:
+            q = q.filter(OrderItem.field_id.notin_(list(exclude_field_ids)))
+    if include_plant_ids:
+        q = q.filter(Plant.id.in_(list(include_plant_ids)))
+    if exclude_plant_ids:
+        q = q.filter(Plant.id.notin_(list(exclude_plant_ids)))
+    q = q.group_by(Plant.id, Plant.name).order_by(func.sum(OrderItem.quantity).desc())
+    if limit and int(limit) > 0:
+        q = q.limit(int(limit))
+    rows = q.all()
+    return [
+        {
+            'id': int(r.id),
+            'name': r.name,
+            'qty': int(r.qty or 0),
+            'revenue': _safe_float(r.rev),
+        }
+        for r in rows
+    ]
+
+
 def _analytics_data(user, today, period):
     """Данные для страницы /analytics — графики и таблицы."""
     role = user.role or ''
@@ -788,6 +913,10 @@ def _analytics_data(user, today, period):
         'order_funnel': [],
         'top_clients': [],
         'top_plants': [],
+        'top_plants_fields': [],
+        'top_plants_containers': [],
+        'plants_settings': _default_analytics_plants_settings(),
+        'plants_catalog': [],
         'tg_summary': {},
         'debtors': [],
         'reserves': [],
@@ -850,24 +979,44 @@ def _analytics_data(user, today, period):
         current_app.logger.exception('analytics: top_clients failed')
 
     # --- Топ растений за выбранный период ---
+    # Общий топ и две разбивки по месту: поле или контейнерная площадка.
+    # Площадки определяются по имени поля (см. get_container_field_ids).
+    # Позиция без поля остаётся только в общем топе.
+    # limit / hidden_ids — из настроек (AppSetting analytics_plants).
     try:
-        rows = db.session.query(
-            Plant.id, Plant.name,
-            func.coalesce(func.sum(OrderItem.quantity), 0).label('qty'),
-            func.coalesce(func.sum(OrderItem.price * OrderItem.quantity), 0).label('rev')
-        ).join(OrderItem, OrderItem.plant_id == Plant.id
-        ).join(Order, OrderItem.order_id == Order.id
-        ).filter(
-            Order.is_deleted.is_(False),
-            Order.status != 'canceled',
-            func.extract('year', Order.date) == period['year'],
-            func.extract('month', Order.date).in_(period['months']),
-        ).group_by(Plant.id, Plant.name
-        ).order_by(func.sum(OrderItem.quantity).desc()).limit(10).all()
-        data['top_plants'] = [
-            {'name': r.name, 'qty': int(r.qty or 0), 'revenue': _safe_float(r.rev)}
-            for r in rows
-        ]
+        from app.services import get_container_field_ids
+        plants_cfg = _analytics_plants_settings()
+        data['plants_settings'] = plants_cfg
+        container_ids = get_container_field_ids()
+        limit = plants_cfg.get('limit', 10)
+        mode = plants_cfg.get('mode') or 'hide'
+        hidden = plants_cfg.get('hidden_ids') or []
+        only_ids = plants_cfg.get('only_ids') or []
+        include_ids = only_ids if mode == 'only' else None
+        exclude_ids = hidden if mode != 'only' else None
+        # Полный список периода — для панели выбора (без фильтров по растениям).
+        data['plants_catalog'] = _top_sold_plants(period, limit=0)
+        data['top_plants'] = _top_sold_plants(
+            period,
+            limit=limit,
+            exclude_plant_ids=exclude_ids,
+            include_plant_ids=include_ids,
+        )
+        data['top_plants_fields'] = _top_sold_plants(
+            period,
+            exclude_field_ids=container_ids,
+            require_field=True,
+            limit=limit,
+            exclude_plant_ids=exclude_ids,
+            include_plant_ids=include_ids,
+        )
+        data['top_plants_containers'] = _top_sold_plants(
+            period,
+            only_field_ids=container_ids,
+            limit=limit,
+            exclude_plant_ids=exclude_ids,
+            include_plant_ids=include_ids,
+        )
     except Exception:
         current_app.logger.exception('analytics: top_plants failed')
 
@@ -1693,6 +1842,19 @@ def _tasks_analytics(today, user=None):
     }
 
 
+def _analytics_redirect_args(form_or_args):
+    """Сохраняет выбранный период при редиректе после сохранения настроек."""
+    args = {}
+    for key in ('period', 'year', 'month', 'quarter', 'half', 'season'):
+        val = form_or_args.get(key)
+        if val not in (None, ''):
+            args[key] = val
+    months = form_or_args.getlist('months') if hasattr(form_or_args, 'getlist') else []
+    if months:
+        args['months'] = months
+    return args
+
+
 @bp.route('/analytics')
 @login_required
 def analytics():
@@ -1717,7 +1879,45 @@ def analytics():
         analytics=data,
         kpi_tiles=kpi_tiles,
         today=today,
+        plants_limit_choices=_ANALYTICS_PLANTS_LIMIT_CHOICES,
     )
+
+
+@bp.route('/analytics/plants-settings', methods=['POST'])
+@login_required
+def analytics_plants_settings():
+    """Сохранить лимит и скрытые растения для топ-чартов."""
+    if (current_user.role or '') in ('user2', 'brigadier'):
+        return redirect(url_for('main.index'))
+    try:
+        limit = int(request.form.get('plants_limit') or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    mode = (request.form.get('plants_mode') or 'hide').strip().lower()
+    # Отмеченные в списке: скрыть ИЛИ оставить только их — зависит от режима.
+    selected_ids = request.form.getlist('plant_pick')
+    try:
+        cfg = _save_analytics_plants_settings(limit, mode, selected_ids)
+        if cfg['limit'] == 0:
+            limit_lbl = 'все'
+        else:
+            limit_lbl = str(cfg['limit'])
+        if cfg.get('mode') == 'only':
+            mode_lbl = f"только выбранные ({len(cfg.get('only_ids') or [])})"
+        else:
+            mode_lbl = f"скрыто {len(cfg.get('hidden_ids') or [])}"
+        flash(
+            f'Настройки топа растений сохранены: показывать {limit_lbl}, {mode_lbl}.',
+            'success',
+        )
+    except Exception:
+        current_app.logger.exception('analytics: save plants settings failed')
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        flash('Не удалось сохранить настройки топа растений.', 'danger')
+    return redirect(url_for('main.analytics', **_analytics_redirect_args(request.form)))
 
 
 @bp.route('/dashboard/anomalies', methods=['GET', 'POST'])
