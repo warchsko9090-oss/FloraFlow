@@ -61,6 +61,7 @@
             {% include 'shop/_landing_price_block.html' %}
             {% endwith %}
 
+            {% if not shop_readonly %}
             <section id="action" class="px-4 py-16 sm:py-20 shop-page-glow">
                 <div class="max-w-xl mx-auto">
                     <div class="shop-panel reveal">
@@ -110,6 +111,14 @@
                     </div>
                 </div>
             </section>
+            {% else %}
+            <section id="action" class="px-4 py-12 sm:py-16 shop-page-glow">
+                <div class="max-w-xl mx-auto text-center reveal">
+                    <p class="font-serif text-brand-muted italic">{{ shop_readonly_banner }}</p>
+                    <p class="mt-4"><a href="{{ url_for('public_client_api.public_shop_contacts') }}" class="shop-btn-primary inline-flex">Контакты менеджера</a></p>
+                </div>
+            </section>
+            {% endif %}
         </main>
 
         {% include 'shop/_footer.html' %}

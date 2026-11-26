@@ -90,8 +90,16 @@
         return 'label';
     }
 
+    function shopIsReadonly() {
+        return window.SHOP_READONLY === true || window.SHOP_READONLY === 'true';
+    }
+
     function stockLabel(itemOrQty) {
+        if (shopIsReadonly()) {
+            return '';
+        }
         if (typeof itemOrQty === 'object' && itemOrQty !== null) {
+            if (itemOrQty.hide_stock) return '';
             if (isOnRequest(itemOrQty)) {
                 return '<span class="on-request-badge">По запросу</span>';
             }
@@ -143,6 +151,12 @@
     }
 
     function renderControls(item) {
+        if (shopIsReadonly() || item?.readonly || item?.hide_stock) {
+            const price = formatPrice(item?.price);
+            return price
+                ? `<div class="w-full h-full min-h-[2.25rem] flex items-center justify-center text-sm text-brand-brass font-semibold tabular-nums">${esc(price)}</div>`
+                : `<div class="w-full h-full min-h-[2.25rem] flex items-center justify-center text-[10px] uppercase tracking-wide text-brand-muted">Уточняйте</div>`;
+        }
         if (isOnRequest(item)) {
             return `<button type="button" data-on-request-open="${esc(item.id)}" class="on-request-btn w-full h-full min-h-[2.25rem] px-2 rounded-sm text-[10px] font-semibold tracking-wide uppercase transition-colors" title="Оставить заявку">По запросу</button>`;
         }
@@ -606,6 +620,11 @@
         init(catalogData, uiOptions) {
             catalog = catalogData || [];
             window.Shop._uiOptions = uiOptions || {};
+            if (shopIsReadonly()) {
+                cart = {};
+                updateUI(window.Shop._uiOptions);
+                return;
+            }
             loadCart();
             syncCartWithCatalog();
             bindCartEvents();

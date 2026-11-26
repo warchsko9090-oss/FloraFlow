@@ -1,4 +1,9 @@
 <header class="border-b border-brand-border/60 bg-brand-bg/50 backdrop-blur-md sticky top-0 z-30 reveal" id="shop-site-header">
+    {% if shop_readonly and shop_readonly_banner %}
+    <div class="bg-brand-brass/15 border-b border-brand-brass/40 text-brand-cream text-center text-xs sm:text-sm px-4 py-2.5 font-sans">
+        {{ shop_readonly_banner }}
+    </div>
+    {% endif %}
     <div class="max-w-6xl mx-auto px-4 shop-header-inner">
         <div class="shop-header-top">
             <a href="{{ url_for('public_client_api.public_landing') }}" class="group inline-block min-w-0 shop-header-brand">

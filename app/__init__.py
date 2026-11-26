@@ -53,9 +53,20 @@ def create_app():
     )
 
     # --- КОНФИГУРАЦИЯ ---
-    secret = os.environ.get('SECRET_KEY', 'my_secret_key_123')
-    if secret == 'my_secret_key_123' and os.environ.get('FLASK_ENV') != 'development':
-        app.logger.warning('SECRET_KEY не задан через окружение — используется дефолт. Установите переменную SECRET_KEY в Amvera.')
+    _weak_secrets = frozenset({
+        '', 'my_secret_key_123', 'floraflow-local-home-2026', 'change-me', 'secret',
+    })
+    secret = (os.environ.get('SECRET_KEY') or '').strip()
+    _is_dev = (os.environ.get('FLASK_ENV') or '').lower() == 'development' or os.environ.get('FLASK_DEBUG') == '1'
+    if secret in _weak_secrets:
+        if _is_dev:
+            secret = 'dev-only-insecure-key'
+            app.logger.warning('SECRET_KEY слабый/пустой — только для development.')
+        else:
+            raise RuntimeError(
+                'SECRET_KEY обязателен и не должен быть дефолтным. '
+                'Задайте в окружении (python -c "import secrets; print(secrets.token_hex(32))").'
+            )
     app.config['SECRET_KEY'] = secret
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -63,7 +74,57 @@ def create_app():
     if _is_behind_proxy():
         app.config['SESSION_COOKIE_SECURE'] = True
         app.config['PREFERRED_URL_SCHEME'] = 'https'
+        # x_for=1 безопасно только если waitress недоступен с сети (127.0.0.1)
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+    # CSRF: Origin/Referer для cookie-сессий (без переписывания всех форм)
+    @app.before_request
+    def _csrf_origin_referer_guard():
+        from flask import request, abort, session
+        if request.method in ('GET', 'HEAD', 'OPTIONS', 'TRACE'):
+            return None
+        ep = request.endpoint or ''
+        path = request.path or ''
+        # Публичные / бот / miniapp / логин — без Origin-CSRF
+        if ep in ('auth.login', 'auth.logout', 'static'):
+            return None
+        if ep.startswith('public_client_api.') or ep.startswith('tg_pay.') or ep.startswith('tg_sale.') \
+                or ep.startswith('tg_hub.') or ep.startswith('tg_admin.') or ep.startswith('push.'):
+            return None
+        if path.startswith('/api/telegram/') or path.startswith('/shop') or path.startswith('/public/'):
+            return None
+        if path.startswith('/internal/failover-sync'):
+            return None
+        # Нет session cookie — не classic browser CSRF
+        cookie_name = app.config.get('SESSION_COOKIE_NAME', 'session')
+        if cookie_name not in request.cookies and not session:
+            return None
+        host = (request.host or '').split(':')[0].lower()
+        if not host:
+            return None
+        origin = (request.headers.get('Origin') or '').strip()
+        referer = (request.headers.get('Referer') or '').strip()
+        def _host_ok(url: str) -> bool:
+            if not url:
+                return False
+            try:
+                from urllib.parse import urlparse
+                h = (urlparse(url).hostname or '').lower()
+                return h == host or h.endswith('.' + host)
+            except Exception:
+                return False
+        if origin:
+            if not _host_ok(origin):
+                abort(403)
+            return None
+        if referer:
+            if not _host_ok(referer):
+                abort(403)
+            return None
+        # Нет Origin/Referer у state-changing с сессией — отклоняем (типичные боты/CSRF)
+        if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            abort(403)
+        return None
 
     # Лимит загрузок (по умолчанию 64 MB, можно переопределить env MAX_UPLOAD_MB)
     max_upload_mb = int(os.environ.get('MAX_UPLOAD_MB', '128'))
@@ -87,7 +148,13 @@ def create_app():
         if db_url.startswith('postgresql://'):
             db_url = 'postgresql+psycopg2://' + db_url[len('postgresql://'):]
         app.config['SQLALCHEMY_DATABASE_URI'] = db_url
-        if os.path.isdir('/data'):
+        # Amvera: /data. Домашний Windows: C:\data (если есть) или app/static.
+        # Явный UPLOAD_FOLDER в env перекрывает авто-выбор.
+        upload_env = (os.environ.get('UPLOAD_FOLDER') or '').strip()
+        if upload_env:
+            os.makedirs(upload_env, exist_ok=True)
+            app.config['UPLOAD_FOLDER'] = upload_env
+        elif os.path.isdir('/data'):
             app.config['UPLOAD_FOLDER'] = '/data'
         else:
             basedir = os.path.abspath(os.path.dirname(__file__))
@@ -95,7 +162,14 @@ def create_app():
             os.makedirs(static_folder, exist_ok=True)
             app.config['UPLOAD_FOLDER'] = static_folder
     else:
-        if os.path.isdir('/data'):
+        upload_env = (os.environ.get('UPLOAD_FOLDER') or '').strip()
+        if upload_env:
+            os.makedirs(upload_env, exist_ok=True)
+            app.config['UPLOAD_FOLDER'] = upload_env
+            basedir = os.path.abspath(os.path.dirname(__file__))
+            project_dir = os.path.dirname(basedir)
+            db_path = os.path.join(project_dir, 'nursery.db')
+        elif os.path.isdir('/data'):
             try:
                 os.makedirs('/data', exist_ok=True)
             except Exception:
@@ -121,102 +195,117 @@ def create_app():
     login_manager.init_app(app)
 
     # --- РЕГИСТРАЦИЯ БЛЮПРИНТОВ ---
-    from . import main, auth, directory, orders, stock, finance, hr, crm, public_client_api
+    from . import public_client_api
 
-    app.register_blueprint(main.bp)
-    app.register_blueprint(auth.bp)
-    app.register_blueprint(directory.bp)
-    app.register_blueprint(orders.bp)
-    app.register_blueprint(stock.bp)
-    app.register_blueprint(finance.bp)
-    from . import tg_pay
-    app.register_blueprint(tg_pay.bp)
-    from . import cash_desk
-    app.register_blueprint(cash_desk.bp)
-    from . import tg_admin
-    app.register_blueprint(tg_admin.bp)
-    from . import tg_sale
-    app.register_blueprint(tg_sale.bp)
-    from . import tg_hub
-    app.register_blueprint(tg_hub.bp)
-    app.register_blueprint(hr.bp)
-    app.register_blueprint(crm.bp)
-    app.register_blueprint(chat.bp)
-    app.register_blueprint(public_client_api.bp)
-
-    from . import digging
-    app.register_blueprint(digging.bp)
-
-    from . import production
-    app.register_blueprint(production.bp)
-
-    from . import vium as vium_module
-    app.register_blueprint(vium_module.bp)
-
-    from . import shop_admin
-    app.register_blueprint(shop_admin.bp)
-
-    from . import push as push_module
-    app.register_blueprint(push_module.bp)
-    push_module.register_push_hooks(app)
-
-    from . import ai_ops
-    app.register_blueprint(ai_ops.bp)
-
-    # Менеджер сайта: просмотр как у руководителя; запись — только заказы
-    # (и связанные sales Mini App / push / auth). Остальное — только GET.
-    SHOP_MANAGER_WRITE_PREFIXES = (
-        'orders.',
-        'tg_sale.',
-        'auth.',
-        'push.',
-        'public_client_api.',
+    _shop_only = (os.environ.get('SHOP_ONLY') or os.environ.get('DOOR_SHOP_ONLY') or '').strip().lower() in (
+        '1', 'true', 'yes',
     )
-    SHOP_MANAGER_WRITE_EXACT = {
-        'static',
-        'main.serve_uploaded_file', 'main.manifest', 'main.app_icon',
-        'main.service_worker', 'main.offline',
-    }
+    from . import failover_sync_api
 
-    @app.before_request
-    def _restrict_shop_manager_writes():
-        from flask import request, redirect, url_for, flash, jsonify
-        from flask_login import current_user
-        ep = request.endpoint or ''
-        path = request.path or ''
-        if ep in ('static', 'main.service_worker', 'main.manifest', 'main.app_icon', 'main.offline'):
-            return None
-        if path.startswith('/static/'):
-            return None
-        if path.startswith('/tg/'):
-            return None
-        try:
-            if not getattr(current_user, 'is_authenticated', False):
-                return None
-        except OperationalError:
-            return None
-        if (getattr(current_user, 'role', None) or '') != 'shop_manager':
-            return None
-        # Просмотр всех страниц разрешён; режем только изменения.
-        if request.method in ('GET', 'HEAD', 'OPTIONS'):
-            return None
-        if ep in SHOP_MANAGER_WRITE_EXACT:
-            return None
-        if any(ep.startswith(p) for p in SHOP_MANAGER_WRITE_PREFIXES):
-            return None
-        wants_json = (
-            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-            or (request.accept_mimetypes.best == 'application/json')
-            or path.startswith('/api/')
+    if _shop_only:
+        # Amvera kdoor / отдельный shop-процесс: только публичная витрина, без ERP `/`.
+        app.register_blueprint(public_client_api.bp)
+        app.register_blueprint(failover_sync_api.bp)
+        app.logger.info('SHOP_ONLY: registered public_client_api + failover_sync')
+    else:
+        from . import main, auth, directory, orders, stock, finance, hr, crm
+
+        app.register_blueprint(main.bp)
+        app.register_blueprint(auth.bp)
+        app.register_blueprint(directory.bp)
+        app.register_blueprint(orders.bp)
+        app.register_blueprint(stock.bp)
+        app.register_blueprint(finance.bp)
+        from . import tg_pay
+        app.register_blueprint(tg_pay.bp)
+        from . import cash_desk
+        app.register_blueprint(cash_desk.bp)
+        from . import tg_admin
+        app.register_blueprint(tg_admin.bp)
+        from . import tg_sale
+        app.register_blueprint(tg_sale.bp)
+        from . import tg_hub
+        app.register_blueprint(tg_hub.bp)
+        app.register_blueprint(hr.bp)
+        app.register_blueprint(crm.bp)
+        app.register_blueprint(chat.bp)
+        app.register_blueprint(public_client_api.bp)
+        app.register_blueprint(failover_sync_api.bp)
+
+        from . import digging
+        app.register_blueprint(digging.bp)
+
+        from . import production
+        app.register_blueprint(production.bp)
+
+        from . import vium as vium_module
+        app.register_blueprint(vium_module.bp)
+
+        from . import shop_admin
+        app.register_blueprint(shop_admin.bp)
+
+        from . import push as push_module
+        app.register_blueprint(push_module.bp)
+        push_module.register_push_hooks(app)
+
+        from . import ai_ops
+        app.register_blueprint(ai_ops.bp)
+
+    if not _shop_only:
+        # Менеджер сайта: просмотр как у руководителя; запись — только заказы
+        # (и связанные sales Mini App / push / auth). Остальное — только GET.
+        SHOP_MANAGER_WRITE_PREFIXES = (
+            'orders.',
+            'tg_sale.',
+            'auth.',
+            'push.',
+            'public_client_api.',
         )
-        if wants_json:
-            return jsonify({
-                'ok': False,
-                'error': 'forbidden',
-                'hint': 'Режим просмотра: изменения недоступны для менеджера сайта.',
-            }), 403
-        flash('Режим просмотра: на этой странице изменения недоступны.', 'warning')
-        return redirect(request.referrer or url_for('orders.orders_list'))
+        SHOP_MANAGER_WRITE_EXACT = {
+            'static',
+            'main.serve_uploaded_file', 'main.manifest', 'main.app_icon',
+            'main.service_worker', 'main.offline',
+        }
+
+        @app.before_request
+        def _restrict_shop_manager_writes():
+            from flask import request, redirect, url_for, flash, jsonify
+            from flask_login import current_user
+            ep = request.endpoint or ''
+            path = request.path or ''
+            if ep in ('static', 'main.service_worker', 'main.manifest', 'main.app_icon', 'main.offline'):
+                return None
+            if path.startswith('/static/'):
+                return None
+            if path.startswith('/tg/'):
+                return None
+            try:
+                if not getattr(current_user, 'is_authenticated', False):
+                    return None
+            except OperationalError:
+                return None
+            if (getattr(current_user, 'role', None) or '') != 'shop_manager':
+                return None
+            # Просмотр всех страниц разрешён; режем только изменения.
+            if request.method in ('GET', 'HEAD', 'OPTIONS'):
+                return None
+            if ep in SHOP_MANAGER_WRITE_EXACT:
+                return None
+            if any(ep.startswith(p) for p in SHOP_MANAGER_WRITE_PREFIXES):
+                return None
+            wants_json = (
+                request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                or (request.accept_mimetypes.best == 'application/json')
+                or path.startswith('/api/')
+            )
+            if wants_json:
+                return jsonify({
+                    'ok': False,
+                    'error': 'forbidden',
+                    'hint': 'Режим просмотра: изменения недоступны для менеджера сайта.',
+                }), 403
+            flash('Режим просмотра: на этой странице изменения недоступны.', 'warning')
+            return redirect(request.referrer or url_for('orders.orders_list'))
 
     @app.after_request
     def _cache_miniapp_static(response):

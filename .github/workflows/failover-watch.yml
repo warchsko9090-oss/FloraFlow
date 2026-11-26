@@ -1,0 +1,89 @@
+# Внешний сторож: раз в 10 минут проверяет дом и при падении
+# будит Amvera-заглушку + переключает DNS + пишет в Telegram.
+#
+# Secrets (Settings → Secrets → Actions):
+#   HOME_IP, FAILOVER_IP, REGRU_USERNAME, REGRU_PASSWORD,
+#   AMVERA_TOKEN, AMVERA_PROJECT_ID, TG_BOT_TOKEN, TG_CHAT_ID
+# Optional: AMVERA_MCP_URL, TG_API_BASE, FAILOVER_DOMAIN
+#
+# Важно: IP раннеров GitHub нужно добавить в whitelist Reg.ru API
+# (ЛК Reg.ru → API). Иначе DNS-шаг упадёт — в TG придёт ошибка.
+
+name: failover-watch
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run (без DNS/Amvera/TG)"
+        type: boolean
+        default: false
+      force_failover:
+        description: "Принудительно на Amvera"
+        type: boolean
+        default: false
+      force_home:
+        description: "Принудительно домой"
+        type: boolean
+        default: false
+
+concurrency:
+  group: failover-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore failover state
+        uses: actions/cache/restore@v4
+        with:
+          path: failover/state.json
+          key: failover-state-${{ github.run_id }}
+          restore-keys: |
+            failover-state-
+
+      - name: Run watcher
+        env:
+          FAILOVER_DOMAIN: ${{ secrets.FAILOVER_DOMAIN }}
+          HOME_IP: ${{ secrets.HOME_IP }}
+          FAILOVER_IP: ${{ secrets.FAILOVER_IP }}
+          REGRU_USERNAME: ${{ secrets.REGRU_USERNAME }}
+          REGRU_PASSWORD: ${{ secrets.REGRU_PASSWORD }}
+          AMVERA_MCP_URL: ${{ secrets.AMVERA_MCP_URL }}
+          AMVERA_TOKEN: ${{ secrets.AMVERA_TOKEN }}
+          AMVERA_PROJECT_ID: ${{ secrets.AMVERA_PROJECT_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_API_BASE: ${{ secrets.TG_API_BASE }}
+          HOME_HEALTH_PATH: /healthz
+          FAIL_THRESHOLD: "2"
+          OK_THRESHOLD: "2"
+        run: |
+          set -e
+          # дефолты, если secret пустой
+          export FAILOVER_DOMAIN="${FAILOVER_DOMAIN:-knyajestvo.ru}"
+          export HOME_IP="${HOME_IP:-95.31.41.191}"
+          export FAILOVER_IP="${FAILOVER_IP:-185.147.26.234}"
+          export AMVERA_MCP_URL="${AMVERA_MCP_URL:-https://openmcp.msk1.amvera.ru/mcp}"
+          ARGS=()
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS+=(--dry-run); fi
+          if [ "${{ github.event.inputs.force_failover }}" = "true" ]; then ARGS+=(--force-failover); fi
+          if [ "${{ github.event.inputs.force_home }}" = "true" ]; then ARGS+=(--force-home); fi
+          python failover/watch.py "${ARGS[@]}"
+
+      - name: Save failover state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: failover/state.json
+          key: failover-state-${{ github.run_id }}

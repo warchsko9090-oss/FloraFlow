@@ -167,9 +167,11 @@
     </div>
 
     {% include 'shop/_scroll_top.html' %}
+    {% if not shop_readonly %}
     {% include 'shop/_cart.html' %}
     {% include 'shop/_checkout.html' %}
     {% include 'shop/_on_request_modal.html' %}
+    {% endif %}
     {% include 'shop/_cookie_consent.html' %}
 
     <div id="photo-modal" class="fixed inset-0 z-[200] hidden opacity-0 transition-opacity duration-300" role="dialog" aria-modal="true" aria-label="Просмотр фото">
@@ -191,7 +193,8 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/shop.js') }}?v=10"></script>
+    <script>window.SHOP_READONLY = {{ 'true' if shop_readonly else 'false' }};</script>
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=11"></script>
     <script>
         const plantMeta = {{ plant | tojson }};
         const variants = Shop.sortVariants({{ variants_json|safe }});

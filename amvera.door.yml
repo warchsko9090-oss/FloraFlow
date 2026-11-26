@@ -1,0 +1,31 @@
+# Amvera проект «kdoor»: дверь на дом + readonly-витрина при падении.
+# В Amvera: Конфигурация → содержимое этого файла как amvera.yml
+# (деплой из корня FloraFlow, не из amvera-shop-door/).
+#
+# Переменные:
+#   UPSTREAM_ORIGIN=http://95.31.41.191
+#   UPSTREAM_HOST=knyajestvo.ru
+#   SHOP_READONLY=1
+#   SHOP_ONLY=1              # только витрина (без ERP на /); door_proxy ставит сам
+#   DATABASE_URL=sqlite:////data/failover.db
+#   UPLOAD_FOLDER=/data
+#   SECRET_KEY=...
+#   DISABLE_SCHEDULER=1
+#   FAILOVER_STUB=0          # 1 = всегда локальная витрина, без прокси
+#   FAILOVER_SYNC_TOKEN=...  # приём снимка POST /internal/failover-sync (вс 00:00 с дома)
+#   FAILOVER_SYNC_MAX_MB=1500
+# Data: /data/failover.db + медиа (scripts/export-shop-failover-snapshot.py)
+# Weekly: scripts/sync-failover-weekly.ps1 -RegisterSchedule
+meta:
+  environment: python
+  toolchain:
+    name: pip
+    version: "3.12"
+build:
+  requirementsPath: requirements.txt
+  useCache: true
+run:
+  # timeout 900 — еженедельная заливка snapshot.tar.gz (фото+БД)
+  command: python -m gunicorn -b 0.0.0.0:5000 -w 2 --timeout 900 wsgi_door:app
+  containerPort: 5000
+serviceType: compute

@@ -1,0 +1,47 @@
+ЧТО ВСТАВИТЬ ВРУЧНУЮ (после этого сторож заработает)
+=====================================================
+
+1) Reg.ru → https://www.reg.ru/user/account/settings/api
+   - REGRU_USERNAME = логин аккаунта (email)
+   - REGRU_PASSWORD = пароль API (не пароль входа в ЛК)
+   - Whitelist IP:
+       • 95.31.41.191          (дом)
+       • ваш текущий IP ПК     (если скрипты с Desktop)
+       • для GitHub Actions — либо диапазоны GitHub, либо лучше
+         self-hosted runner / маленький VPS с одним белым IP
+
+   То же самое вписать в:
+   C:\Users\warch\Desktop\dns-config.env
+     REGRU_USERNAME=...
+     REGRU_PASSWORD=...
+
+2) GitHub → https://github.com/warchsko9090-oss/FloraFlow/settings/secrets/actions
+   Secrets → New repository secret (имя = значение):
+
+     HOME_IP            = 95.31.41.191
+     FAILOVER_IP        = 185.147.26.234
+     FAILOVER_DOMAIN    = knyajestvo.ru
+     REGRU_USERNAME     = (как в п.1)
+     REGRU_PASSWORD     = (API-пароль из п.1)
+     AMVERA_TOKEN       = токен из Amvera ЛК (см. п.3)
+     AMVERA_PROJECT_ID  = id проекта kdoor (см. п.3)
+     AMVERA_MCP_URL     = https://openmcp.msk1.amvera.ru/mcp
+                          (если msk1 не примет — https://openmcp.mia0.amvera.ru/mcp)
+
+   Опционально Telegram:
+     TG_BOT_TOKEN
+     TG_CHAT_ID
+
+3) Amvera → проект kdoor → Инфо / API
+   - Скопировать Project ID → AMVERA_PROJECT_ID
+   - Создать/скопировать API token → AMVERA_TOKEN
+   - kdoor env уже должны быть: UPSTREAM_*, FAILOVER_SYNC_TOKEN, DATABASE_URL, UPLOAD_FOLDER
+
+4) После секретов:
+   GitHub → Actions → failover-watch → Run workflow
+     сначала Dry-run = true
+     потом Dry-run = false, при необходимости Force home = true
+
+5) Дом (DESKTOP-FV1TKR5 / 192.168.1.126):
+   После ребута должны автозапускаться Caddy (80/443) + FloraFlow.
+   Проверка с телефона (не из домашней Wi‑Fi): https://knyajestvo.ru/

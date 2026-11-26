@@ -53,8 +53,28 @@ from app.utils import (
 from app.rate_limit import rate_limit, check_rate_limit
 from app.shop_security import shop_kp_access_token, verify_shop_kp_access
 from app.shop_landing_page import get_landing_context
+from app.shop_readonly import READONLY_BANNER, readonly_forbidden_html, shop_readonly_enabled
 
 bp = Blueprint("public_client_api", __name__)
+
+
+@bp.get("/healthz")
+def public_healthz():
+    """Лёгкий ping для failover-сторожа (без БД/каталога)."""
+    return jsonify(
+        ok=True,
+        service="shop",
+        readonly=shop_readonly_enabled(),
+    ), 200
+
+
+@bp.app_context_processor
+def _inject_shop_readonly():
+    ro = shop_readonly_enabled()
+    return {
+        "shop_readonly": ro,
+        "shop_readonly_banner": READONLY_BANNER if ro else "",
+    }
 
 
 _UPLOAD_SUFFIX_RE = re.compile(r"_(\d{10,})(_\d+)?$")
@@ -154,6 +174,8 @@ def public_catalog():
 def public_draft_order():
     if not _is_token_valid():
         return _forbidden()
+    if shop_readonly_enabled():
+        return jsonify({"status": "error", "message": "Резервный режим: заказ недоступен"}), 403
 
     data = request.get_json(silent=True) or {}
     customer_name = (data.get("customer_name") or "").strip()
@@ -249,6 +271,8 @@ def public_draft_order():
 def _render_landing_page(redirect_endpoint: str):
     """Общая логика главной страницы (prod `/` на shop, `/landing-preview` на ERP)."""
     if request.method == "POST":
+        if shop_readonly_enabled():
+            return readonly_forbidden_html()
         if not check_rate_limit("shop_landing_inquiry", 5, 3600):
             abort(429)
         if not (request.form.get("pd_consent") or "").strip():
@@ -617,7 +641,7 @@ def get_aggregated_catalog(apply_shop_prices=True):
 def catalog_item_to_shop_row(item: dict) -> dict:
     on_request = bool(item.get('on_request'))
     free_qty = int(item.get('free_qty') or 0)
-    return {
+    row = {
         "id": f"{item['plant_id']}_{item['size_id']}",
         "plant_id": item["plant_id"],
         "size_id": item["size_id"],
@@ -635,6 +659,14 @@ def catalog_item_to_shop_row(item: dict) -> dict:
         "pruning": item.get("pruning") or "",
         "is_seedling": bool(item.get("is_seedling")),
     }
+    if shop_readonly_enabled():
+        # Витрина без остатков: цены есть, qty скрыт; без кнопок заявки/корзины.
+        row["stock"] = None
+        row["free_qty"] = None
+        row["on_request"] = False
+        row["hide_stock"] = True
+        row["readonly"] = True
+    return row
 
 
 def catalog_size_hint(size_names: list[str]) -> str:
@@ -711,15 +743,28 @@ def group_catalog_by_plant(catalog_items):
     return sort_plant_groups(plants.values())
 
 
+def _plants_json_for_catalog(catalog_items) -> str:
+    plants = group_catalog_by_plant(catalog_items)
+    if shop_readonly_enabled():
+        for p in plants:
+            p["total_stock"] = None
+            p["hide_stock"] = True
+            p["has_on_request"] = False
+    return json.dumps(plants, ensure_ascii=False)
+
+
 def _shop_page_context(catalog_items):
     from app.shop_antispam import issue_form_token
     shop_items = [catalog_item_to_shop_row(item) for item in catalog_items]
+    ro = shop_readonly_enabled()
     return {
         "catalog_json": json.dumps(shop_items, ensure_ascii=False),
         "shop_contacts": get_shop_contacts_for_site(),
         "contact_display_label": contact_display_label,
         "contact_href": contact_href,
-        "shop_form_token": issue_form_token(),
+        "shop_form_token": "" if ro else issue_form_token(),
+        "shop_readonly": ro,
+        "shop_readonly_banner": READONLY_BANNER if ro else "",
     }
 
 
@@ -958,6 +1003,7 @@ def public_shop_stock_pdf():
             fmt=_format_money,
             shop_contacts=get_shop_contacts_for_site(),
             contact_display_label=contact_display_label,
+            shop_readonly=shop_readonly_enabled(),
         )
         filename = f"Прайс Княжество от {end_date.strftime('%d.%m.%Y')}.pdf"
         data = _build_stock_pdf_bytes(template_ctx, ground_groups, container_groups)
@@ -1080,6 +1126,9 @@ def public_shop_plant(plant_id):
 @rate_limit("shop_on_request", 10, 3600)
 def public_shop_on_request():
     """Заявка на позицию «По запросу» с витрины."""
+    if shop_readonly_enabled():
+        return jsonify({"status": "error", "message": "Резервный режим: заявки недоступны"}), 403
+
     from app.shop_on_request import create_on_request
 
     data = request.get_json(silent=True) if request.is_json else request.form
@@ -1142,6 +1191,8 @@ def public_shop():
     catalog_items = get_aggregated_catalog()
 
     if request.method == "POST":
+        if shop_readonly_enabled():
+            return readonly_forbidden_html()
         if not check_rate_limit('shop_checkout', 8, 3600):
             abort(429)
 
@@ -1274,5 +1325,5 @@ def public_shop():
 
     # GET запрос: Отдаем витрину
     ctx = _shop_page_context(catalog_items)
-    ctx["plants_json"] = json.dumps(group_catalog_by_plant(catalog_items), ensure_ascii=False)
+    ctx["plants_json"] = _plants_json_for_catalog(catalog_items)
     return render_template("public_catalog.html", **ctx)

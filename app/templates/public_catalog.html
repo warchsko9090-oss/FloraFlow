@@ -13,7 +13,7 @@
     <div class="relative z-10 min-h-screen flex flex-col">
         {% include 'shop/_header.html' %}
 
-        <main class="flex-1 px-4 py-10 sm:py-14 pb-32 shop-page-glow shop-main-with-cart">
+        <main class="flex-1 px-4 py-10 sm:py-14 {% if shop_readonly %}pb-14{% else %}pb-32 shop-main-with-cart{% endif %} shop-page-glow">
             <div class="max-w-6xl mx-auto">
                 <div class="flex flex-col gap-5 mb-6 reveal reveal-delay-2">
                     <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
@@ -75,11 +75,14 @@
     </div>
 
     {% include 'shop/_scroll_top.html' %}
+    {% if not shop_readonly %}
     {% include 'shop/_cart.html' %}
     {% include 'shop/_checkout.html' %}
+    {% endif %}
     {% include 'shop/_cookie_consent.html' %}
 
-    <script src="{{ url_for('static', filename='js/shop.js') }}?v=10"></script>
+    <script>window.SHOP_READONLY = {{ 'true' if shop_readonly else 'false' }};</script>
+    <script src="{{ url_for('static', filename='js/shop.js') }}?v=11"></script>
     <script>
         const plants = {{ plants_json|safe }};
         let activeCategory = 'all';
@@ -180,9 +183,11 @@
             if (plant.root_system) tags.push(`<span class="catalog-tag"><i class="fa-solid fa-seedling"></i><span>${Shop.esc(plant.root_system)}</span></span>`);
             if (plant.pruning) tags.push(`<span class="catalog-tag"><i class="fa-solid fa-scissors"></i><span>${Shop.esc(plant.pruning)}</span></span>`);
             const tagsBlock = tags.length ? `<div class="flex flex-wrap gap-1.5 mt-2.5">${tags.join('')}</div>` : '';
-            const stockHint = plant.has_on_request && plant.total_stock <= 0
-                ? '<p class="text-xs sm:text-sm uppercase tracking-wider text-brand-brassDim mt-2">Есть позиции по запросу</p>'
-                : (plant.total_stock > 0 ? `<p class="text-xs sm:text-sm text-brand-graphite mt-2 tabular-nums">${plant.total_stock} шт в наличии</p>` : '');
+            const stockHint = (plant.hide_stock || window.SHOP_READONLY)
+                ? ''
+                : (plant.has_on_request && plant.total_stock <= 0
+                    ? '<p class="text-xs sm:text-sm uppercase tracking-wider text-brand-brassDim mt-2">Есть позиции по запросу</p>'
+                    : (plant.total_stock > 0 ? `<p class="text-xs sm:text-sm text-brand-graphite mt-2 tabular-nums">${plant.total_stock} шт в наличии</p>` : ''));
             card.innerHTML = `
                 ${hotBadge}
                 <div class="shop-panel-accent"></div>
