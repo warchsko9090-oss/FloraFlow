@@ -1,0 +1,44 @@
+ЧТО ВСТАВИТЬ ВРУЧНУЮ
+====================
+
+A) Desktop DNS (ручной переключатель)
+   Файл: C:\Users\warch\Desktop\dns-config.env
+     REGRU_USERNAME=логин Reg.ru (email)
+     REGRU_PASSWORD=пароль API (не пароль входа)
+
+B) Локальный сторож (каждые 10 мин на этом ПК)
+   Файл: C:\Users\warch\Documents\FloraFlow\failover\.env
+   Скопировать из failover\.env.example и заполнить:
+     REGRU_USERNAME=
+     REGRU_PASSWORD=
+     AMVERA_TOKEN=
+     AMVERA_PROJECT_ID=
+
+C) GitHub Actions (внешний сторож, когда дом выключен)
+   https://github.com/warchsko9090-oss/FloraFlow/settings/secrets/actions
+   Secrets:
+     HOME_IP=95.31.41.191
+     FAILOVER_IP=185.147.26.234
+     FAILOVER_DOMAIN=knyajestvo.ru
+     REGRU_USERNAME=...
+     REGRU_PASSWORD=...
+     AMVERA_TOKEN=...
+     AMVERA_PROJECT_ID=...
+     AMVERA_MCP_URL=https://openmcp.msk1.amvera.ru/mcp
+
+D) Reg.ru API whitelist
+   https://www.reg.ru/user/account/settings/api
+   Добавить IP:
+     95.31.41.191
+     IP этого ПК (если скрипты с Desktop)
+     IP GitHub runner / VPS (для Actions)
+
+E) Amvera → kdoor → Инфо
+   Project ID → AMVERA_PROJECT_ID
+   API token → AMVERA_TOKEN
+
+После заполнения .env:
+  .\failover\register-watch-task.ps1
+
+После push на GitHub (если SSL мешает — выключи VPN/Outline и: git push origin master):
+  Actions → failover-watch → Run workflow (сначала Dry-run)
